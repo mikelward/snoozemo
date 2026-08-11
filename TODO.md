@@ -17,21 +17,39 @@ release rather than dropped.
 - [x] `TODO.md`, `README.md`, `.gitignore`.
 - [x] Claude Code web session hook to provision the Android SDK
       (`.claude/hooks/session-start.sh` + `.claude/settings.json`).
-- [ ] Gradle + AGP + Compose skeleton, buildable in CI: application ID `app.snoozemo`,
+- [x] Gradle + AGP + Compose skeleton, buildable in CI: application ID `app.snoozemo`,
       minSdk 33, targetSdk 36, `versionCode` derived from the `main` commit count.
-- [ ] Split the core from the UI in the scaffold itself (maintainer, 2026-08-11), starting
+- [x] Split the core from the UI in the scaffold itself (maintainer, 2026-08-11), starting
       from `SPEC.md` §11's shape: `:app`, `:tile`, `:core`, `:dnd`, `:presence`. The
       requirement is a seam that keeps the core functional, testable, and buildable on its
       own — a Gradle module is the version the build enforces, so it is the default, but
       the modules may be cut differently if that serves the same end better. Prove it by
       building and testing `:core` alone (`./gradlew :core:test`) with no Android
       dependencies pulled in.
-- [ ] Two product flavors, `play` and `direct` (`SPEC.md` §3.4), differing only below
-      `PresenceMonitor`. `play` is the default and the one CI builds first.
-- [ ] CI workflow (`.github/workflows/android-ci.yml`): build, unit tests with failing-test
-      PR comments, lint, and the Roborazzi screenshot job with its `--tests` allow-list.
-      **Deliberately not in the first PR** — a workflow that runs `./gradlew` with no Gradle
-      project would be red on arrival. It lands with the skeleton above.
+      **Landed as a plain Kotlin JVM module** — the Android SDK is not on `:core`'s compile
+      classpath at all, so the seam is enforced by the build rather than by discipline, and
+      CI runs `:core:test` on its own as the check that keeps it that way.
+- [x] Two product flavors, `play` and `direct` (`SPEC.md` §3.4), differing only below
+      `PresenceMonitor`. `play` is the default; CI's `assembleDebug` builds both, since a
+      change that compiles in one can break the other.
+- [x] CI workflow (`.github/workflows/android-ci.yml`): build both flavors, `:core:test` on
+      its own, unit tests with failing-test PR comments, lint. The Roborazzi screenshot job
+      lands with the first real UI (Phase 2/4) and the `deploy` job with the release
+      plumbing (Phase 6) — an empty screenshot allow-list is only a check nobody reads.
+- [ ] When the screenshot job lands, its diff-comment upsert must not repeat the silent
+      drop this repo just fixed on the failing-test comment: the sibling repos' version
+      uses a bare `curl -sS` for the lookup, the PATCH, and the POST, so an HTTP error
+      exits 0. The lookup is the awkward one — failing it open posts a duplicate comment
+      instead of updating the existing one — so it needs an explicit HTTP-status check
+      rather than a straight `--fail-with-body`. Same fix is queued in
+      `mikelward/typelauncher` and `mikelward/simmo`, where the job already exists.
+- [ ] Launcher icon and tile mark. The scaffold ships a placeholder `Z` vector; the real
+      mark is drawn with the tile in Phase 2, where `SPEC.md` §4.2's constraint applies (24
+      dp, single color, legible flattened). The tile icon is **any drawable the app
+      supplies** — there is no system catalog to pick from — declared as `android:icon` on
+      the `TileService` and swappable at runtime via `Tile.setIcon`. What is fixed is the
+      *treatment*: the system tints it per tile state, so only the alpha channel survives
+      and the asset is effectively a silhouette.
 - [ ] `docs/PRIVACY.md` backing the hosted privacy policy, plus the Play Data Safety
       answers it has to agree with ("no data collected, no data shared", `SPEC.md` §12).
 
@@ -127,6 +145,12 @@ the point is that every other line of the app is worthless if it isn't true.
 
 - [ ] Release plumbing: signing, Play Console setup, the `deploy` job, and the "What's new"
       generation from commit subjects described in `AGENTS.md`.
+- [ ] Make a release build **fail** when its version can't be derived from git, rather than
+      warning (`app/build.gradle.kts`). The fallback exists so a checkout without git still
+      builds; once a build can reach a tester or Play, falling back to versionCode 1 is
+      either a rejected upload or a phantom downgrade, and a warning in a CI log is not
+      where anyone would find it. Same for the shallow-clone case, which is worse because
+      the count *looks* fine — the build already warns; a release build should refuse.
 - [ ] Data Safety declaration: "no data collected, no data shared" (`SPEC.md` §12).
 - [ ] In-app prominent disclosure before the location permission prompt, and the
       demonstration video the background-location declaration needs.
@@ -210,6 +234,20 @@ Nothing here is scheduled; each is a sequel that follows from something already 
       one that can sink the project.
 - [ ] **Saved places** — name an anchor, give it its own policy and duration cap; the tile
       long-press becomes a picker. The `Anchor` type is already shaped for it.
+- [ ] **Settle the backup story** (maintainer, 2026-08-11) — before the first release with
+      settings worth keeping, and *not* by leaving `allowBackup="false"` unexamined. Today
+      the app stores a transient anchor and nothing else, so no-backup costs nothing; saved
+      places, per-place policies, and caps change that, and losing them on a phone swap is
+      its own failure. Don't build anything that assumes never. The options, cheapest
+      first:
+      - `dataExtractionRules` (API 31+, and minSdk is 33) can allow **device-to-device
+        transfer while disabling cloud backup** — settings survive a new phone without a
+        place list reaching Google's servers. Probably the answer.
+      - Full auto-backup, which does put it in the cloud (encrypted with the device PIN on
+        modern Android) — a real privacy question, and one that touches the Data Safety
+        answers, so it is the maintainer's call and not autopilot's.
+      - A user-initiated export/import file: no ambient copies, but nobody does it before
+        losing the phone.
 - [ ] **Auto-arm on arrival** — the obvious sequel, and nearly free in the `play` flavor
       where background location is already paid for.
 - [ ] **"Until I get home"** and other saved-place reverse geofences — needs saved places
@@ -239,4 +277,32 @@ none is load-bearing yet.
 - **No CI workflow in the scaffold PR.** A workflow calling `./gradlew` with no Gradle
   project would be red on arrival and would train everyone to ignore a red check.
   Alternative: land a no-op workflow now and fill it in. It lands with the Gradle skeleton
-  instead.
+  instead. *(Landed in the following PR, once there was a project to build.)*
+
+Guessed while building the scaffold (autopilot, 2026-08-11):
+
+- **`:core` is a plain Kotlin JVM module, not an Android library.** It is the strongest
+  reading of "a seam that keeps the core buildable and testable on its own" — the Android
+  SDK is not on its classpath, so the boundary can't erode by accident. Alternative: an
+  Android library module, which would allow `Context` in later. Reversible by swapping the
+  plugin; the cost of reversing grows only if domain code starts depending on Android.
+- **Toolchain versions pinned to match the sibling repos** — AGP 9.2.0, Kotlin 2.2.20,
+  Gradle 9.4.1, Compose BOM 2026.05.01, JDK 17 target. Lint notes AGP 9.3.1 exists;
+  matching Simmo is worth more than being current until there is a reason. Reversible.
+- **CI trimmed to build + `:core:test` + test + lint.** No screenshot job (nothing to
+  record) and no deploy job (no signing, no Play track). Both are already on the phase list.
+- **`.debug` application-ID suffix, and no R8 anywhere yet.** The sibling repos' CI-vs-local
+  suffix split and R8-in-CI both exist to protect a shipping build; neither is meaningful
+  before Phase 6, and adding them now would be config nobody has tested. Reversible.
+- **A placeholder launcher icon** (a plain `Z` vector on a dark background) and a framework
+  XML theme, so `assembleDebug` produces something installable. The real mark is a Phase 2
+  design item under `SPEC.md` §4.2's 24 dp single-color constraint.
+- **One placeholder user-facing string** (`Not built yet — see TODO.md`) on the placeholder
+  screen. It is the only copy in the app and it will be deleted, so it did not go through
+  the usual propose-copy-in-chat step.
+- **`PresenceMonitor` defined in `:core`, not `:presence`** (Codex, PR #3). `SPEC.md` §11's
+  tree put the interface in `:presence`, which cannot work: the controller takes one by
+  injection while `:presence` depends on `:core` for `Anchor`, so the contract has to sit
+  with its consumer or the modules form a cycle. The spec now says so, and the same shape
+  applies to the DND interface in Phase 1. Reversible only by merging the modules, so worth
+  a second opinion if the layering is ever reconsidered.

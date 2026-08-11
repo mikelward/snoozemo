@@ -10,8 +10,15 @@ guess at, no remembering to turn DND back off.
 - **Plan**: [TODO.md](TODO.md)
 - **Engineering conventions**: [AGENTS.md](AGENTS.md)
 
-**Status: design only.** The spec and the plan are written; the app is not built yet — see
-`TODO.md` Phase 0. Nothing below works until that lands.
+**Status: scaffold.** The build, the module layout, and CI are in place; the product isn't
+built yet — `TODO.md` Phase 1 starts it. The app currently launches to a placeholder.
+
+## Modules
+
+`:core` is a plain Kotlin JVM module — no Android SDK on its classpath, so the state
+machine stays testable without a device (`./gradlew :core:test`). `:dnd`, `:presence`, and
+`:tile` are Android libraries; `:app` holds the UI and picks a `play` or `direct` flavor
+(see `SPEC.md` §3.4 and §11).
 
 ## Building
 
