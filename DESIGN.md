@@ -19,14 +19,17 @@ DND back off.
    association plus location, without the user thinking about it.
 3. **Never silently strand the user.** A hard maximum duration and an unmistakable "you are snoozed"
    affordance, so a failed sensor can't silence the phone indefinitely.
-4. **Play-distributable without a restricted-permission review** in the default build.
+4. **Distributable on Google Play**, accepting that this means passing a background-location
+   declaration (§3) — with a fully-functional sideload build that needs no restricted permissions as
+   the fallback if that fails.
 5. **Works on Pixel and on Samsung One UI**, acknowledging that One UI's background-process
    management is the harder target.
 
 ### Non-goals (v1)
 
-- Scheduled or calendar-driven DND. The OS already does this well; Snoozemo is the *ad-hoc,
-  place-scoped* case that the OS does badly.
+- Scheduled DND. The OS already does this well; Snoozemo is the *ad-hoc, place-scoped* case it does
+  badly. The calendar is read once, at arm time, only to seed a suggested end time (§4.4) — the app
+  never triggers itself from your calendar.
 - Cross-device sync, accounts, or any network I/O. The app declares no `INTERNET` permission.
 - Wear OS, tablets, foldable-specific UI.
 - Automatic *arming* on arrival at a place (geofence enter). Deliberately deferred — see §14.
@@ -42,64 +45,120 @@ DND back off.
 | # | Decision | Rationale |
 |---|---|---|
 | D1 | Control DND via **`AutomaticZenRule`**, never `setInterruptionFilter` | Required for apps targeting Android 15+; also composes correctly with the user's other rules |
-| D2 | **No `ACCESS_BACKGROUND_LOCATION`** in the default build | Avoids the Play restricted-permission declaration on *every* track, including internal testing (§3) |
-| D3 | Presence tracked by a **user-visible foreground service**, not the Geofencing API | Follows from D2 (Geofencing API requires background location); also far more survivable on Samsung |
+| D2 | **Two flavors, chosen by distribution channel** — `play` uses the Geofencing API and `ACCESS_BACKGROUND_LOCATION`; `direct` uses a foreground service and no restricted permissions | Play's April 2026 policy removed geofencing as an approved foreground-service use case and directs it to the Geofence API, so the FGS route is not viable on Play (§3) |
+| D3 | The presence engine is **behind one interface with two implementations** | The flavors differ only below `PresenceMonitor` (§6.1); all product behaviour, DND handling, and UI is shared |
 | D4 | **Wi-Fi is a suppressor, not a trigger** | Still on the anchor SSID ⇒ definitely still here (skip location entirely). Wi-Fi dropped ⇒ *maybe* left, so escalate to a location check. Never end a snooze on Wi-Fi loss alone |
 | D5 | **Implicit anchor**: the tile captures "here" at arm time | Zero setup. Saved places are a later addition, not a prerequisite |
 | D6 | **Three independent exits**: departure, max duration, manual | Any one sensor can fail; the phone must always come back |
 | D7 | **Fail open, always** | Every ambiguous state resolves toward ending the snooze, not extending it |
-| D8 | Geofencing API + background location available as an **opt-in build flavor** | For users who want no ongoing notification and are willing to pay the Play review cost |
-| D9 | **Offer "until this meeting ends" only when a meeting is actually in progress** | Keeps the zero-friction one-tap path intact in the common case, and surfaces the choice exactly when it is meaningful (§4.4) |
+| D8 | **Build and validate the `direct` flavor first**, even though `play` is the shipping target | It has no permission gate at all, so it can be tested on real hardware from week one while the Play declarations are in review |
+| D9 | **Arm first, refine second** — the tile arms on tap, and a sheet then offers a time (default now + 1 h) or "until I leave" | Keeps the zero-friction one-tap path intact while making a time bound one tap away. Calendar seeding deferred to v1.1 (§4.4) |
 
 ---
 
-## 3. Distribution: the background-location tradeoff
+## 3. Distribution and permissions: the decision that shapes everything
 
-You asked for more detail here, because it is the decision that shapes the architecture.
+This is the section to read first, because Play policy — not Android's APIs — determines the
+architecture, and the answer is less comfortable than it first appears.
 
-### What I found
+### 3.1 The three technical options
 
-`ACCESS_BACKGROUND_LOCATION` is a Play **restricted permission**. Completing the Permissions
-Declaration Form is required for any active app bundle carrying it — and per Play Console Help, that
-alert applies to **releases on the Internal, Closed, and Open test tracks**, not just production.
-Until you complete the declaration you cannot publish *any* change, including store listing edits.
-So an internal-only track does **not** buy an exemption.
-
-What the declaration asks for: a written justification that background location is *core* to the
-app's user-facing feature, a statement of why a while-in-use alternative won't work, and a
-demonstration video showing the in-app disclosure and the permission prompt. The bar Google applies
-in practice — background location must be essential, not a convenience — is one a "silence my phone
-while I'm at the cinema" app is genuinely at risk of failing, because a while-in-use alternative
-*does* exist. Which is exactly what this design uses.
-
-### The three options
-
-| | **A. Foreground service** (default) | **B. Geofencing API** | **C. Wi-Fi only** |
+| | **A. Foreground service** | **B. Geofencing API** | **C. Wi-Fi only** |
 |---|---|---|---|
-| Background location perm | No | **Yes** | No |
-| Play declaration + video | **No** | Yes, all tracks | No |
-| Play Services required | No (optional) | **Yes** | No |
+| `ACCESS_BACKGROUND_LOCATION` | No | **Yes** | No |
+| Play Services required | No | **Yes** | No |
 | Ongoing notification | **Yes** | No | No |
 | Departure latency | 10–90 s (tunable) | 2–6 min | Instant, when it works |
 | Battery, 4 h snooze | ~1–3% (§9) | <1% | ~0% |
 | Works with no Wi-Fi | Yes | Yes | **No** |
 | Survives One UI Sleeping Apps | **Best** | Poor | Poor |
 | Survives reboot unattended | Needs a re-arm tap (§8.3) | Yes | Partially |
+| **Publishable on Play** | **Unlikely — see 3.3** | Yes, with declarations | Yes |
 
-### Recommendation
+C is not viable as a primary mechanism: unusable anywhere without Wi-Fi, and Wi-Fi drops for reasons
+that have nothing to do with leaving. It survives as the *suppressor* half of D4, in both flavors.
 
-**Ship A as the default.** The ongoing notification is the main cost, and it is close to a
-non-cost here: you *want* an unmissable "your phone is silenced" indicator with a one-tap "end
-snooze" action. Requirement 3 asks for that affordance anyway; option A gets it for free and gets
-Samsung reliability along with it. The notification lives at `IMPORTANCE_LOW` (silent, no peek) and
-exists only while a snooze is armed, which is bounded by the duration cap.
+### 3.2 The background-location gate (option B)
 
-Keep B behind a `background` product flavor. If you later decide the notification is intolerable,
-the presence engine's interface (§6.1) is written so B is a swap of one implementation, and you can
-do the Play declaration then. Nothing in v1 forecloses it.
+`ACCESS_BACKGROUND_LOCATION` is a Play **restricted permission**. The Permissions Declaration Form
+must be completed for any active bundle carrying it, and per Play Console Help that alert applies to
+releases on the **Internal, Closed, and Open test tracks**, not only production — until it is
+completed you cannot publish any change at all, including store-listing edits. An internal-only
+track buys **no exemption**. It asks for a written justification that background location is core to
+a user-facing feature, why a while-in-use alternative will not do, and a demonstration video showing
+the in-app disclosure and the permission prompt.
 
-Reject C as a primary mechanism — it is unusable at any place without Wi-Fi, and Wi-Fi drops for
-reasons that have nothing to do with leaving. It survives as the *suppressor* half of D4.
+### 3.3 Why the foreground-service route does not survive Play review
+
+The original plan here was option A specifically to dodge 3.2. That plan does not survive contact
+with the current policy.
+
+Foreground service types are themselves declared and **reviewed** in Play Console (Policy → App
+content), with a description and a demonstration video per type. The `location` type's approved use
+cases are "long-running use cases that require location access, such as navigation and location
+sharing" — and Android's own documentation, in the same page that defines the type, says: *"If your
+app needs to be triggered when the user reaches specific locations, consider using the geofence API
+instead."*
+
+Then, in the **April 15, 2026 policy update, Google removed geofencing as an approved foreground
+service use case**, explicitly directing developers to the Geofence API for it, with a 30-day
+compliance window.
+
+Snoozemo's foreground service does one thing: notice when the user leaves a place. That is
+geofencing under any honest description, and it is now a named non-approved use of the type. Option
+A is therefore not a way *around* the background-location declaration on Play — it is a way into a
+different review that this app should expect to fail. There is no framing of it as navigation or
+location sharing that is both accurate and approvable, and submitting an inaccurate declaration is
+not on the table.
+
+### 3.4 Recommendation
+
+**Two product flavors, differing only below `PresenceMonitor` (§6.1):**
+
+- **`play`** — option B. Geofencing API, `ACCESS_BACKGROUND_LOCATION`, no ongoing notification.
+  This is the shipping build for any Play track, internal included.
+- **`direct`** — option A. Foreground service, no restricted permissions, no Play Services
+  dependency. For sideloaded APKs and F-Droid, and the better build on Samsung.
+
+This is not hedging. The two channels genuinely have different constraints, the divergence is
+confined to one interface, and `direct` is independently useful: it is the more robust build against
+One UI's Sleeping Apps, it needs no Play Services, and it can be tested on hardware immediately
+while declarations sit in review (D8).
+
+### 3.5 Will the Play declarations be approved?
+
+Honest answer: **probably, but it is not assured, and it is the single biggest project risk.**
+
+Arguing for approval:
+
+- Background location is not incidental here — it is the *entire* app. Snoozemo has one feature and
+  it is location-triggered. "Why won't while-in-use work" has a clean answer: the whole point is that
+  the user puts the phone in their pocket and stops interacting with it.
+- Google's own policy now routes this exact use case to the Geofence API, which requires the
+  permission. The declaration can say so directly, and that is a strong argument to make in the form.
+- There is no `INTERNET` permission (§12). Nothing is collected, transmitted, or monetised, and the
+  Data Safety form says so. Most background-location rejections are about undisclosed collection and
+  sharing; there is nothing here to disclose.
+- The in-app prominent disclosure and the permission flow are straightforward to demonstrate on
+  video, and the feature is visibly the app's headline function.
+
+Arguing against:
+
+- Reviewers reject background-location apps at a high rate, and appeals are slow and opaque.
+- A first-party alternative arguably exists — Android's own Modes can be schedule-triggered — and a
+  reviewer may treat location-triggered DND as a convenience rather than a necessity.
+- Personal developer accounts created after 13 Nov 2023 must additionally run a 14-day closed test
+  with 12 testers before production access. Irrelevant for internal-track-only use, but it stands
+  between this and a public listing.
+
+**Mitigation, in order:** ship `direct` to your own devices immediately and prove the product works;
+submit the `play` flavor to the internal track early, so the declaration outcome is known before much
+is invested in polish; and if the declaration is refused, `direct` via sideload or F-Droid remains a
+complete, fully-functional app — you lose distribution reach, not the app.
+
+Given the answer "Play internal track at a bare minimum": be aware that this specifically does not
+avoid either declaration, and the internal track is where the background-location declaration should
+be exercised first, precisely to find out.
 
 ---
 
@@ -152,47 +211,87 @@ Channel `snooze_active`, `IMPORTANCE_LOW`, ongoing, not dismissible while the se
 ```
 🌙  Snoozing at Home
     Ends when you leave, or in 3h 40m
-    [ End now ]   [ Add 1 hour ]
+    [ End now ]   [ +30 min ]
 ```
+
+`+30 min` matches the sheet's step (§4.4), so extending uses the same mental unit as choosing.
+When the snooze has no time bound the second line reads `Ends when you leave` and the action becomes
+`Set a time`, opening the sheet again.
 
 ### 4.4 Choosing an end condition
 
+> **Status: provisional.** The direction — arm instantly, refine in a sheet — looks right, but the
+> specifics are not settled. Treat the mockups as a starting point, not a spec.
+
 "Until I leave" is the thesis, but it is not always the *best available* answer. If you are in a
-meeting that ends at 15:30, "until 15:30" is sharper than "until I walk out" — you might not walk out
-for another hour. The design should offer a better end condition when it can infer one, without
-taxing the common case with a menu.
+meeting that ends at 14:00, "until 14:00" is sharper than "until I walk out" — you might not walk out
+for another hour. So the sheet offers a time as well as a place, without taxing the common case.
 
-**The rule (D9): tap arms immediately with the best default; a chooser appears only when there is a
-genuinely better alternative on offer.**
+**The rule (D9): the tile arms immediately with a sane default, then shows a sheet that refines it.
+Dismissing the sheet — or never seeing it — leaves you correctly snoozed.**
 
-Concretely, the trampoline activity (§6.9) already exists on the arm path. When a context signal is
-present it renders a compact bottom sheet instead of finishing silently; when nothing is on offer it
-stays invisible and arms in one tap, exactly as today. Either way the snooze is armed *before* the
-sheet is shown, so dismissing it, or the sheet failing to appear, leaves you correctly snoozed.
+The trampoline activity (§6.9) already sits on the arm path. It starts the service first, then
+renders a compact bottom sheet. Arming never waits on the UI, so the one-tap path survives.
+
+#### v1
 
 ```
-🌙  Snoozing at Home
-    ── End when ──────────────────
-    ○ I leave here                  ← default, always present
-    ● This meeting ends    15:30    ← offered only if a meeting is in progress
-    ○ In 1 hour                     ← always present
+    🌙  Snoozing at Home
+
+        ⏰  until 14:00          [ − ]  [ + ]
+        📍  until I leave
+
+        Ends when you leave, either way.
 ```
 
-#### Candidates
+- **A sane default, no inference.** The time is seeded at **one hour from now, rounded to the
+  nearest half hour** — a tap at 13:12 offers 14:00, not 14:12. Ragged times look like a bug and
+  invite pointless fiddling.
+- **`−` / `+` adjust in 30-minute steps** without dismissing the sheet. Floor is 30 minutes from now;
+  ceiling is the 8-hour backstop (§7). Two taps covers 13:00–15:00, which is most meetings.
+- **Two rows, both live.** Tapping a row commits that end condition and dismisses.
+- **The helper line is not decoration.** Choosing a time *lowers the cap*; it does not disable
+  departure tracking (§7). Walking out at 13:40 still ends the snooze at 13:40. The rows differ only
+  in whether there is a time bound below the backstop, and the sheet should say so plainly rather
+  than implying they are exclusive modes.
+
+#### Candidates considered
 
 | End condition | Signal needed | Verdict |
 |---|---|---|
-| **I leave here** | §6 presence engine | **v1.** The default, always offered |
-| **Fixed duration** | none | **v1.** Always offered as a fallback; also the §7 cap |
-| **This meeting ends** | `READ_CALENDAR` | **v1, opt-in.** The strongest of these — a real end time, and the moment people most want silence. Details below |
-| **Either — whichever comes first** | both | **v1.** Not a fourth option in the list: "meeting ends" implies it, by setting the cap to the meeting end while departure tracking stays armed. Leaving early still ends it early |
+| **I leave here** | §6 presence engine | **v1.** Always offered |
+| **A time, adjustable** | none | **v1.** Seeded at now + 1 h; also the §7 cap |
+| **Whichever comes first** | both | **v1.** Not a third row — implied. Setting a time leaves departure tracking armed |
+| **This meeting ends** | `READ_CALENDAR` | **v1.1.** Strong, but deferred — see below |
 | **My next alarm** | `AlarmManager.getNextAlarmClock()` | **Explore.** No permission at all, and a natural fit for a bedtime snooze. Offer only when the next alarm is 3–12 h out, so it doesn't propose a 4-minute snooze |
-| **I start moving** | `TYPE_SIGNIFICANT_MOTION` | **Explore.** No permission, already wired up for §6.7. Different intent from "I leave" — useful for "quiet while I'm sitting here", but noisy: standing up to get coffee would end it. Would need a distance confirmation, at which point it is nearly "I leave" |
-| **I get home** | reverse geofence on a saved place | **Deferred.** Needs saved places (§14) and, for a place you are not at, background location. Naturally pairs with the option-B flavor |
-| **Sunset / bedtime window** | none | **Rejected.** The OS's own scheduled Modes do this properly. Snoozemo is for the ad-hoc case |
-| **Screen unlocked N times** | none | **Rejected.** A proxy for attention, not for place or time, and wrong in both directions |
+| **I start moving** | `TYPE_SIGNIFICANT_MOTION` | **Explore.** No permission, already wired for §6.7. But noisy — standing up for coffee would end it. Adding a distance confirmation makes it "I leave" |
+| **I get home** | reverse geofence on a saved place | **Deferred.** Needs saved places (§14) plus background location, so `play`-flavor only |
+| **Sunset / bedtime window** | none | **Rejected.** The OS's own scheduled Modes do this properly |
+| **Screen unlocked N times** | none | **Rejected.** A proxy for attention, not place or time, and wrong in both directions |
 
-#### The calendar option
+#### Calendar: recommend deferring past v1
+
+The obvious next step is seeding that time from the meeting you are actually in — `until 14:00 ·
+Design review` — with a small **Use my calendar** button on the card triggering the `READ_CALENDAR`
+runtime request in place, re-seeding the sheet on grant without re-arming, and disappearing once
+answered. That is the right shape when it lands, and it is deliberately a plain button rather than a
+designed promo: the permission has to earn itself, and if nobody taps it, that is the answer.
+
+**But I would keep it out of v1**, for two reasons:
+
+1. **It adds a second sensitive permission to the same Play review.** §3.5 already puts the
+   background-location declaration at the top of the risk list. Presenting a reviewer with an app
+   that wants background location *and* calendar access, for a feature the app visibly works without,
+   is unforced risk on the one thing that can sink the project. Get the hard permission approved, then
+   add the easy one.
+2. **The `−`/`+` already covers it.** Meetings end at :00 and :30. From a default of 14:00 you are at
+   most a tap or two from any realistic meeting end. The calendar saves those taps and the small
+   effort of knowing what time it is — real, but not v1-shaped.
+
+The v1 sheet is forward-compatible with it: the calendar only changes what the time is *seeded to*
+and adds a subtitle. No new rows, no new exits, no state-machine change.
+
+#### If and when it lands
 
 `READ_CALENDAR`, queried against `CalendarContract.Instances` for events overlapping now:
 
@@ -201,26 +300,23 @@ val now = System.currentTimeMillis()
 CalendarContract.Instances.query(contentResolver, PROJECTION, now, now + 12.hours)
     .filter { it.begin <= now && it.end > now }
     .filter { it.availability == Instances.AVAILABILITY_BUSY }   // ignore "free"/FYI blocks
-    .filter { it.allDay == false }                               // an all-day event is not a meeting
+    .filter { !it.allDay }                                       // an all-day event is not a meeting
     .minByOrNull { it.end }                                      // the soonest-ending overlap
 ```
 
-Design constraints:
+**There is no calendar "trigger."** Worth stating plainly, because it removes a lot of imagined
+machinery: nothing watches the calendar. No observer, no sync adapter, no background job, no
+broadcast. The query above is a single synchronous `ContentProvider` read against a local database,
+run once, when the sheet is built. Meeting end is just a number used to seed a time picker.
 
-- **Fully optional and lazily requested.** The permission is asked for the first time the user taps
-  *End when → this meeting ends*, never during onboarding. If it is not granted the option simply
-  never appears, and the app is undiminished. This matters for Play review too: an app that asks for
-  calendar access up front, for a secondary feature, invites scrutiny it does not need — see §3's
-  general principle, applied again. `READ_CALENDAR` has no restricted-permission declaration form,
-  but it is still governed by Play's sensitive-permissions policy and must be visibly tied to a
-  user-facing feature. Lazy, in-context requesting is what makes that tie obvious.
-- **Read-only, never written, never leaves the device** (there is no `INTERNET` permission to leave
-  by, §12).
-- **Meetings run over.** Offer *Add 15 min* alongside *Add 1 hour* in the ongoing notification (§4.3)
-  when the snooze was armed against a calendar event, and prefer extending over re-arming.
-- **Back-to-back meetings.** v1 ends at the current event's end and does not chain into the next one.
-  Chaining is tempting and is how you end up silenced all afternoon by a calendar you forgot about;
-  the cap would catch it, but surprising the user is still the wrong default.
+That makes it stateless too: arm at 13:12, and if the meeting is later moved to end at 15:00,
+Snoozemo neither notices nor cares — it committed to 14:00. That is correct. A snooze that silently
+re-times itself under you is worse than one that is occasionally stale, and `+30 min` (§4.3) covers
+the overrun.
+
+Remaining constraints: read-only, never written, never leaves the device (there is no `INTERNET`
+permission for it to leave by, §12); and v1.1 ends at the current event and does **not** chain into
+the next one — chaining is how you end up silenced all afternoon by a calendar you forgot about.
 
 ### 4.5 Ending
 
@@ -339,8 +435,10 @@ interface PresenceMonitor {
 }
 ```
 
-Two implementations: `ForegroundPresenceMonitor` (default flavor) and `GeofencePresenceMonitor`
-(background flavor, §3 option B). Everything above this line is flavor-agnostic.
+Two implementations: `GeofencePresenceMonitor` (`play` flavor, §3 option B) and
+`ForegroundPresenceMonitor` (`direct` flavor, §3 option A). Everything above this line is
+flavor-agnostic — the state machine, the DND handling, the tile, and the §4.4 sheet are all shared,
+and neither flavor is aware of the other.
 
 ### 6.2 The anchor
 
@@ -409,7 +507,8 @@ connected-network signal plus location already covers the cases we care about.
 
 ### 6.5 Location API
 
-Fused location, no geofences (D3):
+Used by the `direct` flavor, which cannot register geofences (§3.1). The `play` flavor uses the
+Geofencing API instead and needs none of this.
 
 ```kotlin
 LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 90_000L)
@@ -471,9 +570,9 @@ A phone sitting on a desk for four hours therefore does essentially no location 
 <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
 <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-<!-- Optional, requested lazily on first use of "until this meeting ends" (§4.4).
-     Never requested during onboarding; the feature hides itself if not granted. -->
-<uses-permission android:name="android.permission.READ_CALENDAR" />
+<!-- v1.1 only, not v1 (§4.4). Requested in-context from the arm sheet,
+     never during onboarding; the feature hides itself if denied. -->
+<!-- <uses-permission android:name="android.permission.READ_CALENDAR" /> -->
 
 <service android:name=".presence.SnoozeService"
          android:foregroundServiceType="location"
@@ -501,10 +600,18 @@ val pi = PendingIntent.getActivity(this, 0, Intent(this, ArmTrampolineActivity::
 startActivityAndCollapse(pi)   // PendingIntent overload, API 34+; Intent overload deprecated in 34
 ```
 
-`ArmTrampolineActivity` uses `@android:style/Theme.NoDisplay`, starts `SnoozeService`, and calls
-`finish()` in `onCreate`. No visible flash, and the FGS start and the subsequent location access are
-both squarely inside documented exemptions. Ending a snooze needs no trampoline — stopping a service
-is unrestricted.
+`ArmTrampolineActivity` starts `SnoozeService` in `onCreate` — before any UI — so arming never waits
+on rendering. The FGS start and the subsequent location access are then both squarely inside
+documented exemptions. Ending a snooze needs no trampoline; stopping a service is unrestricted.
+
+It uses a **transparent** theme (`Theme.Material3.DayNight.Dialog` over a translucent window), not
+`Theme.NoDisplay`, because it hosts the §4.4 sheet and issues the `READ_CALENDAR` runtime request —
+neither is possible from a no-display activity. It finishes as soon as the sheet is dismissed or a
+row is committed, and finishes immediately in `onCreate` if the sheet is disabled in settings.
+
+This activity is on the critical path of the app's only interaction, so it carries a hard budget:
+service started within one frame of `onCreate`, sheet rendered without a visible flash of a blank
+window, and correct behaviour when launched over the lock screen (§4.2).
 
 ---
 
@@ -520,10 +627,10 @@ Idempotent; safe to call twice.
 | **Duration cap** | Default 8 h, configurable 30 min – 24 h | Backstop for every sensor failure |
 | **Manual** | Tile tap, notification action, or in-app | Always available, always instant |
 
-A chosen end condition from §4.4 does not add a fourth exit — it *lowers the cap*. Picking "this
-meeting ends, 15:30" sets `capExpiresAt` to 15:30 while departure tracking stays fully armed, so
-whichever happens first wins and leaving early still ends the snooze early. The 8-hour ceiling
-remains as an absolute backstop above any chosen value.
+A time chosen in the §4.4 sheet does not add a fourth exit — it *lowers the cap*. Picking 14:00 sets
+`capExpiresAt` to 14:00 while departure tracking stays fully armed, so whichever comes first wins and
+leaving early still ends the snooze early. The 8-hour default remains an absolute backstop above any
+chosen value, and `+30 min` may not push past it.
 
 The cap uses `AlarmManager.setAndAllowWhileIdle` — **inexact on purpose**. Exact alarms need
 `SCHEDULE_EXACT_ALARM`, which is no longer auto-granted on Android 14+ and carries its own Play
@@ -612,7 +719,8 @@ Three areas need real-device verification, not assumption:
 
 1. **Sleeping apps / Deep sleeping apps.** One UI's Battery → Background usage limits will put
    infrequently used apps to sleep, which breaks background work. A foreground service is much more
-   resistant to this than a geofence registration would be (a second argument for D3), but it is not
+   resistant to this than a geofence registration would be — which is why `direct` is the better build
+   on Samsung even though `play` is the shipping one — but it is not
    immune. Onboarding should include a Samsung-detected step explaining how to add Snoozemo to
    *Never sleeping apps*.
 
@@ -647,8 +755,8 @@ so ask once and never again.
 :core         SnoozeController (state machine), Anchor, exits, persistence
 :dnd          ZenRuleManager — all NotificationManager/AutomaticZenRule contact
 :presence     PresenceMonitor interface
-              ├── foreground/  ForegroundPresenceMonitor + SnoozeService  (default flavor)
-              └── geofence/    GeofencePresenceMonitor                    (background flavor)
+              ├── geofence/    GeofencePresenceMonitor                    (`play` flavor)
+              └── foreground/  ForegroundPresenceMonitor + SnoozeService  (`direct` flavor)
 ```
 
 `SnoozeController` is a plain Kotlin state machine over the §4.1 diagram, with no Android
@@ -660,7 +768,8 @@ where most of the real complexity lives.
 Kotlin · Compose + Material 3 · coroutines/Flow · Hilt · DataStore (settings, active-snooze record)
 · Room (saved places and snooze history, once §14 lands — not needed for v1's single implicit anchor)
 · Play Services Location (`play-services-location`, used for fused location even in the default
-flavor; the geofencing surface is only touched by the background flavor).
+flavor; the geofencing surface is only touched by the `play` flavor, and the `direct` flavor
+degrades to `LocationManager` if Play Services is absent, §6.5).
 
 Application ID `app.snoozemo`; module packages hang off it (`app.snoozemo.tile`,
 `app.snoozemo.dnd`, `app.snoozemo.presence`). The zen rule's condition URI is
@@ -736,10 +845,11 @@ The force-stop and Samsung rows are the ones most likely to find something. Run 
 - **Saved places.** Name an anchor ("Cinema", "Work"), give it its own policy and duration cap.
   Turns the tile long-press into a picker. The `Anchor` type is already shaped for this.
 - **Auto-arm on arrival.** The obvious sequel, and the one that genuinely needs background location
-  and the Play declaration — so it is the natural trigger for adopting the §3 option-B flavor.
+  and the Play declaration — already paid for in the `play` flavor, so this is nearly free there.
 - **`ZenDeviceEffects`** — grayscale, dim wallpaper, night mode while snoozed (§5.5).
 - **"Until I get home"** and other saved-place reverse geofences (§4.4), which follow from saved
-  places plus the option-B flavor.
+  places plus background location, so `play`-flavor only.
+- **Calendar-seeded end times** (§4.4) — the first thing to add once the Play declarations land.
 - **Chaining back-to-back meetings** (§4.4), if using the app shows people actually want it.
 - **Wear OS tile.**
 
@@ -752,7 +862,7 @@ The force-stop and Samsung rows are the ones most likely to find something. Run 
 | **M1** | `ZenRuleManager` + policy-access onboarding. Arm and release from a debug button. Proves the DND half on both devices |
 | **M2** | Tile, trampoline, foreground service, notification. Duration cap and manual exit working |
 | **M3** | Presence engine: Wi-Fi suppressor, location confirmation, duty cycling. Departure exit working |
-| **M4** | End-condition chooser (§4.4): calendar option behind a lazy `READ_CALENDAR` request, next-alarm option, sheet UI |
+| **M4** | End-condition sheet (§4.4): the two rows, the 30-minute `−`/`+`, cap wiring. No calendar |
 | **M5** | Edge cases — reboot, service death, permission revocation, degraded modes |
 | **M6** | Samsung hardening; onboarding polish; internal track release |
 
@@ -770,6 +880,10 @@ week one than in week five.
 3. Does the trampoline activity produce any visible flash on either device?
 4. Real battery draw over a 4-hour stationary snooze versus the §9 estimates.
 5. Does One UI's Sleeping Apps touch a `location`-typed foreground service in practice?
-6. Confirm current Play Console behaviour for a bundle *without* `ACCESS_BACKGROUND_LOCATION` — the
-   whole of D2 rests on no declaration being required, and this is worth confirming with a real
-   internal-track upload before M5.
+6. **The background-location declaration itself (§3.5).** The largest open risk in the project, and
+   the only one that cannot be resolved by writing code. Submit the `play` flavor to the internal
+   track as early as there is something demonstrable to film, well before M6 — the point is to learn
+   the answer while `direct` is still cheap to fall back on.
+7. Whether the §4.4 sheet is right at all: is the now + 1 h default sane in practice, are 30-minute
+   steps the right granularity, and does anyone reach for the time row often enough to justify adding
+   the calendar in v1.1? §4.4 is provisional and this is what settles it.
