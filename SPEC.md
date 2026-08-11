@@ -1,7 +1,11 @@
-# Snoozemo — Design
+# Snoozemo
 
 **Status:** Draft for review · **Date:** 2026-08-11 · **Platform:** Android (Pixel first, Samsung supported)
 **Application ID:** `app.snoozemo`
+
+This is the product and architecture spec: what Snoozemo does and *why* each design was
+chosen. The phased plan and the hardware-verification list are in `TODO.md` (§15);
+engineering conventions are in `AGENTS.md`. Nothing here is built yet.
 
 Snoozemo puts the phone into Do Not Disturb **until you leave where you are right now**. One tap on a
 Quick Settings tile arms it; walking away disarms it. No timers to guess at, no remembering to turn
@@ -47,7 +51,7 @@ DND back off.
 |---|---|---|
 | D1 | Control DND via **`AutomaticZenRule`**, never `setInterruptionFilter` | Required for apps targeting Android 15+; also composes correctly with the user's other rules |
 | D2 | **Two flavors, chosen by distribution channel** — `play` uses the Geofencing API and `ACCESS_BACKGROUND_LOCATION`; `direct` uses a foreground service and no restricted permissions | Play's April 2026 policy removed geofencing as an approved foreground-service use case and directs it to the Geofence API, so the FGS route is not viable on Play (§3) |
-| D3 | The presence engine is **behind one interface with two implementations** | The flavors differ only below `PresenceMonitor` (§6.1); all product behaviour, DND handling, and UI is shared |
+| D3 | The presence engine is **behind one interface with two implementations** | The flavors differ only below `PresenceMonitor` (§6.1); all product behavior, DND handling, and UI is shared |
 | D4 | **Wi-Fi is a suppressor, not a trigger** | Still on the anchor SSID ⇒ definitely still here (skip location entirely). Wi-Fi dropped ⇒ *maybe* left, so escalate to a location check. Never end a snooze on Wi-Fi loss alone |
 | D5 | **Implicit anchor**: the tile captures "here" at arm time | Zero setup. Saved places are a later addition, not a prerequisite |
 | D6 | **Three independent exits**: departure, max duration, manual | Any one sensor can fail; the phone must always come back |
@@ -143,7 +147,7 @@ Arguing for approval:
   the user puts the phone in their pocket and stops interacting with it.
 - Google's own policy now routes this exact use case to the Geofence API, which requires the
   permission. The declaration can say so directly, and that is a strong argument to make in the form.
-- There is no `INTERNET` permission (§12). Nothing is collected, transmitted, or monetised, and the
+- There is no `INTERNET` permission (§12). Nothing is collected, transmitted, or monetized, and the
   Data Safety form says so. Most background-location rejections are about undisclosed collection and
   sharing; there is nothing here to disclose.
 - The in-app prominent disclosure and the permission flow are straightforward to demonstrate on
@@ -169,7 +173,7 @@ be exercised first, precisely to find out.
 
 ---
 
-## 4. User-visible behaviour
+## 4. User-visible behavior
 
 ### 4.1 States
 
@@ -198,9 +202,9 @@ must never feel slow or refuse.
 
 ### 4.2 The tile
 
-- **Icon:** a `Zz` glyph. Quick Settings icons are 24 dp single-colour vector drawables, tinted by
+- **Icon:** a `Zz` glyph. Quick Settings icons are 24 dp single-color vector drawables, tinted by
   the system — a clock-with-zzz has too much detail to read at that size and would turn to mush once
-  flattened to one colour. A bold two-character `Zz` mark, or a crescent moon with a single `z`, is
+  flattened to one color. A bold two-character `Zz` mark, or a crescent moon with a single `z`, is
   the most legible option that still says "snooze".
 - **Inactive:** label `Snooze here`, no subtitle.
 - **Active:** label `Snoozing`, subtitle `Home · 3h 40m left` (`Tile.setSubtitle`, API 29+), plus
@@ -547,7 +551,7 @@ fun isOutside(fix: Location, a: Anchor): Boolean {
 
 Then require **confirmation**: two consecutive qualifying fixes at least 30 s apart, *or* one fix
 where `d - accuracy > radiusM + 500`. The first rule kills GPS-jump false positives; the second
-means that when you are unambiguously a kilometre away, the phone comes back immediately rather than
+means that when you are unambiguously a kilometer away, the phone comes back immediately rather than
 making you wait out a debounce.
 
 Anchor with no location fix at all (arming indoors with no signal): Wi-Fi-only mode. Losing the
@@ -619,7 +623,7 @@ row is committed, and finishes immediately in `onCreate` if the sheet is disable
 
 This activity is on the critical path of the app's only interaction, so it carries a hard budget:
 service started within one frame of `onCreate`, sheet rendered without a visible flash of a blank
-window, and correct behaviour when launched over the lock screen (§4.2).
+window, and correct behavior when launched over the lock screen (§4.2).
 
 ---
 
@@ -683,7 +687,7 @@ the common case, despite the geofence's own numbers.
 
 #### To-do: explicit fallback end conditions
 
-If, after measuring (§16), geofencing is still unacceptable on Samsung, expose the two signals that
+If, after measuring on hardware (see `TODO.md`, hardware verification item 2), geofencing is still unacceptable on Samsung, expose the two signals that
 do not depend on it as end conditions the user can pick outright:
 
 | Row | Mechanism | Honest assessment |
@@ -757,7 +761,7 @@ the snooze, notify with the reason. Do not attempt to limp along silently.
 the while-in-use exemption list — so a service started from boot gets no location, and no unredacted
 SSID. There is no way around this without `ACCESS_BACKGROUND_LOCATION`.
 
-Behaviour on boot with an unexpired snooze: re-assert the zen rule (this needs no location and works
+Behavior on boot with an unexpired snooze: re-assert the zen rule (this needs no location and works
 fine), start the service in degraded mode, and post the same `Resume tracking` notification as §8.1.
 The duration cap continues from its original start time — reboots do not extend a snooze.
 
@@ -767,7 +771,7 @@ exists to prevent. Make this a setting (`On restart: resume / end`), defaulting 
 
 ### 8.4 Others
 
-| Case | Behaviour |
+| Case | Behavior |
 |---|---|
 | Airplane mode / Wi-Fi off mid-snooze | Wi-Fi signal goes unavailable, not "lost". Fall through to location; if location is also unavailable, degrade to duration-only and say so |
 | Location services disabled system-wide | Degrade to duration-only, update notification |
@@ -782,7 +786,7 @@ exists to prevent. Make this a setting (`On restart: resume / end`), defaulting 
 ## 9. Battery
 
 Rough budget for a 4-hour snooze on a modern Pixel. These are estimates from the mechanisms involved,
-not measurements — §16 says to measure them.
+not measurements — `TODO.md`'s hardware-verification list says to measure them.
 
 **`play` flavor (Geofencing API)** — negligible in every case, well under 1%. A registered geofence
 is monitored by a system process using **network location only**, never GPS (§6.10), so an idle
@@ -822,7 +826,7 @@ settings guidance rather than architecture: nothing here, if it fails, sends the
 drawing board. And the `direct` flavor is independently the stronger build on One UI, so there is a
 good answer available even in the bad cases.
 
-One thing this does buy: keep the OEM-specific work — battery-optimisation guidance, tile-rendering
+One thing this does buy: keep the OEM-specific work — battery-optimization guidance, tile-rendering
 fallbacks — behind a small seam from the start, so M8 is additive rather than surgery.
 
 Three areas need real-device verification, not assumption:
@@ -842,7 +846,7 @@ Three areas need real-device verification, not assumption:
    `com.samsung.android.lool` internals; those component names change between One UI versions.
 
 2. **Modes and Routines.** One UI has its own DND/Modes layer over AOSP's. Third-party
-   `AutomaticZenRule`s have historically appeared under DND schedules, but One UI 8 reorganised this
+   `AutomaticZenRule`s have historically appeared under DND schedules, but One UI 8 reorganized this
    UI substantially. Verify that (a) the rule is created, (b) `setAutomaticZenRuleState` actually
    silences the device, and (c) the rule is discoverable and disableable in Samsung's Settings.
 
@@ -872,6 +876,18 @@ so ask once and never again.
 `SnoozeController` is a plain Kotlin state machine over the §4.1 diagram, with no Android
 dependencies beyond a clock and the two injected interfaces — so it is fully unit-testable, which is
 where most of the real complexity lives.
+
+**The core is split from the UI in the scaffold itself, not once the app grows** (maintainer,
+2026-08-11). That seam is what keeps Android types — `Context`, `Location`, `TileService`, a
+composable's state — out of the state machine; introduced later it stops being a boundary and
+becomes a refactor nobody has time for, and the decision logic ends up in a `Service` where only a
+device can test it.
+
+The module tree above is the starting shape, not the requirement. What is required is a seam that
+keeps the core **functional, testable, and buildable on its own** — a Gradle module boundary is the
+version of that the build enforces for you, so it is the default, but the scaffold may cut the
+modules differently (fewer, or drawn elsewhere) if that serves the same end better. What it may not
+do is leave the core reachable only through the UI or an Android component.
 
 ### Stack
 
@@ -965,65 +981,16 @@ The force-stop and Samsung rows are the ones most likely to find something. Run 
 
 ---
 
-## 15. Milestones
+## 15. Plan and open verification
 
-All milestones are **Pixel and `play` flavor** unless stated. Samsung ships too (goal 5) — it is
-sequenced after the Pixel release, not dropped.
+The phased plan lives in `TODO.md`, which defines milestones **M1–M8** — every reference to
+a milestone in this spec resolves there. So does the list of things that can only be
+settled on real hardware: the background-location declaration, measured geofence exit
+latency, and the One UI questions in §10. Nothing in this document has been verified on a
+device yet, so read every number in §9 and every reliability claim in §6.10 as reasoning
+from mechanism, not measurement.
 
-| | Deliverable |
-|---|---|
-| **M1** | `ZenRuleManager` + policy-access onboarding. Arm and release from a debug button. Proves the DND half |
-| **M2** | Tile, trampoline, notification. Duration cap and manual exit working |
-| **M3** | Presence engine: geofence, Wi-Fi suppressor, and periodic backstop as three wake-up sources (§6.10), feeding the one confirmation test. Departure exit working, latency instrumented |
-| **M4** | End-condition sheet (§4.4): the two rows, the 30-minute `−`/`+`, cap wiring. No calendar |
-| **M5** | Edge cases — reboot, process death, permission revocation, degraded modes |
-| **M6** | Internal-track release on Play |
-| **M7** | `direct` flavor: `ForegroundPresenceMonitor` + `SnoozeService` behind the same interface |
-| **M8** | Samsung: One UI verification (§10) and whatever hardening it turns out to need. Ships as a target, just second |
-
-**Submit the background-location declaration during M3**, as soon as there is a working departure to
-film. It is the longest-lead item and the largest risk (§3.5), and it runs in parallel with M4–M5
-rather than blocking them.
-
-M1 is deliberately first and deliberately small: it proves `setAutomaticZenRuleState` actually
-silences the device before anything is built on top of it. On Pixel that is a formality; the point is
-that everything else in the app is worthless if it isn't true, so it costs a day to remove the doubt.
-
-M7 sits after the internal-track release rather than before it because `direct` is insurance (§3.4).
-Bring it forward only if the declaration is refused — at which point it becomes the whole project.
-
----
-
-## 16. To verify on hardware before committing
-
-Ordered by risk, given Pixel and Play lead.
-
-### Blocking — these can change the project
-
-1. **The background-location declaration (§3.5).** The largest open risk, and the only one that
-   cannot be resolved by writing code. Submit during M3, as soon as there is a working departure to
-   film. Everything else on this list is a tuning question; this one is binary.
-2. **Geofence exit latency and hit rate, measured (§6.10).** The number that decides whether the
-   fallback end conditions are ever needed. Log every geofence callback against a ground-truth
-   departure time over at least a week of ordinary use, Wi-Fi on and off, including a
-   stationary-overnight case. Measure on Pixel first; repeat on Samsung at M8, where the field
-   reports are worse. If the three-source layering closes the gap, the fallbacks stay off the roadmap.
-3. `setAutomaticZenRuleState` genuinely silences the device. A formality on Pixel — do it at M1
-   anyway, since every other line of the app assumes it.
-
-### Tuning — these change details, not direction
-
-4. Real battery draw over a 4-hour stationary snooze versus the §9 estimates, per flavor.
-5. Whether the §4.4 sheet is right at all: is the now + 1 h default sane in practice, are 30-minute
-   steps the right granularity, and does anyone reach for the time row often enough to justify adding
-   the calendar in v1.1? §4.4 is provisional and this is what settles it.
-6. Does the trampoline activity produce any visible flash (§6.9)?
-
-### Samsung, at M8
-
-7. Does `setAutomaticZenRuleState` silence a One UI 8 device, and is the rule visible and disableable
-   in Samsung's own Settings?
-8. Does `Tile.setSubtitle` render on One UI? The countdown lives there, so have the label fallback
-   ready (§10).
-9. Does One UI's Sleeping Apps interfere with geofence delivery, or with a `location`-typed foreground
-   service in the `direct` flavor?
+Two of those are worth restating here because they can change the design rather than tune
+it: the **background-location declaration** (§3.5) is binary and is the single biggest
+project risk, and **measured geofence exit latency** (§6.10) is what decides whether the
+fallback end conditions are ever needed.
