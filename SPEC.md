@@ -442,10 +442,18 @@ own rule* — whatever else was making the phone quiet stays. This is the concre
 
 ```kotlin
 interface PresenceMonitor {
-    fun start(anchor: Anchor): Flow<PresenceEvent>   // StillHere, ProbablyLeft, Departed, Degraded
+    fun start(anchor: Anchor): Flow<PresenceEvent>
     fun stop()
 }
 ```
+
+`PresenceEvent` is `StillHere`, `ProbablyLeft`, `Departed`, `Degraded(cause)`, and
+`CapabilityLost(cause)`. The last two must stay separate types, because they demand opposite
+responses and the difference cannot be left to a monitor's judgment or to a display string:
+**`Degraded` keeps the snooze armed** in a lesser tracking mode with the notification saying so
+(§8.1), while **`CapabilityLost` ends it** with `EndReason.LOST_CAPABILITY` (§8.2, D7). A monitor
+that reports a revoked location permission as `Degraded` leaves the phone silent with nothing left
+to end the snooze — principle 1's failure — so a fatal cause is never reported as a recoverable one.
 
 Two implementations: `GeofencePresenceMonitor` (`play` flavor, §3 option B) and
 `ForegroundPresenceMonitor` (`direct` flavor, §3 option A). Everything above this line is
@@ -866,12 +874,19 @@ so ask once and never again.
 ```
 :app          UI (Compose), onboarding, settings, trampoline activity
 :tile         SnoozeTileService — thin, delegates to :core
-:core         SnoozeController (state machine), Anchor, exits, persistence
+:core         SnoozeController (state machine), Anchor, exits, persistence,
+              and the interfaces the controller is injected with
 :dnd          ZenRuleManager — all NotificationManager/AutomaticZenRule contact
-:presence     PresenceMonitor interface
+:presence     PresenceMonitor implementations
               ├── geofence/    GeofencePresenceMonitor                    (`play` flavor)
               └── foreground/  ForegroundPresenceMonitor + SnoozeService  (`direct` flavor)
 ```
+
+**Contracts live in `:core` with their consumer; implementations live in the Android
+modules.** `PresenceMonitor` is defined in `:core`, not `:presence`, because the controller
+takes one by injection while `:presence` needs `:core` for `Anchor` — defining it the other
+way round is a dependency cycle, not a style preference. The same holds for the DND
+interface `:dnd` implements.
 
 `SnoozeController` is a plain Kotlin state machine over the §4.1 diagram, with no Android
 dependencies beyond a clock and the two injected interfaces — so it is fully unit-testable, which is
@@ -932,6 +947,14 @@ Persisted on every state transition so a process death is fully recoverable.
 - In-app prominent disclosure before the location permission prompt, explaining the *place* use and
   the fact that tracking runs only while a snooze is armed.
 - `android:allowBackup="false"` — a backup of location anchors is not worth the exposure.
+  **This is a starting position, not a permanent one.** It is the right default while the
+  only thing the app stores is a transient anchor; it stops being obviously right once
+  there are saved places, per-place policies, and caps — settings the user built and cannot
+  reproduce, where losing them on a phone swap is its own failure. The two questions are
+  separable, and Android lets them be answered separately (`dataExtractionRules`, API 31+):
+  **device-to-device transfer is not cloud backup**, so "your settings survive a new phone"
+  does not have to mean "your places are in Google's cloud". Settled before the first
+  release that has settings worth keeping (`TODO.md`).
 
 ---
 

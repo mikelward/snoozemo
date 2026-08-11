@@ -7,12 +7,11 @@ lives in `TODO.md`. This repo mirrors the engineering conventions of the sibling
 Launcher (`mikelward/typelauncher`) and Simmo (`mikelward/simmo`) repos; when a convention
 is underspecified here, Simmo's `AGENTS.md` is the tiebreaker.
 
-**Status: the app does not exist yet.** `SPEC.md` and `TODO.md` are written; no Gradle
-project, no source, no CI. Rules below that reference `./gradlew`, CI jobs, screenshot
-tests, or `app/src/**` take effect as Phase 0 lands them (`TODO.md`) — they are here so the
-first commit that creates those things already has a bar to meet, not because they are
-being skipped today. Everything else — the quality bar, git workflow, commit messages,
-privacy, autonomy — applies from the first commit.
+**Status: scaffold only.** The Gradle build, the module split, the two product flavors, and
+CI (build + unit tests + lint) are in place and green; none of the product is. `./gradlew`
+and the CI rules below are live. The screenshot-test rules are not yet — there is no UI to
+record and no screenshot job — and they take effect with the first real screen
+(`TODO.md` Phase 2/4). Everything else applies today.
 
 ## Project documentation
 
@@ -55,9 +54,12 @@ with one of them, the principle wins and the rule is what needs fixing.
    it is reproducible from anywhere else. Where a real constraint seems to force a loss,
    the loss is a **last resort after the alternatives are exhausted**, and any genuine
    trade-off is **the user's to make, stated plainly**, not taken quietly on their behalf.
-   Note the interaction with the no-backup decision (`SPEC.md` §12): `allowBackup="false"`
-   is a deliberate privacy choice, so a device migration loses settings by design — that is
-   exactly the kind of trade-off that gets written down rather than discovered.
+   Note the interaction with the backup decision (`SPEC.md` §12): `allowBackup="false"`
+   is a deliberate privacy choice, so today a device migration loses settings by design —
+   exactly the kind of trade-off that gets written down rather than discovered. It is also
+   explicitly *open*, not settled: once there are settings worth keeping, "survives a new
+   phone" and "lives in Google's cloud" are separable questions (`TODO.md`). Don't write
+   code or copy that treats never-backing-up as permanent.
 4. **Do the work ahead of time.** Anything the arm path needs should already be in memory
    before the tile is tapped: the zen rule id, the settings, the last known SSID. Arming
    must never feel slow or refuse (`SPEC.md` §4.1) — preparation is what buys that.
