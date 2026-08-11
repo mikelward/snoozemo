@@ -90,9 +90,11 @@ the point is that every other line of the app is worthless if it isn't true.
       `onCreate` before any UI, launched via `startActivityAndCollapse(PendingIntent)`.
 - [ ] Ongoing notification on channel `snooze_active`, `IMPORTANCE_LOW`, with `End now` and
       `+30 min` actions (`SPEC.md` §4.3).
-- [ ] `SnoozeController` state machine (IDLE / ARMING / ARMED / CHECKING / RELEASED) as
+- [x] `SnoozeController` state machine (IDLE / ARMING / ARMED / CHECKING / RELEASED) as
       plain Kotlin over an injected clock — the unit-test surface for everything that
-      follows.
+      follows. Covers the three invariants directly: the cap fires (and can't be made to
+      fire early by a stray alarm), `end` is idempotent from any state, and every ambiguous
+      presence event resolves toward ending.
 - [ ] Duration cap: 8 h default, configurable 30 min – 24 h, `AlarmManager
       .setAndAllowWhileIdle` as the backstop plus an in-service coroutine timer for the
       normal case. Armed *before* anything that can throw.
