@@ -17,10 +17,10 @@
 
 *.iml
 /local.properties
-/build
+# Every module's build output (:app, :core, :dnd, :presence, :tile, and the root).
+build/
 /captures
 local.properties
-app/build
 *.keystore
 *.jks
 

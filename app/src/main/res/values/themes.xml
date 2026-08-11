@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      A framework theme, not an AppCompat/Material XML one: the UI is Compose, so
+      the XML theme only has to give the window sane colors before the first
+      composition. The framework has no DayNight variant of Theme.Material, so
+      the dark half lives in values-night/.
+    -->
+    <style name="Theme.Snoozemo" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>
