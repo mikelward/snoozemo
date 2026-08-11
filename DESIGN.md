@@ -22,8 +22,9 @@ DND back off.
 4. **Distributable on Google Play**, accepting that this means passing a background-location
    declaration (§3) — with a fully-functional sideload build that needs no restricted permissions as
    the fallback if that fails.
-5. **Works on Pixel and on Samsung One UI**, acknowledging that One UI's background-process
-   management is the harder target.
+5. **Both Pixel and Samsung One UI, in that order.** Samsung is a real target, not a maybe — but
+   Pixel and Play distribution lead the sequence. Where the two conflict, Pixel wins; where they
+   don't, nothing should be built in a way that makes One UI support harder later.
 
 ### Non-goals (v1)
 
@@ -51,7 +52,7 @@ DND back off.
 | D5 | **Implicit anchor**: the tile captures "here" at arm time | Zero setup. Saved places are a later addition, not a prerequisite |
 | D6 | **Three independent exits**: departure, max duration, manual | Any one sensor can fail; the phone must always come back |
 | D7 | **Fail open, always** | Every ambiguous state resolves toward ending the snooze, not extending it |
-| D8 | **Build and validate the `direct` flavor first**, even though `play` is the shipping target | It has no permission gate at all, so it can be tested on real hardware from week one while the Play declarations are in review |
+| D8 | **Build the `play` flavor first, on Pixel** | Pixel and Play are the priority targets. Nothing blocks developing `play` — the declaration gates *distribution*, not local installs — so the earlier testability argument for `direct`-first does not hold |
 | D9 | **Arm first, refine second** — the tile arms on tap, and a sheet then offers a time (default now + 1 h) or "until I leave" | Keeps the zero-friction one-tap path intact while making a time bound one tap away. Calendar seeding deferred to v1.1 (§4.4) |
 
 ---
@@ -122,12 +123,14 @@ not on the table.
 - **`play`** — option B. Geofencing API, `ACCESS_BACKGROUND_LOCATION`, no ongoing notification.
   This is the shipping build for any Play track, internal included.
 - **`direct`** — option A. Foreground service, no restricted permissions, no Play Services
-  dependency. For sideloaded APKs and F-Droid, and the better build on Samsung.
+  dependency. For sideloaded APKs and F-Droid, and the better build on Samsung. **Insurance, not a
+  parallel product**: it exists so a refused declaration is a distribution setback rather than a dead
+  project, and it should never hold up `play`.
 
-This is not hedging. The two channels genuinely have different constraints, the divergence is
-confined to one interface, and `direct` is independently useful: it is the more robust build against
-One UI's Sleeping Apps, it needs no Play Services, and it can be tested on hardware immediately
-while declarations sit in review (D8).
+This is not hedging. The two channels genuinely have different constraints and the divergence is
+confined to one interface. But the priority is not symmetric: **`play` on Pixel is the product**, and
+`direct` is the fallback that makes §3.5's risk survivable. Build `play` first (D8); keep `direct`
+compiling and tested, but do not let it set the schedule.
 
 ### 3.5 Will the Play declarations be approved?
 
@@ -813,6 +816,15 @@ Nothing OEM-specific required.
 
 ### Samsung One UI
 
+A real target, sequenced second (goal 5). Validated at M8 rather than M1 — not descoped, just not
+allowed to gate the Pixel release. Deferring is safe because everything below is verification or
+settings guidance rather than architecture: nothing here, if it fails, sends the design back to the
+drawing board. And the `direct` flavor is independently the stronger build on One UI, so there is a
+good answer available even in the bad cases.
+
+One thing this does buy: keep the OEM-specific work — battery-optimisation guidance, tile-rendering
+fallbacks — behind a small seam from the start, so M8 is additive rather than surgery.
+
 Three areas need real-device verification, not assumption:
 
 1. **Sleeping apps / Deep sleeping apps.** One UI's Battery → Background usage limits will put
@@ -955,39 +967,63 @@ The force-stop and Samsung rows are the ones most likely to find something. Run 
 
 ## 15. Milestones
 
+All milestones are **Pixel and `play` flavor** unless stated. Samsung ships too (goal 5) — it is
+sequenced after the Pixel release, not dropped.
+
 | | Deliverable |
 |---|---|
-| **M1** | `ZenRuleManager` + policy-access onboarding. Arm and release from a debug button. Proves the DND half on both devices |
-| **M2** | Tile, trampoline, foreground service, notification. Duration cap and manual exit working |
+| **M1** | `ZenRuleManager` + policy-access onboarding. Arm and release from a debug button. Proves the DND half |
+| **M2** | Tile, trampoline, notification. Duration cap and manual exit working |
 | **M3** | Presence engine: geofence, Wi-Fi suppressor, and periodic backstop as three wake-up sources (§6.10), feeding the one confirmation test. Departure exit working, latency instrumented |
 | **M4** | End-condition sheet (§4.4): the two rows, the 30-minute `−`/`+`, cap wiring. No calendar |
-| **M5** | Edge cases — reboot, service death, permission revocation, degraded modes |
-| **M6** | Samsung hardening; onboarding polish; internal track release |
+| **M5** | Edge cases — reboot, process death, permission revocation, degraded modes |
+| **M6** | Internal-track release on Play |
+| **M7** | `direct` flavor: `ForegroundPresenceMonitor` + `SnoozeService` behind the same interface |
+| **M8** | Samsung: One UI verification (§10) and whatever hardening it turns out to need. Ships as a target, just second |
 
-M1 is deliberately first and deliberately small: if `setAutomaticZenRuleState` does not actually
-silence a Samsung device (§10.2), that changes the project, and it is much better to learn it in
-week one than in week five.
+**Submit the background-location declaration during M3**, as soon as there is a working departure to
+film. It is the longest-lead item and the largest risk (§3.5), and it runs in parallel with M4–M5
+rather than blocking them.
+
+M1 is deliberately first and deliberately small: it proves `setAutomaticZenRuleState` actually
+silences the device before anything is built on top of it. On Pixel that is a formality; the point is
+that everything else in the app is worthless if it isn't true, so it costs a day to remove the doubt.
+
+M7 sits after the internal-track release rather than before it because `direct` is insurance (§3.4).
+Bring it forward only if the declaration is refused — at which point it becomes the whole project.
 
 ---
 
 ## 16. To verify on hardware before committing
 
-1. Does `setAutomaticZenRuleState` genuinely silence a One UI 8 device, and is the rule visible in
-   Samsung's Settings? *(highest risk — M1)*
-2. Does `Tile.setSubtitle` render on One UI?
-3. Does the trampoline activity produce any visible flash on either device?
-4. Real battery draw over a 4-hour stationary snooze versus the §9 estimates.
-5. Does One UI's Sleeping Apps touch a `location`-typed foreground service in practice?
-6. **The background-location declaration itself (§3.5).** The largest open risk in the project, and
-   the only one that cannot be resolved by writing code. Submit the `play` flavor to the internal
-   track as early as there is something demonstrable to film, well before M6 — the point is to learn
-   the answer while `direct` is still cheap to fall back on.
-7. Whether the §4.4 sheet is right at all: is the now + 1 h default sane in practice, are 30-minute
+Ordered by risk, given Pixel and Play lead.
+
+### Blocking — these can change the project
+
+1. **The background-location declaration (§3.5).** The largest open risk, and the only one that
+   cannot be resolved by writing code. Submit during M3, as soon as there is a working departure to
+   film. Everything else on this list is a tuning question; this one is binary.
+2. **Geofence exit latency and hit rate, measured (§6.10).** The number that decides whether the
+   fallback end conditions are ever needed. Log every geofence callback against a ground-truth
+   departure time over at least a week of ordinary use, Wi-Fi on and off, including a
+   stationary-overnight case. Measure on Pixel first; repeat on Samsung at M8, where the field
+   reports are worse. If the three-source layering closes the gap, the fallbacks stay off the roadmap.
+3. `setAutomaticZenRuleState` genuinely silences the device. A formality on Pixel — do it at M1
+   anyway, since every other line of the app assumes it.
+
+### Tuning — these change details, not direction
+
+4. Real battery draw over a 4-hour stationary snooze versus the §9 estimates, per flavor.
+5. Whether the §4.4 sheet is right at all: is the now + 1 h default sane in practice, are 30-minute
    steps the right granularity, and does anyone reach for the time row often enough to justify adding
    the calendar in v1.1? §4.4 is provisional and this is what settles it.
-8. **Geofence exit latency and hit rate, measured, on both devices (§6.10).** The one number that
-   decides whether the fallback end conditions are ever needed. Log every geofence callback against a
-   ground-truth departure time, over at least a week of ordinary use, with Wi-Fi both on and off, and
-   include a stationary-overnight case. Field reports of multi-hour delays on Samsung are common
-   enough that this has to be measured rather than assumed — and if the three-source layering closes
-   the gap, the fallbacks stay off the roadmap.
+6. Does the trampoline activity produce any visible flash (§6.9)?
+
+### Samsung, at M8
+
+7. Does `setAutomaticZenRuleState` silence a One UI 8 device, and is the rule visible and disableable
+   in Samsung's own Settings?
+8. Does `Tile.setSubtitle` render on One UI? The countdown lives there, so have the label fallback
+   ready (§10).
+9. Does One UI's Sleeping Apps interfere with geofence delivery, or with a `location`-typed foreground
+   service in the `direct` flavor?
