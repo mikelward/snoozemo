@@ -7,10 +7,17 @@
       Safety answer "no data collected, no data shared" trivially auditable.
       Adding it is a product decision, not an implementation detail.
 
-      The location, notification, and DND permissions arrive with the phases
-      that use them: Phase 1 for ACCESS_NOTIFICATION_POLICY, Phase 2 for
-      POST_NOTIFICATIONS, Phase 3 for the location family.
+      The location and notification permissions arrive with the phases that use
+      them: Phase 2 for POST_NOTIFICATIONS, Phase 3 for the location family.
     -->
+
+    <!--
+      Manifest-declared, but granted through a settings screen rather than a
+      runtime dialog (SPEC.md §5.2) — there is no runtime prompt for this one,
+      which is why onboarding has to send the user to Settings and listen for
+      the grant coming back.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
 
     <application
         android:name=".SnoozemoApplication"
