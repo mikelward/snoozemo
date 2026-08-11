@@ -111,7 +111,11 @@ different review that this app should expect to fail. There is no framing of it 
 location sharing that is both accurate and approvable, and submitting an inaccurate declaration is
 not on the table.
 
-### 3.4 Recommendation
+### 3.4 Recommendation — **agreed**
+
+> **Settled:** option B is the primary. Accept the `ACCESS_BACKGROUND_LOCATION` declaration and
+> build on the Geofencing API. §3.5's risk assessment stands, and §6.10 covers what to do about the
+> API's reliability, but the direction is no longer open.
 
 **Two product flavors, differing only below `PresenceMonitor` (§6.1):**
 
@@ -264,7 +268,8 @@ renders a compact bottom sheet. Arming never waits on the UI, so the one-tap pat
 | **Whichever comes first** | both | **v1.** Not a third row — implied. Setting a time leaves departure tracking armed |
 | **This meeting ends** | `READ_CALENDAR` | **v1.1.** Strong, but deferred — see below |
 | **My next alarm** | `AlarmManager.getNextAlarmClock()` | **Explore.** No permission at all, and a natural fit for a bedtime snooze. Offer only when the next alarm is 3–12 h out, so it doesn't propose a 4-minute snooze |
-| **I start moving** | `TYPE_SIGNIFICANT_MOTION` | **Explore.** No permission, already wired for §6.7. But noisy — standing up for coffee would end it. Adding a distance confirmation makes it "I leave" |
+| **Wi-Fi goes** | `NetworkCallback.onLost` | **Fallback only, if §6.10 measurement forces it.** Instant and free, but it inverts D4 — it *is* the failure mode we designed around |
+| **I start moving** | `TYPE_SIGNIFICANT_MOTION` | **Fallback only, same condition (§6.10).** No permission, already wired for §6.7. But "moved" is not "left" — standing up for coffee would end it |
 | **I get home** | reverse geofence on a saved place | **Deferred.** Needs saved places (§14) plus background location, so `play`-flavor only |
 | **Sunset / bedtime window** | none | **Rejected.** The OS's own scheduled Modes do this properly |
 | **Screen unlocked N times** | none | **Rejected.** A proxy for attention, not place or time, and wrong in both directions |
@@ -615,6 +620,86 @@ window, and correct behaviour when launched over the lock screen (§4.2).
 
 ---
 
+### 6.10 Geofencing quality, and the fallback ladder
+
+The `play` flavor's departure detection rests on the Play Services Geofencing API, so it is worth
+being precise about what that API is and is not good at — this is the difference between the app
+feeling reliable and feeling haunted.
+
+#### Battery: genuinely cheap
+
+Low, and for a structural reason rather than a tuning one:
+
+> "On most devices, the geofence service uses only network location for geofence triggering. The
+> service uses this approach because network location consumes much less power, it takes less time
+> to get discrete locations, and most importantly it's available indoors."
+
+No GPS wakeups. Registration is handed to a system process that is already computing network
+location for other reasons, so an idle geofence is close to free — well under 1% for a 4-hour snooze,
+and materially cheaper than the `direct` flavor's foreground service. `setNotificationResponsiveness`
+trades latency for power on top of that; at our 150 m radius the default is already fine and there is
+little left to win. Battery is **not** the reason to worry about this API.
+
+#### Reliability: the actual risk
+
+The same design choice that makes it cheap makes it fragile, and the documentation is candid:
+
+- **Wi-Fi off** — "your application might never get geofence alerts", depending on radius, device
+  model, and Android version.
+- **No data connection inside the fence** — network location needs one, so "alerts might not be
+  generated."
+- **Latency** — usually under 2 minutes, but 2–3 minutes under Background Location Limits, and up to
+  ~6 minutes if the device has been stationary.
+- **OEM battery management** — One UI's Sleeping Apps degrades this further (§10).
+
+And the field reports are worse than the documentation: geofence transitions firing hours late, or
+not at all, with Samsung on Android 12 singled out repeatedly. Assume some of this is still true.
+
+The irony is exact: geofencing is least reliable when Wi-Fi is off, which is precisely when
+Snoozemo most needs it, because our Wi-Fi suppressor (D4) has nothing to work with either.
+
+#### Do not rely on the geofence alone
+
+Treat the geofence as **one wake-up source among three**, not as the mechanism. All three are cheap,
+and they fail independently:
+
+1. **Geofence exit** — primary. Also a documented exemption for starting a foreground service from
+   the background, so its callback can start a short-lived service to confirm.
+2. **Wi-Fi loss** (`NetworkCallback.onLost`) — free, instant, and completely independent of Play
+   Services. In the `play` flavor we already hold `ACCESS_BACKGROUND_LOCATION`, so this can trigger a
+   one-shot `getCurrentLocation()` and run the §6.6 departure test directly, without waiting for the
+   geofence to notice. This is the single highest-value addition, because it covers the common case
+   (leaving a Wi-Fi place) with no reliance on the flaky path at all.
+3. **A periodic backstop** — a coarse `WorkManager` check on the order of 15–30 minutes while armed,
+   purely to catch a geofence that never fired. Cheap, and it bounds worst-case staleness to
+   something well short of the duration cap.
+
+Confirmation still runs through the one §6.6 test, so no source can end a snooze on its own evidence.
+This layering is why the `play` flavor's departure latency should land near the `direct` flavor's in
+the common case, despite the geofence's own numbers.
+
+#### To-do: explicit fallback end conditions
+
+If, after measuring (§16), geofencing is still unacceptable on Samsung, expose the two signals that
+do not depend on it as end conditions the user can pick outright:
+
+| Row | Mechanism | Honest assessment |
+|---|---|---|
+| **until Wi-Fi goes** | `NetworkCallback.onLost` on the anchor SSID | Instant, free, no Play Services, no location fix. But it inverts D4 — it *is* the failure mode we designed around, and it will end snoozes when the router reboots or you toggle Wi-Fi. Only defensible as an explicit user choice, where the user knows Wi-Fi is the real boundary for that place |
+| **until I move** | `TYPE_SIGNIFICANT_MOTION`, no permission | Instant, free, works with no Wi-Fi and no data. But "moved" is not "left" — standing up ends it. Genuinely useful for "quiet while I'm sitting here", which is a real and different intent |
+
+**Preference, in order.** First, fix it invisibly: the three-source layering above should absorb most
+geofence flakiness without the user ever choosing a mechanism. Second, if a place is reliably bad,
+have the app pick the fallback itself and *say so* in the sheet — `until Wi-Fi goes` shown in place of
+`until I leave`, because the geofence has proven unreliable here — which keeps the user's mental model
+about places rather than sensors. Only third, and only if both fail, expose them as standing options.
+
+The reluctance is not aesthetic. Asking "until Wi-Fi goes, or until you move?" pushes an
+implementation detail the user cannot evaluate onto the user, and the answer they want is always
+"until I leave." But you are right that it may be needed, and the state machine already treats every
+exit as a cap-lowering condition (§7), so adding these rows is UI work rather than architecture work.
+Nothing here has to be decided now.
+
 ## 7. Exits
 
 All three exits converge on one `endSnooze(reason)` path that sets the rule state `STATE_FALSE`,
@@ -693,7 +778,17 @@ exists to prevent. Make this a setting (`On restart: resume / end`), defaulting 
 
 ## 9. Battery
 
-Rough budget for a 4-hour snooze on a modern Pixel:
+Rough budget for a 4-hour snooze on a modern Pixel. These are estimates from the mechanisms involved,
+not measurements — §16 says to measure them.
+
+**`play` flavor (Geofencing API)** — negligible in every case, well under 1%. A registered geofence
+is monitored by a system process using **network location only**, never GPS (§6.10), so an idle
+geofence rides on location work the device is already doing. Our additions are a Wi-Fi network
+callback (event-driven, free) and a 15–30 minute `WorkManager` backstop (a handful of wakeups over a
+4-hour snooze). There is no ongoing notification and no process of ours running between events.
+
+**`direct` flavor (foreground service)** — higher, and dominated entirely by location fix frequency,
+which §6.7's duty cycle drives toward zero in the common case:
 
 | Scenario | Estimate |
 |---|---|
@@ -701,8 +796,11 @@ Rough budget for a 4-hour snooze on a modern Pixel:
 | No Wi-Fi, phone stationary | ~1% — significant-motion trigger plus a 10-minute sanity fix |
 | No Wi-Fi, intermittent movement | ~2–3% — 90 s balanced-power fixes during active periods |
 
-The FGS notification itself costs nothing. The dominant term is location fix frequency, which §6.7
-drives toward zero in the common case (you are at a place with Wi-Fi, and you are not moving).
+The FGS notification itself costs nothing.
+
+So battery is not a reason to prefer `direct`, and not a reason to fear `play`. The `play` flavor is
+the cheaper of the two by a clear margin — its problem is reliability (§6.10), not power, and the
+three-source layering that fixes the reliability is itself nearly free.
 
 ---
 
@@ -861,7 +959,7 @@ The force-stop and Samsung rows are the ones most likely to find something. Run 
 |---|---|
 | **M1** | `ZenRuleManager` + policy-access onboarding. Arm and release from a debug button. Proves the DND half on both devices |
 | **M2** | Tile, trampoline, foreground service, notification. Duration cap and manual exit working |
-| **M3** | Presence engine: Wi-Fi suppressor, location confirmation, duty cycling. Departure exit working |
+| **M3** | Presence engine: geofence, Wi-Fi suppressor, and periodic backstop as three wake-up sources (§6.10), feeding the one confirmation test. Departure exit working, latency instrumented |
 | **M4** | End-condition sheet (§4.4): the two rows, the 30-minute `−`/`+`, cap wiring. No calendar |
 | **M5** | Edge cases — reboot, service death, permission revocation, degraded modes |
 | **M6** | Samsung hardening; onboarding polish; internal track release |
@@ -887,3 +985,9 @@ week one than in week five.
 7. Whether the §4.4 sheet is right at all: is the now + 1 h default sane in practice, are 30-minute
    steps the right granularity, and does anyone reach for the time row often enough to justify adding
    the calendar in v1.1? §4.4 is provisional and this is what settles it.
+8. **Geofence exit latency and hit rate, measured, on both devices (§6.10).** The one number that
+   decides whether the fallback end conditions are ever needed. Log every geofence callback against a
+   ground-truth departure time, over at least a week of ordinary use, with Wi-Fi both on and off, and
+   include a stationary-overnight case. Field reports of multi-hour delays on Samsung are common
+   enough that this has to be measured rather than assumed — and if the three-source layering closes
+   the gap, the fallbacks stay off the roadmap.
