@@ -1,6 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name">Snoozemo</string>
+
+    <!--
+      Phase 1 debug screen only. This copy is scaffolding for a device check, not
+      product copy: it is replaced by onboarding and settings in later phases and
+      never reaches a release, so it is deliberately not translated and has not
+      been through the propose-copy-in-chat step.
+    -->
     <!-- TODO: translate -->
-    <string name="scaffold_placeholder" tools:ignore="MissingTranslation">Not built yet — see TODO.md</string>
+    <string name="debug_access_granted" tools:ignore="MissingTranslation">Do Not Disturb access granted</string>
+    <!-- TODO: translate -->
+    <string name="debug_access_missing" tools:ignore="MissingTranslation">Snoozemo needs Do Not Disturb access</string>
+    <!-- TODO: translate -->
+    <string name="debug_grant_access" tools:ignore="MissingTranslation">Grant access</string>
+    <!-- TODO: translate -->
+    <string name="debug_arm" tools:ignore="MissingTranslation">Snooze</string>
+    <!-- TODO: translate -->
+    <string name="debug_release" tools:ignore="MissingTranslation">End snooze</string>
+    <!-- TODO: translate -->
+    <string name="debug_armed" tools:ignore="MissingTranslation">Snoozing</string>
+    <!-- TODO: translate -->
+    <string name="debug_released" tools:ignore="MissingTranslation">Snooze ended</string>
+    <!-- TODO: translate -->
+    <string name="debug_failed" tools:ignore="MissingTranslation">Didn\'t work: %1$s</string>
+    <!-- TODO: translate -->
+    <string name="debug_rule_failed" tools:ignore="MissingTranslation">Do Not Disturb access is on, but Snoozemo could not create its rule</string>
+    <!-- TODO: translate -->
+    <string name="debug_rule_disabled" tools:ignore="MissingTranslation">Snoozemo\'s rule is switched off in Settings</string>
+    <!-- TODO: translate -->
+    <string name="debug_ended_access_lost" tools:ignore="MissingTranslation">Snooze ended — Do Not Disturb access was turned off</string>
 </resources>

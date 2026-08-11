@@ -59,19 +59,26 @@ Deliberately first and deliberately small: it proves `setAutomaticZenRuleState` 
 silences the device before anything is built on top of it. On Pixel that is a formality;
 the point is that every other line of the app is worthless if it isn't true.
 
-- [ ] `ZenRuleManager`: create one long-lived `AutomaticZenRule` at first successful
-      onboarding, persist its id, never churn it per snooze (`SPEC.md` §5.3).
-- [ ] API 35+ `AutomaticZenRule.Builder` path with the SDK 33/34 constructor fallback, and
+- [x] `ZenRuleManager`: create one long-lived `AutomaticZenRule` at first successful
+      onboarding, persist its id, never churn it per snooze (`SPEC.md` §5.3). Landed as
+      `AndroidZenController` in `:dnd` behind a `ZenController` contract in `:core`; it
+      re-checks that the platform still has the rule rather than trusting the persisted id,
+      since the user can delete it from Settings.
+- [x] API 35+ `AutomaticZenRule.Builder` path with the SDK 33/34 constructor fallback, and
       the 4-arg `Condition` with `SOURCE_USER_ACTION` / `SOURCE_CONTEXT` on API 35+
       (`SPEC.md` §5.4). No `ConditionProviderService` — it is deprecated and unnecessary.
-- [ ] `ACCESS_NOTIFICATION_POLICY` onboarding: the settings-screen grant flow, plus a
+- [x] `ACCESS_NOTIFICATION_POLICY` onboarding: the settings-screen grant flow, plus a
       listener on `ACTION_NOTIFICATION_POLICY_ACCESS_GRANTED_CHANGED` so revocation
-      mid-snooze ends the snooze and says why.
-- [ ] Default `ZenPolicy`: `INTERRUPTION_FILTER_PRIORITY` allowing alarms, media, system
-      sounds, and repeat callers. Total silence available in settings, never the default.
-- [ ] Debug arm/release button — no tile, no presence engine, no UI polish.
-- [ ] Verify on a real Pixel that the rule silences the device and is visible and
-      disableable in Settings (hardware item 3 below).
+      mid-snooze ends the snooze and says why. The decision itself is a pure function in
+      `:core` (`PolicyAccessChange`) with tests, since it is the fail-open rule in code.
+- [x] Default `ZenPolicy`: `INTERRUPTION_FILTER_PRIORITY` allowing alarms, media, system
+      sounds, and repeat callers. Total silence is still to be offered in settings, and is
+      never the default.
+- [x] Debug arm/release button — no tile, no presence engine, no UI polish.
+- [ ] **Still owed: verify on a real Pixel** that the rule silences the device and is
+      visible and disableable in Settings (hardware item 3 below). Nothing in this sandbox
+      can answer it — there is no emulator, and an emulator could not answer it anyway.
+      Until someone runs it, Phase 1 is written but not proven.
 
 ## Phase 2 (M2) — Tile, trampoline, notification, cap
 
@@ -94,6 +101,14 @@ the point is that every other line of the app is worthless if it isn't true.
 - [ ] `requestAddTileService()` during onboarding — asked once, never again.
 - [ ] Persist `ActiveSnooze` on every transition (DataStore), so process death is
       recoverable.
+- [ ] **Move the policy-access listener off the activity** (flagged by Codex on PR #5).
+      Phase 1 registers `ACTION_NOTIFICATION_POLICY_ACCESS_GRANTED_CHANGED` in
+      `onStart`/`onStop`, so access revoked while the app is backgrounded mid-snooze isn't
+      noticed until the user reopens it — the state reconciles on return, but "ends the
+      snooze and says why" (`SPEC.md` §8.2) needs to happen when it happens, not when
+      someone looks. It belongs on the service that owns the running snooze, which is what
+      this phase builds; an activity is structurally the wrong host for it, and process
+      death would defeat an `Application`-scoped receiver anyway.
 
 ## Phase 3 (M3) — Presence: the `play` flavor
 
