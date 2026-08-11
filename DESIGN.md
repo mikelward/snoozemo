@@ -49,6 +49,7 @@ DND back off.
 | D6 | **Three independent exits**: departure, max duration, manual | Any one sensor can fail; the phone must always come back |
 | D7 | **Fail open, always** | Every ambiguous state resolves toward ending the snooze, not extending it |
 | D8 | Geofencing API + background location available as an **opt-in build flavor** | For users who want no ongoing notification and are willing to pay the Play review cost |
+| D9 | **Offer "until this meeting ends" only when a meeting is actually in progress** | Keeps the zero-friction one-tap path intact in the common case, and surfaces the choice exactly when it is meaningful (§4.4) |
 
 ---
 
@@ -154,7 +155,74 @@ Channel `snooze_active`, `IMPORTANCE_LOW`, ongoing, not dismissible while the se
     [ End now ]   [ Add 1 hour ]
 ```
 
-### 4.4 Ending
+### 4.4 Choosing an end condition
+
+"Until I leave" is the thesis, but it is not always the *best available* answer. If you are in a
+meeting that ends at 15:30, "until 15:30" is sharper than "until I walk out" — you might not walk out
+for another hour. The design should offer a better end condition when it can infer one, without
+taxing the common case with a menu.
+
+**The rule (D9): tap arms immediately with the best default; a chooser appears only when there is a
+genuinely better alternative on offer.**
+
+Concretely, the trampoline activity (§6.9) already exists on the arm path. When a context signal is
+present it renders a compact bottom sheet instead of finishing silently; when nothing is on offer it
+stays invisible and arms in one tap, exactly as today. Either way the snooze is armed *before* the
+sheet is shown, so dismissing it, or the sheet failing to appear, leaves you correctly snoozed.
+
+```
+🌙  Snoozing at Home
+    ── End when ──────────────────
+    ○ I leave here                  ← default, always present
+    ● This meeting ends    15:30    ← offered only if a meeting is in progress
+    ○ In 1 hour                     ← always present
+```
+
+#### Candidates
+
+| End condition | Signal needed | Verdict |
+|---|---|---|
+| **I leave here** | §6 presence engine | **v1.** The default, always offered |
+| **Fixed duration** | none | **v1.** Always offered as a fallback; also the §7 cap |
+| **This meeting ends** | `READ_CALENDAR` | **v1, opt-in.** The strongest of these — a real end time, and the moment people most want silence. Details below |
+| **Either — whichever comes first** | both | **v1.** Not a fourth option in the list: "meeting ends" implies it, by setting the cap to the meeting end while departure tracking stays armed. Leaving early still ends it early |
+| **My next alarm** | `AlarmManager.getNextAlarmClock()` | **Explore.** No permission at all, and a natural fit for a bedtime snooze. Offer only when the next alarm is 3–12 h out, so it doesn't propose a 4-minute snooze |
+| **I start moving** | `TYPE_SIGNIFICANT_MOTION` | **Explore.** No permission, already wired up for §6.7. Different intent from "I leave" — useful for "quiet while I'm sitting here", but noisy: standing up to get coffee would end it. Would need a distance confirmation, at which point it is nearly "I leave" |
+| **I get home** | reverse geofence on a saved place | **Deferred.** Needs saved places (§14) and, for a place you are not at, background location. Naturally pairs with the option-B flavor |
+| **Sunset / bedtime window** | none | **Rejected.** The OS's own scheduled Modes do this properly. Snoozemo is for the ad-hoc case |
+| **Screen unlocked N times** | none | **Rejected.** A proxy for attention, not for place or time, and wrong in both directions |
+
+#### The calendar option
+
+`READ_CALENDAR`, queried against `CalendarContract.Instances` for events overlapping now:
+
+```kotlin
+val now = System.currentTimeMillis()
+CalendarContract.Instances.query(contentResolver, PROJECTION, now, now + 12.hours)
+    .filter { it.begin <= now && it.end > now }
+    .filter { it.availability == Instances.AVAILABILITY_BUSY }   // ignore "free"/FYI blocks
+    .filter { it.allDay == false }                               // an all-day event is not a meeting
+    .minByOrNull { it.end }                                      // the soonest-ending overlap
+```
+
+Design constraints:
+
+- **Fully optional and lazily requested.** The permission is asked for the first time the user taps
+  *End when → this meeting ends*, never during onboarding. If it is not granted the option simply
+  never appears, and the app is undiminished. This matters for Play review too: an app that asks for
+  calendar access up front, for a secondary feature, invites scrutiny it does not need — see §3's
+  general principle, applied again. `READ_CALENDAR` has no restricted-permission declaration form,
+  but it is still governed by Play's sensitive-permissions policy and must be visibly tied to a
+  user-facing feature. Lazy, in-context requesting is what makes that tie obvious.
+- **Read-only, never written, never leaves the device** (there is no `INTERNET` permission to leave
+  by, §12).
+- **Meetings run over.** Offer *Add 15 min* alongside *Add 1 hour* in the ongoing notification (§4.3)
+  when the snooze was armed against a calendar event, and prefer extending over re-arming.
+- **Back-to-back meetings.** v1 ends at the current event's end and does not chain into the next one.
+  Chaining is tempting and is how you end up silenced all afternoon by a calendar you forgot about;
+  the cap would catch it, but surprising the user is still the wrong default.
+
+### 4.5 Ending
 
 When a snooze ends by departure or by cap, post a one-shot dismissible notification:
 `Snooze ended — you left Home` / `Snooze ended — 8 hour limit reached`. This is how the user builds
@@ -403,6 +471,9 @@ A phone sitting on a desk for four hours therefore does essentially no location 
 <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
 <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+<!-- Optional, requested lazily on first use of "until this meeting ends" (§4.4).
+     Never requested during onboarding; the feature hides itself if not granted. -->
+<uses-permission android:name="android.permission.READ_CALENDAR" />
 
 <service android:name=".presence.SnoozeService"
          android:foregroundServiceType="location"
@@ -448,6 +519,11 @@ Idempotent; safe to call twice.
 | **Departure** | §6.6 confirmation | The intended path |
 | **Duration cap** | Default 8 h, configurable 30 min – 24 h | Backstop for every sensor failure |
 | **Manual** | Tile tap, notification action, or in-app | Always available, always instant |
+
+A chosen end condition from §4.4 does not add a fourth exit — it *lowers the cap*. Picking "this
+meeting ends, 15:30" sets `capExpiresAt` to 15:30 while departure tracking stays fully armed, so
+whichever happens first wins and leaving early still ends the snooze early. The 8-hour ceiling
+remains as an absolute backstop above any chosen value.
 
 The cap uses `AlarmManager.setAndAllowWhileIdle` — **inexact on purpose**. Exact alarms need
 `SCHEDULE_EXACT_ALARM`, which is no longer auto-granted on Android 14+ and carries its own Play
@@ -645,6 +721,11 @@ against a real `NotificationManager` with policy access granted.
 | Arm, force-stop app | DND state resolves; no permanently stuck silence |
 | Arm on Samsung with Sleeping Apps on, wait 4 h | Still tracking |
 | Arm while DND already on from a bedtime schedule, then leave | Snoozemo's rule off, bedtime rule untouched |
+| Arm with no meeting in progress | No sheet, armed in one tap |
+| Arm during a meeting, choose "until it ends", then leave early | Ends on departure, not at the meeting end |
+| Arm during a meeting, choose "until it ends", stay put | Ends at the meeting end |
+| Arm during an all-day event or a "free" calendar block | Not offered as a meeting |
+| Deny `READ_CALENDAR` | Option absent everywhere; nothing else changes |
 
 The force-stop and Samsung rows are the ones most likely to find something. Run them first.
 
@@ -657,7 +738,9 @@ The force-stop and Samsung rows are the ones most likely to find something. Run 
 - **Auto-arm on arrival.** The obvious sequel, and the one that genuinely needs background location
   and the Play declaration — so it is the natural trigger for adopting the §3 option-B flavor.
 - **`ZenDeviceEffects`** — grayscale, dim wallpaper, night mode while snoozed (§5.5).
-- **Calendar awareness** — offer a duration matching the meeting you are in.
+- **"Until I get home"** and other saved-place reverse geofences (§4.4), which follow from saved
+  places plus the option-B flavor.
+- **Chaining back-to-back meetings** (§4.4), if using the app shows people actually want it.
 - **Wear OS tile.**
 
 ---
@@ -669,8 +752,9 @@ The force-stop and Samsung rows are the ones most likely to find something. Run 
 | **M1** | `ZenRuleManager` + policy-access onboarding. Arm and release from a debug button. Proves the DND half on both devices |
 | **M2** | Tile, trampoline, foreground service, notification. Duration cap and manual exit working |
 | **M3** | Presence engine: Wi-Fi suppressor, location confirmation, duty cycling. Departure exit working |
-| **M4** | Edge cases — reboot, service death, permission revocation, degraded modes |
-| **M5** | Samsung hardening; onboarding polish; internal track release |
+| **M4** | End-condition chooser (§4.4): calendar option behind a lazy `READ_CALENDAR` request, next-alarm option, sheet UI |
+| **M5** | Edge cases — reboot, service death, permission revocation, degraded modes |
+| **M6** | Samsung hardening; onboarding polish; internal track release |
 
 M1 is deliberately first and deliberately small: if `setAutomaticZenRuleState` does not actually
 silence a Samsung device (§10.2), that changes the project, and it is much better to learn it in
