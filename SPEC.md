@@ -345,25 +345,29 @@ no trace the user can read, and "it ended early" is not a reproducible bug repor
 the two failures that matter most — an early release and a stuck snooze — are exactly the two that
 cannot be diagnosed.
 
-**An on-device log, off by default.** The app already declares no `INTERNET` permission (§12), so
-nothing leaves the device unless the user hands it over: sharing goes through the system share sheet
-(and a copy-to-clipboard fallback), which makes every send an explicit act with a visible
-destination. Retention is bounded — the current run plus the previous one, rotated at start, in
-`cacheDir`, which is excluded from backup.
+**An on-device log, on by default** (maintainer, 2026-08-11), with a setting to turn it off. The
+app already declares no `INTERNET` permission (§12), so nothing leaves the device unless the user
+hands it over: sharing goes through the system share sheet (and a copy-to-clipboard fallback), which
+makes every send an explicit act with a visible destination. Retention is bounded — the current run
+plus the previous one, rotated at start, in `cacheDir`, which is excluded from backup.
 
-> **Open: is off-by-default right?** It is the conservative default, and it has a real cost — the
-> failures worth diagnosing (an early release, a stuck snooze, a crash) are unpredictable and
-> unrepeatable, so an off-by-default log guarantees the *first* occurrence of each is the one nobody
-> captured, and asks the user to reproduce a bug that happens once a week in their pocket. Simmo
-> keeps its log always-on for exactly that reason, and the floor below means an always-on log here
-> would hold coarse state and reasons rather than anything about where the user was. Sharing stays
-> explicit either way, so the question is only about data at rest on the user's own device. It is a
-> privacy default rather than an implementation detail, so it is the maintainer's call (`TODO.md`);
-> the rest of this section holds under either answer.
+On-by-default is the decision because off-by-default has a cost that only looks small: the failures
+worth diagnosing here — an early release, a stuck snooze, a crash — are **unpredictable and
+unrepeatable**, so a log that starts off guarantees the *first* occurrence of each is the one nobody
+captured, and asks the user to reproduce a bug that happens once a week in their pocket. The
+conservative-looking default is the one that makes the product undebuggable in practice.
 
-**Nothing promises a log that may not exist.** While the log is off, the post-crash banner below
-does not appear at all — offering to share a diagnostic that was never recorded would waste the one
-moment the user is willing to help, on the failure that most needs reconstruction.
+What it costs is bounded and stated: two runs of coarse state and reasons, on the user's own device,
+under the floor below, behind a setting, and shared only by an explicit act. Simmo's log is
+always-on for the same reason. The alternative — a privacy gain measured in "two files that never
+leave the phone" — buys less than it gives up.
+
+**Turning the setting off deletes what was kept**, immediately: the current run, the previous run,
+and any pinned crash. Stopping new writes while leaving the old files sitting in `cacheDir` would be
+a privacy control that doesn't do the thing its name promises — and worse, those files would no
+longer rotate, so they would outlive every log the feature normally keeps. The cost is real and
+accepted: an unshared crash report is lost at that moment. That is the right way round, because the
+user has just said they don't want this kept.
 
 **What it records.** Enough to reconstruct a snooze's life, and nothing about where that life
 happened:
@@ -418,8 +422,9 @@ Dismiss renames the file off the crash-suffixed name, after which it is an ordin
 shareable from settings and rotated away like any other. A later crash pins again.
 
 The log lives in `cacheDir`, which the system may reclaim under storage pressure, so a pinned crash
-can disappear before the user acts on it. **The banner checks the file is still there and stays
-silent if it isn't** — offering to share a log that no longer exists is worse than saying nothing.
+can disappear before the user acts on it — and a user who switched logging off has none to begin
+with. **The banner checks the file is still there and stays silent if it isn't** — offering to share
+a log that no longer exists is worse than saying nothing.
 Persisting it outside the cache (`noBackupFilesDir`) would close that window, and is deliberately
 not done: a disposable diagnostic belongs in the cache, eviction costs a nice-to-have rather than
 anything the user relies on, and the alternative keeps crash logs alive past the retention this
@@ -1033,9 +1038,10 @@ Persisted on every state transition so a process death is fully recoverable.
   "no data collected, no data shared" — trivially true and trivially auditable.
 - Coordinates never leave the device. The v1 anchor is discarded when the snooze ends.
 - Snooze history (if added) is local, off by default, and clearable.
-- **The debug log (§4.6) is the one sanctioned exception, and a narrow one.** It is off by default,
-  on-device, bounded to two runs, and leaves the device only when the user shares it through the
-  system share sheet. Its floor is absolute: coarse state, reasons, distance from the anchor in
+- **The debug log (§4.6) is the one sanctioned exception, and a narrow one.** It is on by default
+  (maintainer, 2026-08-11) with a setting to switch it off, on-device, bounded to two runs, and
+  leaves the device only when the user shares it through the system share sheet — the default is
+  about what is recorded *on the user's own phone*, not about anything leaving it. Its floor is absolute: coarse state, reasons, distance from the anchor in
   meters, and fix accuracy — never raw coordinates, never a full SSID or BSSID, never a place name
   the user typed. It exists because the alternative is worse for the user, not better: a snooze that
   misfires while the phone is in a pocket is otherwise undiagnosable, and "it sometimes ends early"
