@@ -336,6 +336,95 @@ When a snooze ends by departure or by cap, post a one-shot dismissible notificat
 `Snooze ended — you left Home` / `Snooze ended — 8 hour limit reached`. This is how the user builds
 trust that the mechanism works, and how they notice when it fires wrongly.
 
+### 4.6 The debug log, and sharing it
+
+Matches the sibling repos' diagnostic (Simmo's `Share debug logs` and post-crash banner), because
+this app has the same problem in a worse form: **the entire mechanism runs while nobody is
+looking.** A snooze that ended in the user's pocket at 14:40, or one that never ended at all, leaves
+no trace the user can read, and "it ended early" is not a reproducible bug report. Without a log,
+the two failures that matter most — an early release and a stuck snooze — are exactly the two that
+cannot be diagnosed.
+
+**An on-device log, off by default.** The app already declares no `INTERNET` permission (§12), so
+nothing leaves the device unless the user hands it over: sharing goes through the system share sheet
+(and a copy-to-clipboard fallback), which makes every send an explicit act with a visible
+destination. Retention is bounded — the current run plus the previous one, rotated at start, in
+`cacheDir`, which is excluded from backup.
+
+> **Open: is off-by-default right?** It is the conservative default, and it has a real cost — the
+> failures worth diagnosing (an early release, a stuck snooze, a crash) are unpredictable and
+> unrepeatable, so an off-by-default log guarantees the *first* occurrence of each is the one nobody
+> captured, and asks the user to reproduce a bug that happens once a week in their pocket. Simmo
+> keeps its log always-on for exactly that reason, and the floor below means an always-on log here
+> would hold coarse state and reasons rather than anything about where the user was. Sharing stays
+> explicit either way, so the question is only about data at rest on the user's own device. It is a
+> privacy default rather than an implementation detail, so it is the maintainer's call (`TODO.md`);
+> the rest of this section holds under either answer.
+
+**Nothing promises a log that may not exist.** While the log is off, the post-crash banner below
+does not appear at all — offering to share a diagnostic that was never recorded would waste the one
+moment the user is willing to help, on the failure that most needs reconstruction.
+
+**What it records.** Enough to reconstruct a snooze's life, and nothing about where that life
+happened:
+
+- Every state transition (§4.1) with its reason, and the `EndReason` a snooze ended on.
+- Which of the three wake-up sources fired (§6.10) — geofence exit, Wi-Fi loss, periodic backstop —
+  and, for each, what the departure test concluded.
+- The departure test's arithmetic: **distance from the anchor in meters, the fix's accuracy in
+  meters**, whether the accuracy gate passed, and which confirmation rule matched (§6.6). This is
+  the diagnostic value; the position is not.
+- Whether the anchor SSID was associated — the boolean, never the SSID.
+- Tracking-mode changes and their cause (§8.1), so a snooze that quietly degraded to duration-only
+  is visible after the fact.
+- The cap: that it was armed, that it fired, and whether the alarm or the in-service timer got there
+  first.
+- Permission and capability state at each decision — notification-policy access, location permission
+  and its precision, whether location services are on system-wide, battery-saver state. A denied
+  permission is often the whole answer to "why didn't it end".
+- Build, device, and Android version.
+
+**Entries carry real timestamps** (maintainer, 2026-08-11). Times are diagnostic, not decorative:
+an inexact cap alarm (§7) that fires late because it landed outside a Doze maintenance window, cap
+arithmetic that goes wrong across a DST boundary (§13), or a user who reports "it ended around 3am"
+— none of those can be reconstructed from intervals alone, and a log that cannot answer *when* is
+not worth keeping. The times of a user's snoozes are listed as user data in AGENTS.md's *Privacy*
+rule, which is why the log's other protections carry the weight instead: it stays on the device,
+bounded to two runs, and reaches nobody without an explicit share. That is what the "one sanctioned
+exception" in §12 is for.
+
+**The floor is absolute and is not a matter of judgment**: never raw coordinates, never a full
+SSID or BSSID, never a user-typed place name. Distance and accuracy answer "did the test fire
+correctly"; the position answers "where do you live", which no bug report needs. Anything above the floor is added only with a specific failure it makes diagnosable, and
+`docs/PRIVACY.md` describes what the log carries before it ships (AGENTS.md, *Privacy*).
+
+**A crashed run says so, and survives rotation.** When a previous run ended in an
+uncaught exception, the app's own screen raises a banner offering to share that run or dismiss it,
+rather than relying on the user to remember a Settings action. Only a crash raises it — an ordinary
+process death, a force-stop, or an app update does not, since those runs' logs stay shareable
+without nagging.
+
+A crashed run is **pinned, not rotated**: the crash handler leaves a marker, the next start moves
+that run to a distinct crash-suffixed name, and ordinary rotation does not overwrite it. Without
+that, a restart between the crash and the user's tap would push the crashed run out of the
+`previous` slot and the banner would offer a log that had already been overwritten — and this app
+restarts a lot, since a snooze can outlive several process deaths.
+
+**The pin holds the `previous` slot; it is not a third run.** The two-run bound is the privacy
+bound, so it holds unchanged: while a crash is pinned, an ordinary run that would have rotated into
+`previous` is **discarded instead of displacing it**. That is the right way round — an unread crash
+explains a failure, and the uneventful run after it explains nothing. Sharing consumes the pin;
+Dismiss renames the file off the crash-suffixed name, after which it is an ordinary `previous` run,
+shareable from settings and rotated away like any other. A later crash pins again.
+
+The log lives in `cacheDir`, which the system may reclaim under storage pressure, so a pinned crash
+can disappear before the user acts on it. **The banner checks the file is still there and stays
+silent if it isn't** — offering to share a log that no longer exists is worse than saying nothing.
+Persisting it outside the cache (`noBackupFilesDir`) would close that window, and is deliberately
+not done: a disposable diagnostic belongs in the cache, eviction costs a nice-to-have rather than
+anything the user relies on, and the alternative keeps crash logs alive past the retention this
+section promises.
+
 ---
 
 ## 5. Do Not Disturb mechanism
@@ -944,6 +1033,13 @@ Persisted on every state transition so a process death is fully recoverable.
   "no data collected, no data shared" — trivially true and trivially auditable.
 - Coordinates never leave the device. The v1 anchor is discarded when the snooze ends.
 - Snooze history (if added) is local, off by default, and clearable.
+- **The debug log (§4.6) is the one sanctioned exception, and a narrow one.** It is off by default,
+  on-device, bounded to two runs, and leaves the device only when the user shares it through the
+  system share sheet. Its floor is absolute: coarse state, reasons, distance from the anchor in
+  meters, and fix accuracy — never raw coordinates, never a full SSID or BSSID, never a place name
+  the user typed. It exists because the alternative is worse for the user, not better: a snooze that
+  misfires while the phone is in a pocket is otherwise undiagnosable, and "it sometimes ends early"
+  is a bug that never gets fixed.
 - In-app prominent disclosure before the location permission prompt, explaining the *place* use and
   the fact that tracking runs only while a snooze is armed.
 - `android:allowBackup="false"` — a backup of location anchors is not worth the exposure.
