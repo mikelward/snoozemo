@@ -109,6 +109,21 @@ the point is that every other line of the app is worthless if it isn't true.
       by recorded fix traces including bad-accuracy jumps.
 - [ ] Wi-Fi as suppressor only (D4): associated with the anchor SSID suppresses location
       work entirely; loss escalates to `CHECKING` and never ends a snooze on its own.
+- [ ] **The on-device debug log** (`SPEC.md` §4.6), landing here rather than later because this is
+      the phase that needs it: hardware item 2 asks for every geofence callback measured against a
+      ground-truth departure over a week of ordinary use, and there is no way to collect that by
+      watching a phone. Records state transitions and their reasons, which wake-up source fired, the
+      departure test's distance and accuracy arithmetic, tracking-mode changes, cap arming and
+      firing, and permission state. Off by default, on-device, current run plus previous, rotated at
+      start, in `cacheDir`. The floor is absolute and needs a test of its own: **no raw coordinates,
+      no full SSID/BSSID, no user-typed place name** ever reach it.
+- [ ] **Maintainer decision: is the debug log off by default?** (`SPEC.md` §4.6.) Off is the
+      conservative default and is what the spec currently says, but it guarantees the first
+      occurrence of every unrepeatable failure — an early release, a stuck snooze, a crash — is the
+      one nobody captured, and asks the user to reproduce a bug that happens once a week in their
+      pocket. Simmo's is always-on for that reason. Sharing is explicit either way, so the question
+      is only about data at rest on the user's own device, under a floor that already forbids
+      coordinates, SSIDs, and place names. Not autopilot's call: it is a privacy default.
 - [ ] Departure latency instrumented against ground truth, on-device (hardware item 2).
 - [ ] **Submit the background-location declaration** as soon as there is a working
       departure to film. Longest-lead item and the largest project risk (`SPEC.md` §3.5);
@@ -140,6 +155,15 @@ the point is that every other line of the app is worthless if it isn't true.
       return, bad-accuracy anchor, battery saver, uninstall while snoozed.
 - [ ] Pre-existing DND: Snoozemo arms on top and, on release, turns off only its own rule
       (`SPEC.md` §5.6).
+- [ ] **Sharing the debug log** (`SPEC.md` §4.6) — the user-facing half of the Phase 3 log,
+      matching the sibling repos: a `Share debug logs` action through the system share sheet with a
+      copy-to-clipboard fallback (no `INTERNET`, so the share sheet *is* the transport), and a
+      post-crash banner offering to share the crashed run or dismiss it. Only a crash raises the
+      banner — an ordinary process death, force-stop, or app update leaves the run shareable without
+      nagging. Sizing matters: the payload crosses a Binder transaction twice, and an over-large one
+      fails both silently, so bound it per section and in total.
+- [ ] `docs/PRIVACY.md` must describe what the log carries **before** the sharing surface ships —
+      that ordering is the rule, not a preference (AGENTS.md, *Privacy*).
 
 ## Phase 6 (M6) — Internal-track release on Play
 
