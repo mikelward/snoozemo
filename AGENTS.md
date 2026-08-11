@@ -324,6 +324,30 @@ it in the same commit.
   superseded commit isn't conflated with the current state.
 - **Judge every review comment on merit, whoever wrote it.** Verify the claim before
   acting; if it doesn't hold up, reply saying why and decline.
+- **A review comment citing a rule is a *reading* of that rule, not the rule.** Go back to
+  what this file actually says before acting on it. This matters most for the privacy
+  rules, because they are the ones where a stricter reading always feels like the safe
+  direction — and isn't. Over-applying them removes capability the user needs, quietly,
+  under cover of caution: the diagnostic that would have explained a snooze that misfired
+  in someone's pocket, the timestamps that would have shown an alarm firing late outside a
+  Doze window. A product that can't be debugged fails its users too. Three outcomes, and
+  only three:
+  - **The comment is right** — the code or spec really does break a rule as written. Fix
+    it, in the same PR, and say so on the thread.
+  - **The comment reads the rule more strictly than it is written** — it cites a floor that
+    doesn't list the thing it objects to, or infers a prohibition from a principle. Reply
+    on the thread quoting what the rule actually says, decline, and leave the capability
+    alone. Do **not** narrow the product to make a reviewer comfortable.
+  - **It's a genuine conflict** — the rule as written really does forbid something the
+    product genuinely needs, or two rules point opposite ways. That is the maintainer's
+    call and nobody else's: **flag it for review**, in the chat reply and in `TODO.md`,
+    with what the rule says, what the product needs, and what each choice costs. Don't
+    resolve it yourself in either direction, and don't quietly pick the restrictive option
+    because it looks defensible — a capability removed to satisfy a misreading is
+    expensive to notice and expensive to get back.
+
+  Autopilot does not change this: guessing is allowed on reversible implementation calls,
+  not on what a privacy rule means.
 - Never leave a review comment thread silently dismissed: reply on the thread or resolve
   it. When a comment is a false positive, say why on the thread.
 - **Report the Android `versionCode` after every merge to `main`.** Fetch `main` and run
@@ -433,6 +457,12 @@ it in the same commit.
   `INTERNET` — a crash reporter, analytics, a map tile, a geocoder for place names — breaks
   that guarantee and is a product decision, not an implementation detail.** Bring it to the
   user with the trade-off stated (see *Cost and reliability*); never add it in passing.
+- **The floor below is a list, and the list is exhaustive.** What it names is forbidden
+  absolutely; what it does not name is a judgment call, and the answer to a judgment call
+  is not "add it to the floor to be safe". Widening the floor by inference is how the app
+  ends up unable to explain its own failures — see *Working with PRs* for what to do when a
+  reviewer argues for a stricter reading (short version: quote the rule, decline, and bring
+  a genuine conflict to the maintainer instead of resolving it by removing the capability).
 - **An on-device debug log, if one is added, is the one sanctioned exception, and a narrow
   one.** Diagnosing a snooze that ended early — or never ended — needs a record of what the
   presence engine saw. Such a log may carry **coarse state and reasons**: which state the
