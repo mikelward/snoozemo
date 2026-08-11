@@ -129,16 +129,13 @@ the point is that every other line of the app is worthless if it isn't true.
       ground-truth departure over a week of ordinary use, and there is no way to collect that by
       watching a phone. Records state transitions and their reasons, which wake-up source fired, the
       departure test's distance and accuracy arithmetic, tracking-mode changes, cap arming and
-      firing, and permission state. Off by default, on-device, current run plus previous, rotated at
-      start, in `cacheDir`. The floor is absolute and needs a test of its own: **no raw coordinates,
+      firing, and permission state. On by default with a setting to turn it off (maintainer,
+      2026-08-11), on-device, current run plus previous, rotated at start, in `cacheDir`. The floor is absolute and needs a test of its own: **no raw coordinates,
       no full SSID/BSSID, no user-typed place name** ever reach it.
-- [ ] **Maintainer decision: is the debug log off by default?** (`SPEC.md` §4.6.) Off is the
-      conservative default and is what the spec currently says, but it guarantees the first
-      occurrence of every unrepeatable failure — an early release, a stuck snooze, a crash — is the
-      one nobody captured, and asks the user to reproduce a bug that happens once a week in their
-      pocket. Simmo's is always-on for that reason. Sharing is explicit either way, so the question
-      is only about data at rest on the user's own device, under a floor that already forbids
-      coordinates, SSIDs, and place names. Not autopilot's call: it is a privacy default.
+- [x] **Maintainer decision: is the debug log off by default?** Answered — **on by default**
+      (maintainer, 2026-08-11), with a setting to turn it off. Off would have guaranteed that the
+      first occurrence of every unrepeatable failure was the one nobody captured. Recorded in
+      `SPEC.md` §4.6 with the reasoning.
 - [ ] Departure latency instrumented against ground truth, on-device (hardware item 2).
 - [ ] **Submit the background-location declaration** as soon as there is a working
       departure to film. Longest-lead item and the largest project risk (`SPEC.md` §3.5);
