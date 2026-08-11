@@ -1,0 +1,90 @@
+package app.snoozemo.core
+
+/**
+ * The states of SPEC.md §4.1. The controller that drives these transitions lands
+ * in Phase 1; this is the vocabulary the rest of the app is written against.
+ */
+enum class SnoozeState {
+    /** Not snoozing. Snoozemo's zen rule is `STATE_FALSE`. */
+    IDLE,
+
+    /**
+     * Capturing the anchor. Bounded at 10 s and never allowed to block: on
+     * timeout the snooze arms in a degraded [TrackingMode] rather than refusing,
+     * because arming must never feel slow (SPEC.md §4.1).
+     */
+    ARMING,
+
+    /** Snoozing. The zen rule is `STATE_TRUE` and presence is being watched. */
+    ARMED,
+
+    /**
+     * Something suggested the user may have left — Wi-Fi dropped, significant
+     * motion fired, a geofence exit arrived — and the departure test is running.
+     * No single signal ends a snooze on its own evidence (SPEC.md §6.10).
+     */
+    CHECKING,
+
+    /** The snooze has ended; the zen rule is back to `STATE_FALSE`. */
+    RELEASED,
+}
+
+/**
+ * Why a snooze ended. Every exit records one: a snooze that ends for a reason the
+ * user cannot reconstruct is the "never fail silently" failure, so this is what
+ * the ended-notification and the debug log are written from (SPEC.md §4.5, §7).
+ */
+enum class EndReason {
+    /** The departure test confirmed the user left the anchor. The intended path. */
+    DEPARTURE,
+
+    /** The duration cap fired — the backstop that holds when every sensor has failed. */
+    DURATION_CAP,
+
+    /** The user ended it: tile tap, notification action, or in-app. */
+    MANUAL,
+
+    /**
+     * Snoozemo could no longer do its job — policy access revoked, location
+     * permission downgraded — so it ended the snooze rather than staying armed
+     * on state it cannot verify (SPEC.md D7, §8.2).
+     */
+    LOST_CAPABILITY,
+}
+
+/**
+ * How much of the presence engine is actually working for this snooze. Anything
+ * short of [FULL] is user-visible: the ongoing notification says so, because a
+ * silently degraded snooze is indistinguishable from a working one until it
+ * fails (SPEC.md §8.1).
+ */
+enum class TrackingMode {
+    /** Location and Wi-Fi both available; the departure test can run. */
+    FULL,
+
+    /**
+     * No usable location fix, but associated with the anchor SSID. Wi-Fi loss
+     * escalates, and with nothing to confirm against it resolves by ending after
+     * a grace period (SPEC.md §6.6).
+     */
+    WIFI_ONLY,
+
+    /** Neither signal is available. Only the duration cap will end this snooze. */
+    DURATION_ONLY;
+
+    companion object {
+        /**
+         * The most capable mode [anchor] actually supports.
+         *
+         * Coordinates too vague to test against are worth nothing (SPEC.md
+         * §8.4), so this reads [Anchor.hasUsableFix] rather than "did we get a
+         * fix": an anchor captured indoors with a 500 m cell fix degrades to
+         * Wi-Fi, or to the cap alone if there is no SSID either.
+         */
+        fun from(anchor: Anchor): TrackingMode = when {
+            anchor.hasUsableFix -> FULL
+            anchor.ssid != null -> WIFI_ONLY
+            else -> DURATION_ONLY
+        }
+    }
+}

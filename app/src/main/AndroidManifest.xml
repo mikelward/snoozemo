@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      No INTERNET permission, deliberately and permanently (SPEC.md §12):
+      nothing can leave the device at all, which is what makes the Play Data
+      Safety answer "no data collected, no data shared" trivially auditable.
+      Adding it is a product decision, not an implementation detail.
+
+      The location, notification, and DND permissions arrive with the phases
+      that use them: Phase 1 for ACCESS_NOTIFICATION_POLICY, Phase 2 for
+      POST_NOTIFICATIONS, Phase 3 for the location family.
+    -->
+
+    <application
+        android:name=".SnoozemoApplication"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Snoozemo">
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

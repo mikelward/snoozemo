@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A bold Z, inside the adaptive icon's 66dp safe zone. Placeholder shape: the
+  real mark (SPEC.md §4.2 argues for a `Zz` glyph or a crescent with a single z,
+  legible when flattened to one color at 24dp) is drawn with the tile in Phase 2.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M36,36 L72,36 L72,45 L52,63 L72,63 L72,72 L36,72 L36,63 L56,45 L36,45 Z" />
+</vector>
