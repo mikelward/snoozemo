@@ -37,7 +37,13 @@ release rather than dropped.
       its own, unit tests with failing-test PR comments, lint. The Roborazzi screenshot job
       lands with the first real UI (Phase 2/4) and the `deploy` job with the release
       plumbing (Phase 6) — an empty screenshot allow-list is only a check nobody reads.
-- [ ] When the screenshot job lands, copy the sibling repos' diff-comment upsert as it
+- [x] Roborazzi screenshot job, now that there is a screen to record (`DebugScreen`, Phase 2).
+      Eight snapshots — every state the screen can be in, light and dark, including the two
+      *unread* states, since what this screen must never do is answer a question it hasn't
+      asked the platform yet. Recording is opt-in via `-Proborazzi.test.record`, so
+      `./gradlew test` still runs them as ordinary render-and-assert tests rather than
+      rewriting the committed PNGs on every machine.
+- [x] Copy the sibling repos' diff-comment upsert as it
       stands *now*, not as it was: all four repos post through `gh api`, which exits
       non-zero on both an HTTP error and an unparsable body, so the lookup needs no
       hand-rolled status test. Two rules carry over regardless of transport. The lookup
@@ -570,6 +576,41 @@ Nothing here is scheduled; each is a sequel that follows from something already 
 - [ ] **Wear OS tile.**
 
 ## Decisions needing review
+- **The screenshot refresh commit does not re-trigger CI, and that is unresolved**
+  (Codex, PR #15). A push made with `GITHUB_TOKEN` deliberately starts no workflow run, so
+  when the screenshot job commits `ci: refresh recorded screenshots` back to a PR branch,
+  the new head carries no checks: the PR view shows results against its parent, and a repo
+  with required status checks would sit pending forever. The exposure here is narrow —
+  the refresh commit's diff is confined to snapshot PNGs, nothing in the build reads them,
+  and the job that pushed them is the one that rendered them — so the head's *code* is
+  exactly what was checked. But "checks ran on the parent" is not the same claim as
+  "checks ran on the head", and the difference is the maintainer's to accept.
+  - **Not taken unilaterally, because every fix costs something outside this repo.** A PAT
+    or GitHub App token would trigger CI but adds a secret to maintain and rotate; dropping
+    the auto-commit and failing on drift instead moves the re-recording work onto whoever
+    opened the PR; leaving it as-is keeps the convention all four sibling repos share.
+  - Related and now fixed: a *failed* refresh push used to warn and exit 0, which could
+    leave the job green over drifted snapshots (most plausibly on a Dependabot PR, whose
+    token is read-only). That path now fails the job.
+  - **Same root, second symptom** (Codex, PR #15): because the job must check out the head
+    *branch* to have somewhere to push, it records against the branch alone while the build
+    job checks GitHub's merge ref — so a visual regression that only appears when the base
+    and the PR are combined is not caught before merge. It is caught *after*: the `main`
+    run records against merged code with the drift check enabled, so it goes red rather
+    than landing silently. If the snapshot suite grows enough that catching it post-merge
+    is expensive, the fix that doesn't fight the refresh is a verify-only pass on the merge
+    ref in the `build` job (`-Proborazzi.test.verify=true`, no checkout override, no push).
+  - **Third symptom, same root** (Codex, PR #15): the screenshot job runs PR-controlled
+    Gradle code and then does token-bearing git work in the same job. Every git call there
+    now runs with hooks, `core.fsmonitor` and credential helpers disabled, and the token is
+    interpolated into the push URL rather than exported to the step — but `PATH` is still
+    the build's to poison, so a planted `git` earlier on `PATH` is not covered. Only the
+    split-job shape closes that: record in this job, upload the PNGs as an artifact, and
+    commit/push from a second job that checks out clean and runs no build code. Cost is a
+    second runner and artifact plumbing. Worth doing if this repo ever takes branches from
+    people without write access, since today a same-repo branch already implies push
+    rights.
+
 
 Judgment calls made without an explicit answer from the maintainer. Each is reversible;
 none is load-bearing yet.

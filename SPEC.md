@@ -1526,6 +1526,23 @@ including bad-accuracy jumps; cap arithmetic across DST boundaries.
 **Instrumented** — mock location provider to drive synthetic departure traces; `ZenRuleManager`
 against a real `NotificationManager` with policy access granted.
 
+**Screenshot** — every state a screen can reach, recorded with Roborazzi under Robolectric and
+committed to the repo. The point is the *states*, not the pixels: the surfaces this app has are
+mostly about what it knows and doesn't yet know — access unread, record unread, degraded — and
+those are exactly the states a refactor silently collapses into a plausible default. A committed
+image is the only artifact that makes such a collapse show up in review. The tile mark is
+recorded the same way and for a sharper reason: the system tints it per tile state, so it must
+be checked in both directions, at its real size, or the failure only appears on a device
+(§4.2).
+
+CI records rather than verifies, and commits the recording back to the branch. Rendering differs
+between a laptop and a runner — fonts, renderer version — and a verify-only job makes that
+difference indistinguishable from a UI change; recording on one machine makes the committed
+images mean "what CI draws", which is the only claim a snapshot can honestly make. The
+trade-offs this buys are recorded with the decision (`TODO.md`): the refresh commit is pushed
+with a token that cannot trigger CI, and the job records against the branch rather than the
+merge result.
+
 **Manual matrix**, per device (Pixel + a Samsung):
 
 | Scenario | Expected |

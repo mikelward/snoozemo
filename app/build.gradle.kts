@@ -143,6 +143,20 @@ android {
     }
 }
 
+// Roborazzi reads these as system properties, not Gradle properties, so the
+// `-P` flags CI passes have to be forwarded into the test JVM. Without a flag
+// the screenshot tests still run — they just render and assert without touching
+// a PNG, which is what keeps `./gradlew test` from rewriting snapshots on every
+// developer's machine.
+tasks.withType<Test>().configureEach {
+    if (project.hasProperty("roborazzi.test.record")) {
+        jvmArgs("-Droborazzi.test.record=true")
+    }
+    if (project.hasProperty("roborazzi.test.verify")) {
+        jvmArgs("-Droborazzi.test.verify=true")
+    }
+}
+
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
@@ -168,5 +182,15 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.androidx.test.core)
+    testImplementation(libs.androidx.compose.ui.test.junit4)
     testImplementation(libs.robolectric)
+    testImplementation(libs.roborazzi)
+    // Debug-only, and safe only because unit tests exist for the debug build
+    // type alone here — `./gradlew :app:tasks` lists `testDirectDebugUnitTest`
+    // and `testPlayDebugUnitTest` and nothing else. This dependency is what
+    // declares the activity `createAndroidComposeRule` launches, so setting
+    // `testBuildType` to anything else, or turning release unit tests back on,
+    // needs this moved to `testImplementation` first or the screenshot tests
+    // fail on a variant that has no activity to launch.
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

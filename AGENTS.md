@@ -7,11 +7,14 @@ lives in `TODO.md`. This repo mirrors the engineering conventions of the sibling
 Launcher (`mikelward/typelauncher`) and Simmo (`mikelward/simmo`) repos; when a convention
 is underspecified here, Simmo's `AGENTS.md` is the tiebreaker.
 
-**Status: scaffold only.** The Gradle build, the module split, the two product flavors, and
-CI (build + unit tests + lint) are in place and green; none of the product is. `./gradlew`
-and the CI rules below are live. The screenshot-test rules are not yet — there is no UI to
-record and no screenshot job — and they take effect with the first real screen
-(`TODO.md` Phase 2/4). Everything else applies today.
+**Status: the snooze half works.** The Gradle build, the module split, the two product
+flavors, and CI (build + unit tests + lint + screenshots) are in place and green, and so is
+the DND half: the tile arms and ends a snooze, the record survives process death and
+reboots, and the duration cap holds across a clock change. Presence — the *leave here and it
+ends* half — is not built yet, so every snooze is honestly duration-only (`TODO.md` Phase 3).
+Every rule below is live, screenshot tests included: the app screen records through
+`DebugScreenScreenshotTest`, and a new `*ScreenshotTest` needs its own step in the CI
+allow-list or it records nothing.
 
 ## Project documentation
 
