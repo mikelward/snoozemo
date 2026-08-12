@@ -546,6 +546,17 @@ Nothing here is scheduled; each is a sequel that follows from something already 
 Judgment calls made without an explicit answer from the maintainer. Each is reversible;
 none is load-bearing yet.
 
+- **The escalation's *performing* half is still untestable, and that is now the gap.** The
+  ladder itself moved to `:core` and is covered, but what each performer does with a step —
+  which end reason a retry carries, which alarm it arms, whether `HandOff` announces a
+  snooze — lives in `SnoozeService` and `CapAlarm`, where the app module has no test
+  harness at all. Codex found three real bugs in exactly that half across two review
+  rounds; all three were caught by reading, not by a test, and the third (`Couldn't end the
+  snooze` replacing `Couldn't snooze` on the failed-arm unwind) is a user-visible message
+  no JVM test can currently reach. **When the Robolectric harness lands (Phase 4), these
+  are its first targets** — the alternative is moving the performers' remaining decisions
+  into `:core` too, which is the bigger change and probably the right one.
+
 - **`DESIGN.md` renamed to `SPEC.md`** rather than keeping both. The sibling repos split
   product/architecture decisions (`SPEC.md`) from the plan (`TODO.md`), and the design doc
   was already the former; keeping two overlapping documents is how they drift apart.
