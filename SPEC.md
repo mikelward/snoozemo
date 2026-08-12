@@ -993,6 +993,28 @@ The cap uses `AlarmManager.setAndAllowWhileIdle` — **inexact on purpose**. Exa
 `SCHEDULE_EXACT_ALARM`, which is no longer auto-granted on Android 14+ and carries its own Play
 policy scrutiny, and a cap that fires at 8h04m instead of 8h00m is indistinguishable to the user.
 
+**The cap is measured in real time, not wall-clock time** (maintainer, 2026-08-12). It had two
+enforcers — an `RTC_WAKEUP` alarm at the record's expiry, and an expiry test reading the system
+clock — and both moved together when the date did, so winding the clock back from Settings kept
+Do Not Disturb on past the 24 h backstop. That is principle 1's failure with a two-tap cause.
+The alarm therefore runs on `ELAPSED_REALTIME_WAKEUP` and every cap comparison is made against a
+clock anchored once per process to elapsed realtime. Note the asymmetry: a *forward* clock change
+ends the snooze early, which is the safe direction and needs no defense; only a deliberate
+backwards one extends it.
+
+Elapsed realtime resets on boot, so `capExpiresAt` stays absolute wall time in the record — it is
+what a reboot recovers from, and nothing monotonic could survive one. That leaves a backwards
+change made while no process is alive, which moves the reference the stored deadline is read
+against. **A record claiming more than the maximum cap of remaining time is treated as expired.**
+No snooze can legitimately have that much left, so it is not a long snooze — it is a moved clock,
+and how much real time actually passed is unknowable once the reference is gone. D7 settles which
+way to resolve that: ending early is a small annoyance, never ending is the product failing.
+
+Persisting a monotonic reference alongside the wall-clock one would make the pathological case
+*exact* rather than merely safe, at the cost of the record's schema and a boot-identity check on
+every restore. Not worth it for a case the user has to deliberately engineer, and exactness there
+buys nothing a fail-open does not already cover.
+
 **The alarm is the cap; there is nothing behind it.** An earlier draft here described a coroutine
 timer inside the service handling the normal case with the alarm as belt-and-braces. That timer was
 never built and should not be: it dies with the process, so it would only ever cover cases the

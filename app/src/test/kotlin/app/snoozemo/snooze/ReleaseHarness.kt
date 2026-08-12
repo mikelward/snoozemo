@@ -129,6 +129,10 @@ internal fun shadeShows(title: String): Boolean =
         .allNotifications
         .any { shadowOf(it).contentTitle?.toString() == title }
 
+/** The scheduled alarms themselves, newest last. */
+internal fun scheduledAlarms() =
+    shadowOf(appContext.getSystemService(android.app.AlarmManager::class.java)).scheduledAlarms
+
 /** The scheduled alarms, newest last, as the intents their senders carry. */
 internal fun scheduledAlarmIntents(): List<Intent> =
     shadowOf(appContext.getSystemService(android.app.AlarmManager::class.java))

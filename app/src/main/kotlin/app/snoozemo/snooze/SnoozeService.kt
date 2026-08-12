@@ -84,7 +84,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * record has expired — are exactly the ones that must not be driven by real
      * elapsed time (AGENTS.md, *Testing expectations*).
      */
-    internal open val clock: Clock = Clock.systemUTC()
+    internal open val clock: Clock = SnoozeClock
 
     /**
      * Whether the last attempt to erase the record actually reached disk. False
@@ -1295,7 +1295,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         return if (step.forIdentifiedSnooze && startedAt != null) {
             CapAlarm.armReleaseRetry(applicationContext, at, startedAt.toEpochMilli(), releasingReason)
         } else {
-            CapAlarm.arm(applicationContext, at)
+            CapAlarm.armCheckIn(applicationContext, RETRY_MS)
         }
     }
 

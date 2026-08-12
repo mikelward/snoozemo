@@ -218,4 +218,39 @@ class ActiveSnoozeTest {
 
         assertTrue(ActiveSnooze.retryStillApplies(degraded, snooze.startedAt))
     }
+
+    @Test
+    fun `a deadline further off than the maximum cap counts as expired`() {
+        // What a record looks like once the wall clock is wound back while no
+        // process is alive: its stored deadline is suddenly weeks away. No
+        // snooze can legitimately have more than MAX_CAP left, so this is a
+        // moved clock, and how much real time actually passed is unknowable.
+        val now = Instant.parse("2026-01-01T12:00:00Z")
+        val snooze = ActiveSnooze(
+            anchor = Anchor(capturedAt = now),
+            startedAt = now,
+            capExpiresAt = now.plus(Duration.ofDays(30)),
+            mode = TrackingMode.FULL,
+        )
+
+        assertTrue(
+            "an impossible remaining duration must resolve toward ending",
+            snooze.isExpired(now),
+        )
+    }
+
+    @Test
+    fun `a deadline at exactly the maximum cap is still running`() {
+        // The boundary belongs to the legitimate side: a 24 h snooze armed a
+        // moment ago has exactly MAX_CAP left and must not end on the spot.
+        val now = Instant.parse("2026-01-01T12:00:00Z")
+        val snooze = ActiveSnooze(
+            anchor = Anchor(capturedAt = now),
+            startedAt = now,
+            capExpiresAt = now.plus(ActiveSnooze.MAX_CAP),
+            mode = TrackingMode.FULL,
+        )
+
+        assertFalse("a full-length snooze must not end at arm", snooze.isExpired(now))
+    }
 }

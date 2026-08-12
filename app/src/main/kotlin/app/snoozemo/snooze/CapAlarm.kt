@@ -6,6 +6,7 @@ import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
 import android.util.Log
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.Attempt
@@ -47,7 +48,51 @@ object CapAlarm {
      * treat false as a refusal to arm (SPEC.md §7).
      */
     fun arm(context: Context, capExpiresAtMillis: Long): Boolean =
-        schedule(context, capExpiresAtMillis, SnoozeService.ACTION_CHECK_CAP)
+        schedule(
+            context,
+            SystemClock.elapsedRealtime() + remainingRealMillis(capExpiresAtMillis),
+            AlarmManager.ELAPSED_REALTIME_WAKEUP,
+            SnoozeService.ACTION_CHECK_CAP,
+        )
+
+    /**
+     * Arms a cap check [delayMillis] from now, for a caller that has a *delay*
+     * rather than a deadline.
+     *
+     * Separate from [arm] on purpose. Both end at `ACTION_CHECK_CAP`, so the
+     * action cannot tell them apart — and inferring the time frame from it was a
+     * real bug: the recordless release retries expressed "in 30 seconds" as
+     * `System.currentTimeMillis() + RETRY_MS`, which [arm] then measured back
+     * against the elapsed-realtime clock. A wall clock moved *forward* mid-life
+     * made those disagree, so a half-minute retry became up to the 24 h ceiling
+     * — on the one path where that retry may be the only thing left to turn a
+     * stuck rule off.
+     *
+     * A delay never needed converting to wall time and back. This takes it as
+     * what it is.
+     */
+    fun armCheckIn(context: Context, delayMillis: Long): Boolean =
+        schedule(
+            context,
+            SystemClock.elapsedRealtime() + delayMillis.coerceAtLeast(0L),
+            AlarmManager.ELAPSED_REALTIME_WAKEUP,
+            SnoozeService.ACTION_CHECK_CAP,
+        )
+
+    /**
+     * How long from now [capExpiresAtMillis] is, as real time the user cannot
+     * move, floored at zero and bounded by the absolute backstop.
+     *
+     * The bound is the defense against a backwards clock change made while no
+     * process was alive to notice: the record's expiry is absolute wall time, so
+     * winding the date back makes it look arbitrarily far away. `MAX_CAP` is
+     * already the ceiling on any snooze (SPEC.md §7), so a remaining duration
+     * beyond it is not a long snooze — it is a clock that moved, and the cap
+     * fires at the ceiling instead of never.
+     */
+    private fun remainingRealMillis(capExpiresAtMillis: Long): Long =
+        (capExpiresAtMillis - SnoozeClock.millis())
+            .coerceIn(0L, ActiveSnooze.MAX_CAP.toMillis())
 
     /**
      * Arms a wake-up whose only job is to retry erasing a released record.
@@ -66,7 +111,13 @@ object CapAlarm {
      * on (`ActiveSnooze.retryStillApplies`).
      */
     fun armEraseRetry(context: Context, atMillis: Long, recordStartedAtMillis: Long): Boolean =
-        schedule(context, atMillis, SnoozeService.ACTION_ERASE_RETRY, recordStartedAtMillis)
+        schedule(
+            context,
+            atMillis,
+            AlarmManager.RTC_WAKEUP,
+            SnoozeService.ACTION_ERASE_RETRY,
+            recordStartedAtMillis,
+        )
 
     /**
      * Arms a wake-up that retries **ending** a snooze which has no cap.
@@ -101,11 +152,24 @@ object CapAlarm {
         recordStartedAtMillis: Long,
         reason: EndReason,
     ): Boolean =
-        schedule(context, atMillis, SnoozeService.ACTION_CAP_LOST, recordStartedAtMillis, reason)
+        schedule(
+            context,
+            atMillis,
+            AlarmManager.RTC_WAKEUP,
+            SnoozeService.ACTION_CAP_LOST,
+            recordStartedAtMillis,
+            reason,
+        )
 
+    /**
+     * [triggerAtMillis] is read in whichever frame [type] names, so the caller
+     * states both rather than this inferring one from the action — two callers
+     * share `ACTION_CHECK_CAP` and mean different clocks by it.
+     */
     private fun schedule(
         context: Context,
-        atMillis: Long,
+        triggerAtMillis: Long,
+        type: Int,
         action: String,
         recordStartedAtMillis: Long? = null,
         reason: EndReason? = null,
@@ -113,8 +177,8 @@ object CapAlarm {
         val alarmManager = context.getSystemService(AlarmManager::class.java)
         return runCatching {
             alarmManager.setAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                atMillis,
+                type,
+                triggerAtMillis,
                 pendingIntent(context, action, recordStartedAtMillis, reason),
             )
             true
@@ -529,7 +593,7 @@ private fun armReleaseAlarm(
     return if (step.forIdentifiedSnooze && snooze != null) {
         CapAlarm.armReleaseRetry(context, at, snooze.startedAt.toEpochMilli(), reason)
     } else {
-        CapAlarm.arm(context, at)
+        CapAlarm.armCheckIn(context, RELEASE_RETRY_MS)
     }
 }
 

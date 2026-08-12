@@ -73,8 +73,23 @@ data class ActiveSnooze(
      * Whether the cap has fired. Inclusive of the exact instant, so a cap that
      * lands precisely on `now` ends the snooze — the fail-open direction
      * (SPEC.md D7).
+     *
+     * A deadline further off than [MAX_CAP] counts as fired too, and that is the
+     * same direction rather than a separate rule. No snooze can legitimately
+     * have more than the maximum cap left: it is set to at most that at arm, and
+     * `+30 min` cannot push past it. So a record claiming more is not a long
+     * snooze — it is a clock that moved under a stored deadline, which happens
+     * when the wall clock is wound back while no process is alive to notice.
+     *
+     * Ending is the only honest answer there, because *how much real time
+     * actually passed is unknowable*: the reference the deadline was written
+     * against is gone. Principle 1 settles it — a snooze that ends early is a
+     * small annoyance, one that never ends is the product failing — so this
+     * resolves toward the exit rather than toward keeping the phone quiet for
+     * however long the arithmetic happens to say.
      */
-    fun isExpired(now: Instant): Boolean = !now.isBefore(capExpiresAt)
+    fun isExpired(now: Instant): Boolean =
+        !now.isBefore(capExpiresAt) || Duration.between(now, capExpiresAt) > MAX_CAP
 
     /**
      * Where the cap lands if the notification's `+30 min` is tapped (SPEC.md

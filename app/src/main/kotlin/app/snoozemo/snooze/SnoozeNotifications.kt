@@ -93,7 +93,16 @@ class SnoozeNotifications(private val context: Context) {
             // for eight hours would still read "8h 0m left" seven hours later,
             // which is worse than no countdown because it looks current. The
             // chronometer ticks by itself against an absolute deadline.
-            .setWhen(snooze.capExpiresAt.toEpochMilli())
+            // Translated into the *current* wall-clock frame, not passed
+            // straight through. `capExpiresAt` is measured against `SnoozeClock`,
+            // which ignores wall-clock changes so the cap cannot be wound out
+            // (SPEC.md §7) — but the platform reads `setWhen` in real wall time
+            // to tick this countdown. Handing it the anchored instant would show
+            // the clock-change delta too much or too little on every repost
+            // (`+30 min`, a second tile tap, a tracking-state change) while the
+            // alarm underneath stayed correct. The remaining duration is the
+            // part that is true in both frames.
+            .setWhen(System.currentTimeMillis() + snooze.remaining(SnoozeClock.instant()).toMillis())
             .setUsesChronometer(true)
             .setChronometerCountDown(true)
             .addAction(

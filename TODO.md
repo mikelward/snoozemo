@@ -350,7 +350,13 @@ the point is that every other line of the app is worthless if it isn't true.
       release path that works with only that. Worth confirming on hardware first: whether
       DND survives a reboot at all, and whether `setAutomaticZenRuleState` is callable
       during direct boot — the fix is shaped differently if either answer is no.
-- [ ] **A backwards wall-clock change can outlast the cap** (flagged by Codex on PR #8).
+- [x] **A backwards wall-clock change can outlast the cap** (flagged by Codex on PR #8).
+      Landed 2026-08-12. Smaller than this entry anticipated: no schema change was needed,
+      because every cap comparison already ran through an injected `Clock` and every alarm
+      through one `CapAlarm.arm`. Swapping the clock for one anchored to elapsed realtime and
+      the alarm for `ELAPSED_REALTIME_WAKEUP` covered both enforcers, with a `MAX_CAP` clamp
+      as the backstop for a change made while the process was dead. The original plan below
+      is kept for the reasoning, not as the design that shipped.
       The cap alarm is `RTC_WAKEUP` and the controller's expiry test reads `Clock.systemUTC()`,
       so both move with the wall clock: setting the date back far enough keeps DND on past
       the 24 h backstop, which is principle 1's failure. The asymmetry is worth noting —
@@ -361,6 +367,22 @@ the point is that every other line of the app is worthless if it isn't true.
       reference so a restored record can tell which of the two applies. That touches the
       record's schema and `SPEC.md` §7's "the alarm *is* the cap", so it is its own change
       with its own tests rather than a fold-in.
+- [ ] **A backwards clock change smaller than the cap still overruns it across process
+      death** (flagged by Codex on PR #13). Two hours into an 8 h snooze, wind the clock back
+      one hour and let the process die: the restored record reads seven apparent hours left,
+      so DND runs nine real hours. Not a regression — the behavior is identical before and
+      after PR #13, which fixed the *process-survives* variant (that one is now exactly 8 h)
+      and left this one untouched. The `> MAX_CAP` fail-open only catches shifts big enough
+      to push the remainder past the ceiling.
+      - **The fix needs the schema change PR #13 avoided.** Persist a boot reference
+        (`System.currentTimeMillis() - SystemClock.elapsedRealtime()`) alongside the record:
+        within one boot that value is constant *unless* the wall clock moves, so a restore
+        that finds it changed — with elapsed realtime showing no reboot — knows the delta
+        exactly and can correct the deadline by it. Across a genuine reboot the two are
+        indistinguishable, so that case keeps the wall clock and the fail-open guard.
+      - Worth doing after the store seam lands, since the restore path is where it belongs
+        and that path has no test harness yet.
+
 - [ ] Pre-existing DND: Snoozemo arms on top and, on release, turns off only its own rule
       (`SPEC.md` §5.6).
 - [ ] **Sharing the debug log** (`SPEC.md` §4.6) — the user-facing half of the Phase 3 log,
@@ -572,6 +594,18 @@ none is load-bearing yet.
   remembers to pass. Left as-is for now because that is a wider change than this PR, and
   every current site is covered.
 
+- **The cap's residual wall-clock hole fails open rather than being closed exactly.** A
+  backwards clock change made while no Snoozemo process is alive moves the reference a stored
+  deadline is read against, and nothing in-process can detect it. A record claiming more than
+  `MAX_CAP` of remaining time is therefore treated as *expired*: no snooze can legitimately
+  have that much left, so it is a moved clock, and D7 resolves an unknowable state toward the
+  exit. The alternative — persisting a monotonic reference and a boot marker — makes that case
+  exact instead of safe, at the cost of the record's schema and a check on every restore.
+  Reversible; revisit if a real user ever hits it.
+  - Caught in review: an earlier version of this change *clamped* to `MAX_CAP` instead, which
+    let an 8 h snooze run 24 h when the clock moved before arming and the process then died.
+    Clamping preserved the snooze; the point is that there is nothing there worth preserving.
+
 - **`SnoozeService` is `open` and builds its DND controller through an overridable factory,
   purely so tests can make the platform refuse.** Every branch of the release escalation is
   reached only on a refused zen write, which no device or emulator produces on demand, so
@@ -582,6 +616,11 @@ none is load-bearing yet.
   deleting the factory. Recorded in `SPEC.md` §11 with the reasoning.
   - Still *not* covered: the failed-arm unwind (zen write lands, `save` fails), which needs
     a store that can be told to refuse — the next seam if that path grows another bug.
+  - Also not covered: `SnoozeNotifications` itself. The harness reaches the service, not the
+    notifications it builds, so the ongoing countdown's `setWhen` frame (fixed in the
+    wall-clock change, after Codex spotted it) has no test behind it. Asserting it needs a
+    shifted wall clock and a way to read the posted notification's `when` — the next harness
+    after the store seam.
 
 - **`DESIGN.md` renamed to `SPEC.md`** rather than keeping both. The sibling repos split
   product/architecture decisions (`SPEC.md`) from the plan (`TODO.md`), and the design doc
