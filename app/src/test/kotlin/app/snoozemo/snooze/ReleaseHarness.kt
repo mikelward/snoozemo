@@ -7,6 +7,7 @@ import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.Anchor
+import app.snoozemo.core.ClockReading
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenController
@@ -14,10 +15,8 @@ import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
 import app.snoozemo.core.ZenRuleState
 import app.snoozemo.core.ZenTrigger
-import java.time.Clock
 import java.time.Duration
 import java.time.Instant
-import java.time.ZoneOffset
 import org.robolectric.Robolectric
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ServiceController
@@ -75,15 +74,30 @@ internal class TestSnoozeService : SnoozeService() {
 
     override fun createZenController(): ZenController = zen
 
-    override val clock: Clock get() = testClock
+    override val readClock: () -> ClockReading get() = { testReading }
 
     companion object {
+        /** Arbitrary but plausible: the fixture device booted 30 h ago. */
+        const val FIXTURE_UPTIME_MILLIS: Long = 30L * 60 * 60 * 1000
+
         var zen: RefusingZen = RefusingZen()
-        var testClock: Clock = Clock.systemUTC()
+
+        /**
+         * Both clocks, frozen. The uptime is arbitrary but plausible and moves
+         * with the wall reading, so a fixture reads as an undisturbed device
+         * rather than as one whose clock has been tampered with.
+         */
+        var testReading: ClockReading = ClockReading(
+            wallMillis = System.currentTimeMillis(),
+            uptimeMillis = FIXTURE_UPTIME_MILLIS,
+        )
 
         fun reset(now: Instant) {
             zen = RefusingZen()
-            testClock = Clock.fixed(now, ZoneOffset.UTC)
+            testReading = ClockReading(
+                wallMillis = now.toEpochMilli(),
+                uptimeMillis = FIXTURE_UPTIME_MILLIS,
+            )
         }
     }
 }
@@ -101,6 +115,9 @@ internal fun snoozeFixture(
     capExpiresAt = now.plus(capIn),
     mode = TrackingMode.FULL,
     placeName = "Home",
+    // Stamped as the harness's frozen device would have stamped it, so the
+    // fixture's two frames agree and the cap reads the same either way.
+    bootReference = now.toEpochMilli() - TestSnoozeService.FIXTURE_UPTIME_MILLIS,
 )
 
 internal val appContext: Application get() = ApplicationProvider.getApplicationContext()

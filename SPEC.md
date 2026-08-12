@@ -1001,6 +1001,107 @@ to hold: **a snooze whose cap alarm could not be scheduled does not arm**, and a
 reschedule it ends the snooze instead of restoring it (§8.3). A snooze with no time bound is the
 one state this app must never reach.
 
+**The cap is measured against the clock the user cannot move.** Both of its enforcers originally
+rode wall time — an `RTC_WAKEUP` alarm at the record's expiry, and an expiry test reading
+`Clock.systemUTC()` — so winding the date back in Settings moved both out together and kept Do Not
+Disturb on past the 24 h backstop, indefinitely. That is principle 1's failure, two taps away. The
+asymmetry matters, and it is about which direction is *dangerous* rather than what either one does:
+a backwards change extends a snooze, which is the failure above; a forward change can only shorten
+one, so it needs no defense. Only backwards is worth defending against.
+
+Neither clock alone can fix it. `SystemClock.elapsedRealtime` counts from boot across sleep and
+nothing can move it, but it resets on every boot, so nothing written in it survives one — and the
+record must survive reboots (§8.3). Wall time is the only frame that does survive, and it is the
+frame the user can move. So the record stores its deadline in wall time **and** the offset between
+the two clocks (`wall − uptime`) that was in force when it was written, and every cap decision takes
+the **smaller** of what the two clocks then say is left. That single rule is exact whenever either
+clock is trustworthy — uptime is exact when the clock has moved, wall time is exact across a reboot,
+and across a reboot the uptime answer can only ever *overestimate* what is left, so it never wins
+the comparison wrongly — and where neither is trustworthy it errs toward ending the snooze (D7).
+
+**Every reboot restates the offset**, and the minimum rule depends on it. A reboot resets uptime, so
+the stored offset describes a boot that no longer exists and the deadline has only wall time left to
+be read against — which holds until the wall clock moves, and then nothing catches it: reboot first,
+wind back second, and *both* answers are too high, so their minimum is too high as well. The boot
+receiver therefore writes the new boot's offset back to the record before it re-arms anything. The
+deadline itself is untouched, since wall time is the trustworthy frame at that moment and
+recomputing it would make an already-overdue cap look fresh.
+
+**A restate that cannot be written ends the snooze**, the same answer as a cap that cannot be
+scheduled. A stale offset is not a harmless degradation to wall-clock-only — it is still *believed*
+by every later reader, so a backwards change afterwards leaves both answers too high and any re-arm
+off that record schedules the cap past its own deadline rather than at it. Nothing after the fact can
+restore a trustworthy frame; the write is the only way to keep one. So the snooze ends rather than
+running on a bound nothing can rely on (D7).
+
+What that cannot cover is a clock moved *while the phone was off*, or a phone rebooted and left
+locked so the receiver never runs (`TODO.md` tracks the latter with the direct-boot work it shares a
+cause with). Wall time is then already wrong when it arrives and there is no second frame left to
+check it against; the 24 h ceiling is the only remaining backstop, and a smaller shift is not
+detectable at all.
+
+**A clock change is itself a wake-up, and it may only end a snooze — never extend one.** Counting in
+elapsed realtime is what stops a backwards change pushing the alarm out, and the price is the other
+direction: a clock moved *forward* past the deadline does not move the alarm either, so the snooze
+would run to its original real duration while the ongoing notification — which ticks against wall
+time — sat at zero. A countdown that finished over a phone that is still silent is principle 2's
+failure, so `TIME_SET` re-checks the cap and ends the snooze if it is due. It fires only when
+something actually sets the clock, so it adds nothing to §9's battery budget on an undisturbed
+phone.
+
+It also **writes the record back**, and that is the half that is easy to miss. A backwards change
+leaves uptime as the only frame that knows how long is really left — and that knowledge lives in
+memory, as the gap between the stored offset and the current uptime, which the next boot destroys.
+The boot would then find an untouched, now-inflated wall deadline, adopt it, and hold Do Not Disturb
+open by exactly the size of the shift. So the remaining time is folded back into wall time while wall
+time can still be read. A forward change is a no-op here by construction, since wall time is already
+the smaller of the two.
+
+**The 8-hour backstop moves with the deadline**, which is why the record carries it rather than
+measuring it from the moment the snooze started. The start time is the snooze's identity — every
+queued retry names it — so it stays where it is when the deadline is restated, and a backstop
+derived from it would be left in the frame the user just left, holding the whole shift as slack for
+`+30 min` to spend. Wound back three hours, an eight-hour snooze could then be extended to eleven,
+which is the backstop failing at exactly the button §4.3 bounds.
+
+**The change is performed through the running service wherever one will start**, and only performed
+by the broadcast receiver itself when the service refuses. The record and the controller are two
+copies of the same snooze: writing only the first repairs the record and leaves the running snooze
+carrying the pre-change deadline, which the next thing to write from memory — `+30 min` — puts
+straight back on disk. A repair the button beside it undoes is not a repair. What a clock change
+*means* is therefore decided in one place and performed in two, so the no-service path, which no
+device reaches on purpose, cannot drift from the one that matters.
+
+**A record with no stored offset does not survive a clock change.** Such a record is read against
+wall time alone, and wall time is exactly what has just moved — by an amount and in a direction
+nothing can recover, since there is no second clock left to compare against. Restating it would only
+stamp the moved reading as though it had been measured, handing every later reader a deadline that
+*looks* framed and is not; the 24 h ceiling catches a shift big enough to make the deadline
+implausible, and a three-hour one sails past it. So the snooze ends instead (D7), which is the same
+answer the boot receiver gives when it cannot restate its offset. Only records written before the
+offset existed can reach this, and only at the moment the clock is set.
+
+It deliberately does **not** re-arm. Recomputing the delay is only trustworthy while the record's
+offset describes the current boot, and the two cases above are exactly when it does not — so against
+a stale offset a backwards change would produce a *longer* delay than the one already armed, and
+re-arming would replace a correct alarm with an overlong one, reintroducing the overrun. Leaving the
+existing alarm alone cannot do that: it was armed in elapsed realtime and nothing since has moved it.
+What that gives up is precision in the harmless direction — a forward jump that does not clear the
+deadline leaves the countdown reading short of what the alarm will honor, which resolves itself when
+the cap fires.
+
+A process-wide anchored clock — wall time sampled once at process start and advanced by uptime —
+reads as the obvious fix and is a trap worth recording, because it was tried. The record outlives
+the process, so a deadline stamped in one process's anchored frame is read by the next process
+against a different anchor, and the mismatch is a cap that overruns by however far the clock moved.
+Anchoring hides the clock change instead of measuring it.
+
+Records written before the offset existed carry none, and fall back to wall time alone — the
+behavior they were already relying on. For those, a deadline further off than the 24 h ceiling is
+treated as already fired: no snooze can legitimately have more than the maximum cap left, so a
+record claiming more is a clock that moved while nothing was alive to notice, and how much real time
+actually passed is unknowable.
+
 **A release the platform refuses keeps the snooze — unless there is nothing left to release.** The
 record is what retries: it holds the cap alarm, the notification, and the tile's `Snoozing`, so the
 next cap check or tap tries again, and clearing it would leave the rule on with nothing that knows

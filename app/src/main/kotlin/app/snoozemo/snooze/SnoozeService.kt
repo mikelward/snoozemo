@@ -13,6 +13,9 @@ import android.os.Looper
 import android.util.Log
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.Attempt
+import app.snoozemo.core.ClockChange
+import app.snoozemo.core.ClockChangeAction
+import app.snoozemo.core.ClockReading
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.PolicyAccess
@@ -30,7 +33,6 @@ import app.snoozemo.core.ZenTrigger
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.dnd.PrefsZenRuleIdStore
 import app.snoozemo.ui.MainActivity
-import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 
@@ -77,14 +79,14 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     private lateinit var controller: SnoozeController
 
     /**
-     * Shared with the controller, so the cap is read from one clock only.
+     * Shared with the controller, so the cap is read from one place only.
      *
      * Overridable for tests, which is the only reason it is not private. The
      * decisions that read it — whether a re-armed cap is imminent, whether a
      * record has expired — are exactly the ones that must not be driven by real
      * elapsed time (AGENTS.md, *Testing expectations*).
      */
-    internal open val clock: Clock = Clock.systemUTC()
+    internal open val readClock: () -> ClockReading = SnoozeClock::read
 
     /**
      * Whether the last attempt to erase the record actually reached disk. False
@@ -300,7 +302,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         super.onCreate()
         store = ActiveSnoozeStore(applicationContext)
         pendingFailure = PendingFailureStore(applicationContext)
-        controller = SnoozeController(zen, clock, this)
+        controller = SnoozeController(zen, readClock, this)
 
         // Contained, like the notification channels are at their own source,
         // and for the same reason: this is `onCreate`, so a throw here takes
@@ -348,9 +350,14 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // one of the things that starts this service — so a restore that
             // trusted the old alarm could re-assert the rule with nothing left
             // to end it. Re-arming from the record is idempotent when the alarm
-            // is still pending, and the record's expiry is unchanged, so this
-            // cannot extend a snooze.
-            if (!CapAlarm.arm(applicationContext, record.capExpiresAt.toEpochMilli())) {
+            // is still pending, and it cannot extend the snooze because the
+            // delay comes from the record's own stored frame — which every
+            // reboot restates before anything reads it, and which a snooze
+            // whose restate could not be written does not survive to reach
+            // (SPEC.md §7). Without that guarantee at the source, a stale
+            // offset plus a backwards clock change would make this re-arm
+            // schedule the cap *past* its own deadline instead of at it.
+            if (!CapAlarm.arm(applicationContext, record, readClock())) {
                 // No cap means no guaranteed exit, so don't restore into one.
                 // Released directly rather than through the controller: it has
                 // not been handed the record yet, so `end()` here would run with
@@ -411,8 +418,8 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         val running = controller.active ?: return
         // Restoring the bound this snooze already had, not a rung: idempotent
         // while the original is still pending, and it cannot extend the snooze.
-        val capArmed = CapAlarm.arm(applicationContext, running.capExpiresAt.toEpochMilli())
-        if (capArmed && running.isExpired(clock.instant())) return
+        val capArmed = CapAlarm.arm(applicationContext, running, readClock())
+        if (capArmed && running.isExpired(readClock())) return
 
         if (capArmed) {
             Log.e(TAG, "The release was refused and its cap is not due yet; escalating rather than waiting.")
@@ -548,6 +555,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 rescheduleIfUnfinished()
             }
             ACTION_EXTEND -> extend()
+            ACTION_CLOCK_CHANGED -> reconcileClock()
             // onCreate already restored from the record; starting the service is
             // the whole of what a reboot needs.
             ACTION_RESTORE -> Unit
@@ -773,8 +781,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // the controller: two derivations from two clock readings put them
         // milliseconds apart, and an alarm that fires just before its own record
         // counts as expired is spent for nothing.
-        val capExpiresAt = ActiveSnooze.capExpiryFor(clock.instant())
-        if (!CapAlarm.arm(applicationContext, capExpiresAt.toEpochMilli())) {
+        val reading = readClock()
+        val capExpiresAt = ActiveSnooze.capExpiryFor(reading)
+        // As a delay, from the same reading the deadline came from: there is no
+        // record to measure against yet, and the delay *is* the cap's duration.
+        if (!CapAlarm.armCheckIn(applicationContext, capExpiresAt.toEpochMilli() - reading.wallMillis)) {
             notifications.showCouldNotArm()
             // Kept for the same reason a zen failure is: on a tile-first
             // install POST_NOTIFICATIONS is still denied at the first tap, so
@@ -792,7 +803,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // `onStartCommand` runs the same check on its way out.
         decidingArm = true
         try {
-            armWithCap(capExpiresAt)
+            armWithCap(capExpiresAt, reading)
         } finally {
             decidingArm = false
         }
@@ -801,12 +812,16 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     /**
      * The arm proper, once a cap alarm is scheduled for [capExpiresAt].
      *
+     * [at] is the one reading the deadline and the alarm were both derived
+     * from, threaded through rather than re-read so all three name the same
+     * frame (see `SnoozeController.beginArming`).
+     *
      * Split from [arm] only so the flag above has an unmissable scope: every
      * exit from here — refusal, unrecorded snooze, success — passes through the
      * `finally` rather than each `return` remembering to clear it.
      */
-    private fun armWithCap(capExpiresAt: Instant) {
-        if (!controller.beginArming(capExpiresAt)) {
+    private fun armWithCap(capExpiresAt: Instant, at: ClockReading) {
+        if (!controller.beginArming(capExpiresAt, at)) {
             // Arming was refused. The IDLE transition has already dealt with the
             // record and the notification; the cap alarm is ours to take back.
             //
@@ -938,6 +953,86 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         controller.onAnchorUnavailable(ssid = null)
     }
 
+    /**
+     * The user set the clock, and this service is the one holding the snooze
+     * (SPEC.md §7).
+     *
+     * `TimeChangedReceiver` could write the repaired record on its own — it does
+     * exactly that when this service will not start — but a record written while
+     * a controller is alive is only half the state. The controller's copy still
+     * carries the pre-change deadline, and `+30 min` derives its update from
+     * *that*: one tap and the repair is on the floor, with the pre-change
+     * deadline back on disk and a reboot away from holding Do Not Disturb open
+     * by the size of the shift. So the change is performed where both copies
+     * are, and the record is written from the same snooze the controller then
+     * adopts.
+     *
+     * The decision itself is [ClockChange]'s, shared with the no-service path so
+     * the two cannot disagree about what a clock change means.
+     */
+    private fun reconcileClock() {
+        val snooze = controller.active ?: return
+        when (val action = ClockChange.resolve(snooze, readClock())) {
+            // Nothing moved that this record could not already read correctly.
+            ClockChangeAction.None -> Unit
+
+            // Due as of this reading — including the forward jump that landed
+            // past the deadline, which is the case nothing else would notice:
+            // the alarm counts in elapsed realtime and did not move with the
+            // clock. `ensureCapAfterRefusedEnd` covers a platform that refuses,
+            // exactly as `End now` does; the cap alarm is still armed here, so
+            // unlike the cap-check path there is no spent alarm to replace.
+            ClockChangeAction.EndAtCap -> {
+                controller.onCapCheck()
+                ensureCapAfterRefusedEnd(EndReason.DURATION_CAP)
+            }
+
+            // No offset to read the deadline against but the clock that just
+            // moved, so how long is really left is unknowable. Fail open
+            // (SPEC.md §7, D7) — and `LOST_CAPABILITY` rather than the cap,
+            // because this snooze is not ending on its time, it is ending
+            // because its bound stopped being legible.
+            ClockChangeAction.EndUnframed -> {
+                Log.w(TAG, "The clock moved under a record with no offset; ending rather than guessing.")
+                controller.end(EndReason.LOST_CAPABILITY)
+                ensureCapAfterRefusedEnd(EndReason.LOST_CAPABILITY)
+            }
+
+            is ClockChangeAction.Restate -> restate(action.snooze)
+        }
+    }
+
+    /**
+     * Writes the restated record, then hands the same snooze to the controller.
+     *
+     * That order is the one [extend] uses and for the same reason: the durable
+     * half goes first, and nothing in memory claims a frame that did not reach
+     * disk. A refused write ends the snooze rather than leaving a record whose
+     * deadline is wrong in the dangerous direction — the armed alarm is still
+     * correct, so it only bites after a reboot, but a bound that depends on the
+     * phone never restarting is not a bound (D7).
+     */
+    private fun restate(restated: ActiveSnooze) {
+        if (!store.save(restated)) {
+            Log.e(TAG, "The clock change could not be recorded; ending rather than trusting the old deadline.")
+            controller.end(EndReason.LOST_CAPABILITY)
+            ensureCapAfterRefusedEnd(EndReason.LOST_CAPABILITY)
+            return
+        }
+        controller.reconciledTo(restated)
+
+        // The countdown, which the clock change has just falsified: the platform
+        // ticks the chronometer against the *wall* clock from the instant it was
+        // posted in, so after a backwards change it reads the shift too long — a
+        // snooze that appears to have hours left over a phone about to come back
+        // on. Re-posted rather than emitted as a transition, because nothing
+        // about the snooze changed: the same moment is still the cap, said in a
+        // frame that survives, and a transition would commit the record a second
+        // time to say so. The tile's subtitle is stale in exactly the same way.
+        notifications.showOngoing(restated)
+        SnoozeTileBridge.refresh(applicationContext)
+    }
+
     /** The notification's `+30 min` (SPEC.md §4.3). */
     private fun extend() {
         val snooze = controller.active ?: return
@@ -950,7 +1045,8 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // The alarm moves first, and the controller only hears about it if that
         // worked: the alarm is the cap, so a countdown extended past an alarm
         // still set for the old time would be a promise the platform never made.
-        if (!CapAlarm.arm(applicationContext, extendedCap.toEpochMilli())) {
+        val extended = snooze.copy(capExpiresAt = extendedCap)
+        if (!CapAlarm.arm(applicationContext, extended, readClock())) {
             notifications.showCouldNotExtend()
             return
         }
@@ -960,7 +1056,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // record that survives process death carries it: a countdown and an
         // alarm at the new time over a record at the old one would restore to a
         // snooze that ends earlier than the user was told.
-        if (!store.save(snooze.copy(capExpiresAt = extendedCap))) {
+        if (!store.save(extended)) {
             notifications.showCouldNotExtend()
 
             // The record first, then the alarm. A failed `commit` still leaves
@@ -971,9 +1067,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // re-arm the cap for the later deadline. Writing the original back
             // is what actually undoes it.
             val recordRolledBack = store.save(snooze)
-            if (recordRolledBack &&
-                CapAlarm.arm(applicationContext, snooze.capExpiresAt.toEpochMilli())
-            ) {
+            if (recordRolledBack && CapAlarm.arm(applicationContext, snooze, readClock())) {
                 return
             }
 
@@ -1147,7 +1241,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             return
         }
         val running = controller.active ?: return
-        if (!running.isExpired(clock.instant())) return
+        if (!running.isExpired(readClock())) return
 
         // The cap that woke us is spent, so this snooze has nothing durable
         // behind it until something is put there. Handed to the ladder whole
@@ -1295,7 +1389,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         return if (step.forIdentifiedSnooze && startedAt != null) {
             CapAlarm.armReleaseRetry(applicationContext, at, startedAt.toEpochMilli(), releasingReason)
         } else {
-            CapAlarm.arm(applicationContext, at)
+            CapAlarm.armCheckIn(applicationContext, RETRY_MS)
         }
     }
 
@@ -1536,6 +1630,16 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         const val ACTION_RESTORE = "app.snoozemo.action.RESTORE"
         const val ACTION_CAP_LOST = "app.snoozemo.action.CAP_LOST"
         const val ACTION_REFRESH = "app.snoozemo.action.REFRESH"
+
+        /**
+         * The wall clock was set while a snooze is running (SPEC.md §7).
+         *
+         * Distinct from [ACTION_CHECK_CAP] because the cap being due is only one
+         * of the answers: the record's two clock frames have to be restated
+         * whether or not it is, and doing that through the service is what keeps
+         * the controller's copy in step with the one on disk.
+         */
+        const val ACTION_CLOCK_CHANGED = "app.snoozemo.action.CLOCK_CHANGED"
         const val ACTION_ERASE_RETRY = "app.snoozemo.action.ERASE_RETRY"
 
         /**
@@ -1597,6 +1701,13 @@ open class SnoozeService : Service(), SnoozeController.Listener {
 
         /** Re-post the ongoing notification, after something unblocked it. */
         fun refresh(context: Context) = start(context, ACTION_REFRESH)
+
+        /**
+         * Restate the running snooze's clock frames after the wall clock was
+         * set, returning false if the service would not start — in which case
+         * the caller performs the same change itself.
+         */
+        fun clockChanged(context: Context) = start(context, ACTION_CLOCK_CHANGED)
 
         /**
          * Finish erasing the released record that started at

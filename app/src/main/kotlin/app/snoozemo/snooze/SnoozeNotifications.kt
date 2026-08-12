@@ -93,7 +93,15 @@ class SnoozeNotifications(private val context: Context) {
             // for eight hours would still read "8h 0m left" seven hours later,
             // which is worse than no countdown because it looks current. The
             // chronometer ticks by itself against an absolute deadline.
-            .setWhen(snooze.capExpiresAt.toEpochMilli())
+            //
+            // Translated through the remaining time rather than handed the
+            // record's deadline directly. The chronometer counts against the
+            // *wall* clock, which is the one frame the record's deadline may no
+            // longer be in — after a backwards clock change the two disagree,
+            // and the countdown would show hours that the cap has no intention
+            // of honoring. `remaining` reconciles them; adding it to wall-now
+            // puts the answer back in the frame the platform will tick in.
+            .setWhen(System.currentTimeMillis() + snooze.remaining(SnoozeClock.read()).toMillis())
             .setUsesChronometer(true)
             .setChronometerCountDown(true)
             .addAction(

@@ -1,8 +1,9 @@
 package app.snoozemo.tile
 
 import android.content.Context
+import android.os.SystemClock
+import app.snoozemo.core.ClockReading
 import java.time.Duration
-import java.time.Instant
 
 /**
  * What the tile needs to render, read straight from the persisted snooze record.
@@ -15,6 +16,16 @@ internal data class TileSnapshot(
     val snoozing: Boolean,
     val capExpiresAtMillis: Long,
     val tracked: Boolean,
+    /**
+     * The clock offset the record was written under, or null if it carries
+     * none — see `ActiveSnooze.bootReference`.
+     *
+     * The tile reads the record directly rather than through the store, so it
+     * has to carry this too: without it the countdown is pure wall-clock
+     * arithmetic, and after a backwards clock change the shade would show hours
+     * left on a snooze whose cap is about to fire.
+     */
+    val bootReference: Long? = null,
 ) {
 
     fun subtitle(context: Context): String? = when {
@@ -36,14 +47,27 @@ internal data class TileSnapshot(
      * English inside every locale.
      */
     private fun remaining(context: Context): String {
-        val minutes = Duration.between(Instant.now(), Instant.ofEpochMilli(capExpiresAtMillis))
-            .toMinutes().coerceAtLeast(1)
+        val minutes = Duration.ofMillis(remainingMillis()).toMinutes().coerceAtLeast(1)
         val hours = minutes / 60
         return if (hours > 0) {
             context.getString(R.string.tile_remaining_hours, hours, minutes % 60)
         } else {
             context.getString(R.string.tile_remaining_minutes, minutes)
         }
+    }
+
+    /**
+     * The smaller of what the two clocks say is left, floored at zero — the same
+     * rule and the same reasoning as `ActiveSnooze.remaining`, which is what the
+     * rest of the app judges the cap by. The tile has no record object to call
+     * it on, so the arithmetic is repeated rather than the answer diverging.
+     */
+    private fun remainingMillis(): Long {
+        val reading = ClockReading(System.currentTimeMillis(), SystemClock.elapsedRealtime())
+        val byWallClock = capExpiresAtMillis - reading.wallMillis
+        val reference = bootReference ?: return byWallClock.coerceAtLeast(0L)
+        val byUptime = (capExpiresAtMillis - reference) - reading.uptimeMillis
+        return minOf(byWallClock, byUptime).coerceAtLeast(0L)
     }
 
     companion object {
@@ -58,6 +82,11 @@ internal data class TileSnapshot(
                 snoozing = capExpiresAt != 0L && !released,
                 capExpiresAtMillis = capExpiresAt,
                 tracked = prefs.getString("mode", null) == "FULL",
+                bootReference = if (prefs.contains("boot_reference")) {
+                    prefs.getLong("boot_reference", 0L)
+                } else {
+                    null
+                },
             )
         }
     }

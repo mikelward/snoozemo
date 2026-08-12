@@ -350,17 +350,40 @@ the point is that every other line of the app is worthless if it isn't true.
       release path that works with only that. Worth confirming on hardware first: whether
       DND survives a reboot at all, and whether `setAutomaticZenRuleState` is callable
       during direct boot — the fix is shaped differently if either answer is no.
-- [ ] **A backwards wall-clock change can outlast the cap** (flagged by Codex on PR #8).
-      The cap alarm is `RTC_WAKEUP` and the controller's expiry test reads `Clock.systemUTC()`,
-      so both move with the wall clock: setting the date back far enough keeps DND on past
-      the 24 h backstop, which is principle 1's failure. The asymmetry is worth noting —
-      a *forward* change ends the snooze early, which is the safe direction; only a
-      deliberate backwards change extends it. Fixing it properly means the live deadline
-      runs on `SystemClock.elapsedRealtime` while the persisted record keeps a wall-clock
-      expiry for reboot recovery (elapsed realtime resets on boot), plus a stored boot
-      reference so a restored record can tell which of the two applies. That touches the
-      record's schema and `SPEC.md` §7's "the alarm *is* the cap", so it is its own change
-      with its own tests rather than a fold-in.
+- [x] **A backwards wall-clock change can outlast the cap** (flagged by Codex on PR #8).
+      The cap alarm was `RTC_WAKEUP` and the expiry test read `Clock.systemUTC()`, so both
+      moved with the wall clock: setting the date back kept DND on past the 24 h backstop,
+      which is principle 1's failure. Fixed as `SPEC.md` §7 now describes — the record
+      stores its wall-clock deadline alongside the clock offset it was written under, the
+      cap alarm is `ELAPSED_REALTIME_WAKEUP`, every cap decision takes the smaller of what
+      the two clocks say is left, each reboot restates the offset (ending the snooze if that
+      restate cannot be written, since a stale offset is believed rather than ignored), and
+      a `TIME_SET` change folds the remaining time back into the wall deadline (uptime's
+      answer would otherwise die with the next boot) and
+      re-checks the cap and ends the snooze only if it is already due. That receiver
+      deliberately **never re-arms** — against a stale offset a backwards change would
+      compute a longer delay than the one already armed and replace a correct alarm with an
+      overlong one, which is the overrun this item exists to remove. The change is performed
+      through the running service wherever one will start, since the record and the
+      controller are two copies of the same snooze and repairing only the first leaves
+      `+30 min` to write the pre-change deadline back over it; a record carrying **no**
+      offset ends on a clock change rather than being stamped with a frame it was never
+      measured in. An earlier attempt
+      using a process-wide anchored clock is recorded in §7 as the trap it turned out to
+      be: it overran the cap whenever the record crossed a process boundary.
+      - Still open: a forward change that does **not** clear the deadline leaves the record
+        reading the shortened wall answer while the armed alarm still counts the original
+        elapsed delay, so the countdown reaches zero and the phone stays quiet until the
+        alarm fires. Harmless in the sense that the snooze never outlives its real duration,
+        and stated in §7 as the precision given up — but the record's frame is provably
+        fresh immediately after a reconciliation, so re-arming *there* would close it
+        without reintroducing the stale-offset overrun the never-re-arm rule exists for.
+        Worth doing as its own change, with its own test, rather than inside a fix.
+      - Still open, and shared with the locked-boot item above: a clock moved **while the
+        phone is off**, or a reboot that stays locked so the boot receiver never restates
+        the offset. Wall time is already wrong by the time anything runs, with no second
+        frame left to check it against, so the 24 h ceiling is the only backstop and a
+        smaller shift is undetectable. The direct-boot record fixes both at once.
 - [ ] Pre-existing DND: Snoozemo arms on top and, on release, turns off only its own rule
       (`SPEC.md` §5.6).
 - [ ] **Sharing the debug log** (`SPEC.md` §4.6) — the user-facing half of the Phase 3 log,
@@ -668,6 +691,27 @@ Guessed while building the tile and cap (autopilot, 2026-08-12):
   rather than swapping in `8-hour` and having to change it again when per-place caps land.
   Alternative: state the actual ceiling. Reversible — one string, no locales yet, and it is
   in the wording pass the maintainer already has open.
+
+Guessed while making the clock change survive a reboot (autopilot, 2026-08-12):
+
+- **A record with no stored offset now ends on a clock change instead of being restated.**
+  Codex asked for this on PR #14, and the reasoning holds on its own: such a record is read
+  against wall time alone, wall time is what just moved, and nothing can recover by how much
+  — so restating it stamps a moved reading with a frame it was never measured in, and the
+  24 h ceiling only catches shifts far larger than the ones a user actually makes. The
+  outcome without it is *no worse than before* (the deadline written is the one already
+  there), so this is a genuine judgment call rather than a bug fix: it trades a snooze that
+  ends early for one whose bound nobody can read. Principle 1 settles it that way, and it
+  matches the boot receiver's answer when it cannot restate its own offset. Only records
+  written before the offset existed can reach it — the app is unreleased, so in practice
+  none — and reversing it is one branch in `ClockChange`.
+- **The clock change is performed through the running service, which starts one if the
+  process is gone.** That is a service start, a rule re-assertion and an alarm re-arm on
+  every `TIME_SET` that changes anything, where the receiver alone would have written one
+  preferences record. Taken because the alternative leaves the controller's copy stale for
+  `+30 min` to write back — a repair undone by the button beside it. The cost is bounded by
+  how rarely a clock is actually set, and the same start already happens on the expired
+  path. Reversible by having the receiver write the record and merely notify the service.
 
 ## Keeping the phone alive: the options ledger
 

@@ -1,9 +1,7 @@
 package app.snoozemo.core
 
-import java.time.Clock
 import java.time.Duration
 import java.time.Instant
-import java.time.ZoneOffset
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -14,11 +12,26 @@ import org.junit.Test
 class SnoozeControllerTest {
 
     private val start: Instant = Instant.parse("2026-08-11T09:00:00Z")
-    private var now: Instant = start
-    private val clock = object : Clock() {
-        override fun instant(): Instant = now
-        override fun withZone(zone: java.time.ZoneId?): Clock = this
-        override fun getZone(): java.time.ZoneId = ZoneOffset.UTC
+
+    /** A plausible device uptime when these tests begin. */
+    private var uptimeMillis: Long = Duration.ofHours(30).toMillis()
+
+    private var wall: Instant = start
+
+    /**
+     * The test's clock. Setting it advances *both* frames by the same amount,
+     * which is what an undisturbed device does — a test that moved wall time
+     * alone would be silently testing a clock change.
+     */
+    private var now: Instant
+        get() = wall
+        set(value) {
+            uptimeMillis += Duration.between(wall, value).toMillis()
+            wall = value
+        }
+
+    private val readClock: () -> ClockReading = {
+        ClockReading(wallMillis = wall.toEpochMilli(), uptimeMillis = uptimeMillis)
     }
 
     private val anchor = Anchor(
@@ -59,11 +72,11 @@ class SnoozeControllerTest {
 
     private val zen = FakeZen()
     private val listener = Recorder()
-    private val controller = SnoozeController(zen, clock, listener)
+    private val controller = SnoozeController(zen, readClock, listener)
 
     /** The common case: arm, then the anchor lands within the ceiling. */
     private fun armFully(anchor: Anchor = this.anchor): Boolean {
-        val began = controller.beginArming(ActiveSnooze.capExpiryFor(now))
+        val began = controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
         controller.onAnchorCaptured(anchor)
         return began
     }
@@ -72,7 +85,7 @@ class SnoozeControllerTest {
     fun `the rule goes on at the tap, before any anchor exists`() {
         // The phone must be quiet from the tap, not from the fix (SPEC.md §4.1):
         // anchor capture takes up to 10 s and DND cannot wait for it.
-        assertTrue(controller.beginArming(ActiveSnooze.capExpiryFor(now)))
+        assertTrue(controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock()))
 
         assertEquals(SnoozeState.ARMING, controller.state)
         assertEquals(listOf(true to ZenTrigger.USER_ACTION), zen.calls)
@@ -81,14 +94,14 @@ class SnoozeControllerTest {
     @Test
     fun `a snooze that is still arming is honestly duration-only`() {
         // Nothing is captured yet, so nothing can detect a departure yet.
-        controller.beginArming(ActiveSnooze.capExpiryFor(now))
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
 
         assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
     }
 
     @Test
     fun `the anchor landing completes the arm without touching the rule again`() {
-        controller.beginArming(ActiveSnooze.capExpiryFor(now))
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
 
         controller.onAnchorCaptured(anchor)
 
@@ -100,7 +113,7 @@ class SnoozeControllerTest {
     @Test
     fun `no fix within the ceiling still arms, degraded, and says so`() {
         // Arming must never feel slow or refuse (SPEC.md §4.1).
-        controller.beginArming(ActiveSnooze.capExpiryFor(now))
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
 
         controller.onAnchorUnavailable(ssid = "ExampleWifi")
 
@@ -111,7 +124,7 @@ class SnoozeControllerTest {
 
     @Test
     fun `no fix and no Wi-Fi arms as a timer, and says that too`() {
-        controller.beginArming(ActiveSnooze.capExpiryFor(now))
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
 
         controller.onAnchorUnavailable(ssid = null)
 
@@ -121,7 +134,7 @@ class SnoozeControllerTest {
 
     @Test
     fun `a fix arriving after the snooze ended does not resurrect it`() {
-        controller.beginArming(ActiveSnooze.capExpiryFor(now))
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
         controller.end(EndReason.MANUAL)
 
         controller.onAnchorCaptured(anchor)
@@ -136,7 +149,7 @@ class SnoozeControllerTest {
         // lie to the user, and the failure has to be visible.
         zen.outcome = ZenOutcome.NotApplied(ZenFailure.RULE_DISABLED)
 
-        assertFalse(controller.beginArming(ActiveSnooze.capExpiryFor(now)))
+        assertFalse(controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock()))
 
         assertEquals(SnoozeState.IDLE, controller.state)
         assertNull(controller.active)
@@ -166,7 +179,7 @@ class SnoozeControllerTest {
 
     @Test
     fun `the cap fires even when nothing else has`() {
-        controller.beginArming(ActiveSnooze.capExpiryFor(now, Duration.ofHours(1)))
+        controller.beginArming(ActiveSnooze.capExpiryFor(now, Duration.ofHours(1)), readClock())
         controller.onAnchorCaptured(anchor)
 
         now = start.plus(Duration.ofMinutes(59))
@@ -184,7 +197,7 @@ class SnoozeControllerTest {
     fun `an early or repeated cap alarm cannot end a snooze before its time`() {
         // Alarms fire late, early, and twice; the controller re-checks rather
         // than trusting the caller.
-        controller.beginArming(ActiveSnooze.capExpiryFor(now, Duration.ofHours(2)))
+        controller.beginArming(ActiveSnooze.capExpiryFor(now, Duration.ofHours(2)), readClock())
         controller.onAnchorCaptured(anchor)
 
         controller.onCapCheck()
@@ -195,7 +208,7 @@ class SnoozeControllerTest {
 
     @Test
     fun `a cap longer than the backstop is clamped`() {
-        controller.beginArming(ActiveSnooze.capExpiryFor(now, Duration.ofDays(7)))
+        controller.beginArming(ActiveSnooze.capExpiryFor(now, Duration.ofDays(7)), readClock())
 
         assertEquals(start.plus(ActiveSnooze.MAX_CAP), controller.active?.capExpiresAt)
     }
@@ -208,7 +221,7 @@ class SnoozeControllerTest {
         // expired, and be spent — leaving no duration exit at all.
         val capExpiresAt = start.plus(Duration.ofHours(3)).plusMillis(7)
 
-        controller.beginArming(capExpiresAt)
+        controller.beginArming(capExpiresAt, readClock())
 
         assertEquals(capExpiresAt, controller.active?.capExpiresAt)
     }
@@ -368,8 +381,8 @@ class SnoozeControllerTest {
 
         for (failure in ZenFailure.entries.filter { it.nothingLeftToRelease }) {
             val zen = FakeZen()
-            val controller = SnoozeController(zen, clock, Recorder())
-            controller.beginArming(ActiveSnooze.capExpiryFor(now))
+            val controller = SnoozeController(zen, readClock, Recorder())
+            controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
 
             zen.outcome = ZenOutcome.NotApplied(failure)
             controller.end(EndReason.DURATION_CAP)
@@ -583,5 +596,91 @@ class SnoozeControllerTest {
         controller.onCapCheck()
         assertNull(controller.active)
         assertEquals(EndReason.DURATION_CAP, listener.states.last { it.second != null }.second)
+    }
+
+    @Test
+    fun `a restated record replaces the running one, so the next write carries it`() {
+        // The bug this exists for: the clock change wrote the repaired record to
+        // disk while the controller kept the pre-change one, and `+30 min`
+        // derived its update from memory — putting the pre-change deadline
+        // straight back over the repair.
+        // A four-hour snooze, so `+30 min` still has room under the eight-hour
+        // backstop once the shift has been reconciled away — a default one is
+        // already at the backstop two hours in and would decline to extend,
+        // which is a different rule (see `ActiveSnoozeTest`).
+        controller.beginArming(
+            ActiveSnooze.capExpiryFor(now, Duration.ofHours(4)),
+            readClock(),
+        )
+        controller.onAnchorCaptured(anchor)
+        val running = controller.active!!
+        // Two real hours in, the clock goes back three.
+        uptimeMillis += Duration.ofHours(2).toMillis()
+        wall = start.minus(Duration.ofHours(1))
+        val restated = requireNotNull(running.reconciledOnto(readClock()))
+
+        assertEquals(restated, controller.reconciledTo(restated))
+        assertEquals(restated, controller.active)
+
+        // And the extension that follows now builds on the restated deadline.
+        val extended = controller.extendTo(controller.active!!.extendedCap(Duration.ofMinutes(30)))
+        assertEquals(Duration.ofHours(2).plusMinutes(30), extended!!.remaining(readClock()))
+    }
+
+    @Test
+    fun `a restated record for some other snooze is ignored`() {
+        // The record and the controller can disagree about *which* snooze is
+        // running — a broadcast that read the record before the user armed a new
+        // one, say — and adopting a stranger's deadline is how the live snooze
+        // ends up bounded by a time nothing chose for it.
+        armFully()
+        val running = controller.active!!
+        val stranger = running.copy(
+            startedAt = start.minus(Duration.ofHours(4)),
+            capExpiresAt = start.plus(Duration.ofHours(20)),
+        )
+
+        assertNull(controller.reconciledTo(stranger))
+        assertEquals(running, controller.active)
+    }
+
+    @Test
+    fun `restating nothing does nothing`() {
+        // Idle: a clock change with no snooze running has nothing to restate,
+        // and must not conjure one back into memory.
+        val orphan = ActiveSnooze(
+            anchor = anchor,
+            startedAt = start,
+            capExpiresAt = start.plus(Duration.ofHours(8)),
+            mode = TrackingMode.FULL,
+        )
+
+        assertNull(controller.reconciledTo(orphan))
+        assertNull(controller.active)
+    }
+
+    @Test
+    fun `a clock change during arming cannot separate the record from its alarm`() {
+        // The deadline, the alarm and the record's offset all come from one
+        // reading. Taken from two, a wall-clock change landing between them
+        // pairs a pre-change deadline with a post-change offset — and the cap
+        // then reads as hours further off than the alarm is set for, so the
+        // alarm fires, finds the snooze unexpired, and is spent for nothing.
+        val atArm = readClock()
+        val capExpiresAt = ActiveSnooze.capExpiryFor(atArm)
+
+        // The user sets the clock back three hours mid-arm. Uptime is untouched;
+        // only the wall reading moves, which is what a clock change is.
+        wall = start.minus(Duration.ofHours(3))
+
+        controller.beginArming(capExpiresAt, atArm)
+
+        // Eight hours of real time later — when the alarm actually fires — the
+        // cap must be due, however far the wall clock was moved.
+        uptimeMillis += Duration.ofHours(8).toMillis()
+        assertTrue(
+            "the record must agree with the alarm the same reading armed",
+            controller.active!!.isExpired(readClock()),
+        )
     }
 }
