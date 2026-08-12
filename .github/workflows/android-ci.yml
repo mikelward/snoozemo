@@ -145,3 +145,267 @@ jobs:
 
       - name: Run lint
         run: ./gradlew lint
+
+  screenshot-tests:
+    name: Screenshot tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # Write so "Commit refreshed screenshots" can push regenerated PNGs back
+      # to a same-repo PR branch, and so "Post screenshot diffs" can upsert its
+      # comment.
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          fetch-depth: 0
+          # Same-repo PRs check out the head *branch* rather than
+          # refs/pull/N/merge, so the refresh step below has somewhere to push;
+          # the build job still runs the assertions against the merge ref.
+          ref: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref || '' }}
+          # Don't leave the write-scoped token in .git/config while Gradle runs
+          # PR-controlled build code; the push step gets it via env instead.
+          persist-credentials: false
+
+      - name: Set up JDK
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654  # v5.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2  # v5
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
+      - name: Clear committed snapshots before recording
+        # Recording only overwrites files the suites still produce, so starting
+        # from empty is what makes a deleted test show up as a deletion in the
+        # refresh commit instead of a stale PNG living in the repo forever.
+        run: |
+          rm -rf app/src/test/snapshots/images
+          mkdir -p app/src/test/snapshots/images
+
+      # One step per screenshot class, and the allow-list is deliberate: a new
+      # *ScreenshotTest that isn't listed here records nothing in CI even though
+      # it passes, so its snapshots would silently never exist.
+      #
+      # The `play` flavor only. The screens are flavor-agnostic — the split is
+      # below `PresenceMonitor` (SPEC.md §3.4) — so recording both would render
+      # identical pixels twice and race to write the same files.
+      - name: Run app screen screenshot tests
+        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.DebugScreenScreenshotTest" -Proborazzi.test.record=true
+
+      - name: Print failing test details
+        if: failure()
+        run: |
+          shopt -s nullglob globstar
+          for xml in app/build/test-results/**/TEST-*.xml; do
+            if grep -q "<\(failure\|error\)" "$xml"; then
+              echo "::group::$xml"
+              cat "$xml"
+              echo "::endgroup::"
+            fi
+          done
+
+      - name: Fail on screenshot drift when a refresh cannot be pushed
+        # Fork PRs and pushes to main can't receive a refresh commit, so drift
+        # has to fail the job loudly there rather than hide in an artifact under
+        # a green check.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          if [ -n "$(git status --porcelain -- app/src/test/snapshots/images)" ]; then
+            git status --porcelain -- app/src/test/snapshots/images
+            echo "::error::Recorded screenshots differ from the committed ones; re-record and commit them."
+            exit 1
+          fi
+
+      - name: Commit refreshed screenshots
+        # Keeps the committed snapshots identical to what this runner renders,
+        # so a font or renderer difference between a laptop and CI never reads
+        # as a UI change. Subject prefixed `ci:` so release notes skip it.
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          # Gradle has already run PR-controlled build code in this job, with
+          # the working tree and `.git` writable. So *every* git call here runs
+          # with config that cannot execute what the build could have planted —
+          # not just the ones that touch the token:
+          #   - `core.hooksPath` at an empty directory kills pre-commit and
+          #     pre-push hooks, and overrides a hooksPath written into
+          #     `.git/config`, which a plain `--no-verify` would not;
+          #   - `core.fsmonitor` takes a *pathname* git executes, and `git
+          #     status` alone is enough to run it;
+          #   - an empty `credential.helper` stops a planted helper being handed
+          #     the credential git asks it to store after a push.
+          # The token is never exported to the step, only interpolated into the
+          # push URL, so nothing else this step runs inherits it.
+          # `persist-credentials: false` on the checkout does not cover any of
+          # this: it keeps the token out of `.git/config`, not out of a child
+          # process's environment. What remains uncovered is `PATH` — the build
+          # can prepend a `git` of its own — which only a separate job closes;
+          # that trade-off is recorded in `TODO.md`.
+          mkdir -p "$RUNNER_TEMP/no-hooks"
+          safe_git=(git -c "core.hooksPath=$RUNNER_TEMP/no-hooks" -c core.fsmonitor=false -c credential.helper=)
+          drift="$("${safe_git[@]}" status --porcelain -- app/src/test/snapshots/images)"
+          if [ -z "$drift" ]; then
+            echo "Recorded screenshots match the committed ones; nothing to do."
+            exit 0
+          fi
+          echo "$drift"
+          # The drift is checked *before* this, deliberately. Skipping on the
+          # subject alone said "a refresh already happened" when the question is
+          # "do the snapshots still differ" — and after a rebase, or on a runner
+          # that renders differently, both can be true at once. That combination
+          # used to exit green with the difference visible only in the artifact.
+          if [ "$("${safe_git[@]}" log -1 --pretty=%s)" = "ci: refresh recorded screenshots" ]; then
+            echo "::error::Screenshots still drift on top of a refresh commit, so re-recording would not converge. Re-record locally and push; the images are in the roborazzi-screenshots artifact."
+            exit 1
+          fi
+          "${safe_git[@]}" config user.name "github-actions[bot]"
+          "${safe_git[@]}" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          "${safe_git[@]}" add app/src/test/snapshots/images
+          "${safe_git[@]}" commit --no-verify -m "ci: refresh recorded screenshots"
+          push_url="https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git"
+          if ! "${safe_git[@]}" push "$push_url" "HEAD:${GITHUB_HEAD_REF}"; then
+            # Fail, don't warn. The drift check above is skipped on same-repo
+            # PRs precisely because this step was going to fix the drift — so
+            # swallowing a failed push here is the one path that ends with a
+            # green job over snapshots that do not match what CI renders. A
+            # same-repo PR whose token cannot push is not hypothetical:
+            # Dependabot's `GITHUB_TOKEN` is read-only, and a dependency bump is
+            # the likeliest cause of a rendering change in the first place.
+            echo "::error::Recorded screenshots drifted and the refresh could not be pushed (branch gone or moved, or a read-only token). Re-record and commit them; the images are in the roborazzi-screenshots artifact."
+            exit 1
+          fi
+
+      - name: Post screenshot diffs as a PR comment
+        # GitHub renders "Binary files not rendered" for PNG diffs in the mobile
+        # app, so the Files tab is not a review surface for snapshots; embedded
+        # images are. Never gates the job.
+        #
+        # Embeds go through github.com/<repo>/raw/<sha>/… rather than
+        # raw.githubusercontent.com: that CDN origin never sees a github.com
+        # session cookie, so every embed 404s once the repo is private.
+        continue-on-error: true
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # Same hardening as the commit step, for the same reason: these run
+          # after PR-controlled build code, and `git status`/`git diff` will
+          # execute a `core.fsmonitor` pathname if one was planted.
+          mkdir -p "$RUNNER_TEMP/no-hooks"
+          safe_git=(git -c "core.hooksPath=$RUNNER_TEMP/no-hooks" -c core.fsmonitor=false -c credential.helper=)
+          BASE_SHA=$("${safe_git[@]}" merge-base HEAD "origin/${GITHUB_BASE_REF}")
+          HEAD_SHA=$("${safe_git[@]}" rev-parse HEAD)
+          # Deletions count. A removed or renamed screenshot test is a *change
+          # to the UI record* with no after-image, and the step that clears the
+          # directory before recording makes it a reachable state rather than a
+          # theoretical one. Left out, a reviewer sees no trace of a state the
+          # app used to have.
+          # --no-renames, or a snapshot renamed without a pixel changing is
+          # emitted as `R100<TAB>old<TAB>new`, which this filter drops — and a
+          # rename-only PR would then report itself as having no screenshot
+          # changes at all. With it, the same rename arrives as a deletion plus
+          # an addition, which is also the truthful thing to show a reviewer.
+          mapfile -t entries < <("${safe_git[@]}" diff --no-renames --name-status "$BASE_SHA" HEAD -- app/src/test/snapshots/images/ | grep -E '^[AMD]' || true)
+          raw="https://github.com/${GITHUB_REPOSITORY}/raw"
+          files="https://github.com/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}/files"
+          if [ ${#entries[@]} -eq 0 ]; then
+            # Not an early exit. A PR that *had* screenshot changes and no
+            # longer does already has a comment full of images that are no
+            # longer in the diff, and leaving it there is worse than never
+            # having posted: it shows a UI state this branch does not produce.
+            # So fall through with a body that says so, and post it only if
+            # there is an existing comment to correct (below).
+            echo "No screenshot changes vs merge-base."
+            body="<!-- screenshot-diff -->"$'\n'"## Screenshot diffs"$'\n\n'"No screenshot changes on this PR as of \`${HEAD_SHA:0:7}\`."
+          else
+          body="<!-- screenshot-diff -->"$'\n'"## Screenshot diffs"$'\n\n'"Auto-posted by CI. Images pinned to \`${HEAD_SHA:0:7}\`; each caption opens the diff."$'\n'
+          count=0
+          for entry in "${entries[@]}"; do
+            status="${entry%%$'\t'*}"
+            path="${entry#*$'\t'}"
+            name=$(basename "$path")
+            # GitHub anchors a file in the Files changed tab by the sha256 of its path.
+            anchor=$(printf '%s' "$path" | sha256sum | cut -d' ' -f1)
+            count=$((count+1))
+            if [ "$count" -gt 20 ]; then
+              body+=$'\n'"_…truncated: more than 20 changed screenshots._"
+              break
+            fi
+            case "$status" in
+              A)
+                body+=$'\n'"**Added — [\`${name}\`](${files}#diff-${anchor})**"$'\n\n'"<img src=\"${raw}/${HEAD_SHA}/${path}\" width=\"320\">"$'\n'
+                ;;
+              D)
+                # Before-image only: there is no after. Pinned to the merge
+                # base, which is the last commit that still had the file.
+                body+=$'\n'"**Removed — [\`${name}\`](${files}#diff-${anchor})**"$'\n\n'"<img src=\"${raw}/${BASE_SHA}/${path}\" width=\"320\">"$'\n'
+                ;;
+              *)
+                body+=$'\n'"**Changed — [\`${name}\`](${files}#diff-${anchor})**"$'\n\n'"| Before | After |"$'\n'"| --- | --- |"$'\n'"| <img src=\"${raw}/${BASE_SHA}/${path}\" width=\"320\"> | <img src=\"${raw}/${HEAD_SHA}/${path}\" width=\"320\"> |"$'\n'
+                ;;
+            esac
+          done
+          fi
+          # The lookup must skip rather than guess. Its result picks
+          # update-vs-create, so an error swallowed into an empty id doesn't
+          # lose the comment — it posts a *duplicate*, and every later run
+          # duplicates again. `gh api` exits non-zero on both an HTTP error and
+          # a body jq can't parse, which is exactly the pair a hand-rolled
+          # `curl | jq` had to check separately.
+          #
+          # --paginate for the same reason: past 100 comments the marker falls
+          # off page one, which produces that same duplicate from a different
+          # cause. The jq filter runs per page, so this takes the first id
+          # rather than indexing into one page's array.
+          if ! ids=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
+            --jq '.[] | select((.body // "") | startswith("<!-- screenshot-diff -->")) | .id'); then
+            echo "::warning::Could not list PR comments; skipping the screenshot-diff comment rather than risking a duplicate. The snapshots are in the roborazzi-screenshots artifact."
+            exit 0
+          fi
+          existing="${ids%%$'\n'*}"
+          if [ -n "$existing" ]; then
+            if gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" \
+              -f body="$body" > /dev/null; then
+              echo "Updated screenshot-diff comment ${existing}."
+            else
+              echo "::warning::Could not update screenshot-diff comment ${existing}; the snapshots are in the roborazzi-screenshots artifact."
+            fi
+          elif [ ${#entries[@]} -eq 0 ]; then
+            # Nothing to show and no stale comment to correct.
+            echo "No screenshot changes and no existing comment; nothing to post."
+          else
+            if gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              -f body="$body" > /dev/null; then
+              echo "Posted new screenshot-diff comment."
+            else
+              echo "::warning::Could not post the screenshot-diff comment; the snapshots are in the roborazzi-screenshots artifact."
+            fi
+          fi
+
+      - name: Upload Roborazzi screenshots
+        # Unconditional: a job that died before any test ran still uploads an
+        # empty directory, and that emptiness is itself the diagnosis.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: roborazzi-screenshots
+          path: app/src/test/snapshots/images/
+          if-no-files-found: ignore
+
+      - name: Upload screenshot test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: screenshot-test-reports
+          path: |
+            app/build/reports/tests/
+            app/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 1
