@@ -107,6 +107,33 @@ class SnoozeService : Service(), SnoozeController.Listener {
     private var releasingSnooze: Instant? = null
 
     /**
+     * Why the running escalation is ending its snooze.
+     *
+     * Carried for the whole escalation rather than decided per attempt, because
+     * every attempt is finishing the *same* end. A retry that picked its own
+     * would tell the user their manual exit was a duration cap, and hand the
+     * platform's Modes UI `ZenTrigger.CONTEXT` where `USER_ACTION` is what
+     * happened — the distinction SPEC.md §5.4 keeps the trigger for.
+     *
+     * `LOST_CAPABILITY` is the resting value because it is what the paths with
+     * nothing better to say already mean: something the snooze depended on has
+     * gone. [beginRelease] overwrites it before any attempt runs.
+     */
+    private var releasingReason: EndReason = EndReason.LOST_CAPABILITY
+
+    /**
+     * Whether a record on disk actually describes the snooze being released.
+     *
+     * Distinct from the ladder's `snoozeIdentified`, and they part company on
+     * exactly one path: an arm whose zen write landed but whose `save` failed is
+     * unwound with a live in-memory snooze and nothing written down. That
+     * release is identified — there is a snooze to end, and the alarm needs to
+     * name it — but the user is looking at `Couldn't snooze`, so nothing here
+     * may go on to announce one.
+     */
+    private var releasingRecordOnDisk: Boolean = false
+
+    /**
      * Whether a release is still owed — and therefore whether this service may
      * stop.
      *
@@ -348,16 +375,29 @@ class SnoozeService : Service(), SnoozeController.Listener {
      * release in place, the only things left are a tile and a notification the
      * user has to notice — and this service is an ordinary started one, so it
      * can be gone moments later.
+     *
+     * A re-armed cap only *finishes* the job where it is about to fire. On an
+     * expired record it is: the wake-up is already due, so it re-runs the
+     * release within moments and is a real retry. On a live snooze it is not —
+     * an `End now` refused an hour into an eight-hour snooze would leave the
+     * phone quiet for the remaining seven, with the app having stopped trying
+     * and said nothing, which is principles 1 and 2 together. So the cap is
+     * restored either way and the ladder continues unless the cap is the thing
+     * that ends this.
      */
-    private fun ensureCapAfterRefusedEnd() {
+    private fun ensureCapAfterRefusedEnd(reason: EndReason) {
         val running = controller.active ?: return
-        if (CapAlarm.arm(applicationContext, running.capExpiresAt.toEpochMilli())) return
+        // Restoring the bound this snooze already had, not a rung: idempotent
+        // while the original is still pending, and it cannot extend the snooze.
+        val capArmed = CapAlarm.arm(applicationContext, running.capExpiresAt.toEpochMilli())
+        if (capArmed && running.isExpired(clock.instant())) return
 
-        // Re-arming the snooze's own cap is not a rung — it is restoring the
-        // bound this snooze already had — so it stays here. Everything after it
-        // is the ladder, so everything after it is handed over.
-        Log.e(TAG, "The release was refused and its cap could not be re-armed; escalating.")
-        beginRelease(running.startedAt)
+        if (capArmed) {
+            Log.e(TAG, "The release was refused and its cap is not due yet; escalating rather than waiting.")
+        } else {
+            Log.e(TAG, "The release was refused and its cap could not be re-armed; escalating.")
+        }
+        beginRelease(running.startedAt, reason)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -459,8 +499,17 @@ class SnoozeService : Service(), SnoozeController.Listener {
             ACTION_RELEASE_STUCK -> {
                 notifications.cancelStuckRule()
                 if (controller.active != null) {
-                    controller.end(EndReason.MANUAL)
-                    ensureCapAfterRefusedEnd()
+                    // The reason the release was *originally* for, not the
+                    // action's own default. The no-service ladder hands work
+                    // here when its alarm was refused, and that work can have
+                    // started as a cap expiry or a lost capability — ending it
+                    // as `MANUAL` would tell the user they did it themselves
+                    // and tell the platform's Modes UI `USER_ACTION`, which is
+                    // exactly the distinction SPEC.md §5.4 keeps the trigger
+                    // for. Absent, it really is the user's tap.
+                    val reason = endReasonFrom(intent)
+                    controller.end(reason)
+                    ensureCapAfterRefusedEnd(reason)
                 } else {
                     releaseRecordlessRule()
                 }
@@ -468,7 +517,7 @@ class SnoozeService : Service(), SnoozeController.Listener {
             ACTION_ARM -> arm()
             ACTION_END -> {
                 controller.end(EndReason.MANUAL)
-                ensureCapAfterRefusedEnd()
+                ensureCapAfterRefusedEnd(EndReason.MANUAL)
             }
             ACTION_CHECK_CAP -> {
                 controller.onCapCheck()
@@ -594,8 +643,25 @@ class SnoozeService : Service(), SnoozeController.Listener {
                     !ActiveSnooze.retryStillApplies(adopted, queuedFor) ->
                         Log.w(TAG, "Dropping a stale release retry; a newer snooze owns the record now.")
                     else -> {
-                        notifications.showCouldNotResume()
-                        controller.end(EndReason.LOST_CAPABILITY)
+                        // The reason the refused release was started for, not
+                        // this action's own name for itself: an alarm armed by
+                        // a cap expiry is still finishing that cap.
+                        val capLostReason = endReasonFrom(intent, EndReason.LOST_CAPABILITY)
+                        // `Couldn't resume snoozing` describes one situation —
+                        // a reboot whose cap could not be rescheduled — and
+                        // this action is no longer reached only from that
+                        // situation. A duration cap or a manual exit whose
+                        // release was refused arms the same alarm now, and on
+                        // those the message is simply false: nothing failed to
+                        // resume. It is also a *separate* notification id from
+                        // the ended one, so it would sit in the shade next to
+                        // `Snooze ended · time limit reached` contradicting it
+                        // rather than being replaced. The branch above already
+                        // refuses to post it for exactly this reason.
+                        if (capLostReason == EndReason.LOST_CAPABILITY) {
+                            notifications.showCouldNotResume()
+                        }
+                        controller.end(capLostReason)
                         // No cap could be scheduled — that is why this action
                         // exists — so a refused release here has nothing at all
                         // behind it. A short retry alarm is the one thing left.
@@ -612,6 +678,7 @@ class SnoozeService : Service(), SnoozeController.Listener {
                                 applicationContext,
                                 System.currentTimeMillis() + RETRY_MS,
                                 adopted.startedAt.toEpochMilli(),
+                                capLostReason,
                             )
                         ) {
                             // No alarm and no cap, so this process is the only
@@ -620,7 +687,7 @@ class SnoozeService : Service(), SnoozeController.Listener {
                             // Saying "trying again" without arranging one would
                             // be a promise nothing keeps.
                             Log.e(TAG, "The post-reboot release was refused and no alarm took; retrying in process.")
-                            beginRelease(adopted.startedAt)
+                            beginRelease(adopted.startedAt, capLostReason)
                         }
                     }
                 }
@@ -761,7 +828,7 @@ class SnoozeService : Service(), SnoozeController.Listener {
             // through, so there is nothing on disk to identify a retry by, and
             // the plain wake-up is the one that can drive off a rule nothing
             // describes.
-            beginRelease(startedAt = null)
+            beginRelease(startedAt = null, reason = EndReason.LOST_CAPABILITY)
             return
         }
 
@@ -797,9 +864,10 @@ class SnoozeService : Service(), SnoozeController.Listener {
                         applicationContext,
                         System.currentTimeMillis() + RETRY_MS,
                         stillOn.startedAt.toEpochMilli(),
+                        EndReason.LOST_CAPABILITY,
                     )
                 ) {
-                    beginRelease(stillOn.startedAt)
+                    beginRelease(stillOn.startedAt, EndReason.LOST_CAPABILITY, recordOnDisk = false)
                 }
             }
             return
@@ -902,7 +970,7 @@ class SnoozeService : Service(), SnoozeController.Listener {
             // still the *original* one: `extendTo` was never reached, so this
             // both guarantees an alarm exists and drags back one left sitting at
             // the extended deadline.
-            ensureCapAfterRefusedEnd()
+            ensureCapAfterRefusedEnd(EndReason.LOST_CAPABILITY)
             return
         }
         controller.extendTo(extendedCap)
@@ -1034,7 +1102,7 @@ class SnoozeService : Service(), SnoozeController.Listener {
         // in-process escalation was reached, so a refused alarm followed by a
         // service teardown left nothing written down at all.
         Log.e(TAG, "Recordless safety release was refused; escalating.")
-        beginRelease(startedAt = null)
+        beginRelease(startedAt = null, reason = EndReason.LOST_CAPABILITY)
     }
 
     /**
@@ -1071,7 +1139,7 @@ class SnoozeService : Service(), SnoozeController.Listener {
         // than re-deriving it, and it cannot act on a snooze the user arms in
         // the meantime.
         Log.e(TAG, "The cap fired but the release was refused; escalating.")
-        beginRelease(running.startedAt)
+        beginRelease(running.startedAt, EndReason.DURATION_CAP)
     }
 
     /**
@@ -1087,7 +1155,11 @@ class SnoozeService : Service(), SnoozeController.Listener {
      * function and [advanceRelease] are the performing half — ask, do, record
      * what actually happened, ask again.
      */
-    private fun beginRelease(startedAt: Instant?) {
+    private fun beginRelease(
+        startedAt: Instant?,
+        reason: EndReason,
+        recordOnDisk: Boolean = startedAt != null,
+    ) {
         // Retire the previous escalation's queued retry before starting this
         // one, so there is only ever one callback outstanding and it belongs to
         // the newest obligation. A leftover retry can otherwise fire *during*
@@ -1096,6 +1168,13 @@ class SnoozeService : Service(), SnoozeController.Listener {
         // newer rule with no successor at all.
         releaseRetryHandler.removeCallbacksAndMessages(null)
         releasingSnooze = startedAt
+        // Why this release was asked for in the first place, carried so every
+        // later attempt ends for the same reason the first one did. A retry
+        // that invented its own would tell the user a cap expired — and tell
+        // the platform's Modes UI `CONTEXT` rather than `USER_ACTION` — for a
+        // snooze they ended themselves.
+        releasingReason = reason
+        releasingRecordOnDisk = recordOnDisk
         // Read rather than assumed: a previous escalation may already have
         // stored the obligation, and re-writing it every pass would be a
         // preferences commit per retry for nothing.
@@ -1128,11 +1207,11 @@ class SnoozeService : Service(), SnoozeController.Listener {
                 }
 
                 ReleaseStep.StoreObligation -> releaseProgress = progress.copy(
-                    obligationStored = attempt(pendingFailure.rememberRuleMayBeStuck()),
+                    obligationStored = Attempt.of(pendingFailure.rememberRuleMayBeStuck()),
                 )
 
                 ReleaseStep.TellUser -> releaseProgress = progress.copy(
-                    userTold = attempt(notifications.showStuckRule()),
+                    userTold = Attempt.of(notifications.showStuckRule()),
                 )
 
                 is ReleaseStep.ArmAlarm ->
@@ -1152,9 +1231,17 @@ class SnoozeService : Service(), SnoozeController.Listener {
                 // is true here, and only where a record exists: it names a
                 // snooze, so a rule with nothing on disk behind it has none to
                 // name and gets the log line alone.
+                //
+                // Gated on the record, *not* on the ladder's `snoozeIdentified`,
+                // and the two part company on exactly one path. An arm whose
+                // zen write landed but whose `save` failed is unwound with a
+                // live in-memory snooze and nothing on disk: identified enough
+                // for the alarm, but the user has `Couldn't snooze` on screen,
+                // and replacing it with `Couldn't end the snooze` would
+                // announce a snooze the app had just told them didn't start.
                 ReleaseStep.HandOff -> {
                     Log.w(TAG, "The release is still refused but an alarm took; handing it over.")
-                    if (progress.snoozeIdentified) {
+                    if (releasingRecordOnDisk) {
                         notifications.showFailure(ZenFailure.PLATFORM_REFUSED, whileArming = false)
                     }
                     finishRelease()
@@ -1184,7 +1271,7 @@ class SnoozeService : Service(), SnoozeController.Listener {
         // and spend the only retry doing nothing. Identified, so it cannot end a
         // snooze the user armed in the meantime.
         return if (step.forIdentifiedSnooze && startedAt != null) {
-            CapAlarm.armReleaseRetry(applicationContext, at, startedAt.toEpochMilli())
+            CapAlarm.armReleaseRetry(applicationContext, at, startedAt.toEpochMilli(), releasingReason)
         } else {
             CapAlarm.arm(applicationContext, at)
         }
@@ -1234,7 +1321,7 @@ class SnoozeService : Service(), SnoozeController.Listener {
             Log.w(TAG, "Dropping the release retry; the snooze it was queued for is gone.")
             return true
         }
-        controller.end(EndReason.LOST_CAPABILITY)
+        controller.end(releasingReason)
         return controller.active == null
     }
 
@@ -1250,11 +1337,10 @@ class SnoozeService : Service(), SnoozeController.Listener {
     private fun finishRelease() {
         releaseProgress = null
         releasingSnooze = null
+        releasingReason = EndReason.LOST_CAPABILITY
+        releasingRecordOnDisk = false
         if (controller.active == null && recordErased) stopSelf(latestStartId)
     }
-
-    /** Reads a call site's "did it take" into the ladder's vocabulary. */
-    private fun attempt(took: Boolean): Attempt = if (took) Attempt.TOOK else Attempt.REFUSED
 
 
     /**
@@ -1451,6 +1537,19 @@ class SnoozeService : Service(), SnoozeController.Listener {
          */
         const val EXTRA_RECORD_STARTED_AT = "app.snoozemo.extra.RECORD_STARTED_AT"
 
+        /**
+         * Why an [ACTION_RELEASE_STUCK] start is ending a snooze, as an
+         * [EndReason] name.
+         *
+         * Carried because that action has two senders with different answers:
+         * the notification's `Unsnooze`, which really is the user, and the
+         * no-service ladder handing work over, which may be finishing a
+         * duration cap or a lost capability. Without it every hand-off was
+         * reported to the user — and to the platform's Modes UI — as something
+         * they did themselves.
+         */
+        const val EXTRA_END_REASON = "app.snoozemo.extra.END_REASON"
+
         /** The notification's `+30 min` step (SPEC.md §4.3). */
         val EXTENSION: Duration = Duration.ofMinutes(30)
 
@@ -1497,7 +1596,31 @@ class SnoozeService : Service(), SnoozeController.Listener {
          * refuse to start — that is how the fallback was reached — but this and
          * that are different refusals a moment apart, and it costs one call.
          */
-        fun releaseStuck(context: Context) = start(context, ACTION_RELEASE_STUCK)
+        fun releaseStuck(context: Context, reason: EndReason = EndReason.MANUAL) =
+            start(context, ACTION_RELEASE_STUCK) { it.putExtra(EXTRA_END_REASON, reason.name) }
+
+        /**
+         * The [EndReason] a release start or alarm was made for, or [default]
+         * when it carries none.
+         *
+         * The default is the caller's, because what "no reason attached" means
+         * depends on who is asking. On [ACTION_RELEASE_STUCK] it is `MANUAL`:
+         * the extra is absent exactly when the notification's own `Unsnooze`
+         * sent it, and that is the user acting. On [ACTION_CAP_LOST] it is
+         * `LOST_CAPABILITY`, which is what that action means on its own and
+         * what an alarm armed before this extra existed would have done.
+         *
+         * An unrecognized name takes the same default and logs — a reason we
+         * cannot parse is not worth failing a release over, and ending is what
+         * matters here.
+         */
+        fun endReasonFrom(intent: Intent?, default: EndReason = EndReason.MANUAL): EndReason {
+            val name = intent?.getStringExtra(EXTRA_END_REASON) ?: return default
+            return EndReason.entries.firstOrNull { it.name == name } ?: run {
+                Log.w(TAG, "A release start named an unknown end reason; falling back to the default.")
+                default
+            }
+        }
 
         /**
          * A reboot that could not reschedule the cap: end rather than restore.
@@ -1505,9 +1628,14 @@ class SnoozeService : Service(), SnoozeController.Listener {
          * [recordStartedAtMillis] names the snooze this is about, so a retry
          * that outlived it cannot end the one the user armed since.
          */
-        fun endWithoutCap(context: Context, recordStartedAtMillis: Long) =
+        fun endWithoutCap(
+            context: Context,
+            recordStartedAtMillis: Long,
+            reason: EndReason = EndReason.LOST_CAPABILITY,
+        ) =
             start(context, ACTION_CAP_LOST) {
                 it.putExtra(EXTRA_RECORD_STARTED_AT, recordStartedAtMillis)
+                it.putExtra(EXTRA_END_REASON, reason.name)
             }
 
         /**

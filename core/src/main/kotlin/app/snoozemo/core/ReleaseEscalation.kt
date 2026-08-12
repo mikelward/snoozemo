@@ -126,6 +126,12 @@ enum class Attempt {
 
     /** The platform, the disk, or the notification manager declined. Not done. */
     REFUSED,
+    ;
+
+    companion object {
+        /** Reads a call site's "did it take" into the ladder's vocabulary. */
+        fun of(took: Boolean): Attempt = if (took) TOOK else REFUSED
+    }
 }
 
 /**

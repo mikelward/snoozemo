@@ -280,8 +280,13 @@ the point is that every other line of the app is worthless if it isn't true.
 
 ## Phase 5 (M5) — Edge cases and degraded modes
 
-- [ ] **Make the refused-release escalation one pure decision in `:core`** (`SPEC.md` §7.1).
-      Behavior-preserving: the ladder is already store obligation → arm alarm → retry in process →
+- [x] **Make the refused-release escalation one pure decision in `:core`** (`SPEC.md` §7.1).
+      **Landed** as `ReleaseEscalation` + `ReleaseProgress` + `ReleaseStep`, with the service and
+      the no-service receiver path as its two performers; `SnoozeService` lost ~95 lines and the
+      duplicated ladders are gone. Not quite behavior-preserving in the end — three of the copies
+      were out of line with the ordering the spec states, and bringing them into line is what the
+      move was for. The differences are listed under *Decisions needing review* below.
+      Originally scoped as behavior-preserving: the ladder is already store obligation → arm alarm → retry in process →
       tell the user → exhausted. What changes is that it stops being written out separately in the
       service's two escalations, the cap receiver, the boot receiver and the trampoline fallback,
       and becomes a state → next-step function each of them advances.
@@ -546,6 +551,27 @@ Nothing here is scheduled; each is a sequel that follows from something already 
 Judgment calls made without an explicit answer from the maintainer. Each is reversible;
 none is load-bearing yet.
 
+- **A refused end no longer settles for the snooze's own cap when that cap is hours away.**
+  `ensureCapAfterRefusedEnd` used to re-arm the cap and stop. That is right on an *expired*
+  record — the wake-up is already due, so it retries the release within moments — and wrong
+  on a live one: an `End now` refused an hour into an eight-hour snooze left the phone quiet
+  for the remaining seven, with the app having stopped trying and said nothing. The cap is
+  still restored either way; the ladder now continues unless the cap is what ends this.
+  Reversible by restoring the unconditional early return. Costs one 30 s retry alarm and, on
+  hand-off, the `Couldn't end the snooze — trying again` card on a path that previously said
+  nothing — which is the honest message, since it now really is trying.
+
+- **Every hand-off in the release subsystem drops the end reason, and each one had to be
+  re-attached by hand.** Codex found the same defect four times in this PR — the in-process
+  retry, the no-service hand-off, the service hand-off, and the durable retry alarm — because
+  each crosses a boundary that carries no context of its own: a delayed callback, an
+  `Intent`, a `PendingIntent`. All four are fixed, but the *shape* is the finding: a fifth
+  boundary added later will drop it again, silently, and the symptom is only ever a wrong
+  word in a notification the user sees once. Worth considering a single carrier — the reason
+  bundled with the identity, threaded as one value — rather than a parameter each site
+  remembers to pass. Left as-is for now because that is a wider change than this PR, and
+  every current site is covered.
+
 - **The escalation's *performing* half is still untestable, and that is now the gap.** The
   ladder itself moved to `:core` and is covered, but what each performer does with a step —
   which end reason a retry carries, which alarm it arms, whether `HandOff` announces a
@@ -597,6 +623,32 @@ Guessed while building the scaffold (autopilot, 2026-08-11):
   with its consumer or the modules form a cycle. The spec now says so, and the same shape
   applies to the DND interface in Phase 1. Reversible only by merging the modules, so worth
   a second opinion if the layering is ever reconsidered.
+
+Guessed while unifying the refused-release ladder (autopilot, 2026-08-12):
+
+- **The ladder's rung order is the spec's, so three call sites changed behavior.** `SPEC.md` §7.1
+  says the durable obligation is written first, always. `releaseRecordlessRule` and the no-service
+  `releaseDirectly` both armed their alarm first and stored the obligation only once the in-process
+  rung was reached, so a refused alarm followed by a teardown left nothing written down about a rule
+  that may still be on. They now store first. Alternative: keep each site's order and make the
+  decision take an ordering parameter — which is the duplication back in a new shape. Reversible,
+  but reversing it re-opens the bug.
+- **`ensureCapAfterRefusedEnd` and `rescheduleIfUnfinished` now walk the whole ladder.** They used to
+  stop at one alarm attempt and a message; they now get the in-process retry and the user's exit like
+  every other path. Strictly more successors behind a refused release, at the cost of holding the
+  service up longer in the rare case. Reversible by giving those two sites a shorter ladder.
+- **The give-up makes one further alarm attempt when the stuck-rule card will not post.** Previously
+  only the recordless path did this. It costs one wake-up, and only where nothing at all has landed —
+  no obligation, no alarm, no card. Reversible by dropping `MAX_ALARM_ATTEMPTS` to 1.
+- **`Couldn't end the snooze — trying again` is now posted only where a record exists.** The message
+  names a snooze, and the recordless path has none to name; that path's honest message is the
+  stuck-rule card, which it already gets. Reversible — one condition.
+- **`rescheduleIfUnfinished` asks for the identified release-retry alarm instead of a plain cap
+  check.** Both work there, since the record really is expired; the identified one carries the
+  instruction rather than re-deriving it and cannot act on a snooze armed since. Reversible.
+- **`tellTheUser` was deleted rather than honored.** It was threaded through both escalations and
+  read by neither — the give-up posted the card regardless, as its own comment said. Not a judgment
+  call so much as a finding, recorded here because deleting a parameter looks like one.
 
 Guessed while building the tile and cap (autopilot, 2026-08-12):
 
