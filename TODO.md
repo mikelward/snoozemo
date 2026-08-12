@@ -1057,8 +1057,9 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
   lines `Opens Settings` and `Tap to allow` and a `Couldn't open Settings` failure. It replaces
   `Snoozemo needs Do Not Disturb access`, `Grant access` and the transient
   `Notifications are off — …`. Reversible — no locales yet, and this screen's copy is already in
-  the wording pass the maintainer has open. **The maintainer's call is wanted on the wording**,
-  not on the shape.
+  the wording pass the maintainer has open. **Approved as they stand** (maintainer, 2026-08-12:
+  "strings seem ok"), so they are the current answer rather than an open question; they still
+  belong to that later wording pass like the rest of the screen's copy.
 - **The rows stay tappable once granted**, going to the same Settings screen the not-granted state
   goes to. The alternative — an inert row when there is nothing to fix — reintroduces the exact
   defect this change removed, on the state the user is most likely to tap out of curiosity.
