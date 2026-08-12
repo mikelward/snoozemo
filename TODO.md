@@ -51,9 +51,14 @@ release rather than dropped.
       updating the existing one, and every later run duplicates again. And it must
       paginate (`--paginate`), or past 100 issue comments the marker falls off page one
       and produces that same duplicate from a different cause.
-- [ ] Launcher icon and tile mark. The scaffold ships a placeholder `Z` vector; the real
-      mark is drawn with the tile in Phase 2, where `SPEC.md` §4.2's constraint applies (24
-      dp, single color, legible flattened). The tile icon is **any drawable the app
+- [x] Launcher icon and tile mark — three descending `Z`s, one geometry shared by the tile
+      drawable, the launcher foreground, and the monochrome layer, so the shade and the home
+      screen show one app. Recorded in both tints by `TileMarkScreenshotTest` at the tile's
+      real size, since light-on-dark is the direction that fills in. **Still owed a device:** how
+      it masks on a round launcher, and how One UI draws it. **Good enough for now, not
+      finished** (maintainer, 2026-08-12): the mark ships as it is and gets another pass
+      later, so treat it as the current answer rather than the settled one. What follows is the reasoning
+      it was drawn against. The tile icon is **any drawable the app
       supplies** — there is no system catalog to pick from — declared as `android:icon` on
       the `TileService` and swappable at runtime via `Tile.setIcon`. What is fixed is the
       *treatment*: the system tints it per tile state, so only the alpha channel survives
@@ -66,10 +71,14 @@ release rather than dropped.
         and fill in as light-on-dark. On a 1×1 tile this mark is the whole of the
         armed/inactive signal (`SPEC.md` §4.2), so a glyph that survives only one tint
         loses the state outright.
-      - **The placeholder's single `Z` has to go** (maintainer, 2026-08-12) — `ZZZ` or
-        similar instead. `SPEC.md` §4.2's `Zz` is not ruled out; that call comes with the
-        drawing. It stays for now so there is something installable to test with, but it is
-        wanted soon rather than at the end of the phase list.
+      - **The placeholder's single `Z` is gone** — three `Z`s, per the maintainer, who
+        rejected a two-glyph `Zz` draft on sight (2026-08-12): *"it's zaggy and only has
+        two z's, I think it should have 3"*. Both halves of that mattered. The count is
+        literal; **zaggy** was the filled-wedge construction — a Z built as two bars and a
+        hard diagonal reads as a lightning bolt at 24 dp. The mark is now **stroked with
+        round caps and joins**, which reads as handwriting, and it is what makes three
+        glyphs fit at all: an even-weight stroke costs less area than a filled wedge, so
+        the smallest `z` keeps its counters open under the tint that blooms.
 - [ ] `docs/PRIVACY.md` backing the hosted privacy policy, plus the Play Data Safety
       answers it has to agree with ("no data collected, no data shared", `SPEC.md` §12).
 

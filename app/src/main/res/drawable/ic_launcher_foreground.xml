@@ -1,8 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  A bold Z, inside the adaptive icon's 66dp safe zone. Placeholder shape: the
-  real mark (SPEC.md §4.2 argues for a `Zz` glyph or a crescent with a single z,
-  legible when flattened to one color at 24dp) is drawn with the tile in Phase 2.
+  The same `Zzz` mark as the tile (ic_tile_snooze), scaled into the adaptive
+  icon's 66dp safe zone and centered in the 108dp viewport, so the launcher and
+  the shade show one app rather than two.
+
+  Also the `monochrome` layer, which is why the geometry is shared rather than
+  redrawn: a themed icon is flattened to a silhouette exactly as Quick Settings
+  flattens the tile, so a launcher-only flourish would survive on the home
+  screen and disappear in the shade.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -10,6 +15,21 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M36,36 L72,36 L72,45 L52,63 L72,63 L72,72 L36,72 L36,63 L56,45 L36,45 Z" />
+        android:pathData="M63.95,29.11 L74.49,29.11 L63.95,37.53 L74.49,37.53"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.58"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M49.11,45.58 L62.41,45.58 L49.11,56.23 L62.41,56.23"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4.26"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M34.26,65.03 L50.64,65.03 L34.26,78.12 L50.64,78.12"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5.09"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
 </vector>

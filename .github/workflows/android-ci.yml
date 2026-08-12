@@ -198,6 +198,12 @@ jobs:
       - name: Run app screen screenshot tests
         run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.DebugScreenScreenshotTest" -Proborazzi.test.record=true
 
+      - name: Run tile mark screenshot tests
+        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.TileMarkScreenshotTest" -Proborazzi.test.record=true
+
+      - name: Run launcher icon screenshot tests
+        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.LauncherIconScreenshotTest" -Proborazzi.test.record=true
+
       - name: Print failing test details
         if: failure()
         run: |

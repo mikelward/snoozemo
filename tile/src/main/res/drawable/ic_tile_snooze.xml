@@ -1,8 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  A bold Z at 24dp. Quick Settings tints tile icons by state, so only the alpha
-  channel survives — this is a silhouette by necessity, not by style, and it has
-  to read on its own because some panels show no label at all (SPEC.md §4.2).
+  The `Zzz` mark, drawn for a 24dp tile.
+
+  Quick Settings tints tile icons by state, so only the alpha channel survives:
+  this is a silhouette by necessity, not by style. It also has to carry the
+  meaning alone, because the maintainer runs the tile 1x1 and some panels show
+  no label beside it.
+
+  **Three Zs rising to the right and shrinking as they go** (maintainer,
+  2026-08-12): the big one sits at the bottom left where the sleeper would be,
+  and the smallest drifts off the top right. One `Z` reads as a letter; the
+  climbing, shrinking trio is what reads as asleep.
+
+  **Stroked with round caps and joins, not filled.** A filled Z is two bars and
+  a hard diagonal, which at this size reads as a zigzag — closer to a lightning
+  bolt than to sleep. An even-weight stroke with rounded ends reads as
+  handwriting, and it costs less area than a filled wedge, which is what lets
+  three glyphs fit in 24dp at all.
+
+  **Nothing touches**, and the clearance is measured on the ink rather than on
+  these coordinates: a round cap puts half a stroke past every endpoint, so the
+  gaps between the three bands are sized against the strokes (1.5dp of clear
+  space) rather than against the path boxes. That matters most under the tint
+  that blooms — the active tile inverts (light ground when off, dark when on)
+  and the system tints the glyph to contrast with whichever it drew, so the same
+  asset is dark-on-light *and* light-on-dark, and only the second direction
+  thickens strokes and closes gaps. `TileMarkScreenshotTest` records both at the
+  tile's real size, since a mark that only survives blown up is no use here.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
@@ -11,6 +35,21 @@
     android:viewportHeight="24"
     android:tint="?android:attr/colorControlNormal">
     <path
-        android:fillColor="@android:color/white"
-        android:pathData="M5,4 L19,4 L19,7.5 L11.5,16.5 L19,16.5 L19,20 L5,20 L5,16.5 L12.5,7.5 L5,7.5 Z" />
+        android:pathData="M15.62,2.95 L19.45,2.95 L15.62,6.01 L19.45,6.01"
+        android:strokeColor="@android:color/white"
+        android:strokeWidth="1.3"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M10.22,8.94 L15.06,8.94 L10.22,12.81 L15.06,12.81"
+        android:strokeColor="@android:color/white"
+        android:strokeWidth="1.55"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M4.82,16.01 L10.78,16.01 L4.82,20.77 L10.78,20.77"
+        android:strokeColor="@android:color/white"
+        android:strokeWidth="1.85"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
 </vector>
