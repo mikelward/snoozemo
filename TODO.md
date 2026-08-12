@@ -36,13 +36,14 @@ release rather than dropped.
       its own, unit tests with failing-test PR comments, lint. The Roborazzi screenshot job
       lands with the first real UI (Phase 2/4) and the `deploy` job with the release
       plumbing (Phase 6) — an empty screenshot allow-list is only a check nobody reads.
-- [ ] When the screenshot job lands, its diff-comment upsert must not repeat the silent
-      drop this repo just fixed on the failing-test comment: the sibling repos' version
-      uses a bare `curl -sS` for the lookup, the PATCH, and the POST, so an HTTP error
-      exits 0. The lookup is the awkward one — failing it open posts a duplicate comment
-      instead of updating the existing one — so it needs an explicit HTTP-status check
-      rather than a straight `--fail-with-body`. Same fix is queued in
-      `mikelward/typelauncher` and `mikelward/simmo`, where the job already exists.
+- [ ] When the screenshot job lands, copy the sibling repos' diff-comment upsert as it
+      stands *now*, not as it was: all four repos post through `gh api`, which exits
+      non-zero on both an HTTP error and an unparsable body, so the lookup needs no
+      hand-rolled status test. Two rules carry over regardless of transport. The lookup
+      must **skip, not guess** — failing it open posts a duplicate comment instead of
+      updating the existing one, and every later run duplicates again. And it must
+      paginate (`--paginate`), or past 100 issue comments the marker falls off page one
+      and produces that same duplicate from a different cause.
 - [ ] Launcher icon and tile mark. The scaffold ships a placeholder `Z` vector; the real
       mark is drawn with the tile in Phase 2, where `SPEC.md` §4.2's constraint applies (24
       dp, single color, legible flattened). The tile icon is **any drawable the app
