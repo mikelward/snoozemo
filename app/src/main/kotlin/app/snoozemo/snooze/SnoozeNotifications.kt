@@ -75,6 +75,40 @@ class SnoozeNotifications(private val context: Context) {
         }
     }
 
+    /**
+     * Whether anything this app posts would actually reach the shade.
+     *
+     * Holding `POST_NOTIFICATIONS` is not the same as being heard: the user can
+     * switch the app off wholesale in Settings or block either channel
+     * individually, and the system then drops the post silently. The setup row
+     * would otherwise say `Allowed` over a snooze whose countdown, `End now`
+     * and failure messages were all going nowhere (flagged by Codex on PR #18)
+     * — principle 2's failure on the screen that exists to prevent it.
+     *
+     * Both channels count, and neither is optional: the ongoing one is the only
+     * visible state a 1×1 tile has (SPEC.md §4.2), and the ended one carries
+     * every reason a snooze stopped (§4.5).
+     *
+     * **A missing channel counts against us**, which is why this is an instance
+     * method rather than a static read of the manager. Constructing this class
+     * has already run [ensureChannels], so by the time the check happens the
+     * channel is either there or its creation was refused — and a refusal is a
+     * degraded state, not a neutral one, since posting to a channel that does
+     * not exist throws (also Codex, PR #18, on a first version that read null
+     * as "not created yet, will be fine").
+     *
+     * Off the arm path — only the app screen asks this, after its first frame —
+     * so the binder calls are affordable here.
+     */
+    fun canReachTheUser(): Boolean {
+        val manager = manager ?: return false
+        if (!manager.areNotificationsEnabled()) return false
+        return listOf(CHANNEL_ACTIVE, CHANNEL_ENDED).all { id ->
+            val channel = manager.getNotificationChannel(id)
+            channel != null && channel.importance != NotificationManager.IMPORTANCE_NONE
+        }
+    }
+
     fun showOngoing(snooze: ActiveSnooze) {
         val body = when (snooze.mode) {
             TrackingMode.FULL -> context.getString(R.string.ongoing_ends_when_you_leave)

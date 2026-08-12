@@ -605,6 +605,41 @@ if (!nm.isNotificationPolicyAccessGranted) {
 Listen for `NotificationManager.ACTION_NOTIFICATION_POLICY_ACCESS_GRANTED_CHANGED` to react when it
 is granted or revoked. Revocation mid-snooze ⇒ end the snooze and tell the user (D7).
 
+#### How the app screen presents this, and `POST_NOTIFICATIONS` beside it
+
+Snoozemo asks for exactly two things, and they are not the same kind of thing. Do Not Disturb access
+is the settings screen above — the user leaves the app, flips a toggle, and comes back, with no
+in-app dialog and no result callback. `POST_NOTIFICATIONS` (§4.3) is a genuine runtime prompt that
+appears in place. They sit next to each other on the same screen, so three rules apply:
+
+- **The status is the target.** Each capability is one tappable row carrying its name, its state,
+  and what tapping does. A sentence that names a problem and does nothing when tapped is the shape
+  this replaced.
+- **No row offers an action the platform will ignore.** The system shows the notification prompt
+  until it has been denied twice and then silently drops every later request, so past that point the
+  row stops offering a prompt and points at the app's notification settings instead. Telling the two
+  states apart needs a persisted flag, because `shouldShowRequestPermissionRationale` reports `false`
+  both before the first denial and after the last. What it records is an **observed denial**, not a
+  request: a dialog the user dismisses without answering costs nothing, so counting launches would
+  strand that user in the settings-only state with a prompt still available. A grant clears the flag,
+  since granting resets the history the system counts. Both surfaces that ask record what they
+  learn, the tile trampoline included — the two prompts are the app's in total, not each surface's,
+  and a tile-first user can be through both without opening the app — but only from the **answer**
+  to a request, never before one, because nothing on the arm path may read or write a preferences
+  file or call the package manager. The tile therefore does not make this distinction at arm time
+  at all; it asks whenever the permission is missing, and the system drops the request if the
+  prompts are gone.
+- **One state is knowingly not covered.** An install whose prompts were already exhausted before
+  the flag existed reads as never-denied and cannot correct itself: the platform reports no
+  rationale from then on and exposes no permission-state API to an ordinary app. That row keeps
+  offering a prompt that will not appear — the defect this design exists to remove, on the one
+  install that cannot report it. It costs nothing today, since the app is unreleased and no install
+  predates the flag, and closing it needs a device to choose between the candidate signals
+  (`TODO.md`) rather than a guess. An unverifiable inference was tried and withdrawn.
+- **The difference is stated, not implied.** The row says `Opens Settings` or `Tap to allow`, in the
+  same position on both rows, so the reader can tell which one takes them out of the app before they
+  tap it.
+
 ### 5.3 Rule lifecycle
 
 Create **one** long-lived rule at first successful onboarding, not one per snooze — rules are

@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -39,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import app.snoozemo.R
 import app.snoozemo.core.EndReason
+import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.PolicyAccessAction
 import app.snoozemo.core.PolicyAccessChange
@@ -47,6 +50,8 @@ import app.snoozemo.core.ZenRuleState
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.dnd.PrefsZenRuleIdStore
 import app.snoozemo.snooze.ActiveSnoozeStore
+import app.snoozemo.snooze.NotificationPromptStore
+import app.snoozemo.snooze.SnoozeNotifications
 import app.snoozemo.snooze.SnoozeService
 import app.snoozemo.snooze.releaseDirectly
 
@@ -62,6 +67,7 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var zen: ZenController
     private lateinit var store: ActiveSnoozeStore
+    private lateinit var promptStore: NotificationPromptStore
     private var recordWatch: AutoCloseable? = null
 
     /**
@@ -84,7 +90,34 @@ class MainActivity : ComponentActivity() {
      * something that cannot arm.
      */
     private var access by mutableStateOf<PolicyAccess?>(null)
+
+    /**
+     * Null for the same reason, and read at the same point: the check is a
+     * `PackageManager` call, so it waits until after the first frame like
+     * everything else here. Denied is not a safe default either — it would tell
+     * a user whose notifications work that they don't.
+     */
+    private var notifications by mutableStateOf<NotificationPermission?>(null)
+
+    /**
+     * Whether a posted message would actually reach the shade — the permission
+     * held *and* the app and both channels not silenced in Settings.
+     *
+     * Defaults to true so the row never accuses the platform before it has
+     * looked; the row it feeds is hidden until [notifications] has been read
+     * anyway.
+     */
+    private var notificationsReachTheUser by mutableStateOf(true)
     private var lastOutcome by mutableStateOf<String?>(null)
+
+    /**
+     * Which row's Settings trip was refused, if either was.
+     *
+     * Held per row rather than as one message at the foot of the screen: the
+     * column scrolls, so a failure appended below the buttons can be off screen
+     * exactly when the user is looking at the row they just tapped.
+     */
+    private var settingsFailure by mutableStateOf<SetupRowId?>(null)
 
     /**
      * Bumped by every [refreshAccess]; only the newest reading may act or paint.
@@ -124,20 +157,25 @@ class MainActivity : ComponentActivity() {
      */
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            // Refused is a state the user should be able to see, not one that
-            // silently costs them every later message. And a *grant* has work to
-            // do: a snooze armed before this point had its ongoing notification
-            // dropped by the system, so nothing on screen carries the countdown
-            // or the way to end it. Asking the service to re-post is what puts
-            // that back, rather than waiting for the next state change.
-            if (granted) SnoozeService.refresh(this) else {
-                lastOutcome = getString(R.string.debug_notifications_denied)
-            }
+            // Whatever the answer, the row states it — refused is a state the
+            // user should be able to see standing there, not a message that
+            // scrolls past once. Re-read rather than inferred from `granted`,
+            // because a *denial* also moves the row: the second one is what
+            // takes the system's prompt away, and the row has to stop offering
+            // one and point at Settings instead.
+            refreshNotifications()
+            // A grant has work to do beyond the row: a snooze armed before this
+            // point had its ongoing notification dropped by the system, so
+            // nothing on screen carries the countdown or the way to end it.
+            // Asking the service to re-post is what puts that back, rather than
+            // waiting for the next state change.
+            if (granted) SnoozeService.refresh(this)
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = ActiveSnoozeStore(applicationContext)
+        promptStore = NotificationPromptStore(applicationContext)
         zen = AndroidZenController(
             context = applicationContext,
             store = PrefsZenRuleIdStore(applicationContext),
@@ -148,9 +186,13 @@ class MainActivity : ComponentActivity() {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     DebugScreen(
                         access = access,
+                        notifications = notifications,
                         snoozing = snoozing,
                         lastOutcome = lastOutcome,
-                        onGrantAccess = ::openPolicyAccessSettings,
+                        notificationsReachTheUser = notificationsReachTheUser,
+                        settingsFailure = settingsFailure,
+                        onAccessRow = ::openPolicyAccessSettings,
+                        onNotificationsRow = ::fixNotifications,
                         onArm = ::armFromScreen,
                         onRelease = ::endFromScreen,
                     )
@@ -162,7 +204,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         watchAccessAfterFirstFrame()
-        askForNotificationsAfterFirstFrame()
+        readNotificationsAfterFirstFrame()
         // The service can arm or end while this screen is up — the cap firing,
         // a tile tap, a notification action — so follow the record rather than
         // reading it once.
@@ -205,42 +247,108 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Asks for `POST_NOTIFICATIONS` once the screen is actually on screen.
+     * Reads the notification permission once the screen is actually on screen.
      *
-     * `onStart` runs before the first draw, and launching the request there is
-     * a binder call plus a system dialog in front of the content — the same
-     * thing the record read and the policy reconciliation were moved off, and
-     * more visible than either, since the user's first sight of Snoozemo would
-     * be a permission dialog over a blank window.
+     * Reading only — this screen no longer launches the request by itself. It
+     * used to, on every start, which turned the new row against the user: tap
+     * the granted row, switch notifications off in Settings, come back, and the
+     * screen would immediately ask to turn them back on, over a choice they had
+     * just made deliberately (flagged by Codex on PR #18). The row is the better
+     * affordance anyway — it says `Tap to allow` and stays saying it, where a
+     * dialog fires once and is gone.
      *
-     * A frame callback and *then* a post: the frame callback runs as part of
-     * drawing, so queuing from inside it lands on the looper after that frame
-     * is done. The trampoline uses the plain post because it has no content to
-     * protect — here there is.
+     * The tile trampoline still asks on its own, and must: a user who added the
+     * tile from the Quick Settings editor may never open this screen, and for
+     * them a denied permission means an armed snooze with no visible state
+     * anywhere (SPEC.md §4.2).
+     *
+     * Deferred past the first frame because the read is a `PackageManager` call
+     * plus two binder calls for the channels, and `onStart` runs before the
+     * first draw. A frame callback and *then* a post: the frame callback runs
+     * as part of drawing, so queuing from inside it lands on the looper after
+     * that frame is done.
+     *
+     * It runs on every start rather than once, because the user can change any
+     * of this from Settings while the screen is in the background and the row
+     * would otherwise still say `Allowed`.
      */
-    private fun askForNotificationsAfterFirstFrame() {
+    private fun readNotificationsAfterFirstFrame() {
         Choreographer.getInstance().postFrameCallback {
-            window.decorView.post {
-                // The *check* is deferred too, not just the dialog. It is a
-                // `PackageManager` call, so leaving it in `onStart` put system
-                // IPC ahead of the first draw for every cold launch — including
-                // the common one where the permission is already granted and
-                // nothing was going to be asked at all.
-                //
-                // The system shows the dialog twice at most and then silently
-                // ignores repeat requests, so this costs nothing once the user
-                // has answered.
-                if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PERMISSION_GRANTED) {
-                    return@post
-                }
-                // The screen may have gone by the time this runs — a fast back
-                // press, or a configuration change — and a request from a
-                // stopped activity has nowhere to deliver its answer.
-                if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
-                    notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                }
-            }
+            window.decorView.post { refreshNotifications() }
         }
+    }
+
+    /**
+     * Re-reads the notification permission onto the screen, and returns what it
+     * read so the caller can act on the same answer.
+     *
+     * On the main thread, unlike the policy-access and record reads beside it:
+     * this one has no binder round trip in it — `checkSelfPermission` is a
+     * local package-manager cache hit and the rest is a preferences read the
+     * application has already warmed — and every caller is either already
+     * past the first frame or reacting to a dialog the user just answered.
+     */
+    private fun refreshNotifications(): NotificationPermission {
+        val granted = checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PERMISSION_GRANTED
+        val rationale = shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)
+        // Recorded on the way past, because this reading is the only place the
+        // platform admits a denial landed — `rationale` is true only between
+        // the first denial and the permanent one, and by the time the row needs
+        // to know, it is false again.
+        promptStore.record(granted = granted, rationale = rationale)
+        // Read here rather than in the composable: both are binder calls, and
+        // this whole method already runs after the first frame.
+        // Constructed rather than called statically: building it runs the
+        // channel creation, so an absent channel afterwards means the creation
+        // was refused rather than merely not attempted yet.
+        notificationsReachTheUser = SnoozeNotifications(applicationContext).canReachTheUser()
+        val current = NotificationPermission.of(
+            granted = granted,
+            everDenied = promptStore.everDenied(),
+            rationale = rationale,
+        )
+        notifications = current
+        return current
+    }
+
+    /**
+     * What tapping the notifications row does — which is never nothing.
+     *
+     * The row is the repair surface for the permission that carries every
+     * message this app promises to send, so a tap that silently achieves
+     * nothing is principle 2's failure on the screen that exists to prevent it.
+     * [NotificationPermission] is what makes the choice: there is a prompt to
+     * show, or there isn't and Settings is the only route left.
+     *
+     * A stale reading can't send the tap to the wrong place — a row showing
+     * `ASKABLE` over a permission that has since been granted launches a
+     * request the system answers immediately and harmlessly — but it is re-read
+     * first anyway, since the row is being acted on and the read is cheap.
+     */
+    private fun fixNotifications() {
+        when (refreshNotifications()) {
+            NotificationPermission.ASKABLE -> askForNotifications()
+            // Granted, or asked for as often as the system allows. Either way
+            // the toggle the user needs is the app's own notification settings.
+            NotificationPermission.GRANTED, NotificationPermission.BLOCKED ->
+                openSettings(
+                    SetupRowId.NOTIFICATIONS,
+                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, packageName),
+                )
+        }
+    }
+
+    /**
+     * Launches the runtime request — only ever from a tap on the row.
+     *
+     * Nothing is recorded here, deliberately: launching is not spending. The
+     * system counts explicit denials, not requests, so a dialog the user swipes
+     * away leaves the prompt available — and the flag that says otherwise is
+     * written by [refreshNotifications], from the one reading that can tell.
+     */
+    private fun askForNotifications() {
+        notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     /**
@@ -494,8 +602,39 @@ class MainActivity : ComponentActivity() {
         return releaseDirectly(applicationContext, reason)
     }
 
+    /**
+     * Do Not Disturb access, whichever way it is currently set.
+     *
+     * Not a runtime permission, which is half of why the old shape was
+     * confusing: there is no in-app dialog and no result callback, so the user
+     * leaves for Settings, flips a toggle, and comes back (SPEC.md §5.2). What
+     * this screen owns is noticing the return — `accessReceiver` and the
+     * `onStart` refresh both do — so nothing here waits for an answer.
+     */
     private fun openPolicyAccessSettings() {
-        startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+        openSettings(SetupRowId.DND, Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+    }
+
+    /**
+     * Leaves for a Settings screen, and says so when it can't.
+     *
+     * Contained because `startActivity` throws when nothing resolves the
+     * intent, and both of these are optional in principle — an OEM build or a
+     * restricted profile without the screen would otherwise crash the app from
+     * a tap on a row that describes a problem. Swallowing it is worse than the
+     * crash in one specific way: the row would then be the dead tap this whole
+     * change exists to remove, so the failure gets said.
+     */
+    private fun openSettings(row: SetupRowId, intent: Intent) {
+        runCatching { startActivity(intent) }
+            // Cleared on success as well as set on failure: a refusal that has
+            // since stopped happening must not keep an error under a row that
+            // now works.
+            .onSuccess { if (settingsFailure == row) settingsFailure = null }
+            .onFailure {
+                Log.e(TAG, "Opening a Settings screen was refused.", it)
+                settingsFailure = row
+            }
     }
 }
 
@@ -507,12 +646,22 @@ fun SnoozemoTheme(content: @Composable () -> Unit) {
     )
 }
 
+/** Which setup row a failure belongs beside. */
+enum class SetupRowId {
+    DND,
+    NOTIFICATIONS,
+}
+
 @Composable
 fun DebugScreen(
     access: PolicyAccess?,
+    notifications: NotificationPermission?,
+    notificationsReachTheUser: Boolean,
     snoozing: Boolean?,
     lastOutcome: String?,
-    onGrantAccess: () -> Unit,
+    settingsFailure: SetupRowId?,
+    onAccessRow: () -> Unit,
+    onNotificationsRow: () -> Unit,
     onArm: () -> Unit,
     onRelease: () -> Unit,
     modifier: Modifier = Modifier,
@@ -520,6 +669,14 @@ fun DebugScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
+            // Scrolls, and this is not cosmetic. Two three-line rows, a title
+            // and two buttons overflow a landscape window or a large font
+            // scale, and an unscrolled `Column` clips its later children — the
+            // last of which is `End snooze` (flagged by Codex on PR #18).
+            // Manual exit is "always available, always instant" (SPEC.md §7),
+            // and a user who cannot reach it because their font is large has
+            // lost the exit from this screen entirely.
+            .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -531,54 +688,147 @@ fun DebugScreen(
         // either direction: the wrong guess either tells a user who granted
         // access that they haven't, or offers to arm something that can't.
         access?.let {
-            Text(
-                text = stringResource(
+            SetupRow(
+                title = stringResource(R.string.setup_dnd_title),
+                status = stringResource(
                     if (it == PolicyAccess.GRANTED) {
-                        R.string.debug_access_granted
+                        R.string.setup_dnd_granted
                     } else {
-                        R.string.debug_access_missing
+                        R.string.setup_dnd_missing
                     },
                 ),
-                style = MaterialTheme.typography.bodyMedium,
+                // Always, and in both states. Do Not Disturb access is a
+                // Settings toggle with no in-app dialog and no result callback
+                // (SPEC.md §5.2), so the tap leaves the app whichever way the
+                // switch is currently set — and a row that stopped being
+                // tappable once granted would be a dead tap for anyone who came
+                // back to check or to turn it off.
+                action = stringResource(R.string.setup_opens_settings),
+                onClick = onAccessRow,
+                failure = stringResource(R.string.failure_could_not_open_settings)
+                    .takeIf { settingsFailure == SetupRowId.DND },
+            )
+        }
+        // Same discipline, same reason: unread is not "denied". Read after the
+        // first frame like everything else here, so this is briefly absent
+        // rather than briefly wrong.
+        notifications?.let {
+            SetupRow(
+                title = stringResource(R.string.setup_notifications_title),
+                // Granted is necessary and not sufficient. The permission can
+                // be held while the app is switched off in Settings or either
+                // channel is blocked, and the system then drops every post —
+                // so the row may only say `Allowed` when a message would
+                // actually arrive (flagged by Codex on PR #18).
+                status = stringResource(
+                    if (it == NotificationPermission.GRANTED && notificationsReachTheUser) {
+                        R.string.setup_notifications_granted
+                    } else {
+                        R.string.setup_notifications_missing
+                    },
+                ),
+                // The one place the two permissions visibly differ, which is
+                // the point of stating the action separately: `ASKABLE` is a
+                // prompt in place, and the other two leave for Settings —
+                // `BLOCKED` because the system has stopped showing that prompt
+                // and would silently ignore a request, `GRANTED` because
+                // Settings is where it gets turned back off.
+                action = stringResource(
+                    if (it == NotificationPermission.ASKABLE) {
+                        R.string.setup_tap_to_allow
+                    } else {
+                        R.string.setup_opens_settings
+                    },
+                ),
+                onClick = onNotificationsRow,
+                failure = stringResource(R.string.failure_could_not_open_settings)
+                    .takeIf { settingsFailure == SetupRowId.NOTIFICATIONS },
             )
         }
 
-        when (access) {
-            null -> Unit
-            PolicyAccess.DENIED -> Button(
-                onClick = onGrantAccess,
+        if (access == PolicyAccess.GRANTED) {
+            Button(
+                onClick = onArm,
+                // Disabled until the record has actually been read. Unknown
+                // is not "nothing is running": offering to arm over a snooze
+                // the screen hasn't read yet is how the user loses the
+                // deadline they were promised. A button that is briefly
+                // inert costs a tap; the other direction costs the cap.
+                enabled = snoozing == false,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(stringResource(R.string.debug_grant_access))
+                Text(stringResource(R.string.debug_arm))
             }
-            PolicyAccess.GRANTED -> {
-                Button(
-                    onClick = onArm,
-                    // Disabled until the record has actually been read. Unknown
-                    // is not "nothing is running": offering to arm over a snooze
-                    // the screen hasn't read yet is how the user loses the
-                    // deadline they were promised. A button that is briefly
-                    // inert costs a tap; the other direction costs the cap.
-                    enabled = snoozing == false,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(stringResource(R.string.debug_arm))
-                }
-                // Deliberately always enabled, even when we believe nothing is
-                // running. Manual exit is "always available, always instant"
-                // (SPEC.md §7), and endSnooze is idempotent — so a stale belief
-                // must never be what stops someone turning their phone back on.
-                OutlinedButton(
-                    onClick = onRelease,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(stringResource(R.string.debug_release))
-                }
+            // Deliberately always enabled, even when we believe nothing is
+            // running. Manual exit is "always available, always instant"
+            // (SPEC.md §7), and endSnooze is idempotent — so a stale belief
+            // must never be what stops someone turning their phone back on.
+            OutlinedButton(
+                onClick = onRelease,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.debug_release))
             }
         }
 
         lastOutcome?.let {
             Text(text = it, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+/**
+ * One capability, as a single tappable target.
+ *
+ * The shape is the fix: the status used to be inert text with the only live
+ * target beside it, so tapping the sentence that named the problem did nothing
+ * (`TODO.md` Phase 2). Here the sentence *is* the button — `Surface(onClick)`
+ * carries the ripple and the button semantics, so TalkBack announces the whole
+ * row, title and status and action together, as one thing to activate.
+ *
+ * [action] is a separate line rather than a suffix on [status] so its position
+ * is fixed down the column: the reader compares "what happens if I tap this"
+ * between the rows without reading either sentence to the end.
+ */
+@Composable
+private fun SetupRow(
+    title: String,
+    status: String,
+    action: String,
+    onClick: () -> Unit,
+    failure: String? = null,
+) {
+    Surface(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(text = title, style = MaterialTheme.typography.titleMedium)
+            Text(text = status, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text = action,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            // Inside the row, not at the foot of the screen. A tap that could
+            // not open Settings has to say so where the tap was: the column
+            // scrolls now, so a message appended below the buttons is off
+            // screen in landscape or at a large font scale, and the row would
+            // read as the dead tap this whole change removes (flagged by Codex
+            // on PR #18).
+            failure?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
         }
     }
 }
@@ -589,9 +839,13 @@ private fun DebugScreenPreview() {
     SnoozemoTheme {
         DebugScreen(
             access = PolicyAccess.GRANTED,
+            notifications = NotificationPermission.GRANTED,
+            notificationsReachTheUser = true,
             snoozing = false,
             lastOutcome = null,
-            onGrantAccess = {},
+            settingsFailure = null,
+            onAccessRow = {},
+            onNotificationsRow = {},
             onArm = {},
             onRelease = {},
         )
