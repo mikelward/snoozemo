@@ -689,6 +689,23 @@ with real onboarding and settings, so they may be fixed by deletion.
   Fix: arm the identified short release retry as well as restoring the cap, so the retry happens in
   minutes rather than at the deadline. Costs one extra wake-up, and only on a refused end.
 
+- [ ] **A failed arm doesn't discharge an outstanding stuck-rule obligation.** `ACTION_ARM` is
+  excluded from the reconcile on purpose — a preferences read and a possible zen write between the
+  tap and `STATE_TRUE` is what `SPEC.md` §4.1 forbids — and that was justified by "a successful arm
+  clears the flag anyway". True of a *successful* arm; not of one that fails **before** reaching zen,
+  which is what a refused `CapAlarm.arm()` is. The service then stops with the tile inactive, a
+  one-shot `Couldn't snooze`, and nothing scheduled, while an older rule may still be silencing the
+  phone.
+  - **The `Dismiss` action is what sharpens it.** Giving the card its own id protects it from being
+    *replaced*, not from being deliberately removed — and dismissing it is a supported action. Once
+    it is gone the notification is no longer a successor, so the flag is the only thing left, and
+    this is the path that skips it.
+  - Fix: reconcile after an arm that fails **without taking ownership of the rule**, rather than on
+    the way in — which keeps the arm path clean while giving the failed-arm branch the discharge
+    every other start already has.
+  - Bounded meanwhile: the snooze that left the rule on still has its own cap, and any later
+    non-arm start still discharges the obligation.
+
 - [ ] **A refused `notify` leaves the ongoing notification missing for the whole snooze.**
   `showOngoing` discards `post`'s result, so a transient throw with `POST_NOTIFICATIONS` *granted*
   loses the countdown, the degraded-mode line, `End now` and `+30 min` until something else happens
