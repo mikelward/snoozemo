@@ -6,9 +6,13 @@ import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
 import android.util.Log
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.Attempt
+import app.snoozemo.core.ClockChange
+import app.snoozemo.core.ClockChangeAction
+import app.snoozemo.core.ClockReading
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.ReleaseEscalation
 import app.snoozemo.core.ReleaseProgress
@@ -33,8 +37,14 @@ import java.time.Instant
 object CapAlarm {
 
     /**
-     * Arms the alarm for [capExpiresAtMillis], returning false if it could not
-     * be scheduled.
+     * Arms the alarm for [snooze]'s cap, returning false if it could not be
+     * scheduled.
+     *
+     * Takes the record rather than a deadline so the remaining time is worked
+     * out from the record's own stored frame (`ActiveSnooze.remaining`) — a bare
+     * deadline would have to be read against some clock chosen here, and picking
+     * the wrong one is how a cap ends up measured in a frame it was never
+     * written in.
      *
      * Called **before** anything that can throw on the arm path, because a
      * snooze whose cap was never scheduled is a snooze with one fewer exit — and
@@ -46,8 +56,35 @@ object CapAlarm {
      * which after process death is a phone left silent indefinitely. Callers
      * treat false as a refusal to arm (SPEC.md §7).
      */
-    fun arm(context: Context, capExpiresAtMillis: Long): Boolean =
-        schedule(context, capExpiresAtMillis, SnoozeService.ACTION_CHECK_CAP)
+    fun arm(
+        context: Context,
+        snooze: ActiveSnooze,
+        now: ClockReading = SnoozeClock.read(),
+    ): Boolean = armCheckIn(context, snooze.remaining(now).toMillis())
+
+    /**
+     * Arms a cap check [delayMillis] from now.
+     *
+     * Elapsed realtime, not wall time, and that is the whole point: this is the
+     * cap's last line of defense, and an `RTC_WAKEUP` alarm slides with the
+     * clock. Winding the date back moved this alarm out with it, so Do Not
+     * Disturb stayed on past the backstop — reachable from Settings in two taps.
+     * Elapsed realtime counts from boot across sleep and nothing can move it.
+     *
+     * Taking a *delay* rather than a deadline is also deliberate. Both callers
+     * here already know how long they want to wait — the cap knows its remaining
+     * time, the release retries know their interval — so nothing needs
+     * converting into wall time and back, which is exactly where a frame gets
+     * lost. `ACTION_CHECK_CAP` cannot tell the two apart, so it must not be what
+     * decides which clock a number was written in.
+     */
+    fun armCheckIn(context: Context, delayMillis: Long): Boolean =
+        schedule(
+            context,
+            SystemClock.elapsedRealtime() + delayMillis.coerceAtLeast(0L),
+            AlarmManager.ELAPSED_REALTIME_WAKEUP,
+            SnoozeService.ACTION_CHECK_CAP,
+        )
 
     /**
      * Arms a wake-up whose only job is to retry erasing a released record.
@@ -66,7 +103,13 @@ object CapAlarm {
      * on (`ActiveSnooze.retryStillApplies`).
      */
     fun armEraseRetry(context: Context, atMillis: Long, recordStartedAtMillis: Long): Boolean =
-        schedule(context, atMillis, SnoozeService.ACTION_ERASE_RETRY, recordStartedAtMillis)
+        schedule(
+            context,
+            atMillis,
+            AlarmManager.RTC_WAKEUP,
+            SnoozeService.ACTION_ERASE_RETRY,
+            recordStartedAtMillis,
+        )
 
     /**
      * Arms a wake-up that retries **ending** a snooze which has no cap.
@@ -101,11 +144,24 @@ object CapAlarm {
         recordStartedAtMillis: Long,
         reason: EndReason,
     ): Boolean =
-        schedule(context, atMillis, SnoozeService.ACTION_CAP_LOST, recordStartedAtMillis, reason)
+        schedule(
+            context,
+            atMillis,
+            AlarmManager.RTC_WAKEUP,
+            SnoozeService.ACTION_CAP_LOST,
+            recordStartedAtMillis,
+            reason,
+        )
 
+    /**
+     * [triggerAtMillis] is read in whichever frame [type] names, so the caller
+     * states both rather than this inferring one from the action — the cap and
+     * the release retries share `ACTION_CHECK_CAP` and mean different clocks.
+     */
     private fun schedule(
         context: Context,
-        atMillis: Long,
+        triggerAtMillis: Long,
+        type: Int,
         action: String,
         recordStartedAtMillis: Long? = null,
         reason: EndReason? = null,
@@ -113,8 +169,8 @@ object CapAlarm {
         val alarmManager = context.getSystemService(AlarmManager::class.java)
         return runCatching {
             alarmManager.setAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                atMillis,
+                type,
+                triggerAtMillis,
                 pendingIntent(context, action, recordStartedAtMillis, reason),
             )
             true
@@ -529,7 +585,7 @@ private fun armReleaseAlarm(
     return if (step.forIdentifiedSnooze && snooze != null) {
         CapAlarm.armReleaseRetry(context, at, snooze.startedAt.toEpochMilli(), reason)
     } else {
-        CapAlarm.arm(context, at)
+        CapAlarm.armCheckIn(context, RELEASE_RETRY_MS)
     }
 }
 
@@ -600,7 +656,7 @@ private fun restoreDirectly(context: Context, snooze: ActiveSnooze) {
     // inexact alarm — which the platform delivers when it feels like it. Turning
     // DND on and waiting for that is a phone silenced *after* its cap, for an
     // interval nothing in the app controls. The snooze is simply over.
-    if (snooze.isExpired(Instant.now())) {
+    if (snooze.isExpired(SnoozeClock.read())) {
         Log.w(RELEASE_TAG, "The record's cap passed while the phone was off; ending instead.")
         releaseDirectly(context, EndReason.DURATION_CAP)
         return
@@ -666,6 +722,143 @@ private const val RELEASE_TAG = "SnoozeRelease"
 private const val RELEASE_RETRY_MS = 5 * 60 * 1000L
 
 /**
+ * Re-checks the cap when the user sets the clock (SPEC.md §7).
+ *
+ * The cap alarm counts in elapsed realtime so that winding the clock *back*
+ * cannot push it out. The cost of that is the other direction: a clock moved
+ * forward past the deadline does not move the alarm either, so the snooze would
+ * run to its original real duration while the ongoing notification — which
+ * ticks against wall time — sat at zero. The user reads a countdown that
+ * finished and a phone that is still silent, with nothing explaining the gap.
+ * That is principle 2's failure, so the clock change itself is the wake-up.
+ *
+ * Cheap by construction: this fires only when something actually sets the
+ * clock, so it costs nothing on an undisturbed phone and adds no polling to
+ * SPEC.md §9's battery budget.
+ *
+ * **This never re-arms, only ends**, and that restraint is the point. Re-arming
+ * recomputes the delay from the record, which is only trustworthy while the
+ * record's stored offset describes this boot — and it may not: the boot receiver
+ * can fail to write it, and a phone rebooted and left locked never runs the boot
+ * receiver at all (`TODO.md`). Against a stale offset a *backwards* change makes
+ * the recomputed delay longer than the one already armed, so re-arming here
+ * would replace a correct alarm with an overlong one and hand the user back the
+ * exact overrun this change exists to remove. Leaving the existing alarm alone
+ * cannot do that: it was armed in elapsed realtime and nothing since has moved
+ * it.
+ *
+ * What is given up is only precision, and only in the safe direction. A forward
+ * jump that does *not* clear the deadline leaves the countdown reading shorter
+ * than the alarm will honor — a cosmetic disagreement that resolves itself when
+ * the cap fires, rather than a snooze that outlives its bound.
+ *
+ * What it decides is in [ClockChange], and deliberately not here: the running
+ * service performs the same decision when it can be started, and this performs
+ * it when it cannot. Two hand-written copies would drift, and the half that
+ * drifted would be the no-service one, which no device reaches on purpose.
+ */
+class TimeChangedReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent?) {
+        if (intent?.action != Intent.ACTION_TIME_CHANGED) return
+        val store = ActiveSnoozeStore(context)
+        val snooze = store.load() ?: return
+
+        // Resolved here rather than handed straight to the service, so a clock
+        // that was set to the time it already read costs one preferences read
+        // and nothing else — no service start, no zen call, no notification.
+        if (ClockChange.resolve(snooze, SnoozeClock.read()) == ClockChangeAction.None) return
+
+        // Then the service, wherever it will start, because it owns the second
+        // copy of this snooze. The controller's copy is what `+30 min` derives
+        // its update from, so a record repaired behind a live service's back is
+        // one the next extension writes the pre-change deadline back over — the
+        // repair undone by the button beside it. The service re-resolves from
+        // its own record and its own reading; this call only decides *who*
+        // performs it.
+        if (SnoozeService.clockChanged(context)) return
+
+        // Refused, so there is no controller to keep in step and this broadcast
+        // is the only thing that will act on the change — the same fallback
+        // every other cap path keeps for the same reason. Resolved again rather
+        // than reusing the answer above: the service start is an IPC, and the
+        // whole subject here is a clock that moves between readings.
+        performClockChange(context, store, ClockChange.resolve(snooze, SnoozeClock.read()))
+    }
+}
+
+/**
+ * Performs a clock change with no service, the direct twin of
+ * `SnoozeService.reconcileClock`.
+ */
+private fun performClockChange(
+    context: Context,
+    store: ActiveSnoozeStore,
+    action: ClockChangeAction,
+) {
+    when (action) {
+        // The cap is due as of this reading. Ending is all that is owed — a
+        // record about to be erased does not need its frames restated.
+        ClockChangeAction.EndAtCap -> releaseDirectly(context, EndReason.DURATION_CAP)
+
+        // Nothing left to read the deadline against but the clock that just
+        // moved, so how long is really left is unknowable and the snooze ends
+        // (SPEC.md §7, D7). `LOST_CAPABILITY` rather than the cap: this is not
+        // a snooze that ran its time, it is one whose bound stopped being
+        // legible.
+        ClockChangeAction.EndUnframed -> {
+            Log.w(RELEASE_TAG, "The clock moved under a record with no offset; ending rather than guessing.")
+            releaseDirectly(context, EndReason.LOST_CAPABILITY)
+        }
+
+        is ClockChangeAction.Restate -> restateDirectly(context, store, action.snooze)
+
+        ClockChangeAction.None -> Unit
+    }
+}
+
+/**
+ * Writes a restated record back with no service, and ends the snooze if that
+ * write does not land.
+ *
+ * The write is the whole repair: after a backwards change, uptime is the only
+ * frame that knows how long is really left, and it lives in memory as the gap
+ * between the stored offset and the current uptime — which the next boot
+ * destroys. The boot would then find an untouched, now-inflated wall deadline,
+ * adopt it, and hold Do Not Disturb open by the size of the shift. Folding the
+ * remaining time back into wall time, while wall time can still be read, is
+ * what carries it across (SPEC.md §7).
+ *
+ * A refused write gets the same answer as a reboot that cannot restate its
+ * offset, and for the same reason: the record on disk asserts a deadline that
+ * is wrong in the dangerous direction and every later reader believes it. The
+ * armed alarm is still correct, so this only bites after a reboot — but nothing
+ * here can make it not bite, and a bound that depends on the phone never
+ * restarting is not a bound. Fail open (SPEC.md D7).
+ */
+private fun restateDirectly(
+    context: Context,
+    store: ActiveSnoozeStore,
+    restated: ActiveSnooze,
+) {
+    if (!store.save(restated)) {
+        Log.e(RELEASE_TAG, "The clock change could not be recorded; ending rather than trusting the old deadline.")
+        releaseDirectly(context, EndReason.LOST_CAPABILITY)
+        return
+    }
+
+    // The countdown, which the clock change has just falsified. The platform
+    // ticks a chronometer against the *wall* clock from the instant the
+    // notification was posted in, so after a backwards change it reads the
+    // shift too long — a snooze that appears to have hours left over a phone
+    // that is about to come back on, which is the reverse of the failure this
+    // receiver was written for and just as unexplainable. Re-posting anchors it
+    // in the clock the user is now on. The tile's subtitle is stale in exactly
+    // the same way.
+    SnoozeNotifications(context.applicationContext).showOngoing(restated)
+    SnoozeTileBridge.refresh(context.applicationContext)
+}
+
+/**
  * Puts a snooze back together after a reboot (SPEC.md §8.1, §8.3).
  *
  * A reboot clears every scheduled alarm and does not restart a stopped service,
@@ -682,9 +875,41 @@ private const val RELEASE_RETRY_MS = 5 * 60 * 1000L
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action != Intent.ACTION_BOOT_COMPLETED) return
-        val snooze = ActiveSnoozeStore(context).load() ?: return
+        val store = ActiveSnoozeStore(context)
+        val stored = store.load() ?: return
 
-        if (CapAlarm.arm(context, snooze.capExpiresAt.toEpochMilli())) {
+        // The offset first, before the alarm and before the rule. A reboot has
+        // just reset uptime, so the record's stored offset describes a boot that
+        // no longer exists and the deadline has only the wall clock left to be
+        // read against — which is fine until the wall clock moves, and then
+        // nothing catches it. Restating it here is what gives this boot a frame
+        // the user cannot wind backwards (SPEC.md §7).
+        val now = SnoozeClock.read()
+        val snooze = stored.rebasedOnto(now)
+        if (!store.save(snooze)) {
+            // The same answer as a cap that cannot be scheduled below, and for
+            // the same reason: what is left is a record whose offset describes a
+            // boot that no longer exists, and every later reader believes it.
+            // The cap is computed from the smaller of the two clocks, so a stale
+            // offset plus a backwards change leaves *both* answers too high —
+            // and a re-arm off that record then schedules the cap past its own
+            // deadline rather than at it.
+            //
+            // An earlier version logged this and carried on, reasoning that a
+            // stale offset merely degrades to wall-clock-only. That was wrong:
+            // it degrades to something worse than wall-clock-only, because the
+            // stale offset is still trusted. Nothing here can restore a
+            // trustworthy frame — the write is the only way to keep one — so
+            // this ends the snooze rather than running one whose bound cannot be
+            // relied on. Fail open (SPEC.md D7).
+            Log.e(RELEASE_TAG, "The reboot could not restate the clock offset; ending rather than trusting it.")
+            if (!SnoozeService.endWithoutCap(context, stored.startedAt.toEpochMilli())) {
+                releaseDirectly(context, EndReason.LOST_CAPABILITY)
+            }
+            return
+        }
+
+        if (CapAlarm.arm(context, snooze, now)) {
             // Restoring re-asserts the rule and re-checks the cap; the service
             // does both in onCreate from the same record.
             //

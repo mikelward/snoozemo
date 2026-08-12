@@ -60,6 +60,25 @@ class ActiveSnoozeStore(context: Context) {
             mode = loadMode(),
             placeName = prefs.getString(KEY_PLACE, ActiveSnooze.DEFAULT_PLACE_NAME)
                 ?: ActiveSnooze.DEFAULT_PLACE_NAME,
+            // Absent for a record written before this key existed. Null is the
+            // honest answer there and the safe one: the cap falls back to wall
+            // time alone, which is what such a record was already relying on.
+            bootReference = if (prefs.contains(KEY_BOOT_REFERENCE)) {
+                prefs.getLong(KEY_BOOT_REFERENCE, 0L)
+            } else {
+                null
+            },
+            // Falls back to the derivation this replaced, which is both what a
+            // record written before this key existed means and what it was
+            // already being read as. Such a record has never been reconciled —
+            // the field and the reconciliation landed together — so the
+            // derivation is still correct for it.
+            capCeilingAt = Instant.ofEpochMilli(
+                prefs.getLong(
+                    KEY_CAP_CEILING_AT,
+                    startedAt + ActiveSnooze.DEFAULT_CAP.toMillis(),
+                ),
+            ),
         )
     }
 
@@ -146,6 +165,17 @@ class ActiveSnoozeStore(context: Context) {
         .remove(KEY_RELEASED)
         .putLong(KEY_STARTED_AT, snooze.startedAt.toEpochMilli())
         .putLong(KEY_CAP_EXPIRES_AT, snooze.capExpiresAt.toEpochMilli())
+        // Written with the deadline for the same reason the boot reference is:
+        // a clock change moves both, and a ceiling left in the old frame is one
+        // `+30 min` can walk the snooze past.
+        .putLong(KEY_CAP_CEILING_AT, snooze.capCeilingAt.toEpochMilli())
+        // Written with the deadline, never separately: the two are only
+        // meaningful as a pair, and a reference stamped from a later reading
+        // would describe a different frame than the deadline beside it.
+        .also { editor ->
+            snooze.bootReference?.let { editor.putLong(KEY_BOOT_REFERENCE, it) }
+                ?: editor.remove(KEY_BOOT_REFERENCE)
+        }
         .putLong(KEY_CAPTURED_AT, snooze.anchor.capturedAt.toEpochMilli())
         .putString(KEY_MODE, snooze.mode.name)
         .putString(KEY_PLACE, snooze.placeName)
@@ -219,6 +249,8 @@ class ActiveSnoozeStore(context: Context) {
         const val KEY_STARTED_AT = "started_at"
         const val KEY_RELEASED = "released"
         const val KEY_CAP_EXPIRES_AT = "cap_expires_at"
+        const val KEY_BOOT_REFERENCE = "boot_reference"
+        const val KEY_CAP_CEILING_AT = "cap_ceiling_at"
         const val KEY_CAPTURED_AT = "captured_at"
         const val KEY_MODE = "mode"
         const val KEY_PLACE = "place"

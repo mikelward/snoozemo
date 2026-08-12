@@ -1,6 +1,5 @@
 package app.snoozemo.core
 
-import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 
@@ -8,8 +7,8 @@ import java.time.Instant
  * The state machine of SPEC.md §4.1, and the place most of the app's real
  * complexity lives.
  *
- * Plain Kotlin over a clock and two injected interfaces, deliberately: it is
- * reachable by a JVM test with no Robolectric and no emulator, which is what
+ * Plain Kotlin over a clock reading and two injected interfaces, deliberately: it
+ * is reachable by a JVM test with no Robolectric and no emulator, which is what
  * lets the rules that matter — the cap always fires, ending is idempotent,
  * ambiguity ends the snooze — be tested rather than hoped for.
  *
@@ -18,9 +17,21 @@ import java.time.Instant
  */
 class SnoozeController(
     private val zen: ZenController,
-    private val clock: Clock,
+    /**
+     * Both clocks, read together at the moment they are needed.
+     *
+     * A [ClockReading] rather than a `java.time.Clock` because the cap has to
+     * survive the wall clock moving, and one frame cannot tell you that it has
+     * (see [ActiveSnooze.remaining]). Taking both from a single reading is also
+     * what stops the record and the alarm being stamped from two readings taken
+     * moments apart.
+     */
+    private val readClock: () -> ClockReading,
     private val listener: Listener,
 ) {
+
+    /** Wall time from the same reading the cap is judged against. */
+    private fun nowInstant(): Instant = Instant.ofEpochMilli(readClock().wallMillis)
 
     /** Where the caller learns what happened, so nothing has to be inferred. */
     interface Listener {
@@ -66,12 +77,27 @@ class SnoozeController(
      */
     fun beginArming(
         capExpiresAt: Instant,
+        at: ClockReading,
         placeName: String = ActiveSnooze.DEFAULT_PLACE_NAME,
     ): Boolean {
-        val now = clock.instant()
+        // The caller's reading, not a fresh one. The deadline and the alarm were
+        // both derived from it, and the record's offset has to describe the same
+        // frame they do: a wall-clock change landing between two readings pairs
+        // a pre-change deadline with a post-change offset, and the cap then
+        // reads as hours further off than the alarm is set for — so the alarm
+        // fires, finds the snooze "not expired", and is spent for nothing. The
+        // window is microseconds wide and the cost of losing it is a snooze with
+        // no duration exit, which is the one state this app must never reach.
+        val now = Instant.ofEpochMilli(at.wallMillis)
         val snooze = ActiveSnooze(
             anchor = Anchor(capturedAt = now),
             startedAt = now,
+            // Stamped from the same reading the record's times come from, so
+            // the offset really does describe the frame `capExpiresAt` was
+            // written in. Taken from a second reading it would be off by
+            // whatever the wall clock did in between — which is precisely the
+            // quantity this exists to detect.
+            bootReference = at.bootReference,
             // Taken verbatim, and an absolute instant rather than a duration, so
             // that this record and the alarm the caller has already scheduled
             // name the *same* moment. Deriving it here from a second clock
@@ -197,6 +223,44 @@ class SnoozeController(
     }
 
     /**
+     * Takes [restated] as the running snooze — the same snooze with its clock
+     * frames rewritten onto the clock the user has just set (SPEC.md §7).
+     * Returns it, or null when there is nothing running or it describes a
+     * different snooze.
+     *
+     * Called **after** the record is on disk, exactly as [extendTo] is called
+     * after the alarm is re-armed, and for the mirror-image reason. Here the
+     * record is the durable half: the deadline it carries is what a later boot
+     * reads, so believing in a restated frame that never reached disk would put
+     * memory and disk into the disagreement this repair exists to remove.
+     *
+     * Whoever holds the controller must call it. The record and `active` are
+     * two copies of the same snooze, and until this runs the second one still
+     * carries the pre-change deadline — which the next thing to write from it,
+     * `+30 min` being the one that exists today, would put straight back on
+     * disk over the repair.
+     *
+     * Deliberately emits no transition. Nothing about the snooze has changed
+     * from the user's point of view — the same moment is still the cap, said in
+     * a frame that survives — and the two surfaces that *are* stale after a
+     * clock change (the notification's chronometer, which the platform ticks
+     * against wall time, and the tile's cached subtitle) are refreshed by the
+     * caller that just wrote the record, without a state change that would save
+     * it a second time.
+     */
+    fun reconciledTo(restated: ActiveSnooze): ActiveSnooze? {
+        val snooze = active ?: return null
+        // Identity, not equality: a restated record differs from the running one
+        // by design, and `startedAt` is the field that is fixed for a snooze's
+        // whole life (see [ActiveSnooze.retryStillApplies]). A record for some
+        // other snooze reaching here would replace the live one's deadline with
+        // a stranger's.
+        if (restated.startedAt != snooze.startedAt) return null
+        active = restated
+        return restated
+    }
+
+    /**
      * The duration cap — the backstop that holds when every sensor has failed
      * (SPEC.md §7, D6). Called from the alarm and from the in-service timer,
      * which is why it re-checks rather than trusting the caller: an alarm can
@@ -204,7 +268,7 @@ class SnoozeController(
      */
     fun onCapCheck() {
         val snooze = active ?: return
-        if (snooze.isExpired(clock.instant())) end(EndReason.DURATION_CAP)
+        if (snooze.isExpired(readClock())) end(EndReason.DURATION_CAP)
     }
 
     /** What the presence engine concluded (SPEC.md §6.1). */
@@ -274,7 +338,7 @@ class SnoozeController(
         // the phone again — briefly in the good case, and until some later retry
         // succeeded in the bad one. Ending is the same call either way, so the
         // only thing the old order bought was a flap.
-        if (snooze.isExpired(clock.instant())) {
+        if (snooze.isExpired(readClock())) {
             state = SnoozeState.ARMED
             end(EndReason.DURATION_CAP)
             return

@@ -113,6 +113,28 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <!--
+          The cap alarm counts in elapsed realtime, which a wall-clock change
+          does not move — so a clock moved *forward* past the deadline leaves
+          the countdown reading zero while the alarm waits out the original
+          duration (SPEC.md §7). This is what closes that gap. TIME_SET is one of
+          the implicit broadcasts still delivered to manifest receivers,
+          precisely so apps can reschedule alarms after a clock change.
+
+          Not exported: the system reaches a private receiver for its own
+          broadcasts, and exporting would let any app forge a clock change and
+          drive a cap check — ending someone's snooze on demand. Matches the
+          sibling Simmo repo's DataWatchReceiver, which takes the same
+          system-broadcast-only receiver private for the same reason.
+        -->
+        <receiver
+            android:name=".snooze.TimeChangedReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.TIME_SET" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>
