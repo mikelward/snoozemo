@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!--
+          exported="true" is required: the tile is added from the system's own
+          Quick Settings editor, and requestAddTileService needs it too (§10).
+          BIND_QUICK_SETTINGS_TILE means only the system can bind it.
+        -->
+        <service
+            android:name="app.snoozemo.tile.SnoozeTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_snooze"
+            android:label="@string/tile_name"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

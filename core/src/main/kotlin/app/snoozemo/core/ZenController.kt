@@ -112,4 +112,28 @@ enum class ZenFailure {
 
     /** The platform rejected the change. */
     PLATFORM_REFUSED,
+    ;
+
+    /**
+     * Whether this failure means there is no rule left holding the phone quiet.
+     *
+     * The distinction decides what a *failed release* does, and it is the
+     * difference between a snooze that can still be retried and one that has
+     * already effectively ended:
+     *
+     * - **True** — the rule is gone, was never created, or is switched off, so
+     *   nothing is silencing the phone on Snoozemo's behalf and there is nothing
+     *   left to turn off. Revoking policy access is the case that matters: the
+     *   platform deletes the app's rules, so every retry would fail the same way
+     *   forever and the record would strand the app claiming `Snoozing` over a
+     *   phone that is already ringing.
+     * - **False** — the platform refused a change to a rule that still exists,
+     *   which may well work on the next try. Here the record *is* the retry
+     *   mechanism and must be kept (SPEC.md §7).
+     */
+    val nothingLeftToRelease: Boolean
+        get() = when (this) {
+            NO_POLICY_ACCESS, NO_RULE, RULE_DISABLED -> true
+            PLATFORM_REFUSED -> false
+        }
 }

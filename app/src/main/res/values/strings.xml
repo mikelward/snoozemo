@@ -19,15 +19,59 @@
     <!-- TODO: translate -->
     <string name="debug_release" tools:ignore="MissingTranslation">End snooze</string>
     <!-- TODO: translate -->
-    <string name="debug_armed" tools:ignore="MissingTranslation">Snoozing</string>
-    <!-- TODO: translate -->
-    <string name="debug_released" tools:ignore="MissingTranslation">Snooze ended</string>
-    <!-- TODO: translate -->
-    <string name="debug_failed" tools:ignore="MissingTranslation">Didn\'t work: %1$s</string>
-    <!-- TODO: translate -->
     <string name="debug_rule_failed" tools:ignore="MissingTranslation">Do Not Disturb access is on, but Snoozemo could not create its rule</string>
     <!-- TODO: translate -->
     <string name="debug_rule_disabled" tools:ignore="MissingTranslation">Snoozemo\'s rule is switched off in Settings</string>
     <!-- TODO: translate -->
-    <string name="debug_ended_access_lost" tools:ignore="MissingTranslation">Snooze ended — Do Not Disturb access was turned off</string>
+    <string name="debug_notifications_denied" tools:ignore="MissingTranslation">Notifications are off — Snoozemo can\'t show what a snooze is doing</string>
+
+    <!-- Ongoing notification and endings (SPEC.md §4.3, §4.5). -->
+    <!-- TODO: translate -->
+    <string name="channel_active" tools:ignore="MissingTranslation">Snoozing</string>
+    <!-- TODO: translate -->
+    <string name="channel_ended" tools:ignore="MissingTranslation">Snooze ended</string>
+    <!-- TODO: translate -->
+    <string name="ongoing_title" tools:ignore="MissingTranslation">Snoozing</string>
+    <!-- TODO: translate -->
+    <string name="ongoing_ends_when_you_leave" tools:ignore="MissingTranslation">Ends when you leave</string>
+    <!-- TODO: translate -->
+    <string name="ongoing_wifi_only" tools:ignore="MissingTranslation">Wi-Fi only</string>
+    <!-- TODO: translate -->
+    <string name="ongoing_timer_only" tools:ignore="MissingTranslation">Timer only</string>
+    <!-- TODO: translate -->
+    <string name="action_end_now" tools:ignore="MissingTranslation">End now</string>
+    <!-- TODO: translate -->
+    <string name="action_extend" tools:ignore="MissingTranslation">+30 min</string>
+    <!-- TODO: translate -->
+    <string name="ended_departure" tools:ignore="MissingTranslation">Snooze ended — you left</string>
+    <!-- TODO: translate -->
+    <string name="ended_cap" tools:ignore="MissingTranslation">Snooze ended — time limit reached</string>
+    <!-- TODO: translate -->
+    <!-- Deliberately not "lost access": this covers every capability loss, and
+         the specific reason is carried by its own one-shot alongside it. -->
+    <string name="ended_lost_capability" tools:ignore="MissingTranslation">Snooze ended — Snoozemo can\'t keep it going</string>
+    <!-- TODO: translate -->
+    <string name="failure_no_access" tools:ignore="MissingTranslation">Snoozemo needs Do Not Disturb access</string>
+    <!-- TODO: translate -->
+    <string name="failure_rule_disabled" tools:ignore="MissingTranslation">Snoozemo\'s rule is switched off in Settings</string>
+    <!-- TODO: translate -->
+    <string name="failure_could_not_start" tools:ignore="MissingTranslation">Couldn\'t snooze</string>
+    <!-- TODO: translate -->
+    <string name="failure_could_not_end" tools:ignore="MissingTranslation">Couldn\'t end the snooze — trying again</string>
+    <!-- TODO: translate -->
+    <string name="failure_rule_stuck" tools:ignore="MissingTranslation">Do Not Disturb may still be on</string>
+    <!-- TODO: translate -->
+    <string name="failure_rule_stuck_body" tools:ignore="MissingTranslation">Snoozemo couldn\'t turn it off.</string>
+    <!-- TODO: translate -->
+    <string name="action_unsnooze" tools:ignore="MissingTranslation">Unsnooze</string>
+    <!-- TODO: translate -->
+    <string name="action_dismiss" tools:ignore="MissingTranslation">Dismiss</string>
+    <!-- TODO: translate -->
+    <string name="failure_could_not_resume" tools:ignore="MissingTranslation">Couldn\'t resume snoozing</string>
+    <!-- TODO: translate -->
+    <string name="failure_not_forgotten" tools:ignore="MissingTranslation">Snooze ended, but it may come back</string>
+    <!-- TODO: translate -->
+    <string name="failure_could_not_extend" tools:ignore="MissingTranslation">Couldn\'t add 30 minutes</string>
+    <!-- TODO: translate -->
+    <string name="extend_at_max" tools:ignore="MissingTranslation">Already at the time limit</string>
 </resources>

@@ -104,4 +104,118 @@ class ActiveSnoozeTest {
             TrackingMode.from(vagueFix.copy(ssid = null)),
         )
     }
+
+    @Test
+    fun `extending moves the cap out by the step`() {
+        val snooze = snooze(Duration.ofHours(1))
+
+        assertEquals(
+            start.plus(Duration.ofMinutes(90)),
+            snooze.extendedCap(Duration.ofMinutes(30)),
+        )
+    }
+
+    @Test
+    fun `extending stops at the backstop`() {
+        // Repeated taps may not walk a snooze past the 8-hour default (SPEC.md
+        // §7), measured from the start rather than from the current cap.
+        val snooze = snooze(Duration.ofMinutes(7 * 60 + 50))
+
+        assertEquals(
+            start.plus(ActiveSnooze.DEFAULT_CAP),
+            snooze.extendedCap(Duration.ofMinutes(30)),
+        )
+    }
+
+    @Test
+    fun `extending never reaches the configurable maximum`() {
+        // The bug this pins: clamping to MAX_CAP let sixteen taps take a
+        // default snooze from 8 hours to 24 — the backstop every other exit
+        // falls back to, walked past half an hour at a time.
+        var cap = ActiveSnooze.DEFAULT_CAP
+        repeat(40) {
+            cap = Duration.between(start, snooze(cap).extendedCap(Duration.ofMinutes(30)))
+        }
+
+        assertEquals(ActiveSnooze.DEFAULT_CAP, cap)
+    }
+
+    @Test
+    fun `extending at the ceiling returns the cap unchanged`() {
+        // How the caller tells "extended" from "cannot extend" without
+        // re-deriving the clamp: nothing moved, so nothing is claimed to.
+        val snooze = snooze(ActiveSnooze.DEFAULT_CAP)
+
+        assertEquals(snooze.capExpiresAt, snooze.extendedCap(Duration.ofMinutes(30)))
+    }
+
+    @Test
+    fun `a cap already past the backstop declines rather than jumping back`() {
+        // Only a per-place setting could produce one, and none exists yet — but
+        // a clamp that returned the ceiling here would *shorten* the snooze on
+        // a tap that asked to lengthen it, which is the one direction `+30 min`
+        // must never move.
+        val snooze = snooze(Duration.ofHours(12))
+
+        assertEquals(snooze.capExpiresAt, snooze.extendedCap(Duration.ofMinutes(30)))
+    }
+
+    @Test
+    fun `a retry applies to the record it was queued for`() {
+        val snooze = snooze()
+
+        assertTrue(ActiveSnooze.retryStillApplies(snooze, snooze.startedAt))
+    }
+
+    @Test
+    fun `a retry does not apply to a newer snooze's record`() {
+        // The failure this guards, in both directions: a durable erase retry
+        // outlives the snooze it was armed for, fires after the user has armed
+        // a new one, and takes that snooze's cap with it while its zen rule
+        // stays on — and a durable release retry ends that new snooze outright,
+        // blaming a reboot that never happened.
+        val newer = snooze().copy(startedAt = start.plusSeconds(60))
+
+        assertFalse(ActiveSnooze.retryStillApplies(newer, start))
+    }
+
+    @Test
+    fun `a retry applies when there is no record left to protect`() {
+        assertTrue(ActiveSnooze.retryStillApplies(null, start))
+    }
+
+    @Test
+    fun `an unidentified retry is not refused`() {
+        // No caller can produce one, and refusing it would strand a released
+        // record that a later cold start would restore into a live snooze.
+        val snooze = snooze()
+
+        assertTrue(ActiveSnooze.retryStillApplies(snooze, null))
+    }
+
+    @Test
+    fun `a retry is not confused by a cap that moved`() {
+        // startedAt is the identity precisely because the cap does not stay
+        // put: `+30 min` moves it, and matching on it would let a retry queued
+        // before an extension find "a different record" and give up.
+        val snooze = snooze()
+        val extended = snooze.copy(capExpiresAt = snooze.extendedCap(Duration.ofMinutes(30)))
+
+        assertTrue(ActiveSnooze.retryStillApplies(extended, snooze.startedAt))
+    }
+
+    @Test
+    fun `a retry is not confused by a snooze whose tracking degraded`() {
+        // The other two fields that move under a live snooze. A release retry
+        // is armed on the reboot path, where the mode and the anchor are the
+        // most likely things to have changed by the time it fires — matching on
+        // the whole record would drop a retry that is still the right one.
+        val snooze = snooze()
+        val degraded = snooze.copy(
+            mode = TrackingMode.DURATION_ONLY,
+            anchor = snooze.anchor.copy(ssid = null, lat = null, lon = null),
+        )
+
+        assertTrue(ActiveSnooze.retryStillApplies(degraded, snooze.startedAt))
+    }
 }
