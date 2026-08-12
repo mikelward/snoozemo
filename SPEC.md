@@ -1326,6 +1326,19 @@ composable's state — out of the state machine; introduced later it stops being
 becomes a refactor nobody has time for, and the decision logic ends up in a `Service` where only a
 device can test it.
 
+**Where decision logic genuinely cannot leave an Android component, the component gets a
+seam instead** (maintainer, 2026-08-12). The escalation behind a refused zen write (§7.1) is
+the case that forced this: its ladder moved to `:core` and is covered there, but *performing*
+each rung — which alarm is armed, what reason it carries, what the user is left reading — can
+only happen in the service. Every one of those branches is reached only when the platform
+**refuses**, which no device and no emulator will do on demand, so the whole area was
+reachable by review and nothing else. Five real defects shipped into review from it in a
+single change. The service therefore builds its DND controller through an overridable factory
+rather than a constructor call, which is enough to make refusal expressible; everything else
+those tests observe — notifications, alarms and the extras inside their pending intents — is
+the real thing under Robolectric. Faking those would have hidden two of the five, which were
+*in* an intent extra and a notification id.
+
 The module tree above is the starting shape, not the requirement. What is required is a seam that
 keeps the core **functional, testable, and buildable on its own** — a Gradle module boundary is the
 version of that the build enforces for you, so it is the default, but the scaffold may cut the
