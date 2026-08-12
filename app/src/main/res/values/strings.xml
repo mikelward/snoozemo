@@ -8,12 +8,36 @@
       never reaches a release, so it is deliberately not translated and has not
       been through the propose-copy-in-chat step.
     -->
+    <!--
+      The two setup rows. Each is a whole tappable target, so the sentence that
+      names the problem is the thing you tap — the status line used to be inert
+      text beside a separate button (`TODO.md` Phase 2).
+
+      The action line is a separate string on purpose: the two permissions are
+      not the same kind of thing, and the row is where that has to be legible.
+      Do Not Disturb access is a Settings toggle, so the user leaves the app and
+      comes back (SPEC.md §5.2); `POST_NOTIFICATIONS` is a runtime prompt that
+      appears in place — until the system stops showing it, after which Settings
+      is the only route left and the row says so instead.
+    -->
     <!-- TODO: translate -->
-    <string name="debug_access_granted" tools:ignore="MissingTranslation">Do Not Disturb access granted</string>
+    <string name="setup_dnd_title" tools:ignore="MissingTranslation">Do Not Disturb access</string>
     <!-- TODO: translate -->
-    <string name="debug_access_missing" tools:ignore="MissingTranslation">Snoozemo needs Do Not Disturb access</string>
+    <string name="setup_dnd_granted" tools:ignore="MissingTranslation">Granted</string>
     <!-- TODO: translate -->
-    <string name="debug_grant_access" tools:ignore="MissingTranslation">Grant access</string>
+    <string name="setup_dnd_missing" tools:ignore="MissingTranslation">Snoozemo can\'t snooze without it</string>
+    <!-- TODO: translate -->
+    <string name="setup_notifications_title" tools:ignore="MissingTranslation">Notifications</string>
+    <!-- TODO: translate -->
+    <string name="setup_notifications_granted" tools:ignore="MissingTranslation">Allowed</string>
+    <!-- TODO: translate -->
+    <string name="setup_notifications_missing" tools:ignore="MissingTranslation">Snoozemo can\'t show what a snooze is doing</string>
+    <!-- TODO: translate -->
+    <string name="setup_opens_settings" tools:ignore="MissingTranslation">Opens Settings</string>
+    <!-- TODO: translate -->
+    <string name="setup_tap_to_allow" tools:ignore="MissingTranslation">Tap to allow</string>
+    <!-- TODO: translate -->
+    <string name="failure_could_not_open_settings" tools:ignore="MissingTranslation">Couldn\'t open Settings</string>
     <!-- TODO: translate -->
     <string name="debug_arm" tools:ignore="MissingTranslation">Snooze</string>
     <!-- TODO: translate -->
@@ -22,8 +46,6 @@
     <string name="debug_rule_failed" tools:ignore="MissingTranslation">Do Not Disturb access is on, but Snoozemo could not create its rule</string>
     <!-- TODO: translate -->
     <string name="debug_rule_disabled" tools:ignore="MissingTranslation">Snoozemo\'s rule is switched off in Settings</string>
-    <!-- TODO: translate -->
-    <string name="debug_notifications_denied" tools:ignore="MissingTranslation">Notifications are off — Snoozemo can\'t show what a snooze is doing</string>
 
     <!-- Ongoing notification and endings (SPEC.md §4.3, §4.5). -->
     <!-- TODO: translate -->

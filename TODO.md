@@ -202,23 +202,62 @@ the point is that every other line of the app is worthless if it isn't true.
         the ended-message ever fires early enough to be describing an arm.
 - [x] `endSnooze(reason)` as the single idempotent exit path, and the one-shot ended
       notification that names the reason (`SPEC.md` §4.5).
-- [ ] **Next PR: fix the access flow — the status line has to be the thing you tap** (maintainer,
-      2026-08-12). `Snoozemo needs Do Not Disturb access` reads like an action and isn't one; the
-      only live target is a separate `Grant access` button, so tapping the sentence that names the
-      problem does nothing. Make the whole state tappable, and go over the flow end to end rather
-      than patching that one line.
-      - **It is not a runtime permission**, which is part of why the current shape is confusing:
+- [x] **Fix the access flow — the status line has to be the thing you tap** (maintainer,
+      2026-08-12). `Snoozemo needs Do Not Disturb access` read like an action and wasn't one; the
+      only live target was a separate `Grant access` button, so tapping the sentence that named the
+      problem did nothing. **Landed** as one tappable row per capability — name, state, and what the
+      tap does — with the whole row as the target, and the flow gone over end to end rather than
+      that one line patched. Recorded in `SPEC.md` §5.2.
+      - **It is not a runtime permission**, which was part of why the old shape was confusing:
         Do Not Disturb access is a Settings toggle reached with
         `ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS`, so the user leaves the app, flips it, and
         comes back — there is no in-app dialog and no result callback (`SPEC.md` §5.2). What the
         app *does* own is noticing the return: the service reconciles on every non-arm wake-up and
-        the screen reconciles on open, so the state should update by itself once they are back.
+        the screen reconciles on open, so the state updates by itself once they are back.
       - **`POST_NOTIFICATIONS` is the one that really is a runtime prompt**, and the two sit next
-        to each other on the same screen looking alike. Whatever the fix is, it should make the
-        difference legible rather than hide it — one leaves the app, one doesn't.
+        to each other on the same screen looking alike. Each row now carries an action line in the
+        same position — `Opens Settings` or `Tap to allow` — so the difference is stated rather
+        than left to be discovered by tapping.
+      - **The third state is the one that made this more than a layout change.** The system shows
+        the notification prompt at most twice and then silently ignores every request, so a row
+        that always asked would be a *new* dead tap in place of the old one. `NotificationPermission`
+        in `:core` decides between the three, and needs a persisted "has a denial ever landed" flag
+        to do it: `shouldShowRequestPermissionRationale` reads `false` both before the first denial
+        and after the last. A **denial**, not a request — a dialog dismissed without an answer costs
+        nothing, so counting launches would strand a user who pressed back once (Codex, PR #18). The
+        trampoline records it too — the two prompts belong to the app, not to each surface, and a
+        tile-first user can be through both without opening the screen.
       - Covers the tile-first path too: a user who added the tile from the Quick Settings editor
         may reach this screen only after a failed arm, so it is as much a repair surface as an
         onboarding one.
+      - Still owed a device: whether `ACTION_APP_NOTIFICATION_SETTINGS` lands where expected on
+        Pixel and One UI, and how the rows read at the user's font scale.
+      - **The app screen no longer asks for notifications by itself** — the row's `Tap to allow` is
+        the affordance, and the automatic request was actively hostile once the row existed: tap the
+        granted row, switch notifications off in Settings, come back, and the screen asked to turn
+        them back on over a choice just made deliberately (Codex, PR #18). The tile trampoline still
+        asks on its own, and must — a Quick-Settings-editor user may never open the screen, and for
+        them a denied permission is an armed snooze with no visible state anywhere. Reversible, but
+        reversing it needs a way to tell onboarding from a return-from-Settings.
+      - **Known gap, deliberately left open: an install whose prompts were already exhausted before
+        the flag existed** reads as never-denied forever, so its notifications row offers a prompt
+        that never appears — the dead tap this item exists to remove, on the one install that
+        cannot report it. Costs nothing today (the app is unreleased, so only a dev build can be in
+        that state) and a reinstall clears it. Two candidate signals were considered and neither can
+        be settled here: inferring from whether the request paused the caller (an auto-denied
+        request may still start and finish the permission controller, so the inference is unsound —
+        Codex, PR #18, after a first attempt shipped it), and reading the raw
+        `onRequestPermissionsResult` arrays, where an **empty** array is the documented signal for a
+        dismissed dialog as against a real answer — but `ActivityResultContracts.RequestPermission`
+        collapses both to `false`, so it needs the deprecated API. **Pick one on hardware**, by
+        denying twice and then watching what a further request does.
+        - **A managed device reaches the same dead end by a different route** (Codex, PR #18): where
+          an administrator policy fixes `POST_NOTIFICATIONS` to denied, there is no rationale and no
+          stored denial on a *fresh* install either, so the row offers a prompt the platform will
+          never show. Same gap, same absent remedy — `getPermissionFlags` needs a signature
+          permission and `DevicePolicyManager.getPermissionGrantState` needs to be the admin, so an
+          ordinary app cannot read either. Worth re-checking if Snoozemo is ever aimed at managed
+          fleets; until then it shares whatever fix the item above gets.
 - [ ] `requestAddTileService()` during onboarding — asked once, never again.
 - [ ] Real anchor capture on the arm path. Until Phase 3 lands `PresenceMonitor`, every snooze
       arms honestly duration-only rather than pretending to track a place it never captured.
@@ -997,3 +1036,46 @@ costs.
 
   `releaseDirectly`'s last-resort branch now posts the same notification, replacing a
   `Couldn't end the snooze — trying again` that was false on that path in both directions.
+
+Guessed while making the access flow tappable (autopilot, 2026-08-12):
+
+- **The permission allowlist cannot be installed from inside this repo, and the attempt was
+  dropped.** `.claude/settings.json` is broadened here — it is read by desktop and CLI sessions
+  rooted in this repo — but Claude Code on the web does not read it, and a `SessionStart` hook
+  cannot fix that: it runs after the client has loaded its permission settings, and the sandbox is
+  ephemeral, so a `$HOME/.claude/settings.json` written from the hook helps neither this session nor
+  the next (maintainer, 2026-08-13; independently flagged by Codex on PR #18 after the hook version
+  was pushed). **The durable fix is the environment's own setup script**, configured in the Claude
+  Code web environment and not in version control — so it is the maintainer's to apply. The list it
+  needs is the `permissions.allow` array in `.claude/settings.json`; the scheduler entries are the
+  load-bearing ones, since the PR-watch loop arms its next check with no human present and a prompt
+  there ends the watch silently.
+
+- **New user-facing copy that did not go through the propose-in-chat step.** Six strings, all on
+  the setup rows: `Do Not Disturb access` / `Granted` / `Snoozemo can't snooze without it`,
+  `Notifications` / `Allowed` / `Snoozemo can't show what a snooze is doing`, plus the two action
+  lines `Opens Settings` and `Tap to allow` and a `Couldn't open Settings` failure. It replaces
+  `Snoozemo needs Do Not Disturb access`, `Grant access` and the transient
+  `Notifications are off — …`. Reversible — no locales yet, and this screen's copy is already in
+  the wording pass the maintainer has open. **The maintainer's call is wanted on the wording**,
+  not on the shape.
+- **The rows stay tappable once granted**, going to the same Settings screen the not-granted state
+  goes to. The alternative — an inert row when there is nothing to fix — reintroduces the exact
+  defect this change removed, on the state the user is most likely to tap out of curiosity.
+  Reversible by making the `onClick` conditional.
+- **Tapping the notifications row when the permission is granted opens the app's notification
+  settings.** It is the only live destination left, and it is where the user turns it back off.
+  Alternative: no action. Same objection as above.
+- **A new one-boolean preferences file (`notification_prompt`) rather than a key on an existing
+  one.** `PendingFailureStore`'s file is about a snooze that failed; this is about the app's own
+  request history and is read by two activities. Reversible — one key, one file, and nothing
+  depends on the separation.
+- **`checkSelfPermission` and `shouldShowRequestPermissionRationale` are read on the main thread**,
+  unlike the policy-access and record reads beside them, which are off-thread. Neither is a binder
+  round trip and both run after the first frame, so this adds nothing to the frame; the
+  alternative is a third generation-counter dance for a read that cannot block. Reversible if a
+  device shows otherwise.
+- **`startActivity` for a Settings screen is contained and reports failure** rather than crashing
+  or being swallowed. An OEM build or a restricted profile without the screen would otherwise take
+  the app down from a tap on a row describing a problem. Reversible, but reversing it picks one of
+  those two outcomes.
