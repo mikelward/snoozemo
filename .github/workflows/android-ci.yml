@@ -114,19 +114,18 @@ jobs:
             if [ "${#body}" -gt 60000 ]; then
               body="${body:0:60000}"$'\n```\n\n_Truncated — the full reports are in the `unit-test-reports` artifact._'
             fi
-            # --fail-with-body, not a bare `curl -sS`: a 4xx/5xx (missing write
-            # permission, an over-long body) otherwise exits 0 and the comment
-            # silently never appears. That matters more here than usual, because
-            # AGENTS.md reads "no PR comment" as evidence the failure happened
-            # *before* the tests ran — so a dropped comment doesn't just lose
-            # data, it points the next reader at the wrong stage.
-            if ! curl -sS --fail-with-body -o /tmp/pr-comment-response.json -X POST \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-              -d "$(jq -n --arg body "$body" '{body:$body}')"; then
+            # `gh api`, not `curl`: it exits non-zero on a 4xx/5xx and prints
+            # the response itself, where a bare `curl -sS` exits 0 and the
+            # comment silently never appears. That matters more here than
+            # usual, because AGENTS.md reads "no PR comment" as evidence the
+            # failure happened *before* the tests ran — so a dropped comment
+            # doesn't just lose data, it points the next reader at the wrong
+            # stage. Raising the warning is still ours to do: the step runs
+            # under `if: failure()`, so the job is already red and what a
+            # reader needs is a line saying where the reports went.
+            if ! gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              -f body="$body" > /dev/null; then
               echo "::warning::Could not post the failing-test comment; the reports are in the job log above and in the unit-test-reports artifact."
-              cat /tmp/pr-comment-response.json
             fi
           fi
 
