@@ -156,10 +156,12 @@ it in the same commit.
 - **Never raise the authorship or committer question.** The rewrite above is expected and
   needs no comment: no PR note, no chat caveat, no explanation of the mechanism, no offer
   to "fix" it. Raising it every session is the noise this bullet exists to stop.
-- **Only `main` is protected.** Every other branch is scratch space: create, reset, force-
-  push, and delete any non-`main` branch freely — no permission, no announcement,
-  including a branch name whose work has already merged and commits a reviewer has already
-  commented on. `main` itself is never force-pushed or rewritten.
+- **Branches under your own agent prefix are yours.** Create, reset, force-push, and
+  delete the `<agent>/…` branches *this session* created — freely, including a name whose
+  work has already merged and commits a reviewer has commented on. The prefix alone isn't
+  ownership: another session can share it, so leave a same-prefix branch you didn't create
+  alone, and another tool's prefix is never yours. `main` is never force-pushed or
+  rewritten.
 - In environments with remote Git support, always start work from the latest `origin/main`:
   `git fetch origin main` and rebase the working branch onto it before the first commit,
   even when the branch already exists. Resolve conflicts rather than abandoning the rebase,
