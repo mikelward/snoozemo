@@ -84,10 +84,11 @@ android {
 
     defaultConfig {
         applicationId = "app.snoozemo"
-        // minSdk 33 (Android 13) buys requestAddTileService, POST_NOTIFICATIONS,
-        // and the modern Wi-Fi APIs without version branches, and covers every
-        // Pixel and Samsung flagship still receiving updates (SPEC.md §11).
-        minSdk = 33
+        // minSdk 34 (Android 14) buys requestAddTileService, POST_NOTIFICATIONS,
+        // the modern Wi-Fi APIs, and the PendingIntent overload of
+        // startActivityAndCollapse — the tile's whole arm path — without version
+        // branches (SPEC.md §11).
+        minSdk = 34
         targetSdk = 36
         versionCode = gitCommitCount
         versionName = "$baseVersionName.$gitCommitCount+$gitShortSha"

@@ -76,6 +76,33 @@ data class ActiveSnooze(
      */
     fun isExpired(now: Instant): Boolean = !now.isBefore(capExpiresAt)
 
+    /**
+     * Where the cap lands if the notification's `+30 min` is tapped (SPEC.md
+     * §4.3), clamped to [DEFAULT_CAP] measured from [startedAt] — repeated taps
+     * may not walk a snooze past the backstop.
+     *
+     * The ceiling is the **8-hour default**, not [MAX_CAP]. SPEC.md §7 is
+     * explicit: a time chosen in the end-condition sheet only ever *lowers* the
+     * cap, "the 8-hour default remains an absolute backstop above any chosen
+     * value, and `+30 min` may not push past it." Clamping to [MAX_CAP] instead
+     * let sixteen taps walk a default snooze from 8 hours to 24 — sixteen hours
+     * of silence past the backstop the whole design leans on, reached by a
+     * button whose only job is to add half an hour.
+     *
+     * Stated as a ceiling rather than a subtraction so a cap already *above* the
+     * default — which only a per-place setting could produce, and none exists
+     * yet — declines to extend rather than jumping backwards.
+     *
+     * Returns [capExpiresAt] unchanged when the ceiling is already reached, so a
+     * caller can tell "extended" from "cannot extend" by comparison rather than
+     * re-deriving the clamp and getting it subtly different.
+     */
+    fun extendedCap(by: Duration): Instant {
+        val ceiling = startedAt.plus(DEFAULT_CAP)
+        val extended = capExpiresAt.plus(by)
+        return if (extended.isAfter(ceiling)) maxOf(capExpiresAt, ceiling) else extended
+    }
+
     companion object {
         /** Shown until saved places land and the anchor can be named. */
         const val DEFAULT_PLACE_NAME: String = "Here"
@@ -84,13 +111,55 @@ data class ActiveSnooze(
         val DEFAULT_CAP: Duration = Duration.ofHours(8)
 
         /**
-         * The absolute backstop. A time chosen in the end-condition sheet lowers
-         * the cap; nothing — including `+30 min` — may push it above this
-         * (SPEC.md §4.3, §7).
+         * The ceiling on a cap the user asks for — the top of the configurable
+         * 30 min – 24 h range (SPEC.md §7).
+         *
+         * Not the ceiling `+30 min` clamps to: that is [DEFAULT_CAP], because
+         * extending is not choosing a cap. See [extendedCap].
          */
         val MAX_CAP: Duration = Duration.ofHours(24)
 
         /** The floor the sheet's `−` may not go below. */
         val MIN_CAP: Duration = Duration.ofMinutes(30)
+
+        /**
+         * The absolute instant a snooze started at [now] with a requested
+         * [cap] should end, clamped to [MIN_CAP]–[MAX_CAP].
+         *
+         * Exists so the cap is settled **once**, before anything is scheduled or
+         * recorded. The alarm and the record have to name the same moment: two
+         * derivations from two clock readings put them milliseconds apart, and
+         * an alarm that fires just before its own record counts as expired is a
+         * spent alarm and a snooze with no duration exit.
+         */
+        fun capExpiryFor(now: Instant, cap: Duration = DEFAULT_CAP): Instant =
+            now.plus(cap.coerceIn(MIN_CAP, MAX_CAP))
+
+        /**
+         * Whether a retry queued for the snooze that started at [queuedFor] is
+         * still entitled to act on the record now on disk ([onDisk]).
+         *
+         * Both retries the app schedules — erasing a released record, and
+         * ending a snooze whose cap could not be rescheduled — can outlive the
+         * snooze they were queued for: the alarm behind each is durable, the
+         * process is not, and the user can arm a *new* snooze before either
+         * fires. Both would then act on the wrong snooze. A stale erase deletes
+         * the new record, taking its cap with it while its zen rule stays on —
+         * a phone left quiet with nothing scheduled to bring it back, produced
+         * by the mechanism meant to prevent exactly that. A stale release ends
+         * the snooze the user just armed, and explains it as a reboot that
+         * couldn't resume, which never happened.
+         *
+         * [startedAt] is the identity, because it is the one field that is fixed
+         * for a snooze's whole life: the cap moves with `+30 min`, the mode and
+         * the anchor change as tracking degrades.
+         *
+         * Both nulls mean "nothing to disagree with" and answer true — an absent
+         * record has nothing to protect, and an unidentified retry is one no
+         * caller can currently produce, so refusing it would only strand a
+         * record that a later cold start would restore.
+         */
+        fun retryStillApplies(onDisk: ActiveSnooze?, queuedFor: Instant?): Boolean =
+            onDisk == null || queuedFor == null || onDisk.startedAt == queuedFor
     }
 }

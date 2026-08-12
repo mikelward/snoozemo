@@ -7,4 +7,13 @@
       the dark half lives in values-night/.
     -->
     <style name="Theme.Snoozemo" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!-- The trampoline (SPEC.md §6.9): transparent rather than NoDisplay, so it
+         can host the end-condition sheet and a runtime permission request when
+         those land. -->
+    <style name="Theme.Snoozemo.Transparent" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
 </resources>

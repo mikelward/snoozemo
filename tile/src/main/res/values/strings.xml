@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- The tile's name in the "add tile" picker: people scan that list for an
+         app name, not a verb. -->
+    <!-- TODO: translate -->
+    <string name="tile_name" tools:ignore="MissingTranslation">Snoozemo</string>
+    <!-- TODO: translate -->
+    <string name="tile_snooze_here" tools:ignore="MissingTranslation">Snooze here</string>
+    <!-- TODO: translate -->
+    <string name="tile_snoozing" tools:ignore="MissingTranslation">Snoozing</string>
+    <!-- TODO: translate -->
+    <string name="tile_timer_only" tools:ignore="MissingTranslation">Timer only · %1$s</string>
+    <!-- TODO: translate -->
+    <string name="tile_state_off" tools:ignore="MissingTranslation">Off</string>
+    <!-- TODO: translate -->
+    <string name="tile_state_on" tools:ignore="MissingTranslation">Snoozing, %1$s</string>
+    <!-- The countdown, with an hour or more left. Abbreviated because Quick
+         Settings truncates the subtitle hard; %1$d is hours, %2$d minutes. -->
+    <!-- TODO: translate -->
+    <string name="tile_remaining_hours" tools:ignore="MissingTranslation">%1$dh %2$dm left</string>
+    <!-- The countdown inside the last hour. -->
+    <!-- TODO: translate -->
+    <string name="tile_remaining_minutes" tools:ignore="MissingTranslation">%1$dm left</string>
+</resources>

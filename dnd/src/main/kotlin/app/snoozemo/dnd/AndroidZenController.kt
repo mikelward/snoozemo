@@ -40,7 +40,43 @@ class AndroidZenController(
             PolicyAccess.DENIED
         }
 
-    override fun ensureRule(): ZenRuleState {
+    /**
+     * Serialized process-wide, because the rule is a singleton and creating it
+     * is a read-then-write.
+     *
+     * Two threads can reach this at once — the screen reconciles policy access
+     * on a worker while a tile arm drives another controller instance, and the
+     * receivers build their own — and without the lock both can see no id, both
+     * create a rule, and both persist. One id wins; the other rule is orphaned,
+     * and if the arm activated the loser then the phone is being silenced by a
+     * rule nothing records.
+     *
+     * A lock across binder calls, which is normally worth avoiding, and safe
+     * here for one reason: this is never on the fast arm path. `setSnoozed`
+     * reaches it only after the warm id has already failed, and every other
+     * caller is startup or a broadcast.
+     */
+    /**
+     * Contained here rather than at each call site, because every caller is on
+     * a path where a throw costs more than the preparation is worth.
+     *
+     * The worst is the cap wake-up: `reconcilePolicyAccess` runs before the
+     * action is dispatched, so an exception from *preparing the rule* unwinds
+     * `onStartCommand` before the release that wake-up existed to perform —
+     * and the alarm behind it is one-shot and already spent. The screen and
+     * `setSnoozed` are milder but the same shape.
+     *
+     * `FAILED` is the honest answer and already means what this is: the lookup
+     * didn't complete, so the rule's state is unknown rather than absent.
+     * `setSnoozed` maps it to `PLATFORM_REFUSED`, the retryable outcome.
+     */
+    override fun ensureRule(): ZenRuleState =
+        runCatching { synchronized(RULE_CREATION) { ensureRuleLocked() } }.getOrElse {
+            Log.e(TAG, "Preparing the zen rule failed; reporting the state as unknown.", it)
+            ZenRuleState.FAILED
+        }
+
+    private fun ensureRuleLocked(): ZenRuleState {
         if (policyAccess() == PolicyAccess.DENIED) return ZenRuleState.MISSING_ACCESS
 
         // A persisted id is only good while the platform still has the rule: the
@@ -78,8 +114,29 @@ class AndroidZenController(
         return runCatching { notificationManager.addAutomaticZenRule(buildRule()) }
             .fold(
                 onSuccess = { id ->
-                    store.setRuleId(id)
-                    ZenRuleState.READY
+                    // The id has to be on disk before this reports READY,
+                    // because the caller's next move is to turn the rule on.
+                    // A rule that is active with its id unrecorded is one no
+                    // later process can turn off — it would create a second
+                    // rule and release that instead, while the first went on
+                    // silencing the phone with nothing left that names it.
+                    if (store.setRuleId(id)) {
+                        ZenRuleState.READY
+                    } else {
+                        // Take the rule back rather than leaving one we can't
+                        // name. Safe to do here and only here: it was created a
+                        // moment ago and has never been set to STATE_TRUE, so
+                        // it is inert — this is not turning off something that
+                        // is silencing the phone (SPEC.md §5.6).
+                        Log.e(TAG, "The new zen rule's id could not be stored; removing the rule.")
+                        runCatching { notificationManager.removeAutomaticZenRule(id) }.onFailure {
+                            // An inert rule nobody can name is clutter, not a
+                            // hazard: it silences nothing until its state is
+                            // set, and only this app would ever set it.
+                            Log.w(TAG, "Removing the unrecorded zen rule failed; it stays inert.", it)
+                        }
+                        ZenRuleState.FAILED
+                    }
                 },
                 onFailure = { error ->
                     // Never swallowed: the caller turns this into something the
@@ -107,25 +164,157 @@ class AndroidZenController(
         val warmId = store.ruleId()
         if (warmId != null) {
             val applied = trySetState(warmId, snoozed, trigger, placeName)
-            if (applied is ZenOutcome.Applied) return applied
+            if (applied is ZenOutcome.Applied) return confirmSilenced(warmId, snoozed, placeName)
         }
 
         // Only now — having already failed, or never having had an id — is it
         // worth paying for diagnosis. This path is slow and that is fine: it is
         // not the happy path, and the alternative is being fast and wrong.
-        if (policyAccess() == PolicyAccess.DENIED) {
+        // Contained, because this runs on the release path too. An escaping
+        // exception here doesn't degrade a diagnosis — it unwinds `end()` and
+        // then `onStartCommand`, so the cap check that woke the service never
+        // reaches the code that puts a fresh alarm behind an unfinished
+        // release. The alarm that woke it is spent, and the phone stays quiet
+        // with nothing left scheduled to change that.
+        //
+        // `PLATFORM_REFUSED`, never `NO_POLICY_ACCESS`: the latter is one of
+        // the failures that means *nothing is silencing the phone*, so a
+        // release would take it as an ending and erase the record. A read that
+        // threw tells us nothing of the sort. Unknown has to stay retryable.
+        val access = runCatching { policyAccess() }.getOrElse {
+            Log.e(TAG, "Reading policy access failed while diagnosing a refused write.", it)
+            return ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED)
+        }
+        if (access == PolicyAccess.DENIED) {
             return ZenOutcome.NotApplied(ZenFailure.NO_POLICY_ACCESS)
         }
         when (ensureRule()) {
             ZenRuleState.READY -> Unit
             ZenRuleState.DISABLED -> return ZenOutcome.NotApplied(ZenFailure.RULE_DISABLED)
             ZenRuleState.MISSING_ACCESS -> return ZenOutcome.NotApplied(ZenFailure.NO_POLICY_ACCESS)
-            ZenRuleState.FAILED -> return ZenOutcome.NotApplied(ZenFailure.NO_RULE)
+            // PLATFORM_REFUSED, not NO_RULE, and the distinction has teeth:
+            // FAILED means the *lookup* threw, which is exactly why ensureRule
+            // keeps the existing id rather than creating a second rule. So we
+            // don't know the rule is gone — and `NO_RULE.nothingLeftToRelease`
+            // would tell a release to complete, erasing the record and the cap
+            // while that rule may still be silencing the phone. Unknown is
+            // retryable; only a rule we know is absent is an ending.
+            ZenRuleState.FAILED -> return ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED)
         }
         val ruleId = store.ruleId() ?: return ZenOutcome.NotApplied(ZenFailure.NO_RULE)
         // Retried rather than abandoned, because this runs on the *release* path
         // too, where giving up means leaving the phone silent.
-        return trySetState(ruleId, snoozed, trigger, placeName)
+        //
+        // Confirmed again even though `ensureRule` returned READY a line ago.
+        // That check is a moment stale by the time the state lands, and the
+        // window is not theoretical — `ensureRule` takes a lock and makes its
+        // own binder calls. A rule switched off inside it would be accepted
+        // here and reported as a successful snooze over an audible phone.
+        val applied = trySetState(ruleId, snoozed, trigger, placeName)
+        return if (applied is ZenOutcome.Applied) {
+            confirmSilenced(ruleId, snoozed, placeName)
+        } else {
+            applied
+        }
+    }
+
+    /**
+     * Checks that an accepted arm will actually be heard, and rejects it if not.
+     *
+     * The platform accepts `setAutomaticZenRuleState` on a rule the user has
+     * switched off in Settings or the Modes UI, and reports success — while the
+     * phone goes on ringing. Taken at face value, the fast path above would
+     * record a snooze and put `Snoozing` on the tile and the notification over
+     * an audible phone, which is the worst thing this app can say.
+     *
+     * Done **after** the state change rather than before it, so nothing is added
+     * between the tile tap and the rule going `STATE_TRUE` (`AGENTS.md`, the arm
+     * path). Warming the enabled state at startup instead was the alternative
+     * and is not sufficient on its own: the user can switch the rule off at any
+     * point after the last `ensureRule`, and the cached answer would be stale in
+     * exactly the case that matters.
+     *
+     * Only on the way *in*. A release never needs it — the goal there is the
+     * rule not silencing anything, and a disabled rule already isn't.
+     *
+     * A lookup that fails refuses the arm. It is not evidence that anything is
+     * wrong — but it is not evidence that anything is right either, and the two
+     * unknowns are not equally priced. Claiming the snooze means `Snoozing` on
+     * the tile and the notification over a phone that may be ringing all
+     * afternoon, which is principle 2's failure and the one thing this function
+     * exists to prevent; refusing costs a working snooze the user can re-arm
+     * with one tap, and it resolves toward ending (SPEC.md D7).
+     *
+     * `PLATFORM_REFUSED` specifically, because the rule may well be on:
+     * `STATE_TRUE` was accepted a moment ago. That is the retryable code, so
+     * the caller keeps a release scheduled for the condition rather than
+     * concluding there is nothing to come back for.
+     */
+    private fun confirmSilenced(ruleId: String, snoozed: Boolean, placeName: String): ZenOutcome {
+        if (!snoozed) return ZenOutcome.Applied
+
+        val lookup = runCatching { notificationManager.getAutomaticZenRule(ruleId) }
+        val rule = lookup.getOrElse {
+            Log.e(TAG, "Confirming the zen rule is on failed; refusing an arm we cannot verify.", it)
+            return ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED)
+        }
+        return when {
+            // Accepted a state change for a rule that isn't there. Nothing is
+            // silencing the phone, and `NO_RULE` says so — an arm reported this
+            // way is refused, and a release treats it as already over.
+            rule == null -> {
+                Log.e(TAG, "The zen rule accepted a state change but no longer exists.")
+                ZenOutcome.NotApplied(ZenFailure.NO_RULE)
+            }
+            // Switched off by the user. Snoozemo does not turn it back on —
+            // that switch is theirs (SPEC.md §5.1) — so the arm is refused and
+            // the reason is surfaced.
+            !rule.isEnabled -> {
+                Log.e(TAG, "The zen rule is switched off, so arming would silence nothing.")
+                // But put the condition back first. This runs *after* a
+                // successful STATE_TRUE — that is what made the disabled rule
+                // detectable — and refusing the arm here tears down the record
+                // and the cap. Leaving the condition true would arm a trap: the
+                // day the user re-enables the rule in Settings it starts
+                // silencing the phone, with no snooze, no notification and no
+                // alarm anywhere in the app that knows to end it.
+                if (resetCondition(ruleId, placeName)) {
+                    ZenOutcome.NotApplied(ZenFailure.RULE_DISABLED)
+                } else {
+                    // The reset was refused, so the trap is armed and this call
+                    // cannot disarm it. `RULE_DISABLED` would be the wrong thing
+                    // to say now: it means `nothingLeftToRelease`, which tells
+                    // every release path that there is nothing to come back for
+                    // — and there is. `PLATFORM_REFUSED` is the honest code and
+                    // the useful one, because it is the retryable one: callers
+                    // keep the record and the cap, and those are precisely what
+                    // will drive the condition off later.
+                    Log.e(TAG, "Could not reset the disabled rule's condition; keeping the retry.")
+                    ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED)
+                }
+            }
+            else -> ZenOutcome.Applied
+        }
+    }
+
+    /**
+     * Takes back a `STATE_TRUE` that [confirmSilenced] has decided must not
+     * stand, retrying a few times before giving up.
+     *
+     * Retried at all because the call it is undoing *succeeded* moments ago on
+     * the same rule — a refusal here is a transient the next attempt is likely
+     * to get past, and each one is a single binder call off the arm path.
+     * Bounded rather than persistent because this is the unwind of a refused
+     * arm: nothing is waiting on it, and a loop that couldn't give up would
+     * hold the wake-up that reached it.
+     */
+    private fun resetCondition(ruleId: String, placeName: String): Boolean {
+        repeat(CONDITION_RESET_ATTEMPTS) {
+            if (trySetState(ruleId, false, ZenTrigger.CONTEXT, placeName) is ZenOutcome.Applied) {
+                return true
+            }
+        }
+        return false
     }
 
     private fun trySetState(
@@ -167,7 +356,7 @@ class AndroidZenController(
                 .setEnabled(true)
                 .build()
         } else {
-            // API 33–34. `owner` may be null provided configurationActivity is
+            // API 34. `owner` may be null provided configurationActivity is
             // set; a ConditionProviderService has not been needed since API 29,
             // when setAutomaticZenRuleState replaced it, and is deprecated
             // (SPEC.md §5.3).
@@ -203,6 +392,15 @@ class AndroidZenController(
     }
 
     private companion object {
+        /**
+         * Guards [ensureRule]. Shared rather than per-instance because four
+         * places construct a controller and they all target the same one rule.
+         */
+        val RULE_CREATION = Any()
+
+        /** Bounds [resetCondition]; small, because it is undoing a call that just worked. */
+        const val CONDITION_RESET_ATTEMPTS = 3
+
         const val TAG = "ZenController"
         val CONDITION_URI: Uri = Uri.parse(ZenRule.CONDITION_ID)
         const val TRIGGER_DESCRIPTION = "While you're at a place you snoozed"

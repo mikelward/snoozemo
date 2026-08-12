@@ -65,14 +65,22 @@ class SnoozeController(
      * to the user rather than a degraded mode.
      */
     fun beginArming(
-        cap: Duration = ActiveSnooze.DEFAULT_CAP,
+        capExpiresAt: Instant,
         placeName: String = ActiveSnooze.DEFAULT_PLACE_NAME,
     ): Boolean {
         val now = clock.instant()
         val snooze = ActiveSnooze(
             anchor = Anchor(capturedAt = now),
             startedAt = now,
-            capExpiresAt = now.plus(cap.coerceIn(ActiveSnooze.MIN_CAP, ActiveSnooze.MAX_CAP)),
+            // Taken verbatim, and an absolute instant rather than a duration, so
+            // that this record and the alarm the caller has already scheduled
+            // name the *same* moment. Deriving it here from a second clock
+            // reading put the record a few milliseconds later than the alarm —
+            // enough that the alarm could fire, find the snooze "not yet
+            // expired", and be spent, leaving no duration exit at all. Clamping
+            // belongs where the duration is chosen ([ActiveSnooze.capExpiryFor]),
+            // not here, precisely so it cannot move the two apart.
+            capExpiresAt = capExpiresAt,
             mode = TrackingMode.DURATION_ONLY,
             placeName = placeName,
         )
@@ -130,13 +138,22 @@ class SnoozeController(
      * idle, is safe and still drives the rule off — the three exits can race,
      * and every one of them must be allowed to fire without checking first.
      *
-     * **A release the platform refuses does not clear the snooze.** The record is
-     * the only thing that can turn the rule off later: it keeps the cap alarm
-     * armed, the notification on screen, and the tile showing `Snoozing`, so the
-     * next cap check or tap retries. Clearing it would leave the rule active with
-     * nothing left in the app that knows to try again — a phone silent
-     * indefinitely, which is principle 1's failure. The failure is reported
-     * either way, so a stuck release is visible rather than silent.
+     * **A release the platform refuses does not clear the snooze — unless there
+     * is nothing left to release.** Where the rule still exists and the platform
+     * merely refused, the record is the only thing that can turn it off later:
+     * it keeps the cap alarm armed, the notification on screen, and the tile
+     * showing `Snoozing`, so the next cap check or tap retries. Clearing it
+     * would leave the rule active with nothing in the app that knows to try
+     * again — a phone silent indefinitely, which is principle 1's failure.
+     *
+     * But where the failure means the rule is gone
+     * ([ZenFailure.nothingLeftToRelease] — policy access revoked being the case
+     * that bites), retrying can never succeed and keeping the record is the
+     * opposite failure: the app strands itself claiming `Snoozing` over a phone
+     * that is already ringing, and SPEC.md §8.2's promise that revocation *ends
+     * the snooze* is never kept. So that case completes the end.
+     *
+     * The failure is reported either way, so neither outcome is silent.
      */
     fun end(reason: EndReason) {
         val ending = active
@@ -145,16 +162,38 @@ class SnoozeController(
         val outcome = zen.setSnoozed(false, trigger, ending?.placeName ?: ActiveSnooze.DEFAULT_PLACE_NAME)
         if (outcome is ZenOutcome.NotApplied) {
             listener.onZenFailure(outcome.reason, whileArming = false)
-            // Deliberately keeps `active` and the current state so a retry is
-            // still possible. Not a stuck state machine: onCapCheck, the tile,
-            // and the notification action all call end() again.
-            return
+            // Keeps `active` and the current state so a retry is still possible.
+            // Not a stuck state machine: onCapCheck, the tile, and the
+            // notification action all call end() again.
+            if (!outcome.reason.nothingLeftToRelease) return
         }
 
         active = null
         state = SnoozeState.RELEASED
         listener.onStateChanged(state, ending, reason)
         state = SnoozeState.IDLE
+    }
+
+    /**
+     * Moves the cap out to [newCapExpiresAt] — the notification's `+30 min`
+     * (SPEC.md §4.3). Returns the extended snooze, or null when there is nothing
+     * running or the new cap is not actually later.
+     *
+     * Takes an instant rather than a duration, and refuses to move the cap
+     * *earlier*, because the caller must re-arm the alarm **before** calling
+     * this. The alarm is what actually ends the snooze; a controller that
+     * believed in a later cap than the alarm was set for would show a countdown
+     * the platform had no intention of honoring, and one that moved the cap out
+     * after a failed re-arm would extend the snooze past its only backstop.
+     */
+    fun extendTo(newCapExpiresAt: Instant): ActiveSnooze? {
+        val snooze = active ?: return null
+        if (!newCapExpiresAt.isAfter(snooze.capExpiresAt)) return null
+
+        val extended = snooze.copy(capExpiresAt = newCapExpiresAt)
+        active = extended
+        listener.onStateChanged(state, extended, null)
+        return extended
     }
 
     /**
@@ -199,6 +238,29 @@ class SnoozeController(
     }
 
     /**
+     * Takes over a persisted [snooze] **without touching the zen rule**, for a
+     * wake-up whose whole purpose is to end it.
+     *
+     * [restore] re-asserts the rule, which is right when the process died
+     * mid-snooze and wrong when the user has just tapped `End now`: it would
+     * turn DND back on for the moment before [end] turns it off, and if that
+     * release were then refused, the flap is what leaves the phone quiet after
+     * an explicit exit — principle 1's failure produced by the exit meant to
+     * prevent it. Ending needs the record, not the rule, so this hands over the
+     * first without the second. Nothing is assumed about the platform either
+     * way: [end] drives the rule off from here regardless of what state it was
+     * actually in.
+     *
+     * Emits no transition. The snooze is about to end, and announcing `ARMED`
+     * on the way would post an ongoing notification for it first.
+     */
+    fun adopt(snooze: ActiveSnooze) {
+        if (active != null) return
+        active = snooze
+        state = SnoozeState.ARMED
+    }
+
+    /**
      * Restores a snooze that outlived the process (SPEC.md §8.1). The cap
      * continues from its original start — a reboot does not extend a snooze
      * (§8.3) — so an already-expired one ends immediately rather than being
@@ -207,16 +269,42 @@ class SnoozeController(
     fun restore(snooze: ActiveSnooze) {
         active = snooze
 
+        // The clock first, before the rule. A record whose cap passed while the
+        // process was dead is already over, and re-asserting it would silence
+        // the phone again — briefly in the good case, and until some later retry
+        // succeeded in the bad one. Ending is the same call either way, so the
+        // only thing the old order bought was a flap.
+        if (snooze.isExpired(clock.instant())) {
+            state = SnoozeState.ARMED
+            end(EndReason.DURATION_CAP)
+            return
+        }
+
         // Re-assert the rule rather than assume it survived (SPEC.md §8.1). The
         // record surviving does not mean the rule's condition did — a reboot, an
         // app update, or the platform dropping it would otherwise leave the app
         // showing a snooze over a phone that rings.
         val outcome = zen.setSnoozed(true, ZenTrigger.CONTEXT, snooze.placeName)
         if (outcome is ZenOutcome.NotApplied) {
-            // Cannot honor the snooze, so don't claim to. Ends without calling
-            // the zen controller again: the rule is already not on — that is why
-            // this failed — and a second call would only fail the same way.
             listener.onZenFailure(outcome.reason, whileArming = true)
+
+            if (!outcome.reason.nothingLeftToRelease) {
+                // The same distinction [end] draws, and for the same reason. A
+                // platform refusal is not evidence the rule is off — the rule
+                // still exists and may still be holding the phone quiet, since
+                // this call was only *re-asserting* what was already running.
+                // Treating it as "ended" would erase the record and cancel the
+                // cap, which are the only two things that could ever turn it
+                // back off. So keep them, stay armed, and let the cap retry.
+                state = SnoozeState.ARMED
+                listener.onStateChanged(state, snooze, null)
+                onCapCheck()
+                return
+            }
+
+            // Nothing is silencing the phone — no access, no rule, or the rule
+            // switched off — so the snooze really is over. Ends without calling
+            // the zen controller again: a second call would fail the same way.
             active = null
             state = SnoozeState.RELEASED
             listener.onStateChanged(state, snooze, EndReason.LOST_CAPABILITY)

@@ -116,6 +116,26 @@ different review that this app should expect to fail. There is no framing of it 
 location sharing that is both accurate and approvable, and submitting an inaccurate declaration is
 not on the table.
 
+**A narrower foreground service is a different question, and the answer is still no — for a
+different reason.** A service that does *no* location work, existing only to keep the process
+resident, is not a named non-approved use of anything: it would be declared `specialUse`, which Play
+reviews case by case. `location` would not apply and claiming it would be inaccurate;
+`shortService` caps out around three minutes; `systemExempted` is not available to ordinary apps.
+
+The honest justification, if one is ever needed, is **"the user has put the device into a temporary
+silent state that the app has promised to end, and the service exists to guarantee the ringer comes
+back"** (maintainer, 2026-08-12). That is user-initiated, user-visible and time-bounded, and it is a
+materially stronger case than §3.3's, which fails on a named exclusion rather than on doubt. Written
+down here so it does not have to be reconstructed later.
+
+**Scope of the "no": not on Play, and not for v1** (maintainer, 2026-08-12) — deliberately narrower
+than a permanent ruling. On the `play` flavor such a service would buy nothing the Geofencing API
+does not already do; it would exist only to hold a permission-revocation watch and some retry state,
+and **a permission is not spent on revocation handling**. That leaves two doors open on purpose: the
+`direct` flavor has a foreground service anyway (§3.4), where none of this review applies, and a
+later version may find core functionality that genuinely requires one on Play. If it does, the case
+above is the one to build — not a fresh one improvised under time pressure.
+
 ### 3.4 Recommendation — **agreed**
 
 > **Settled:** option B is the primary. Accept the `ACCESS_BACKGROUND_LOCATION` declaration and
@@ -124,8 +144,22 @@ not on the table.
 
 **Two product flavors, differing only below `PresenceMonitor` (§6.1):**
 
-- **`play`** — option B. Geofencing API, `ACCESS_BACKGROUND_LOCATION`, no ongoing notification.
+- **`play`** — option B. Geofencing API, `ACCESS_BACKGROUND_LOCATION`, **no foreground service**.
   This is the shipping build for any Play track, internal included.
+
+  > **Amended 2026-08-12** (maintainer: no strong preference, decision delegated). This bullet
+  > used to read "no ongoing notification", which was the wrong thing to write down. What option B
+  > buys is the absence of a *foreground service* — and therefore of the mandatory,
+  > non-dismissible notification the platform attaches to one, plus the
+  > `foregroundServiceType` declaration that is the actual Play-policy exposure (§3.5).
+  >
+  > An ordinary ongoing notification is a different object: it needs no service, no
+  > foreground-service type, and no permission beyond `POST_NOTIFICATIONS`, which both flavors
+  > already declare. Reading the old wording literally would have forbidden it in the shipping
+  > build, and §4.2 is unambiguous that a 1×1 icon-only tile leaves **nowhere else** for the
+  > countdown, the degraded-mode reason, or `End now` to live. That is not a trade worth making
+  > to satisfy a phrase, so **both flavors post the ongoing notification**; only `direct` posts
+  > one the system requires.
 - **`direct`** — option A. Foreground service, no restricted permissions, no Play Services
   dependency. For sideloaded APKs and F-Droid, and the better build on Samsung. **Insurance, not a
   parallel product**: it exists so a refused declaration is a distribution setback rather than a dead
@@ -171,6 +205,41 @@ Given the answer "Play internal track at a bare minimum": be aware that this spe
 avoid either declaration, and the internal track is where the background-location declaration should
 be exercised first, precisely to find out.
 
+### 3.6 If a mechanism is taken away — the contingency
+
+**Assume this ground moves.** Google removed geofencing as an approved foreground-service use case
+in April 2026 with a 30-day compliance window (§3.3); background location has tightened at almost
+every release; `specialUse` is reviewed case by case and could narrow. The realistic planning
+assumption is that **any one of the three mechanisms may become unavailable within a few Android
+versions**, and the app should degrade rather than break (maintainer, 2026-08-12).
+
+It already can, and this is the point worth internalizing: **the contingency is the fallback ladder
+the app runs anyway** (§6.10, D7), applied permanently rather than per-snooze.
+
+| What is lost | What still works | What the user sees |
+|---|---|---|
+| Geofencing (or the FGS behind it) | Wi-Fi suppressor + duration cap | `Snoozing · ends when you leave Wi-Fi, or in 3h 40m` |
+| Wi-Fi as well | Duration cap alone | `Snoozing · ends in 3h 40m` — an honest timer |
+| — | The cap is the floor and cannot be taken away | The phone always comes back |
+
+Three properties make that ladder hold, and each is a constraint on future work rather than a
+feature to be added later:
+
+1. **The duration cap is not a service and not a permission.** It is one
+   `AlarmManager.setAndAllowWhileIdle`, which needs no declaration and no review. Every mechanism
+   above it can be withdrawn and the phone still comes back on time. Nothing may be built that makes
+   the cap depend on a service staying alive.
+2. **The release obligation never lives *only* in a process.** Escalation is alarm-first,
+   in-process second, precisely so that losing the right to keep a process alive costs latency, not
+   the exit itself (§8).
+3. **`PresenceMonitor` is the seam** (§3.4, §6.1). A withdrawn mechanism is an implementation swap
+   below one interface, not an app rewrite — which is also what keeps the two flavors from diverging
+   anywhere else.
+
+So the plan on losing a mechanism is: drop to the next rung, say so in the ongoing notification
+(§4.3 — a degraded snooze must never look like a tracked one), and ship. The product gets less
+clever; it does not stop working, and it never gets less safe.
+
 ---
 
 ## 4. User-visible behavior
@@ -215,19 +284,93 @@ must never feel slow or refuse.
 - **Locked device:** arming works locked — no `unlockAndRun()` wrapper. The whole point is a
   one-tap action from the shade. Ending also works locked. Only the settings screen requires unlock.
 
+**The tile is the arm affordance; the notification is the status surface** (maintainer,
+2026-08-11). The maintainer runs the tile in its **1×1 form**, which shows the icon alone — no
+label, no subtitle — so icon-only is the *expected* presentation here, not a degraded edge case.
+One UI may not render `Tile.setSubtitle` at all (§10) and what does render is truncated hard, but
+those are secondary: the primary case already shows nothing but a glyph.
+
+So **nothing the user needs to know may live only on the tile.** The place, the countdown, the
+reason a snooze degraded, and the way to extend or end it all live in the ongoing notification
+(§4.3), which has room, is where the user is already looking, and renders the same on every device.
+The tile still sets its label and subtitle for the presentations that show them; it just isn't
+load-bearing. This is what principle 2 ("never fail silently") depends on in practice, and it means
+the fallback of folding the remaining time into the tile label (§10) is a nicety, not a fix.
+
+**The active tile inverts, and that is the platform's doing, not ours.** A Quick Settings tile
+cannot specify a background: the system draws it from `Tile.state`, so `STATE_ACTIVE` while a
+snooze runs gives the same light-when-off / dark-when-on treatment as the system's own Do Not
+Disturb tile (maintainer, 2026-08-12). Matching it is deliberate — a user reading the shade for
+"why is my phone quiet" sees the two tiles agree — and it is free, so nothing here is worth
+hand-rolling. What it costs is a constraint on the icon: the system tints the glyph to contrast
+with whichever background it just drew, so the *same* asset is rendered dark-on-light and
+light-on-dark, and it has to hold up both ways.
+
+Two consequences for the icon itself. It carries the armed/inactive distinction alone, so the
+tinted-silhouette treatment (§4.2's icon note) has to read at a glance in both states with no text
+beside it — and in both tints, which is the sharper half of that requirement, since a mark can
+survive one and fill in on the other. And the countdown is *only* in the notification, so a snooze whose notification the user
+has never granted permission for has no visible status at all — which is why `POST_NOTIFICATIONS`
+is requested rather than merely declared (§5.2).
+
 ### 4.3 Notification (while armed)
 
-Channel `snooze_active`, `IMPORTANCE_LOW`, ongoing, not dismissible while the service runs.
+Channel `snooze_active`, `IMPORTANCE_DEFAULT`, ongoing, not dismissible while the service runs.
 
 ```
-🌙  Snoozing at Home
-    Ends when you leave, or in 3h 40m
+🌙  Snoozing                          3:40:12
+    Ends when you leave
     [ End now ]   [ +30 min ]
 ```
 
 `+30 min` matches the sheet's step (§4.4), so extending uses the same mental unit as choosing.
-When the snooze has no time bound the second line reads `Ends when you leave` and the action becomes
-`Set a time`, opening the sheet again.
+
+**The countdown is the platform's chronometer, not text Snoozemo formats.** A notification is only
+rebuilt on a state change, so a remaining time written into the body is the value it had when the
+snooze was armed — still reading `8h 0m left` seven hours later, which is worse than showing nothing
+because it looks current. `setUsesChronometer` against the absolute cap ticks by itself and cannot
+go stale. It also means the body says only what *kind* of snooze this is — `Ends when you leave`,
+`Wi-Fi only`, `Timer only` — which is the part that actually needs words.
+
+**Not `IMPORTANCE_LOW`, deliberately** (maintainer, 2026-08-12) — this started low, on the reasoning
+that an ongoing status card should stay out of the way, and that was wrong for this particular card.
+
+Low importance groups it, which costs two things this notification cannot afford: it is **less
+discoverable**, and both `End now` and `+30 min` sit behind an extra tap to expand the group. That
+is the wrong shape for a product whose whole claim is one tap to arm and one tap to end. It also
+has real work to do beyond looking tidy — it is what tells the user the snooze **is** working, and
+what explains why their other notifications have gone quiet. A card that answers "why is my phone
+silent?" is worth nothing filed where it isn't found.
+
+The usual cost of raising importance doesn't apply here either: during a snooze the premise is that
+the user **isn't looking at their phone**, and the phone is in Do Not Disturb regardless, so a more
+prominent card interrupts nothing. The trade is discoverability against adjacency to the system's
+own entry, and discoverability wins.
+
+One practical consequence: **a channel's importance is fixed at creation.** Once the user can see a
+channel the level is theirs, and later calls with a different value are ignored — so a device that
+already ran a build at the old level keeps it until its app data is cleared. Pre-release that is a
+testing note and nothing more. After release the same change would need a new channel id, and by
+then leaving existing users where they are is the *correct* behavior, not a workaround.
+
+Endings and failures are unaffected: they stay on `snooze_ended` (`IMPORTANCE_DEFAULT`), which they
+already were.
+
+**The status bar carries the mark for free.** An ongoing notification puts its small icon in the
+status bar, so the tile's glyph is on screen for the whole snooze — a persistent, always-visible
+"this is why your phone is quiet" that costs nothing extra and survives the shade being closed.
+That makes it a third place the same 24 dp silhouette has to read (§4.2's tile, both tints, and
+here), at the smallest size of the three and tinted to a single color by the system. It is also the
+one status surface that disappears entirely if `POST_NOTIFICATIONS` is denied, which is the other
+half of why the permission is requested rather than merely declared (§5.2).
+
+Endings and failures are not part of that question: they stay on `snooze_ended`
+(`IMPORTANCE_DEFAULT`), because those have to be *noticed* rather than filed.
+
+The cost is that the silent section collapses, so the countdown and `End now` / `+30 min` may need
+an expand to reach. On a 1×1 tile that carries no status (§4.2) this notification is the only place
+the snooze is legible, so how much survives collapsing is a real question and a device check
+(`TODO.md`) — including whether the shade ever bundles the two cards together.
 
 ### 4.4 Choosing an end condition
 
@@ -484,7 +627,7 @@ val ruleId = nm.addAutomaticZenRule(rule)   // requires ACCESS_NOTIFICATION_POLI
 
 `CONDITION_ID` is a stable app-owned URI, e.g. `Uri.parse("snoozemo://snooze")`.
 
-On API 33–34 use the older `AutomaticZenRule(name, owner, configurationActivity, conditionId, policy,
+On API 34 use the older `AutomaticZenRule(name, owner, configurationActivity, conditionId, policy,
 interruptionFilter, enabled)` constructor. `owner` may be null provided `configurationActivity` is
 set — a `ConditionProviderService` has not been necessary since API 29, when
 `setAutomaticZenRuleState` was introduced as its replacement, and `ConditionProviderService` is
@@ -709,14 +852,34 @@ background-start restriction and the while-in-use permission restriction:
 
 ```kotlin
 // TileService.onClick
-val pi = PendingIntent.getActivity(this, 0, Intent(this, ArmTrampolineActivity::class.java),
+val pi = PendingIntent.getActivity(this, 0, Intent(this, TileTrampolineActivity::class.java),
     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 startActivityAndCollapse(pi)   // PendingIntent overload, API 34+; Intent overload deprecated in 34
 ```
 
-`ArmTrampolineActivity` starts `SnoozeService` in `onCreate` — before any UI — so arming never waits
+`TileTrampolineActivity` starts `SnoozeService` in `onCreate` — before any UI — so arming never waits
 on rendering. The FGS start and the subsequent location access are then both squarely inside
-documented exemptions. Ending a snooze needs no trampoline; stopping a service is unrestricted.
+documented exemptions.
+
+**Ending goes through it too.** An earlier version routed `End now` straight to the service on the
+grounds that stopping work is unrestricted — which confused *stopping* a service, something the app
+may always do, with **starting** one to ask it to stop, which is what an end tap does once the
+system has killed the service mid-snooze. That start is subject to the same background restriction
+as the arm's, and a refusal there is not a slow exit but no exit: the tap the user reaches for to
+get their phone back is the one that must never fail (§7).
+
+**Anything else this activity does is queued, not called.** `startService` only *posts*
+`onStartCommand` to the same main looper, so work done synchronously after that line — including the
+binder call inside a permission request — runs *before* the arm rather than after it. The arm keeps
+the thread; everything else takes what's left.
+
+**The trampoline is also where the tile-first user is asked for notification permission.** The tile
+can be added straight from the Quick Settings editor, so someone may arm many times without ever
+opening the app, and the app screen's request never runs for them. Given §4.2 — the tile is 1×1 and
+icon-only, so it carries no status — that user would have an armed snooze with no visible state
+anywhere, and a failed arm with no explanation. This activity is the one place the tile-first path
+passes through. It is skipped on the lock screen, where a dialog can't be answered and arming locked
+is a supported case, and the platform's own two-refusal cap stops it becoming a nag.
 
 It uses a **transparent** theme (`Theme.Material3.DayNight.Dialog` over a translucent window), not
 `Theme.NoDisplay`, because it hosts the §4.4 sheet and issues the `READ_CALENDAR` runtime request —
@@ -829,11 +992,66 @@ chosen value, and `+30 min` may not push past it.
 The cap uses `AlarmManager.setAndAllowWhileIdle` — **inexact on purpose**. Exact alarms need
 `SCHEDULE_EXACT_ALARM`, which is no longer auto-granted on Android 14+ and carries its own Play
 policy scrutiny, and a cap that fires at 8h04m instead of 8h00m is indistinguishable to the user.
-A coroutine timer inside the service handles the normal case; the alarm is the belt-and-braces
-version that survives the service dying.
+
+**The alarm is the cap; there is nothing behind it.** An earlier draft here described a coroutine
+timer inside the service handling the normal case with the alarm as belt-and-braces. That timer was
+never built and should not be: it dies with the process, so it would only ever cover cases the
+alarm already covers, while making the alarm look optional. The consequence is a rule the code has
+to hold: **a snooze whose cap alarm could not be scheduled does not arm**, and a reboot that cannot
+reschedule it ends the snooze instead of restoring it (§8.3). A snooze with no time bound is the
+one state this app must never reach.
+
+**A release the platform refuses keeps the snooze — unless there is nothing left to release.** The
+record is what retries: it holds the cap alarm, the notification, and the tile's `Snoozing`, so the
+next cap check or tap tries again, and clearing it would leave the rule on with nothing that knows
+to retry. But that reasoning only holds while a rule still exists to drive. Where the failure says
+otherwise — policy access revoked (the platform deletes the app's rules), the rule missing, the
+rule switched off — every retry would fail identically forever, and keeping the record strands the
+app claiming `Snoozing` over a phone that is already ringing. So those complete the end. Only a
+platform refusal of a rule that still exists is worth retrying.
 
 Not implemented: the screen-unlock check-in from the original options. It is a worse version of the
 location check — same information, more false positives, more code.
+
+### 7.1 The escalation ladder is one decision, not five copies
+
+> **Status: decided, not yet built.** The behavior below is what the code already does; what
+> changes is where the decision lives. Tracked in `TODO.md`.
+
+When a release is refused, the app escalates: store the obligation, schedule an alarm, retry in
+process, tell the user, give up. Today that sequence is written out **separately in five entry
+points** — the service's recordless and recorded escalations, the cap alarm's receiver, the boot
+receiver, and the trampoline's no-service fallback — because each is reached when a different
+mechanism has failed and none can assume the others are available.
+
+That duplication is the design problem. Every copy has to independently remember the same
+non-obvious rules, and over one review pass of this code, nine separate findings were instances of
+one of them being forgotten: persisting *before* yielding rather than at the give-up, checking
+whether a write or a post actually took rather than that it was attempted, retiring the previous
+successor before arming a new one, clearing the obligation when the rule is confirmed off. Four of
+those were introduced by the fix to the previous one. A ladder whose whole purpose is "never leave
+the phone silently quiet" cannot be a shape where each site is trusted to remember.
+
+**So the ladder becomes a pure decision in `:core`** — the current state of what has actually
+succeeded in, the next step out — with each call site reduced to *advance, perform, report the
+result*. Three properties make it worth the move:
+
+- **The ordering is stated once.** The obligation is durable and everything after it is not: an
+  alarm can be canceled by an unrelated cleanup, and an in-process retry dies with an ordinary
+  started service. So it is written first, always, and the ordering is a property of the decision
+  rather than a comment repeated five times.
+- **The inputs are "did this take", never "did we try".** A refused `commit`, an alarm the platform
+  declined and a `notify` that threw are all *not done*, and each one has to move the ladder on
+  rather than be assumed.
+- **Running out is a named state.** `Exhausted` is reachable and explicit, so no path can fall off
+  the end while still telling the user something is trying — which is the specific dishonesty
+  §4.5's copy rules exist to prevent.
+
+The testing argument is the strongest one. **None of these branches is reachable without a platform
+that refuses a zen write**, so no device test and no emulator can exercise them; today they are
+argued rather than executed, and review is the only thing checking them. As a pure function over a
+state, the whole ladder becomes reachable from a JVM test, which is exactly the reasoning §11
+already applies to `SnoozeController`.
 
 ---
 
@@ -852,10 +1070,32 @@ notification to say so — `Snoozing at Home · location paused, ends in 3h 40m`
 `Resume tracking` action. Tapping a notification action is a documented while-in-use exemption, so
 that tap fully restores tracking.
 
+**Re-asserting is for resuming, never for ending.** A wake-up whose purpose is to *end* the snooze —
+the user's `End now`, or a boot that could not reschedule the cap — takes over the persisted record
+without touching the zen rule, then turns it off. Re-asserting first would silence the phone for the
+moment before the release, and a release refused after that leaves it silenced behind the very exit
+the user chose. Ending needs the record, not the rule, and it never assumes what state the platform
+was in.
+
+**A released record says so on disk, because erasing it can fail.** The record is the app's evidence
+that a snooze is running, so when a release succeeds but the erase doesn't, what is left behind is
+evidence for something that is over — and every wake-up that isn't the erase retry restores from it,
+re-asserting the rule and taking the phone quiet again until the old cap, with nothing the user did
+behind it. So the record carries a released marker, written *before* the erase is attempted, and a
+marked record reads as absent everywhere: restoring, adopting, refusing a duplicate arm, and the
+tile. The marker is not a guarantee — it is another write to the same store that just refused one —
+but it turns a likely wrong state into an unlikely one, and the cap still bounds whatever survives.
+
 ### 8.2 Permission revoked mid-snooze
 
 `ACCESS_NOTIFICATION_POLICY` revoked, or location permission downgraded to coarse or denied: end
 the snooze, notify with the reason. Do not attempt to limp along silently.
+
+Revocation is the case that makes §7's release rule matter. Turning the rule off is itself refused
+once access is gone — the platform has already deleted the rule — so a release path that retried on
+every failure would never complete this ending, and the promise above would go unkept while the app
+sat showing `Snoozing`. The failure means there is nothing left silencing the phone, so the snooze
+ends on it rather than retrying against it.
 
 ### 8.3 Reboot
 
@@ -863,15 +1103,95 @@ the snooze, notify with the reason. Do not attempt to limp along silently.
 the while-in-use exemption list — so a service started from boot gets no location, and no unredacted
 SSID. There is no way around this without `ACCESS_BACKGROUND_LOCATION`.
 
-Behavior on boot with an unexpired snooze: re-assert the zen rule (this needs no location and works
-fine), start the service in degraded mode, and post the same `Resume tracking` notification as §8.1.
-The duration cap continues from its original start time — reboots do not extend a snooze.
+Behavior on boot with an unexpired snooze: **re-arm the cap alarm first**, then re-assert the zen
+rule (this needs no location and works fine), start the service in degraded mode, and post the same
+`Resume tracking` notification as §8.1. The duration cap continues from its original start time —
+reboots do not extend a snooze.
+
+The cap comes first and is armed straight from the persisted record, without going through the
+service, because it needs only an `AlarmManager` handle — so it still lands if starting the service
+from `BOOT_COMPLETED` is refused.
+
+**Nothing on the release side may depend on the service starting.** The cap alarm is one-shot, so by
+the time its receiver runs the alarm is spent: if the service cannot be started there, no scheduled
+thing is left to end the snooze. Same for the boot path once its cap has failed to reschedule. So
+both release the rule directly from the receiver — a few binder calls, well inside a receiver's
+budget, driving Snoozemo's own rule off exactly as the controller would (§5.6, never anyone else's)
+— and reschedule a short retry if even that is refused. A cap that fires late is a far smaller
+failure than one that never fires; and when nothing schedulable is left at all, the user is asked to
+end it by hand rather than left with a quiet phone and no explanation.
+
+**An unknown state is retryable; only a state known to be safe ends a snooze.** The two are easy to
+conflate and the cost is asymmetric. "The rule is gone" ends the snooze and erases the record; "we
+could not find out" must not, because the rule may still be silencing the phone and the record is the
+only thing that could ever turn it off. So a failed *lookup* is a platform refusal, not a missing
+rule, and a refused re-assertion on restore keeps the snooze rather than declaring it over.
+
+**A record whose cap has passed is released, never re-asserted.** Restoring one that already expired
+would silence the phone again on the way to ending it — briefly if the release works, indefinitely if
+it doesn't. The clock is checked before the rule.
+
+**A scheduled wake-up carries its own purpose.** The cap and the record-erase retry are separate
+alarms with separate actions, because a recreated service reads them oppositely: a cap wake-up picks
+the record back up and re-asserts the rule, while an erase retry exists to dispose of a record whose
+snooze already ended. Sharing one alarm meant a retry could restart the process, be read as a cap,
+and silence the phone again over a snooze the user had ended. For the same reason, restoring happens
+in `onStartCommand`, where the action is known, and not in `onCreate`, where it isn't.
+
+**A spent cap alarm always leaves a successor.** The alarm is one-shot, so once it has fired,
+anything it left undone — a release the platform refused, a record that wouldn't erase — would
+otherwise never be revisited. Every path that consumes the alarm without finishing the job schedules
+a short retry, and restoring a snooze re-arms the cap from the record unconditionally rather than
+trusting an alarm that may have been the very thing that woke the process.
+
+**The cap is one absolute instant, settled before anything is scheduled or recorded.** The alarm and
+the record must name the same moment. Deriving it twice — once for the alarm, once again from a
+later clock reading for the record — puts them milliseconds apart, and an alarm that fires just
+*before* its own record counts as expired is a spent alarm and a snooze with no duration exit left. And if the cap itself cannot be rescheduled, the snooze **ends**
+rather than being restored: restoring would re-assert the rule with no guaranteed exit behind it,
+which is §7's one forbidden state. The rule is driven off explicitly rather than assumed cleared by
+the reboot.
 
 Alternative considered and rejected: end the snooze on every reboot. Simpler, but an OTA update
 rebooting the phone at 2 a.m. would unsilence a bedtime snooze, which is the exact harm the app
 exists to prevent. Make this a setting (`On restart: resume / end`), defaulting to resume.
 
-### 8.4 Others
+### 8.4 The system putting us in the sin bin
+
+The failure this section exists for is **not** the user revoking a permission. That one fails safe:
+§8.2, the platform deletes the rule, so nothing is silencing the phone and calls ring through. The
+dangerous direction is the opposite one — **the rule stays active while the thing that would turn it
+off stops being allowed to run.** Then DND holds and nothing in the app is scheduled to end it,
+which is principle 1's failure arriving through no fault of the user.
+
+Three mechanisms can do that, and they are not equally survivable:
+
+| Mechanism | What it does to us | Survivable? |
+|---|---|---|
+| **App Standby Buckets** — `restricted` | `setAndAllowWhileIdle` and jobs throttled to roughly once a day | Yes, but the cap can be a day late |
+| **OEM battery management** — One UI Sleeping Apps and friends (§10) | Alarms and jobs cancelled, process not restarted | Partially — §10's mitigations |
+| **Force-stop** by the user | Alarms cancelled **and** broadcasts no longer delivered, including `BOOT_COMPLETED`, until the app is next launched manually | **No in-app recovery** |
+
+**Buckets are the one to keep in proportion.** Arming is a tile tap, and app interaction is the
+primary signal that promotes an app toward the active bucket, so a user who armed minutes ago is
+very unlikely to be sitting in `restricted`. The exposure is long snoozes on a phone where Snoozemo
+is otherwise unused. Measurable with `adb shell am set-standby-bucket`; on the hardware list.
+
+**Force-stop has no fix, and the honest mitigation is the one the platform already provides.** A
+force-stopped app cannot schedule, cannot receive broadcasts, and cannot be woken by anything short
+of the user opening it. But force-stop also removes the ongoing notification, so the user is left
+looking at DND on with no Snoozemo card, and the system's own DND toggle turns it off. Snoozemo
+should not pretend to recover from this; it should be sure it never *needs* to, which is what §8.1's
+alarm-first escalation is for.
+
+**Doze deferral is the mild case, not one of these.** An inexact alarm held by Doze is not dropped —
+it fires at the next maintenance window or when the device leaves Doze, and ordinary activity (an
+incoming call, the user unlocking) ends Doze. So a cap that misses its moment fires shortly after
+the phone next does anything, and the staleness is bounded by device use rather than open-ended.
+Worth stating because it is easy to read §7's "inexact on purpose" as a much weaker guarantee than
+it is.
+
+### 8.5 Others
 
 | Case | Behavior |
 |---|---|
@@ -894,7 +1214,9 @@ not measurements — `TODO.md`'s hardware-verification list says to measure them
 is monitored by a system process using **network location only**, never GPS (§6.10), so an idle
 geofence rides on location work the device is already doing. Our additions are a Wi-Fi network
 callback (event-driven, free) and a 15–30 minute `WorkManager` backstop (a handful of wakeups over a
-4-hour snooze). There is no ongoing notification and no process of ours running between events.
+4-hour snooze). There is no foreground service and no process of ours running between events — the
+ongoing notification this flavor does post (§3.4) costs nothing, since a posted notification holds
+no process up and wakes nothing.
 
 **`direct` flavor (foreground service)** — higher, and dominated entirely by location fix frequency,
 which §6.7's duty cycle drives toward zero in the common case:
@@ -1010,11 +1332,21 @@ Application ID `app.snoozemo`; module packages hang off it (`app.snoozemo.tile`,
 `app.snoozemo.dnd`, `app.snoozemo.presence`). The zen rule's condition URI is
 `snoozemo://snooze` (§5.3).
 
-**minSdk 33** (Android 13) — gives `requestAddTileService`, `POST_NOTIFICATIONS`, and modern Wi-Fi
+**minSdk 34** (Android 14) — gives `requestAddTileService`, `POST_NOTIFICATIONS`, and modern Wi-Fi
 APIs without version branches, and covers every Pixel and Samsung flagship still receiving updates
-in 2026. **targetSdk 36** (Android 16) — Play requires 36 for new uploads and updates from
-31 Aug 2026, so start there. The API 35 `AutomaticZenRule.Builder` / 4-arg `Condition` paths still
-need SDK-33/34 fallbacks (§5.3, §5.4); that is the only significant version branching in the app.
+in 2026.
+
+The floor started at 33 for exactly those reasons, and was raised to 34 by the maintainer once the
+tile landed (2026-08-11). API 33's `startActivityAndCollapse` takes an `Intent`; the overload that
+takes a `PendingIntent` — the one that isn't deprecated, and the one every current example uses — is
+API 34+. Carrying 33 meant a version branch plus a deprecation suppression on the single hottest
+path in the app, the tile tap that arms a snooze (§4.1, §6.9), which is the last place that should
+carry a rarely-exercised second code path. Android 13 devices are the cost; a correct, single-path
+arm is the benefit, and the arm path is goal 1.
+
+**targetSdk 36** (Android 16) — Play requires 36 for new uploads and updates from 31 Aug 2026, so
+start there. The API 35 `AutomaticZenRule.Builder` / 4-arg `Condition` paths still need an SDK-34
+fallback (§5.3, §5.4); that is the only significant version branching left in the app.
 
 ### Data
 

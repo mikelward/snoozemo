@@ -1,0 +1,1634 @@
+package app.snoozemo.snooze
+
+import android.app.NotificationManager
+import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.util.Log
+import app.snoozemo.core.ActiveSnooze
+import app.snoozemo.core.DegradationCause
+import app.snoozemo.core.EndReason
+import app.snoozemo.core.PolicyAccess
+import app.snoozemo.core.PolicyAccessAction
+import app.snoozemo.core.PolicyAccessChange
+import app.snoozemo.core.SnoozeController
+import app.snoozemo.core.SnoozeState
+import app.snoozemo.core.ZenFailure
+import app.snoozemo.core.ZenOutcome
+import app.snoozemo.core.ZenTrigger
+import app.snoozemo.dnd.AndroidZenController
+import app.snoozemo.dnd.PrefsZenRuleIdStore
+import app.snoozemo.ui.MainActivity
+import java.time.Clock
+import java.time.Duration
+import java.time.Instant
+
+private const val TAG = "SnoozeService"
+
+/**
+ * Owns the running snooze: the state machine, the record, the cap alarm, the
+ * ongoing notification, and the policy-access watch.
+ *
+ * A service rather than the activity, because every one of those has to outlive
+ * whatever screen the user was looking at. Phase 1 kept the policy-access
+ * receiver on the activity, so a revocation while backgrounded went unnoticed
+ * until the app was reopened; that lives here now, for as long as a snooze is
+ * running (`TODO.md`, flagged by Codex on PR #5).
+ *
+ * Not a foreground service in the `play` flavor: SPEC.md §3 puts departure
+ * detection on the Geofencing API precisely so there is no long-running service
+ * to justify. The `direct` flavor's foreground service arrives in Phase 7 behind
+ * `PresenceMonitor`.
+ */
+class SnoozeService : Service(), SnoozeController.Listener {
+
+    private lateinit var store: ActiveSnoozeStore
+    /**
+     * Built on first use, not in `onCreate`, because constructing it creates
+     * the two notification channels — two synchronous binder calls.
+     *
+     * `SnoozeNotifications.warm` normally pays for those at process start, but
+     * a cold tile tap is exactly the case where it may not have finished: the
+     * tap is what started the process. Constructing here would then have put
+     * both calls between the tap and `STATE_TRUE`, which is the one stretch of
+     * this app nothing may sit in (`AGENTS.md`, the arm path).
+     *
+     * Safe because no path touches this before the zen write on a *successful*
+     * arm: `ARMING` writes the record and nothing else, and the ongoing
+     * notification goes up on `ARMED`. The paths that do touch it earlier are
+     * the failure ones — a cap that wouldn't schedule, an arm that was refused
+     * — where there is no snooze left to be quick for.
+     */
+    private val notifications: SnoozeNotifications by lazy {
+        SnoozeNotifications(applicationContext)
+    }
+    private lateinit var pendingFailure: PendingFailureStore
+    private lateinit var controller: SnoozeController
+
+    /** Shared with the controller, so the cap is read from one clock only. */
+    private val clock: Clock = Clock.systemUTC()
+
+    /**
+     * Whether the last attempt to erase the record actually reached disk. False
+     * keeps this service alive, because it is the only thing that will retry.
+     */
+    private var recordErased: Boolean = true
+
+    /** Bounds the in-process erase retry of [forget]; reset by a success. */
+    private var eraseRetries: Int = 0
+
+    /**
+     * Whether a release is still owed for a rule that nothing on disk describes
+     * — and therefore whether this service may stop.
+     *
+     * The counterpart of [recordErased], for the opposite leftover. A record
+     * with no release is bounded by its own cap; a *release* with no record has
+     * nothing bounding it at all, so the process holding the retry is the only
+     * thing left. It stays up until the rule is off or the attempts run out.
+     */
+    private var owedRelease: Boolean = false
+
+    /** Bounds [keepTryingRecordlessRelease]; reset by a success. */
+    private var releaseRetries: Int = 0
+
+    /**
+     * Set while [arm] is between asking to arm and acting on the answer.
+     *
+     * `IDLE` is delivered from inside `beginArming`, so its callback runs while
+     * [arm] still has cleanup to decide — including, on the worst refusal, an
+     * in-process release retry. A `stopSelf` from that callback would be
+     * queued before the retry is posted and would cancel it at `onDestroy`.
+     */
+    private var decidingArm: Boolean = false
+
+    /**
+     * Holds the in-process release retry, so it can be taken back the same way
+     * the erase retry can — and for the same reason: a snooze armed in the
+     * meantime owns the rule, and this would turn it off underneath them.
+     */
+    private val releaseRetryHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * Which record [forget] is entitled to erase — the `startedAt` of the
+     * snooze whose release it is finishing.
+     *
+     * Kept because erasing outlives its snooze. A retry can be durable (an
+     * alarm) or merely delayed (the handler below), and either can still be
+     * outstanding once the user has armed a *new* snooze; the record on disk is
+     * then the new one, and erasing it cancels its cap while its zen rule stays
+     * on. Tracked from the last transition that wrote a record, or handed in by
+     * the alarm, so `forget` can tell the two apart
+     * (`ActiveSnooze.retryStillApplies`).
+     */
+    private var erasing: Instant? = null
+
+    /**
+     * Holds the in-process erase retry so it can be taken back.
+     *
+     * A pending retry outlives what it was queued for: the record can be
+     * cleared by something else, the service can stop, and the user can arm a
+     * *new* snooze — all within the retry's delay. Firing then would erase the
+     * new snooze's record and cancel its cap while its rule stayed on, which is
+     * the failure the retry exists to prevent, aimed at the wrong snooze.
+     */
+    private val eraseRetryHandler = Handler(Looper.getMainLooper())
+
+    /** Restoring is attempted once per service instance, from onStartCommand. */
+    private var restored: Boolean = false
+
+    /**
+     * The id of the most recent start, so shutdowns outside `onStartCommand`
+     * can name one.
+     *
+     * A bare `stopSelf()` stops regardless of what is queued behind it, and
+     * transitions reach this class from places that have no `startId` to hand —
+     * the access broadcast, an in-process retry, the controller settling after
+     * a release. Stopping on one of those can discard a start already queued
+     * behind it, and the one that matters is `ACTION_ARM`: a tile tap that
+     * races a cap-driven end would be dropped, which is the whole product's
+     * one interaction failing silently. Passing the latest id makes the
+     * platform decline the stop when a newer start has arrived.
+     */
+    private var latestStartId: Int = 0
+
+    /**
+     * Why the last arm was refused, so [arm]'s unwind can tell the two kinds of
+     * refusal apart.
+     *
+     * `beginArming` only returns a boolean, and the difference matters here:
+     * a refusal that means *nothing is silencing the phone* leaves nothing to
+     * clean up, while `PLATFORM_REFUSED` means the platform declined a change
+     * to a rule that still exists — and, from the disabled-rule confirmation,
+     * can mean `STATE_TRUE` landed and the reset back to `STATE_FALSE` did not.
+     */
+    private var lastArmFailure: ZenFailure? = null
+
+    /**
+     * Set while [arm] is unwinding a snooze that armed the rule but couldn't be
+     * recorded, so the release doesn't post "Snooze ended" on top of the
+     * "Couldn't start the snooze" the user is already reading.
+     */
+    private var unwindingFailedArm: Boolean = false
+
+    private val accessReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) = reconcilePolicyAccess()
+    }
+
+    /**
+     * Whether [accessReceiver] actually registered, so teardown only
+     * unregisters something that exists — and so a failure to register reads as
+     * the known degradation it is rather than a surprise at `onDestroy`.
+     */
+    private var accessReceiverRegistered: Boolean = false
+
+    /**
+     * Acts on the current policy-access state, whether a broadcast or a wake-up
+     * brought us here.
+     *
+     * The broadcast says only that access *changed*, for grants and revocations
+     * alike, so this reads the current state rather than inferring a direction
+     * (SPEC.md §5.2) — which is also what makes it safe to call from anywhere.
+     */
+    private fun reconcilePolicyAccess() {
+        // Contained because of where it runs: on every wake-up, including the
+        // cap check. An escaping exception here would unwind `onStartCommand`
+        // before the branch that actually ends the snooze, and the alarm that
+        // woke us is spent by then — a phone left quiet by a *diagnostic*.
+        //
+        // Nothing is the right outcome for a failed read: acting on a guess
+        // would either end a healthy snooze or create a rule on a hunch, and
+        // the record and its cap are both untouched, so the next wake-up asks
+        // again with nothing lost.
+        val access = runCatching { zen.policyAccess() }.getOrElse {
+            Log.e(TAG, "Reading policy access failed; leaving the snooze as it is.", it)
+            return
+        }
+        when (PolicyAccessChange.resolve(access, controller.active != null)) {
+            // The promise of SPEC.md §8.2, kept when it happens rather than when
+            // someone next opens the app.
+            PolicyAccessAction.EndSnooze -> controller.end(EndReason.LOST_CAPABILITY)
+            PolicyAccessAction.EnsureRule -> zen.ensureRule()
+            PolicyAccessAction.None -> Unit
+        }
+    }
+
+    private val zen by lazy {
+        AndroidZenController(
+            context = applicationContext,
+            store = PrefsZenRuleIdStore(applicationContext),
+            configurationActivity = ComponentName(this, MainActivity::class.java),
+        )
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        store = ActiveSnoozeStore(applicationContext)
+        pendingFailure = PendingFailureStore(applicationContext)
+        controller = SnoozeController(zen, clock, this)
+
+        // Contained, like the notification channels are at their own source,
+        // and for the same reason: this is `onCreate`, so a throw here takes
+        // the service down before `onStartCommand` runs at all. On a cap
+        // wake-up that is the snooze's last exit — the alarm is spent, and its
+        // receiver has already read the accepted `startService` as sufficient
+        // and skipped its own release.
+        //
+        // Losing the receiver is a real degradation, not a shrug: a revocation
+        // while the app is backgrounded goes unnoticed until something else
+        // wakes the service. But every wake-up calls `reconcilePolicyAccess`
+        // anyway, so the promise of SPEC.md §8.2 is late rather than lost —
+        // and a snooze that ends late still beats a phone left silent because
+        // a broadcast registration failed.
+        accessReceiverRegistered = runCatching {
+            registerReceiver(
+                accessReceiver,
+                IntentFilter(NotificationManager.ACTION_NOTIFICATION_POLICY_ACCESS_GRANTED_CHANGED),
+                RECEIVER_NOT_EXPORTED,
+            )
+        }.onFailure {
+            Log.e(TAG, "Registering the policy-access receiver failed; wake-ups still reconcile.", it)
+        }.isSuccess
+
+        // Restoring is deliberately NOT here. onCreate cannot see which action
+        // started the service, and one of them — the erase retry — exists to
+        // clean up a record whose snooze already ended. Restoring first would
+        // read that leftover as a live snooze and re-assert the rule, silencing
+        // the phone again with no user action behind it. onStartCommand knows
+        // the action, so the decision belongs there.
+    }
+
+    /**
+     * Picks a snooze back up after process death (SPEC.md §8.1, §8.3): the rule
+     * is re-asserted rather than assumed to have survived, and a record whose
+     * cap passed while we were dead ends immediately.
+     */
+    private fun restoreIfNeeded() {
+        if (restored || controller.active != null) return
+        restored = true
+        store.load()?.let { record ->
+            erasing = record.startedAt
+            // The alarm first, and unconditionally. Whatever killed the process
+            // may also have consumed the cap alarm — the alarm firing is itself
+            // one of the things that starts this service — so a restore that
+            // trusted the old alarm could re-assert the rule with nothing left
+            // to end it. Re-arming from the record is idempotent when the alarm
+            // is still pending, and the record's expiry is unchanged, so this
+            // cannot extend a snooze.
+            if (!CapAlarm.arm(applicationContext, record.capExpiresAt.toEpochMilli())) {
+                // No cap means no guaranteed exit, so don't restore into one.
+                // Released directly rather than through the controller: it has
+                // not been handed the record yet, so `end()` here would run with
+                // no active snooze and — on a refusal — return without clearing
+                // the record or leaving anything to retry. The direct path
+                // carries the full escalation instead (§8.3).
+                notifications.showCouldNotResume()
+                releaseDirectly(applicationContext, EndReason.LOST_CAPABILITY)
+                return@let
+            }
+            controller.restore(record)
+        }
+    }
+
+    /**
+     * Takes over the persisted record for a wake-up that is going to end it.
+     *
+     * Restoring would re-assert the zen rule on the way past — right after
+     * process death, wrong here: an `End now` tap that recreates this service
+     * would turn DND on for the moment before turning it off, and a release
+     * refused after that leaves the phone quiet behind an explicit exit. The
+     * cap alarm isn't re-armed either, since the release is about to cancel it;
+     * the caller re-arms if the release turns out to have been refused.
+     */
+    private fun adoptIfNeeded() {
+        if (restored || controller.active != null) return
+        restored = true
+        store.load()?.let {
+            erasing = it.startedAt
+            controller.adopt(it)
+        }
+    }
+
+    /**
+     * Makes sure a snooze that survived a refused release still has its cap.
+     *
+     * Ending is what normally cancels the cap alarm, so a refusal has to leave
+     * one behind — otherwise a release the platform declined has quietly spent
+     * the app's last exit. Re-arming at the record's own expiry is idempotent
+     * while the original is still pending and cannot extend the snooze.
+     *
+     * When even that is refused, this escalates the same way the no-service
+     * path does rather than stopping at a message. The cap is the *scheduled*
+     * exit; with neither it nor the release in place, the only things left are
+     * a tile and a notification the user has to notice — and this service is an
+     * ordinary started one, so it can be gone moments later. A retry alarm is
+     * the durable successor, identified by `startedAt` so it can only end the
+     * snooze it was armed for even if the process dies and the user arms
+     * another (SPEC.md §8.1).
+     */
+    private fun ensureCapAfterRefusedEnd() {
+        val running = controller.active ?: return
+        if (CapAlarm.arm(applicationContext, running.capExpiresAt.toEpochMilli())) return
+
+        Log.e(TAG, "The release was refused and its cap could not be re-armed; retrying the end.")
+        if (CapAlarm.armReleaseRetry(
+                applicationContext,
+                System.currentTimeMillis() + RETRY_MS,
+                running.startedAt.toEpochMilli(),
+            )
+        ) {
+            // `Couldn't end the snooze — trying again` is true now: something is.
+            notifications.showFailure(ZenFailure.PLATFORM_REFUSED, whileArming = false)
+            return
+        }
+
+        // Nothing schedulable at all, so the app cannot promise to end this
+        // itself and must not say it is trying. The stuck-rule card is the
+        // honest message and the only one carrying an exit — and with a record
+        // still on disk its `Unsnooze` ends the snooze through the controller,
+        // so the record, the cap and the tile all come down with the rule.
+        Log.e(TAG, "No release retry could be scheduled either; handing the user the exit.")
+        if (!notifications.showStuckRule()) {
+            Log.e(TAG, "The stuck-rule notice could not be posted; the tile is the last exit left.")
+        }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Recorded before anything can transition, since a transition inside
+        // this call is exactly when a shutdown gets decided without an id.
+        latestStartId = startId
+
+        // Pick the record back up first — but how depends on what this wake-up
+        // is for. The arm is starting a new snooze and the erase retry is
+        // disposing of an old one's leftovers, so neither loads anything; the
+        // three release actions adopt the record without re-asserting the rule;
+        // everything else is a genuine restore.
+        //
+        // `ACTION_RELEASE_STUCK` belongs with the ends, not the restores, and
+        // that is not bookkeeping. Restoring asserts `STATE_TRUE` on the way
+        // past — right for a process that died mid-snooze, wrong for a tap
+        // whose entire purpose is to turn Do Not Disturb *off*. On a cold
+        // process with a live record behind a stale card, restoring first would
+        // silence the phone and then try to un-silence it, and a refusal in
+        // between leaves the user's own exit having caused the silence.
+        when (intent?.action) {
+            ACTION_ARM, ACTION_ERASE_RETRY -> Unit
+            ACTION_END, ACTION_CAP_LOST, ACTION_RELEASE_STUCK -> adoptIfNeeded()
+            else -> restoreIfNeeded()
+        }
+
+        // Then reconcile with the platform, on every wake-up except the arm.
+        // After the restore, not before: this reads whether a snooze is running,
+        // and before the record is picked back up the answer is always "no".
+        //
+        // The access receiver is registered dynamically because this broadcast
+        // is not on the manifest-receiver exemption list, so it only exists
+        // while this service does — and an ordinary started service can be
+        // stopped when the app goes to the background. A revocation during that
+        // gap goes unseen, leaving the record, tile and notification claiming a
+        // snooze the platform has already dropped. Every later wake-up is a
+        // chance to notice, and they are all off the arm path.
+        if (intent?.action != ACTION_ARM) reconcilePolicyAccess()
+
+        // An obligation that outlived its process gets discharged by whatever
+        // starts us next, whatever that start was for. The flag is the only
+        // thing that survives here — no record, no alarm, and the in-process
+        // retry died with the service — so without this it would sit on disk
+        // until something happened to route through one of the two branches
+        // that read it, and the rule could stay on meanwhile.
+        //
+        // Guarded on there being no record and no snooze, because that is what
+        // the flag means: *our* rule may be on with nothing behind it. If a
+        // snooze exists, it owns the rule and this is not ours to touch.
+        //
+        // Off the arm path deliberately. `ACTION_ARM` is excluded because a
+        // preferences read and a possible zen write between the tap and
+        // `STATE_TRUE` is exactly what §4.1 forbids — and an arm that succeeds
+        // clears the flag anyway, since the rule becomes legitimately ours.
+        if (intent?.action != ACTION_ARM &&
+            pendingFailure.ruleMayBeStuck() &&
+            controller.active == null &&
+            store.load() == null
+        ) {
+            Log.w(TAG, "A start found a possibly-stuck rule outstanding; driving it off.")
+            releaseRecordlessRule()
+        }
+
+        when (intent?.action) {
+            // A sticky recreation: the system killed us and brought us back with
+            // no intent to say why. If a record survived, `restoreIfNeeded` above
+            // has already picked the snooze back up and there is nothing more to
+            // do — but with *no* record this is how a recordless release retry
+            // survives its process being killed, and it is the only way it can.
+            // The flag holding that retry is in memory and died with the
+            // process; the rule it was trying to turn off did not.
+            //
+            // Safe on a stray recreation for the same reason the cap path's
+            // version is: driving Snoozemo's own already-off rule off again
+            // costs one binder call and changes nothing.
+            null -> if (controller.active == null) releaseRecordlessRule()
+            // The user tapped `Unsnooze` on the stuck-rule notification. They
+            // are asking for Do Not Disturb off, so that is what happens.
+            //
+            // The notification is taken down first, and unconditionally: it
+            // exists to offer this exit, the user has now taken it, and leaving
+            // it in the shade would invite a second tap at a rule that is
+            // already off. `releaseRecordlessRule` escalates by itself if the
+            // platform refuses again, and that escalation re-posts this same
+            // notification when it gives up.
+            //
+            // Which release depends on what the restore above found, and this
+            // is not the formality it looks like. The card is normally
+            // canceled by whatever made it false — a confirmed release, a
+            // later successful arm — but a cancel that throws, or a process
+            // death between saving a new record and taking the card down,
+            // leaves it in the shade over a *live* snooze. Driving the rule
+            // off recordlessly there would un-silence the phone while the
+            // record, the cap alarm, the tile and the ongoing notification all
+            // went on claiming a snooze — and the next restore would re-assert
+            // the rule, silencing the phone again after the user had
+            // explicitly asked for it off. So a snooze that exists is ended
+            // through the controller, exactly as `End now` would.
+            ACTION_RELEASE_STUCK -> {
+                notifications.cancelStuckRule()
+                if (controller.active != null) {
+                    controller.end(EndReason.MANUAL)
+                    ensureCapAfterRefusedEnd()
+                } else {
+                    releaseRecordlessRule()
+                }
+            }
+            ACTION_ARM -> arm()
+            ACTION_END -> {
+                controller.end(EndReason.MANUAL)
+                ensureCapAfterRefusedEnd()
+            }
+            ACTION_CHECK_CAP -> {
+                controller.onCapCheck()
+                // The alarm that woke us is spent, so anything still unfinished
+                // needs a new one or it will never be revisited.
+                rescheduleIfUnfinished()
+            }
+            ACTION_EXTEND -> extend()
+            // onCreate already restored from the record; starting the service is
+            // the whole of what a reboot needs.
+            ACTION_RESTORE -> Unit
+            // Something that suppressed notifications has changed — today, a
+            // late POST_NOTIFICATIONS grant on a tile-first install. Whatever
+            // the user should be able to see right now gets posted again, and
+            // that is not only a running snooze: a tile-first tap with no DND
+            // access *fails*, and its explanation was dropped by the same
+            // suppression. Reconstructed from the current state rather than
+            // remembered, since the service that saw the failure has already
+            // stopped by the time the grant arrives.
+            ACTION_REFRESH -> {
+                val running = controller.active
+                // Peeked, not taken. This whole mechanism exists because the
+                // message was dropped once already, and the replay can fail the
+                // same way — a refused `notify`, channels that wouldn't create.
+                // Taking it here would spend the last copy of an explanation
+                // the user has still never seen, and a failed arm won't come
+                // round again to re-record it. Cleared once it has landed.
+                val owed = if (running == null) pendingFailure.peek() else null
+                // Posted *alongside* whatever else is owed rather than instead
+                // of it, now that the stuck-rule card has its own id: both can
+                // genuinely be outstanding at once — a refused arm that left a
+                // rule behind owes "Couldn't snooze" *and* a way to undo it —
+                // and on a shared id the explanation would have displaced the
+                // only `Unsnooze` the user had.
+                //
+                // This is what repairs the tile-first case. The give-up
+                // notification is posted while `POST_NOTIFICATIONS` may still
+                // be denied, and the platform drops it — leaving a
+                // possibly-silenced phone with no affordance anywhere. A later
+                // grant sends `ACTION_REFRESH`, and without this the replay
+                // covered only `ArmFailure` and the exit was gone for good.
+                //
+                // A post, not a re-attempt, because the re-attempt has already
+                // happened: every non-arm start drives the rule off first, and
+                // clears this flag and cancels the card if that succeeded. So
+                // reaching here with the flag still set means the rule would
+                // not come off just now, which is exactly when the user needs
+                // the card.
+                if (running == null && pendingFailure.ruleMayBeStuck()) {
+                    notifications.showStuckRule()
+                }
+                when {
+                    running != null -> notifications.showOngoing(running)
+                    // The actual failure the last arm hit, not a guess at it.
+                    // Inferring only the access-denied case left every other
+                    // reason — no cap, no record, rule disabled, platform
+                    // refusal — permanently unexplained.
+                    owed is ArmFailure.Zen ->
+                        if (notifications.showFailure(owed.failure, whileArming = true)) {
+                            pendingFailure.clear()
+                        }
+                    owed is ArmFailure.BelowZen ->
+                        if (notifications.showCouldNotArm()) pendingFailure.clear()
+                    // Contained like the other reads: this one only decides
+                    // whether to explain a past failure, and a throw would
+                    // take the service down over it.
+                    runCatching { zen.policyAccess() }.getOrDefault(PolicyAccess.GRANTED) ==
+                        PolicyAccess.DENIED ->
+                        notifications.showFailure(ZenFailure.NO_POLICY_ACCESS, whileArming = true)
+                    else -> Unit
+                }
+            }
+            // The record of an already-ended snooze wouldn't erase. Nothing to
+            // restore and nothing to release — just finish the cleanup, and
+            // only for the record this retry was actually queued for: the alarm
+            // behind it is durable and this process is not, so it can arrive
+            // after the user has armed a new snooze.
+            ACTION_ERASE_RETRY -> {
+                erasing = intent?.getLongExtra(EXTRA_RECORD_STARTED_AT, 0L)
+                    ?.takeIf { it != 0L }
+                    ?.let(Instant::ofEpochMilli)
+                forget()
+            }
+            // A reboot that couldn't reschedule the cap. The record has been
+            // adopted rather than restored, so the rule is driven off from
+            // whatever state it is actually in rather than being switched on
+            // first — the reboot may well have left it on, and `end` does not
+            // assume either way.
+            ACTION_CAP_LOST -> {
+                val adopted = controller.active
+                // Which snooze this wake-up is about. The retry alarm behind it
+                // is durable and this process is not, so it can arrive after
+                // the snooze it was armed for has ended and the user has armed
+                // another — and unlike the cap, this action ends a snooze
+                // outright rather than asking whether its deadline has passed.
+                val queuedFor = intent?.getLongExtra(EXTRA_RECORD_STARTED_AT, 0L)
+                    ?.takeIf { it != 0L }
+                    ?.let(Instant::ofEpochMilli)
+                when {
+                    // No record — but that does *not* mean the release
+                    // succeeded, and reading it that way was a way to leave the
+                    // phone quiet. A release is one thing that erases the
+                    // record; an arm that never managed to *write* one is
+                    // another. That second case is exactly what this retry can
+                    // be carrying: the record write failed after `STATE_TRUE`,
+                    // the immediate release was refused, this alarm was armed
+                    // from the controller's snooze, and the process then died
+                    // with nothing on disk. Treating it as finished abandons a
+                    // possibly-active rule until the original cap.
+                    //
+                    // So drive Snoozemo's own rule off instead of assuming.
+                    // Costless on the reading where the release really did
+                    // succeed — turning off a rule that is already off is what
+                    // idempotent means — and it escalates by itself if the
+                    // platform refuses again. No user-visible message either
+                    // way: on the succeeded reading there is nothing to report,
+                    // and `showCouldNotResume` would describe a reboot that
+                    // never happened.
+                    adopted == null -> {
+                        Log.w(TAG, "A release retry found no record; driving the rule off rather than assuming.")
+                        releaseRecordlessRule()
+                    }
+                    !ActiveSnooze.retryStillApplies(adopted, queuedFor) ->
+                        Log.w(TAG, "Dropping a stale release retry; a newer snooze owns the record now.")
+                    else -> {
+                        notifications.showCouldNotResume()
+                        controller.end(EndReason.LOST_CAPABILITY)
+                        // No cap could be scheduled — that is why this action
+                        // exists — so a refused release here has nothing at all
+                        // behind it. A short retry alarm is the one thing left.
+                        //
+                        // A *release* retry, not a cap check. A cap wake-up asks
+                        // "is the record expired yet?", and this record's
+                        // original cap is still hours away — that is the whole
+                        // situation — so the check would find nothing to do,
+                        // decline to reschedule, and spend the one retry this
+                        // branch has. The retry has to carry the same
+                        // instruction that got us here: end it, there is no cap.
+                        if (controller.active != null &&
+                            !CapAlarm.armReleaseRetry(
+                                applicationContext,
+                                System.currentTimeMillis() + RETRY_MS,
+                                adopted.startedAt.toEpochMilli(),
+                            )
+                        ) {
+                            // No alarm and no cap, so this process is the only
+                            // successor left — the same position the recordless
+                            // path reaches, with a record to identify by.
+                            // Saying "trying again" without arranging one would
+                            // be a promise nothing keeps.
+                            Log.e(TAG, "The post-reboot release was refused and no alarm took; retrying in process.")
+                            beginRecordedRelease(adopted.startedAt)
+                        }
+                    }
+                }
+            }
+        }
+        // Some actions finish without any controller transition — an erase retry
+        // that worked, a refresh with nothing running, an arm refused before the
+        // state machine was ever entered — so the shutdown check in
+        // onStateChanged never runs for them and an idle service (and its
+        // registered receiver) would stay up asking to be recreated after a
+        // kill. `stopSelf(startId)`, not the bare form: another start may have
+        // arrived while this one was being handled, and only the id-carrying
+        // form declines to stop in that case.
+        //
+        // `owedRelease` holds it up for the same reason `recordErased` does:
+        // this process is the only thing left that will turn a possibly-stuck
+        // rule off, and stopping would take that retry with it.
+        if (controller.active == null && recordErased && !owedRelease) stopSelf(startId)
+
+        // START_STICKY: a snooze is a promise to turn the phone back on, and the
+        // system recreating us is how that promise survives being killed.
+        //
+        // Except when the only thing outstanding is erasing a record whose
+        // snooze already ended. A sticky recreation arrives with a **null**
+        // intent — no action to key on — so it takes the restore branch, reads
+        // the leftover record as a live snooze, and turns DND back on with
+        // nothing the user did behind it. The erase-retry alarm is the durable
+        // mechanism for that work and it carries its own action, so declining
+        // the recreation loses nothing and closes the one path that can't
+        // distinguish a released record from a running one.
+        return if (controller.active == null && !recordErased) START_NOT_STICKY else START_STICKY
+    }
+
+    private fun arm() {
+        // Never arm over a snooze that is already running. Doing so replaces its
+        // record and its cap with a fresh eight hours, so the deadline the user
+        // was promised is simply gone and the phone stays quiet past it — the
+        // arm path producing principle 1's failure. A duplicate arm re-states
+        // what is running instead.
+        //
+        // The record, not just the controller: this is the one action that skips
+        // the restore, because a cold process armed straight from the tile has
+        // nothing in memory yet — so the in-memory answer alone would miss
+        // exactly the case that matters. The file is warmed at process start and
+        // this path writes to it a few lines below, so reading it here adds no
+        // wait that arming didn't already have.
+        if (controller.active != null || store.load() != null) {
+            restoreIfNeeded()
+            controller.active?.let(notifications::showOngoing)
+            return
+        }
+
+        // The cap alarm is armed first, before anything that can throw: a snooze
+        // whose cap was never scheduled has lost the exit that holds when every
+        // sensor has failed (SPEC.md §7). And if it can't be scheduled, nothing
+        // is armed at all — the alarm *is* the cap, so arming without it would
+        // create a snooze with no time bound, which after process death is a
+        // phone silent indefinitely.
+        //
+        // Settled once, as an absolute instant, and handed to both the alarm and
+        // the controller: two derivations from two clock readings put them
+        // milliseconds apart, and an alarm that fires just before its own record
+        // counts as expired is spent for nothing.
+        val capExpiresAt = ActiveSnooze.capExpiryFor(clock.instant())
+        if (!CapAlarm.arm(applicationContext, capExpiresAt.toEpochMilli())) {
+            notifications.showCouldNotArm()
+            // Kept for the same reason a zen failure is: on a tile-first
+            // install POST_NOTIFICATIONS is still denied at the first tap, so
+            // the message above goes nowhere and a later grant is the only
+            // chance to tell the user why their tap didn't snooze the phone.
+            pendingFailure.remember(ArmFailure.BelowZen)
+            return
+        }
+
+        lastArmFailure = null
+        // Held across everything below, because `IDLE` and `ARMING` are both
+        // delivered from inside `beginArming` — their callbacks run while this
+        // is still mid-decision, and the shutdown check in `onStateChanged`
+        // must not tear the service down before that decision is made.
+        // `onStartCommand` runs the same check on its way out.
+        decidingArm = true
+        try {
+            armWithCap(capExpiresAt)
+        } finally {
+            decidingArm = false
+        }
+    }
+
+    /**
+     * The arm proper, once a cap alarm is scheduled for [capExpiresAt].
+     *
+     * Split from [arm] only so the flag above has an unmissable scope: every
+     * exit from here — refusal, unrecorded snooze, success — passes through the
+     * `finally` rather than each `return` remembering to clear it.
+     */
+    private fun armWithCap(capExpiresAt: Instant) {
+        if (!controller.beginArming(capExpiresAt)) {
+            // Arming was refused. The IDLE transition has already dealt with the
+            // record and the notification; the cap alarm is ours to take back.
+            //
+            // The cap only. If that clear failed, IDLE left an erase retry armed
+            // and a record on disk, and canceling the retry too would leave the
+            // record with nothing scheduled to remove it — a later cold start
+            // would then restore it as a live snooze.
+            //
+            // And a refusal that leaves the rule's state *unknown* gets one
+            // put back. `PLATFORM_REFUSED` is that refusal: the platform
+            // declined a change to a rule that still exists, and one way to
+            // reach it is a `STATE_TRUE` that landed on a switched-off rule and
+            // would not come back off. Nothing on disk describes that — IDLE
+            // erased the record — so a wake-up is the only thing that will ever
+            // revisit it. It finds no record and takes the recordless safety
+            // release, which drives Snoozemo's own rule off once. On the
+            // harmless reading it costs a single wake-up: turning off a rule
+            // that is already off is what idempotent means.
+            //
+            // Re-armed rather than merely left alone, because IDLE has already
+            // been through `forget()` by now and a successful erase there
+            // cancels every alarm this snooze had — the cap included. "Keeping"
+            // it was keeping something that no longer existed.
+            //
+            // Soon, not at the original cap: if the rule really is stuck on,
+            // the phone is silent *now*, and waiting out a cap the user never
+            // got a snooze from is principle 1's failure with a schedule.
+            if (lastArmFailure?.nothingLeftToRelease != false) {
+                CapAlarm.cancel(applicationContext)
+                return
+            }
+            Log.w(TAG, "The arm was refused with the rule's state unknown; scheduling a release.")
+            // Recorded *before* the alarm, not only if the alarm is refused,
+            // because the alarm is cancelable by something that knows nothing
+            // about it. This release rides on the ordinary cap action, and a
+            // successful `forget()` — from the erase retry IDLE may have left
+            // armed, or from a later cap wake-up — calls `cancelAll`, which
+            // takes the cap with it. The obligation would then be gone with no
+            // trace, over a rule that may still be silencing the phone.
+            //
+            // The flag survives that, and any later non-arm start discharges
+            // it. Its readers require the record to be gone first, which is
+            // exactly the state the erase retry is working toward — and if the
+            // write itself is refused, the card goes up now rather than the
+            // alarm being trusted alone, since a later `forget()` cancels every
+            // alarm this snooze had, the one armed just below included.
+            rememberOrTellNow()
+            if (!CapAlarm.arm(applicationContext, System.currentTimeMillis() + RETRY_MS)) {
+                // Nothing scheduled, nothing on disk, and a rule that may be
+                // silencing the phone — IDLE erased the record and canceled the
+                // cap on its way through. So this process is the last successor
+                // there is, and it keeps trying rather than returning.
+                //
+                // Silently, though. `Couldn't snooze` is already on screen from
+                // the zen failure a moment ago and is true, while the release
+                // copy would replace it with `Couldn't end the snooze — trying
+                // again`, which contradicts it. Saying the *useful* thing here
+                // ("Do Not Disturb may still be on") needs copy that doesn't
+                // exist yet; TODO.md carries it.
+                Log.e(TAG, "Nothing could be scheduled to release a possibly-stuck rule; retrying in process.")
+                beginRecordlessRelease(tellTheUser = false)
+            }
+            return
+        }
+
+        // Now that the rule is on and the hot path is over, force the record
+        // through to disk and find out whether it landed. It is the only thing
+        // that can turn the rule off after process death, so a snooze that
+        // couldn't be written is one we can't promise to end — release it and
+        // say so rather than leaving DND on with nothing to release it.
+        val snooze = controller.active
+        if (snooze == null || !store.save(snooze)) {
+            notifications.showCouldNotArm()
+            pendingFailure.remember(ArmFailure.BelowZen)
+            // The user is being told it didn't start; following that with
+            // "Snooze ended" would contradict it. The snooze existed for a few
+            // milliseconds and they never saw a confirmed one.
+            unwindingFailedArm = true
+            controller.end(EndReason.LOST_CAPABILITY)
+            unwindingFailedArm = false
+            // That end can be refused too, and returning here would leave the
+            // rule on with only the cap behind it — the *default* cap, hours
+            // away, because this snooze never got as far as being recorded.
+            // The user would have `Couldn't snooze` on screen and a phone that
+            // stays quiet until the backstop fires, which is principle 1's
+            // failure produced by the unwind of a failed arm.
+            //
+            // The alarm first, this process second, as everywhere else: an
+            // alarm outlives the process and the in-process retry does not.
+            // Identified by the controller's snooze rather than the record's,
+            // since the record is precisely what could not be written.
+            controller.active?.let { stillOn ->
+                Log.e(TAG, "An unrecorded arm could not be released; retrying rather than waiting for the cap.")
+                if (!CapAlarm.armReleaseRetry(
+                        applicationContext,
+                        System.currentTimeMillis() + RETRY_MS,
+                        stillOn.startedAt.toEpochMilli(),
+                    )
+                ) {
+                    beginRecordedRelease(stillOn.startedAt)
+                }
+            }
+            return
+        }
+
+        // Nothing left to explain: this arm worked, so an older failure must
+        // not surface later as if it described this snooze.
+        //
+        // Both copies of it. Clearing the store only stops it being *replayed*
+        // later; a failure notification posted by an earlier arm is already in
+        // the shade, under its own id, and `setAutoCancel` dismisses it on a
+        // tap rather than by itself. Left alone it sits beside the `Snoozing`
+        // card this arm just posted — two notifications disagreeing about
+        // whether the phone is snoozed, which is principle 2's failure caused
+        // by an explanation that outlived what it explained.
+        pendingFailure.clear()
+        notifications.cancelFailure()
+        // And nothing is stuck any more. If a previous arm left the rule
+        // possibly-on with no record, this arm has just turned it on
+        // deliberately and given it a record and a cap — so the obligation is
+        // discharged by the thing that replaced it, not left to chase a rule
+        // that is now legitimately ours.
+        pendingFailure.clearRuleStuck()
+        notifications.cancelStuckRule()
+
+        // And nothing left to erase. A previous release that marked its record
+        // but couldn't clear it leaves `recordErased` false — while the marker
+        // is exactly what let this arm proceed, and the save above has just
+        // overwritten that record with this one. Left standing, the flag says
+        // "cleanup pending" about a record that no longer exists, and the next
+        // refused release reads it and calls `forget()` on the *live* snooze:
+        // record deleted, every alarm canceled, rule possibly still on. The
+        // identity guard inside `forget` cannot catch it either, because
+        // `ARMING` has already pointed `erasing` at this snooze.
+        recordErased = true
+        eraseRetries = 0
+        eraseRetryHandler.removeCallbacksAndMessages(null)
+        // The erase-retry *alarm* is left where it is on purpose: it carries
+        // the old record's `startedAt`, so if it fires it fails the identity
+        // check and drops itself, and canceling alarms is the one thing that
+        // has repeatedly turned out to remove an exit something still needed.
+
+        // Phase 3 replaces this with real anchor capture behind PresenceMonitor.
+        // Until then every snooze is honestly duration-only rather than pretending
+        // to track a place it never captured.
+        controller.onAnchorUnavailable(ssid = null)
+    }
+
+    /** The notification's `+30 min` (SPEC.md §4.3). */
+    private fun extend() {
+        val snooze = controller.active ?: return
+        val extendedCap = snooze.extendedCap(EXTENSION)
+        if (!extendedCap.isAfter(snooze.capExpiresAt)) {
+            notifications.showAtMaxDuration()
+            return
+        }
+
+        // The alarm moves first, and the controller only hears about it if that
+        // worked: the alarm is the cap, so a countdown extended past an alarm
+        // still set for the old time would be a promise the platform never made.
+        if (!CapAlarm.arm(applicationContext, extendedCap.toEpochMilli())) {
+            notifications.showCouldNotExtend()
+            return
+        }
+
+        // Then the record, and only then the controller. All three have to agree
+        // about when this snooze ends, so nothing claims the extension until the
+        // record that survives process death carries it: a countdown and an
+        // alarm at the new time over a record at the old one would restore to a
+        // snooze that ends earlier than the user was told.
+        if (!store.save(snooze.copy(capExpiresAt = extendedCap))) {
+            notifications.showCouldNotExtend()
+
+            // The record first, then the alarm. A failed `commit` still leaves
+            // the extended cap in the preferences' in-memory map — only the
+            // disk write failed — so anything that reads the record in this
+            // process, including a service recreation woken by the old alarm,
+            // would find the extension we just told the user didn't happen and
+            // re-arm the cap for the later deadline. Writing the original back
+            // is what actually undoes it.
+            val recordRolledBack = store.save(snooze)
+            if (recordRolledBack &&
+                CapAlarm.arm(applicationContext, snooze.capExpiresAt.toEpochMilli())
+            ) {
+                return
+            }
+
+            // The roll-back failed too, so what the record and the alarm now say
+            // is whatever survived — at best disagreeing with each other, at
+            // worst both sitting at the extended deadline the user was told did
+            // not happen, with no way left to move either. This does not fail
+            // early and safe; it leaves the phone quiet past the deadline
+            // everything else is promising. So end the snooze instead: a cap we
+            // can no longer state is not one to keep (SPEC.md §7).
+            Log.e(TAG, "Rolling back a failed extension failed too; ending the snooze.")
+            controller.end(EndReason.LOST_CAPABILITY)
+            // And if even that release is refused, the snooze is still running
+            // with its two deadlines in disagreement — so make sure one of them
+            // is actually scheduled. Re-armed at the controller's cap, which is
+            // still the *original* one: `extendTo` was never reached, so this
+            // both guarantees an alarm exists and drags back one left sitting at
+            // the extended deadline.
+            ensureCapAfterRefusedEnd()
+            return
+        }
+        controller.extendTo(extendedCap)
+    }
+
+    override fun onStateChanged(state: SnoozeState, snooze: ActiveSnooze?, reason: EndReason?) {
+        when (state) {
+            // The one transition on the arm path, between the tap and the rule
+            // going on, so the write is handed to a background thread rather
+            // than waited on (`AGENTS.md`, "the arm path"). arm() forces it
+            // down and checks it as soon as the rule is on.
+            SnoozeState.ARMING -> snooze?.let {
+                // This snooze owns the record from here on, so an erase queued
+                // for an earlier one can be told apart from a clean-up of this.
+                erasing = it.startedAt
+                store.saveAsync(it)
+                // Deliberately *not* the notification. This transition is
+                // delivered from inside `beginArming`, before
+                // `setAutomaticZenRuleState(STATE_TRUE)`, so a `notify` here is
+                // a system-server round trip sitting between the tile tap and
+                // the phone going quiet — the one thing the arm path may not
+                // have (`AGENTS.md`, the arm path). Nothing needs it this
+                // early: `ARMED` follows within milliseconds and posts it, and
+                // an arm that *fails* never flashes `Snoozing` at all now.
+                //
+                // The record is different and stays: it is what turns the rule
+                // back off after process death, so it has to exist before the
+                // rule does. `saveAsync` keeps it off this thread.
+            }
+            SnoozeState.ARMED, SnoozeState.CHECKING -> snooze?.let {
+                erasing = it.startedAt
+                // A failed update here is a stale record, not a missing one: the
+                // cap time in it is unchanged, so the snooze still ends on time
+                // and still has something to release it with. Logged, not fatal
+                // — unlike the arm-path write, which arm() treats as a refusal.
+                if (!store.save(it)) {
+                    Log.w(TAG, "Updating the snooze record failed; the stored cap still stands.")
+                }
+                notifications.showOngoing(it)
+            }
+            SnoozeState.RELEASED -> {
+                snooze?.let { erasing = it.startedAt }
+                forget()
+                if (unwindingFailedArm) notifications.cancelOngoing() else notifications.showEnded(reason)
+                // The rule is confirmed off, so a stuck-rule card left over from
+                // an earlier refusal is now saying something false and offering
+                // an exit nobody needs. `ensureCapAfterRefusedEnd` can post that
+                // card and then be followed by a release that works — a second
+                // `End now`, the cap, a retry alarm — and this is the transition
+                // every one of those arrives at. The direct no-service path
+                // already does the same; this is its twin.
+                //
+                // The persisted obligation goes with it, for the same reason:
+                // both are claims that the rule *might* be on, and this
+                // transition is the one that proves otherwise. Left set, it
+                // would send the next start off to drive an already-off rule
+                // off again — harmless, but a promise outliving its cause.
+                notifications.cancelStuckRule()
+                if (pendingFailure.ruleMayBeStuck()) pendingFailure.clearRuleStuck()
+            }
+            // Reached when arming was refused, and only then. The record and the
+            // ongoing notification went up before the rule was asked for, so
+            // both are now claiming "Snoozing" over a phone that will ring —
+            // and a later cold start would restore that record as a real snooze.
+            SnoozeState.IDLE -> {
+                forget()
+                notifications.cancelOngoing()
+            }
+        }
+        // Every transition except `ARMING`, which is the one that sits between
+        // the tile tap and the rule going on. Nothing is lost by skipping it:
+        // arming is followed within milliseconds by `ARMED` or `IDLE`, and both
+        // refresh. What is gained is one fewer binder call on the path whose
+        // whole purpose is to be immediate.
+        if (state != SnoozeState.ARMING) SnoozeTileBridge.refresh(applicationContext)
+        // Nothing running, nothing to own. Keyed on the record rather than on
+        // the state: a successful release reports RELEASED and settles into
+        // IDLE without a second callback, so a state test here would never fire
+        // and would leave an empty START_STICKY service and its receiver up.
+        //
+        // Not while a record we failed to erase is still on disk, though: this
+        // service is the only thing that will try again.
+        //
+        // Nor while `arm` is still deciding. `IDLE` arrives from inside
+        // `beginArming`, before the caller has looked at *why* the arm was
+        // refused — and one of those reasons leaves a rule that may be
+        // silencing the phone with no record and no alarm, whose only remaining
+        // successor is an in-process retry this service has not been asked for
+        // yet. Stopping here queues a teardown that `onDestroy` then uses to
+        // cancel that retry a few lines after it is posted. `onStartCommand`
+        // stops the service on its way out instead, once the decision is in.
+        if (decidingArm || owedRelease) return
+        // Named, not bare: a start queued behind this transition — a tile arm
+        // racing a cap-driven end is the case that matters — must not be
+        // thrown away by the stop.
+        if (controller.active == null && recordErased) stopSelf(latestStartId)
+    }
+
+    /**
+     * Drives Snoozemo's own rule off when nothing on disk describes a snooze.
+     *
+     * Either a stray wake-up after a clean end, or a rule left on with nothing
+     * tracking it — an arm whose record never landed and whose release was then
+     * refused leaves exactly that, and from here the two are indistinguishable.
+     * The second is the one that matters, so this drives our own rule off once.
+     * On the harmless reading it changes nothing: turning off a rule that is
+     * already off is what idempotent means (SPEC.md §5.6 — never anyone else's).
+     */
+    private fun releaseRecordlessRule() {
+        val outcome = zen.setSnoozed(false, ZenTrigger.CONTEXT, ActiveSnooze.DEFAULT_PLACE_NAME)
+        if (outcome !is ZenOutcome.NotApplied || outcome.reason.nothingLeftToRelease) {
+            // Confirmed off — including the `nothingLeftToRelease` readings,
+            // which mean there was nothing silencing the phone in the first
+            // place. Either way nothing is owed, so stop carrying it and take
+            // down a stuck-rule notification that is now describing a rule that
+            // is off.
+            if (pendingFailure.ruleMayBeStuck()) {
+                pendingFailure.clearRuleStuck()
+                notifications.cancelStuckRule()
+            }
+            return
+        }
+
+        // Refused rather than unnecessary, so the rule may genuinely be on with
+        // no record behind it — and whatever alarm brought us here is spent.
+        Log.e(TAG, "Recordless safety release was refused; retrying via a fresh alarm.")
+        if (!CapAlarm.arm(applicationContext, System.currentTimeMillis() + RETRY_MS)) {
+            // Nothing schedulable, and nothing on disk for a later start to
+            // find either. This process is the only successor left.
+            Log.e(TAG, "The recordless release retry could not be scheduled; retrying in process.")
+            beginRecordlessRelease(tellTheUser = true)
+        }
+    }
+
+    /**
+     * Puts a fresh alarm behind anything the cap check left undone.
+     *
+     * The cap alarm is one-shot, so by the time this runs it is spent. Two
+     * things can survive it, and both would otherwise be revisited by nothing:
+     * a snooze whose release the platform refused (still active, still past its
+     * cap, still silencing the phone), and a record that wouldn't erase. One
+     * short retry alarm covers both.
+     */
+    private fun rescheduleIfUnfinished() {
+        if (!recordErased) {
+            forget()
+            return
+        }
+
+        if (controller.active == null) {
+            releaseRecordlessRule()
+            return
+        }
+        val running = controller.active ?: return
+        if (!running.isExpired(clock.instant())) return
+
+        Log.e(TAG, "The cap fired but the release was refused; retrying via a fresh alarm.")
+        if (!CapAlarm.arm(applicationContext, System.currentTimeMillis() + RETRY_MS)) {
+            // The cap that woke us is spent and no replacement would schedule,
+            // so nothing durable is left for this snooze — the same position
+            // the post-reboot path reaches, and it gets the same successor.
+            // Stopping at the notification would leave the phone quiet until
+            // the user happened to notice.
+            Log.e(TAG, "Scheduling the cap-release retry failed; retrying in process.")
+            beginRecordedRelease(running.startedAt)
+        }
+    }
+
+    /**
+     * Starts a **fresh** recordless escalation, retiring whatever the last one
+     * left behind. Every entry point uses one of these rather than calling the
+     * `keepTrying*` functions directly; only their own recursive tails do that.
+     */
+    private fun beginRecordlessRelease(tellTheUser: Boolean) {
+        // Written down *before* the first attempt, not at the give-up. The
+        // escalation's last successor is a delayed callback in this process,
+        // and this is an ordinary started service — Android can stop it at any
+        // point in that window, and `onDestroy` cancels the callback. Recording
+        // the obligation only when the retries run out means the common
+        // teardown never reaches the code that records it, so the terminal
+        // notification is never posted and nothing at all survives.
+        //
+        // Costs one boolean and a `commit`. Cleared the moment the rule is
+        // confirmed off, so the only way it outlives its cause is a process
+        // killed between the release and the clear, where the next start finds
+        // an already-off rule and drives it off again — a no-op.
+        rememberOrTellNow()
+        retirePendingRelease()
+        keepTryingRecordlessRelease(tellTheUser)
+    }
+
+    /**
+     * Records the obligation, and falls back to the user when the disk won't.
+     *
+     * `commit` can refuse — a full or failing filesystem — and by the time
+     * either escalation starts, the zen release and its replacement alarm have
+     * already been refused too. The delayed callback is then the only successor
+     * left, and it dies with the service, so a discarded `false` here is the
+     * whole ladder ending in nothing.
+     *
+     * The notification is the one remaining thing that outlives this process:
+     * once in the shade it stays there with `Unsnooze` live, whatever happens
+     * to the service. Posted immediately rather than at the give-up, because
+     * the give-up is precisely the code a teardown never reaches.
+     *
+     * It does not contradict a `Couldn't snooze` already on screen from the
+     * same failure — different id, different claim, and both are true: the arm
+     * didn't take *and* the rule may still be silencing the phone.
+     */
+    private fun rememberOrTellNow() {
+        if (pendingFailure.rememberRuleMayBeStuck()) return
+        Log.e(TAG, "The release obligation could not be stored; handing the user the exit now.")
+        if (!notifications.showStuckRule()) {
+            Log.e(TAG, "The stuck-rule notice could not be posted either; only this process is left.")
+        }
+    }
+
+    /**
+     * The recorded counterpart of [beginRecordlessRelease].
+     *
+     * Persists the same obligation, for the same reason: the last successor
+     * here is a delayed callback in an ordinary started service, and `onDestroy`
+     * takes it with the process. The flag is deliberately not conditional on
+     * whether a record exists right now, because one of the two callers reaches
+     * this precisely when the record *couldn't be written* — an arm whose zen
+     * rule landed, whose record write failed, and whose immediate release and
+     * retry alarm were both refused. On the other caller a record does exist
+     * and the flag simply waits: its readers require the record to be gone
+     * first, and by then it is the only thing left describing the rule.
+     */
+    private fun beginRecordedRelease(startedAt: Instant) {
+        rememberOrTellNow()
+        retirePendingRelease()
+        keepTryingRecordedRelease(startedAt)
+    }
+
+    /**
+     * Drops a queued release retry and its attempt count, because a newer
+     * obligation is about to replace them.
+     *
+     * The retry state — the handler, [releaseRetries], [owedRelease] — is
+     * shared by both escalations, and a queued callback outlives the snooze it
+     * was queued for. Without this, a retry left over from a snooze that some
+     * other exit has since ended can fire *during a newer* obligation, find its
+     * own snooze gone, and call [finishOwedRelease] — clearing a flag it does
+     * not own and stopping a service the new retry is living in, whose
+     * `onDestroy` then cancels that new retry. The newer rule is left with no
+     * successor at all, which is the failure this whole escalation exists to
+     * prevent, produced by the escalation itself.
+     *
+     * Retiring at the *start* of each escalation is what makes that impossible:
+     * there is only ever one queued release callback, and it belongs to the
+     * newest obligation. A stale callback that fires when no new escalation
+     * followed is harmless by contrast — it finds nothing to release and
+     * clears an obligation that really is finished.
+     *
+     * The count resets with it: the new obligation is entitled to its own
+     * attempts, not the remainder of someone else's.
+     */
+    private fun retirePendingRelease() {
+        releaseRetryHandler.removeCallbacksAndMessages(null)
+        releaseRetries = 0
+    }
+
+    /**
+     * Keeps trying to drive Snoozemo's own rule off when nothing on disk
+     * describes it — the one leftover no other mechanism can pick up.
+     *
+     * Reached only when both durable options are gone: there is no record (so a
+     * later cold start finds nothing to restore and release) and no alarm could
+     * be scheduled (so nothing will wake anything). Every other failure path in
+     * this file can hand off to one or the other; this one has this process and
+     * nothing else, which is why the service is kept alive for it. Bounded by a
+     * count so a permanently refusing platform doesn't leave a timer ticking.
+     *
+     * [tellTheUser] is false on the failed-arm path, where `Couldn't snooze` is
+     * already on screen and the release copy would contradict it (see TODO.md).
+     */
+    private fun keepTryingRecordlessRelease(tellTheUser: Boolean) {
+        if (releaseRetries++ >= MAX_IN_PROCESS_RELEASE_RETRIES) {
+            Log.e(TAG, "Giving up the in-process recordless release; the rule may still be on.")
+            owedRelease = false
+            // The user is now the only exit, so hand them one rather than a
+            // status line. Nothing else points at this state: no record, so the
+            // tile reads inactive; no alarm; no obligation left here. This
+            // notification carries `Unsnooze`, and it outlives this process.
+            //
+            // Posted regardless of [tellTheUser]. That flag exists so the
+            // *retrying* message doesn't overwrite `Couldn't snooze` with a
+            // contradiction while an arm failure is still on screen — but at
+            // give-up there is nothing left to contradict: it is no longer
+            // trying, and "Do Not Disturb may still be on" is both true and
+            // more useful than the message it replaces.
+            // Checked, not fired and forgotten. `post` can be refused with the
+            // permission already granted, and this is the end of the line — no
+            // record, no alarm, no retry, and no permission grant coming to
+            // trigger a replay. Dropping the result here would lose the last
+            // affordance silently, which is the failure this whole branch
+            // exists to prevent.
+            //
+            // The persisted flag is what makes recovery possible at all: it
+            // outlives this process, and `onStartCommand` re-attempts the
+            // release on any later start that finds no record. So the job here
+            // is to make sure *something* starts us again — one more alarm,
+            // which may well be granted now even though an earlier one wasn't.
+            if (!notifications.showStuckRule() &&
+                !CapAlarm.arm(applicationContext, System.currentTimeMillis() + RETRY_MS)
+            ) {
+                Log.e(TAG, "The stuck-rule notice could not be posted and no alarm took; only a later start can recover.")
+            }
+            return
+        }
+        owedRelease = true
+        releaseRetryHandler.postDelayed({
+            // A snooze armed since then owns the rule now, and turning it off
+            // here would end the snooze the user just started — the same
+            // mistake the stale erase and release retries guard against, from
+            // the one path that has no record to identify itself by.
+            if (controller.active != null || store.load() != null) {
+                Log.w(TAG, "Dropping the recordless release; a new snooze owns the rule now.")
+                // The new snooze owns the rule, so nothing is stuck: whatever
+                // this was chasing is now something with a record and a cap
+                // behind it.
+                pendingFailure.clearRuleStuck()
+                finishOwedRelease()
+                return@postDelayed
+            }
+            val outcome = zen.setSnoozed(false, ZenTrigger.CONTEXT, ActiveSnooze.DEFAULT_PLACE_NAME)
+            val released = outcome is ZenOutcome.Applied ||
+                (outcome is ZenOutcome.NotApplied && outcome.reason.nothingLeftToRelease)
+            if (released) {
+                releaseRetries = 0
+                pendingFailure.clearRuleStuck()
+                finishOwedRelease()
+                return@postDelayed
+            }
+            // Still refusing. An alarm outlives this process, so take one the
+            // moment the platform will give one — an in-process retry only
+            // lasts as long as the service does.
+            if (CapAlarm.arm(applicationContext, System.currentTimeMillis() + RETRY_MS)) {
+                Log.w(TAG, "The recordless release is refused but an alarm took; handing it over.")
+                finishOwedRelease()
+                return@postDelayed
+            }
+            keepTryingRecordlessRelease(tellTheUser)
+        }, IN_PROCESS_RETRY_MS)
+    }
+
+    /**
+     * Keeps trying to end the snooze that *does* have a record, when there is
+     * no cap behind it and no alarm can be scheduled.
+     *
+     * The `ACTION_CAP_LOST` counterpart of [keepTryingRecordlessRelease], and
+     * needed for the same reason: that branch exists because the original cap
+     * could not be rescheduled, so a refused release with a refused retry alarm
+     * has no successor at all. Reporting `Couldn't end the snooze — trying
+     * again` there was worse than nothing — it promised a retry that did not
+     * exist.
+     *
+     * Identified, like every other retry here: the record can be replaced by a
+     * snooze the user arms in the meantime, and ending *that* one is not this
+     * retry's business.
+     */
+    private fun keepTryingRecordedRelease(startedAt: Instant) {
+        if (releaseRetries++ >= MAX_IN_PROCESS_RELEASE_RETRIES) {
+            // Nothing is going to try again, so the message must not say it
+            // will. `Couldn't end the snooze — trying again` is exactly the
+            // claim this branch cannot keep: no cap, no alarm the platform
+            // would give, and the last in-process attempt just ran.
+            //
+            // The stuck-rule card is the honest one and the only one carrying
+            // an exit. With the record still on disk its `Unsnooze` ends the
+            // snooze through the controller, so the record, the cap and the
+            // tile come down with the rule.
+            Log.e(TAG, "Giving up the in-process release; handing the user the exit.")
+            owedRelease = false
+            if (!notifications.showStuckRule()) {
+                Log.e(TAG, "The stuck-rule notice could not be posted; the tile is the last exit left.")
+            }
+            return
+        }
+        owedRelease = true
+        releaseRetryHandler.postDelayed({
+            val running = controller.active
+            if (running == null || running.startedAt != startedAt) {
+                Log.w(TAG, "Dropping the release retry; the snooze it was queued for is gone.")
+                finishOwedRelease()
+                return@postDelayed
+            }
+            controller.end(EndReason.LOST_CAPABILITY)
+            if (controller.active == null) {
+                releaseRetries = 0
+                finishOwedRelease()
+                return@postDelayed
+            }
+            // An alarm outlives this process, so take one the moment the
+            // platform will give one.
+            if (CapAlarm.armReleaseRetry(
+                    applicationContext,
+                    System.currentTimeMillis() + RETRY_MS,
+                    startedAt.toEpochMilli(),
+                )
+            ) {
+                Log.w(TAG, "The release is still refused but an alarm took; handing it over.")
+                finishOwedRelease()
+                return@postDelayed
+            }
+            keepTryingRecordedRelease(startedAt)
+        }, IN_PROCESS_RETRY_MS)
+    }
+
+    /**
+     * Marks an owed release done and lets an idle service go.
+     *
+     * Stops against the latest start rather than the one that queued this: the
+     * delay means a newer start may have arrived, and the bare form would stop
+     * regardless and discard it. Guarded on the same conditions
+     * `onStartCommand` uses, so a snooze armed in the meantime keeps the
+     * service up.
+     */
+    private fun finishOwedRelease() {
+        owedRelease = false
+        if (controller.active == null && recordErased) stopSelf(latestStartId)
+    }
+
+    /**
+     * Erases the record and the cap alarm together — and, if the erase failed,
+     * deliberately leaves the alarm alone.
+     *
+     * A record that outlives its snooze is one a later cold start will restore,
+     * and restoring re-asserts the zen rule: the phone would go quiet again with
+     * no user action behind it. The erase can't be forced, so the fallback is to
+     * keep the exit that bounds it. The stale record's cap is unchanged, so the
+     * alarm still fires at the original time and ends the thing it restored —
+     * an unwanted snooze that expires on schedule, rather than an open-ended one.
+     */
+    private fun forget() {
+        // Only the record this erase was queued for. A retry — durable alarm or
+        // delayed handler — can arrive after the user has armed a new snooze,
+        // and erasing *that* record cancels its cap while its zen rule stays
+        // on: a phone left quiet with nothing scheduled to bring it back, done
+        // by the mechanism that exists to prevent it.
+        val onDisk = store.load()
+        if (!ActiveSnooze.retryStillApplies(onDisk, erasing)) {
+            Log.w(TAG, "Dropping a stale erase retry; a newer snooze owns the record now.")
+            // Nothing of ours is outstanding any more, so this service has no
+            // reason to stay up holding a retry for a record that is gone.
+            recordErased = true
+            eraseRetries = 0
+            eraseRetryHandler.removeCallbacksAndMessages(null)
+            return
+        }
+
+        // Settle the identity *before* the clear. A failed `commit` still
+        // empties the in-memory map, so reading the record back afterwards to
+        // label a retry would find nothing and arm an unidentified one — the
+        // very thing the guard above exists to reject.
+        val queuedFor = erasing ?: onDisk?.startedAt
+        erasing = queuedFor
+
+        // Marked released before the erase is attempted, so a record that
+        // outlives a failed erase is at least never read back as a live snooze.
+        // The erase is what fails here, so a marker written after it would
+        // never be reached — and every wake-up that isn't an erase retry
+        // restores from this record, which would re-assert the rule.
+        val marked = store.markReleased()
+        recordErased = store.clear()
+        if (recordErased) {
+            eraseRetries = 0
+            erasing = null
+            // Nothing left to retry, so drop any pending one before it can fire
+            // against whatever record comes next.
+            eraseRetryHandler.removeCallbacksAndMessages(null)
+            // Both alarms, and only here: the record is gone, so neither the cap
+            // nor an erase retry has anything left to act on.
+            CapAlarm.cancelAll(applicationContext)
+            return
+        }
+        Log.e(TAG, "Erasing the snooze record failed; retrying, with the cap as its bound.")
+        if (!marked) {
+            // Both writes to this file were refused, so what is on disk is a
+            // released record that doesn't say so. Worse than a failed erase
+            // alone: until a retry lands, any wake-up that restores — a cap
+            // alarm, a boot, a notification grant — reads it as live and turns
+            // DND back on. Recorded separately from the erase failure because
+            // it is a different, larger exposure, and the two are worth telling
+            // apart in a bug report.
+            //
+            // There is no third mechanism to reach for: both the marker and the
+            // erase are commits to the store that just refused one, and the
+            // in-memory map is already correct, so this process is safe and
+            // only a *later* one is at risk. What bounds it is the record's own
+            // cap, unchanged — whatever restores it ends on the original
+            // schedule rather than running on.
+            Log.e(TAG, "The record could not be marked released either; a restore may resurrect it.")
+        }
+        notifications.showNotForgotten()
+        // An actual retry, not just a flag: nothing else calls this again, and
+        // the cap alarm on its own would only wake a service that found no
+        // active snooze and did nothing.
+        //
+        // The **erase-retry** alarm specifically, never the cap. A cap wake-up
+        // restores the record before its action is even examined — that is what
+        // a cap means — so pointing one at a record we are trying to delete
+        // would re-assert the rule on arrival, and a clear that then succeeded
+        // would cancel the cap while the resurrected snooze stayed active. It
+        // also leaves the real cap alarm where it is, so the stale record keeps
+        // the bound this log line claims for it.
+        //
+        // Skipped entirely when there is no record to name: an erase alarm
+        // without an identity is one that would delete whatever record it finds
+        // on arrival, which after a new arm is that snooze's cap.
+        if (queuedFor != null &&
+            CapAlarm.armEraseRetry(
+                applicationContext,
+                System.currentTimeMillis() + RETRY_MS,
+                queuedFor.toEpochMilli(),
+            )
+        ) {
+            return
+        }
+
+        // Neither the disk nor the alarm is cooperating. All that is left is
+        // this process, so use it: an in-process retry is bounded by the
+        // process's own lifetime, which is worse than an alarm but is not
+        // nothing — and this service stays up for exactly this reason. Bounded
+        // by a count as well, so a permanently broken filesystem doesn't leave a
+        // timer ticking forever; the next service wake-up retries after that.
+        if (eraseRetries++ >= MAX_IN_PROCESS_ERASE_RETRIES) {
+            Log.e(TAG, "Giving up the in-process erase retry; the next wake-up will try again.")
+            return
+        }
+        Log.e(TAG, "Scheduling the record-erase retry failed; falling back to an in-process retry.")
+        eraseRetryHandler.postDelayed({
+            // Guarded as well as cancelable, because the cancellation only
+            // covers this service instance: a snooze armed in the meantime owns
+            // the record now, and erasing it would take its cap with it.
+            if (controller.active != null) {
+                Log.w(TAG, "Dropping a stale erase retry; a new snooze owns the record now.")
+                return@postDelayed
+            }
+            forget()
+        }, IN_PROCESS_RETRY_MS)
+    }
+
+    override fun onDegraded(snooze: ActiveSnooze, cause: DegradationCause) {
+        // Said where the user is already looking, rather than left to be
+        // discovered when the snooze doesn't end (SPEC.md §8.1).
+        store.save(snooze)
+        notifications.showOngoing(snooze)
+    }
+
+    override fun onZenFailure(failure: ZenFailure, whileArming: Boolean) {
+        notifications.showFailure(failure, whileArming)
+        // Kept in case the system dropped it: on a tile-first install
+        // POST_NOTIFICATIONS is still denied at the first tap, so the message
+        // explaining a failed arm goes nowhere and the user is left with a tap
+        // that did nothing and no reason for it. A later grant re-posts this.
+        if (whileArming) {
+            pendingFailure.remember(ArmFailure.Zen(failure))
+            // Also kept in memory, for the unwind a few frames later: `arm` sees
+            // only that `beginArming` returned false, and what it should do with
+            // the cap alarm depends on *which* refusal this was.
+            lastArmFailure = failure
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // The retry cannot outlive the instance that queued it — the next one
+        // re-reads the record and picks the work back up if it is still there.
+        eraseRetryHandler.removeCallbacksAndMessages(null)
+        releaseRetryHandler.removeCallbacksAndMessages(null)
+        // Only if it registered. A registration the platform refused is a state
+        // this class now knows about, so unregistering it is not something to
+        // attempt and then explain away.
+        if (!accessReceiverRegistered) return
+        accessReceiverRegistered = false
+        runCatching { unregisterReceiver(accessReceiver) }.onFailure {
+            // Registered but not unregisterable — a lifecycle defect, not an
+            // expected state. Harmless at teardown (the process is releasing it
+            // anyway), so logged rather than escalated, but not swallowed.
+            Log.w(TAG, "Unregistering the policy-access receiver failed.", it)
+        }
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    companion object {
+        const val ACTION_ARM = "app.snoozemo.action.ARM"
+        const val ACTION_END = "app.snoozemo.action.END"
+        const val ACTION_CHECK_CAP = "app.snoozemo.action.CHECK_CAP"
+        const val ACTION_EXTEND = "app.snoozemo.action.EXTEND"
+        const val ACTION_RESTORE = "app.snoozemo.action.RESTORE"
+        const val ACTION_CAP_LOST = "app.snoozemo.action.CAP_LOST"
+        const val ACTION_REFRESH = "app.snoozemo.action.REFRESH"
+        const val ACTION_ERASE_RETRY = "app.snoozemo.action.ERASE_RETRY"
+
+        /**
+         * The user tapping `Unsnooze` on the stuck-rule notification — the last
+         * exit, and the only one driven entirely by them.
+         *
+         * Distinct from [ACTION_END] because there is no snooze to end: no
+         * record, nothing for the controller to adopt. This drives Snoozemo's
+         * own rule off directly and is safe whenever it arrives, since a user
+         * asking for Do Not Disturb off always wants exactly that.
+         */
+        const val ACTION_RELEASE_STUCK = "app.snoozemo.action.RELEASE_STUCK"
+
+        /**
+         * Which record an [ACTION_ERASE_RETRY] may delete, as epoch millis of
+         * its `startedAt`.
+         *
+         * On-device only, and never logged: a snooze's start time is the user's
+         * (`AGENTS.md`, *Privacy*), so it travels between the app's own
+         * components and goes nowhere else.
+         */
+        const val EXTRA_RECORD_STARTED_AT = "app.snoozemo.extra.RECORD_STARTED_AT"
+
+        /** The notification's `+30 min` step (SPEC.md §4.3). */
+        val EXTENSION: Duration = Duration.ofMinutes(30)
+
+        /** How soon to come back at anything a spent cap alarm left undone. */
+        private const val RETRY_MS = 5 * 60 * 1000L
+
+        /** The last-resort retry when even scheduling an alarm fails. */
+        private const val IN_PROCESS_RETRY_MS = 30 * 1000L
+        private const val MAX_IN_PROCESS_ERASE_RETRIES = 10
+
+        /**
+         * Ten tries at 30 s is five minutes of holding the service up for a
+         * rule the platform keeps refusing to release. Long enough to outlast a
+         * transient refusal, short enough not to be a background service that
+         * never goes away.
+         */
+        private const val MAX_IN_PROCESS_RELEASE_RETRIES = 10
+
+        /**
+         * Arms from inside the app. The tile goes through the trampoline
+         * instead (SPEC.md §6.9); an activity is already a documented exemption
+         * for starting a service, so this needs no trampoline of its own.
+         */
+        fun arm(context: Context) = start(context, ACTION_ARM)
+
+        fun end(context: Context) = start(context, ACTION_END)
+
+        fun checkCap(context: Context) = start(context, ACTION_CHECK_CAP)
+
+        fun restore(context: Context) = start(context, ACTION_RESTORE)
+
+        /** Re-post the ongoing notification, after something unblocked it. */
+        fun refresh(context: Context) = start(context, ACTION_REFRESH)
+
+        /**
+         * Finish erasing the released record that started at
+         * [recordStartedAtMillis], and only that one — by the time this runs the
+         * user may have armed a new snooze whose record must not be touched.
+         */
+        fun retryErase(context: Context, recordStartedAtMillis: Long) =
+            start(context, ACTION_ERASE_RETRY) {
+                it.putExtra(EXTRA_RECORD_STARTED_AT, recordStartedAtMillis)
+            }
+
+        /**
+         * Drive Snoozemo's own rule off when nothing else is left to do it.
+         *
+         * The same action the stuck-rule notification's `Unsnooze` sends, used
+         * as a last successor by the no-service fallback: if that path can
+         * neither persist the obligation nor post the card, this service's
+         * in-process retry is the only thing that could still run. It may well
+         * refuse to start — that is how the fallback was reached — but this and
+         * that are different refusals a moment apart, and it costs one call.
+         */
+        fun releaseStuck(context: Context) = start(context, ACTION_RELEASE_STUCK)
+
+        /**
+         * A reboot that could not reschedule the cap: end rather than restore.
+         *
+         * [recordStartedAtMillis] names the snooze this is about, so a retry
+         * that outlived it cannot end the one the user armed since.
+         */
+        fun endWithoutCap(context: Context, recordStartedAtMillis: Long) =
+            start(context, ACTION_CAP_LOST) {
+                it.putExtra(EXTRA_RECORD_STARTED_AT, recordStartedAtMillis)
+            }
+
+        /**
+         * Starts the service for [action], returning false if the platform
+         * refused.
+         *
+         * Every caller is a broadcast receiver or a notification action, so the
+         * app should be on the temporary allowlist that permits this — but
+         * "should be" is documentation, and the caller has to know. It matters
+         * most for the cap alarm: that alarm is one-shot and has already fired
+         * by the time this runs, so a refusal there is not a lost wake-up, it is
+         * the loss of the snooze's last exit. [CapAlarmReceiver] handles it.
+         */
+        private fun start(
+            context: Context,
+            action: String,
+            extras: (Intent) -> Unit = {},
+        ): Boolean =
+            runCatching {
+                val intent = Intent(context, SnoozeService::class.java).setAction(action)
+                extras(intent)
+                context.startService(intent)
+                true
+            }.getOrElse {
+                Log.e(TAG, "Starting the snooze service for $action was refused.", it)
+                false
+            }
+    }
+}

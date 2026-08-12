@@ -19,6 +19,21 @@
     -->
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
 
+    <!--
+      The ongoing "you are snoozed" notification, and the ended one. Requested at
+      runtime too (MainActivity): declaring it grants nothing since Android 13,
+      and without the grant every degraded-mode and failure message the app
+      relies on to not fail silently is dropped by the system.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+      A reboot clears every scheduled alarm and restarts nothing, so without this
+      an active snooze survives in the platform's zen rule with nothing left in
+      the app to end it (SPEC.md §8.1).
+    -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <application
         android:name=".SnoozemoApplication"
         android:allowBackup="false"
@@ -34,7 +49,70 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!--
+              Long-pressing the tile lands here (SPEC.md §4.2). It is also the
+              rule's configurationActivity, so the entry Settings offers next to
+              Snoozemo's DND rule goes to the same place.
+            -->
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
+
+        <!-- Started by the tile's trampoline; owns the running snooze. -->
+        <service
+            android:name=".snooze.SnoozeService"
+            android:exported="false" />
+
+        <!--
+          Transparent, and on the arm path: it starts the service before any UI
+          so arming never waits on rendering (SPEC.md §6.9). The action is how
+          :tile launches it without a compile-time dependency on :app.
+
+          Deliberately not android:noHistory: this activity outlives its own
+          first frame when it hosts the notification-permission dialog, and will
+          again for the Phase 4 end-condition sheet. noHistory would finish it
+          the moment the dialog took the foreground, dropping the result. It
+          always finishes itself instead, and excludeFromRecents keeps it out of
+          the recents list either way.
+
+          exported="false", and no intent-filter: an exported trampoline lets any
+          app on the phone silence it for the default cap. :tile names this class
+          explicitly instead, and the PendingIntent the system invokes carries
+          this app's identity, so nothing here needs to be reachable from
+          outside.
+        -->
+        <activity
+            android:name=".snooze.TileTrampolineActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Snoozemo.Transparent" />
+
+        <receiver
+            android:name=".snooze.CapAlarmReceiver"
+            android:exported="false" />
+
+        <!--
+          Backs the `Dismiss` action on the stuck-rule notification. Not
+          exported: the only sender is our own PendingIntent, and letting anyone
+          else clear that card would remove the one affordance pointing at a
+          rule that may still be silencing the phone.
+        -->
+        <receiver
+            android:name=".snooze.NotificationActionReceiver"
+            android:exported="false" />
+
+        <!-- Exported because the sender is the system (SPEC.md §8.1). -->
+        <receiver
+            android:name=".snooze.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

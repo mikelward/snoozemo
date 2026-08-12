@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A bold Z at 24dp. Quick Settings tints tile icons by state, so only the alpha
+  channel survives — this is a silhouette by necessity, not by style, and it has
+  to read on its own because some panels show no label at all (SPEC.md §4.2).
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?android:attr/colorControlNormal">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M5,4 L19,4 L19,7.5 L11.5,16.5 L19,16.5 L19,20 L5,20 L5,16.5 L12.5,7.5 L5,7.5 Z" />
+</vector>
