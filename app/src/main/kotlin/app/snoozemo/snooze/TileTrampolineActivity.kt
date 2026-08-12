@@ -36,8 +36,25 @@ class TileTrampolineActivity : ComponentActivity() {
      */
     private var awaitingPermission = false
 
+    /**
+     * Lazy so the preferences file is opened only where the permission is
+     * actually being considered. Everything here runs after the service start,
+     * but an end or an extend has no reason to pay for a disk read at all.
+     */
+    private val promptStore by lazy { NotificationPromptStore(this) }
+
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            // Recorded here rather than before the request, and this is the
+            // only place the tile touches the store: the snooze is already
+            // armed by the time an answer arrives, so neither the disk read nor
+            // the write is anywhere near the zen rule. A tile-first user may
+            // never open the app screen, so a denial only the tile witnessed
+            // still has to be one the screen knows about.
+            promptStore.record(
+                granted = granted,
+                rationale = shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS),
+            )
             // The snooze is already armed by now, and its ongoing notification
             // was posted while the permission was still denied — so the system
             // dropped it. Without this the whole first snooze runs with no
@@ -177,10 +194,18 @@ class TileTrampolineActivity : ComponentActivity() {
      * state anywhere** and a failed arm with no explanation. This is the one
      * place the tile-first path passes through.
      *
-     * Two things keep it from being a nuisance. The system shows the dialog at
-     * most twice and silently ignores later requests, so this stops asking by
-     * itself. And it is skipped on the lock screen, where a permission dialog
-     * cannot be answered and arming locked is a supported case (§4.2).
+     * Two things keep it from being a nuisance. The system shows the dialog
+     * only until it has been denied twice and silently ignores every request
+     * after that, so this stops mattering by itself. And it is skipped on the
+     * lock screen, where a permission dialog cannot be answered and arming
+     * locked is a supported case (§4.2).
+     *
+     * Deliberately *not* the three-way decision the app screen makes. Telling
+     * "denied once, still promptable" from "the system has stopped asking"
+     * needs `shouldShowRequestPermissionRationale` or a preferences read, and
+     * nothing between the tap and the zen rule going on may be either (flagged
+     * by Codex on PR #18). The screen answers that question where it is free
+     * to; here the cost of not knowing is a request the system drops.
      */
     private fun shouldAskForNotifications(): Boolean {
         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PERMISSION_GRANTED) {
