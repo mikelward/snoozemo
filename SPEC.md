@@ -1015,11 +1015,11 @@ location check — same information, more false positives, more code.
 
 ### 7.1 The escalation ladder is one decision, not five copies
 
-> **Status: decided, not yet built.** The behavior below is what the code already does; what
-> changes is where the decision lives. Tracked in `TODO.md`.
+> **Status: built.** `ReleaseEscalation` in `:core`, with the service and the no-service
+> receiver path as its two performers.
 
 When a release is refused, the app escalates: store the obligation, schedule an alarm, retry in
-process, tell the user, give up. Today that sequence is written out **separately in five entry
+process, tell the user, give up. That sequence used to be written out **separately in five entry
 points** — the service's recordless and recorded escalations, the cap alarm's receiver, the boot
 receiver, and the trampoline's no-service fallback — because each is reached when a different
 mechanism has failed and none can assume the others are available.
@@ -1048,10 +1048,22 @@ result*. Three properties make it worth the move:
   §4.5's copy rules exist to prevent.
 
 The testing argument is the strongest one. **None of these branches is reachable without a platform
-that refuses a zen write**, so no device test and no emulator can exercise them; today they are
-argued rather than executed, and review is the only thing checking them. As a pure function over a
-state, the whole ladder becomes reachable from a JVM test, which is exactly the reasoning §11
-already applies to `SnoozeController`.
+that refuses a zen write**, so no device test and no emulator can exercise them; as prose spread
+over five files they were argued rather than executed, and review was the only thing checking them.
+As a pure function over a state, the whole ladder is reachable from a JVM test, which is exactly the
+reasoning §11 already applies to `SnoozeController`.
+
+**Two performers, not five.** The service walks the ladder with a delayed callback as its
+in-process rung; the receiver path walks the same ladder with *starting the service* as that rung,
+one attempt rather than ten, because a broadcast receiver has neither the budget nor the lifetime
+for more. Everything else — which alarm, when the user is told, when to stop — is the decision's,
+not theirs.
+
+**One input changes what a caller does rather than when**: whether a record still describes the
+snooze. With one, the ladder asks for the identified "end it, whatever the clock says" alarm; with
+none, the plain wake-up that can drive off a rule nothing on disk describes. Asking for the wrong
+one is silent — a plain cap check on an early refused end restores the snooze, finds it unexpired,
+declines to act, and has spent the retry.
 
 ---
 

@@ -8,7 +8,11 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import app.snoozemo.core.ActiveSnooze
+import app.snoozemo.core.Attempt
 import app.snoozemo.core.EndReason
+import app.snoozemo.core.ReleaseEscalation
+import app.snoozemo.core.ReleaseProgress
+import app.snoozemo.core.ReleaseStep
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
 import app.snoozemo.core.ZenTrigger
@@ -82,22 +86,36 @@ object CapAlarm {
      * whatever the user snoozes next. Ending the wrong snooze is the fail-open
      * direction, but it is still an end the user didn't ask for, explained as a
      * reboot that couldn't resume, which never happened.
+     *
+     * [reason] travels with it for the same reason the identity does: this alarm
+     * is the *successor* to a release that was already refused, so it finishes
+     * an end that something else started. Without it every wake-up here reported
+     * `LOST_CAPABILITY`, turning a cap expiry into a capability failure — the
+     * user is told the app lost something rather than that their time limit was
+     * reached, and the platform's Modes UI is told `CONTEXT` rather than the
+     * trigger that actually applied.
      */
-    fun armReleaseRetry(context: Context, atMillis: Long, recordStartedAtMillis: Long): Boolean =
-        schedule(context, atMillis, SnoozeService.ACTION_CAP_LOST, recordStartedAtMillis)
+    fun armReleaseRetry(
+        context: Context,
+        atMillis: Long,
+        recordStartedAtMillis: Long,
+        reason: EndReason,
+    ): Boolean =
+        schedule(context, atMillis, SnoozeService.ACTION_CAP_LOST, recordStartedAtMillis, reason)
 
     private fun schedule(
         context: Context,
         atMillis: Long,
         action: String,
         recordStartedAtMillis: Long? = null,
+        reason: EndReason? = null,
     ): Boolean {
         val alarmManager = context.getSystemService(AlarmManager::class.java)
         return runCatching {
             alarmManager.setAndAllowWhileIdle(
                 AlarmManager.RTC_WAKEUP,
                 atMillis,
-                pendingIntent(context, action, recordStartedAtMillis),
+                pendingIntent(context, action, recordStartedAtMillis, reason),
             )
             true
         }.getOrElse {
@@ -151,6 +169,7 @@ object CapAlarm {
         context: Context,
         action: String,
         recordStartedAtMillis: Long?,
+        reason: EndReason?,
     ): PendingIntent =
         PendingIntent.getBroadcast(
             context,
@@ -159,6 +178,7 @@ object CapAlarm {
                 recordStartedAtMillis?.let {
                     intent.putExtra(SnoozeService.EXTRA_RECORD_STARTED_AT, it)
                 }
+                reason?.let { intent.putExtra(SnoozeService.EXTRA_END_REASON, it.name) }
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
@@ -240,8 +260,13 @@ class CapAlarmReceiver : BroadcastReceiver() {
             // The service checks it against the record it adopts; the fallback
             // below has to check for itself.
             val endStartedAt = intent.getLongExtra(SnoozeService.EXTRA_RECORD_STARTED_AT, 0L)
-            if (!SnoozeService.endWithoutCap(context, endStartedAt)) {
-                releaseDirectlyIfStillOurs(context, endStartedAt)
+            // The reason the release this is retrying was started for. Absent on
+            // an alarm armed before this extra existed, where `LOST_CAPABILITY`
+            // is both the historical behavior and what the action means on its
+            // own: a snooze whose cap is gone.
+            val reason = SnoozeService.endReasonFrom(intent, default = EndReason.LOST_CAPABILITY)
+            if (!SnoozeService.endWithoutCap(context, endStartedAt, reason)) {
+                releaseDirectlyIfStillOurs(context, endStartedAt, reason)
             }
             return
         }
@@ -264,13 +289,17 @@ class CapAlarmReceiver : BroadcastReceiver() {
  * and the alternative is threading a loaded record through a function whose
  * other callers have none.
  */
-private fun releaseDirectlyIfStillOurs(context: Context, recordStartedAtMillis: Long) {
+private fun releaseDirectlyIfStillOurs(
+    context: Context,
+    recordStartedAtMillis: Long,
+    reason: EndReason,
+) {
     val queuedFor = recordStartedAtMillis.takeIf { it != 0L }?.let(Instant::ofEpochMilli)
     if (!ActiveSnooze.retryStillApplies(ActiveSnoozeStore(context).load(), queuedFor)) {
         Log.w(RELEASE_TAG, "Dropping a stale release retry; a newer snooze owns the record now.")
         return
     }
-    releaseDirectly(context, EndReason.LOST_CAPABILITY)
+    releaseDirectly(context, reason)
 }
 
 /**
@@ -400,65 +429,108 @@ internal fun releaseDirectly(context: Context, reason: EndReason): Boolean {
     }
 
     // The release itself was refused, and the alarm that would have retried it
-    // is spent. Schedule another so the exit still exists — a cap that fires
-    // late is a far smaller failure than one that never fires.
-    //
-    // Which alarm depends on whether a record survives, and getting this wrong
-    // is silent. A plain cap check asks "has the record expired yet?", so on an
-    // *early* refused end — a manual `End now` hours before the cap — the
-    // wake-up would restore the snooze, find it unexpired, and decline to do
-    // anything, having spent the one retry this path had. The user's exit would
-    // be gone and the phone quiet until the original deadline. `ACTION_CAP_LOST`
-    // carries the instruction that actually applies here: end it, whatever the
-    // clock says. It is identified, so it cannot end a newer snooze.
-    //
-    // With no record, the cap check is right: it finds nothing to restore and
-    // falls through to the recordless release, which is the only thing that can
-    // drive off a rule nothing on disk describes.
-    Log.e(RELEASE_TAG, "Releasing without the service was refused; retrying via a fresh alarm.")
-    val retryArmed = snooze?.let {
-        CapAlarm.armReleaseRetry(
-            context,
-            System.currentTimeMillis() + RELEASE_RETRY_MS,
-            it.startedAt.toEpochMilli(),
-        )
-    } ?: CapAlarm.arm(context, System.currentTimeMillis() + RELEASE_RETRY_MS)
-    if (retryArmed) return false
-
-    // Nothing schedulable is left, so the app cannot promise to end this itself.
-    // Say so where the user can act on it: the tile and the notification both
-    // still offer an immediate manual end, and the record is still on disk, so
-    // anything that starts the app later retries. Silence here would be the
-    // failure — a quiet phone with no explanation and no prompt.
-    // `Couldn't end the snooze — trying again` would be false twice over here:
-    // nothing is trying, and with no record there is no snooze to name. The
-    // stuck-rule notification is the honest one and, unlike that message, it
-    // carries a way out — which on this path is the only one left.
-    Log.e(RELEASE_TAG, "Could not schedule a release retry either; asking the user to end it.")
-    // Written before the post, and the order is the whole point. The post can
-    // be refused — `POST_NOTIFICATIONS` is denied until something asks, and on
-    // a tile-first install nothing has — and by here there is no alarm, no
-    // service and no callback behind it, so a card that never appears would be
-    // the end of the line for a rule that may still be silencing the phone.
-    // The flag outlives this process, and every later non-arm start reads it
-    // and drives the rule off (`SnoozeService.onStartCommand`). With a record
-    // still on disk it simply waits: its readers require that the record is
-    // gone first, because until then the record is the better successor.
-    val remembered = PendingFailureStore(context).rememberRuleMayBeStuck()
-    val told = SnoozeNotifications(context.applicationContext).showStuckRule()
-    if (remembered || told) return false
-
-    // Neither the durable obligation nor the card took, so nothing scheduled,
-    // stored or on screen is left — the end of every successor this path has.
-    // One thing is still worth trying: the service holds an in-process retry,
-    // and while its refusal is how this function was reached, that refusal and
-    // this attempt are a moment apart and a start costs one call. If it takes,
-    // the retry lives as long as the process does, which is more than nothing.
-    Log.e(RELEASE_TAG, "The stuck-rule obligation could not be stored or shown; asking the service.")
-    if (!SnoozeService.releaseStuck(context)) {
-        Log.e(RELEASE_TAG, "Nothing is left to release a possibly-stuck rule; the user must turn it off.")
-    }
+    // is spent — so the ladder decides what is left (SPEC.md §7.1). This site
+    // used to write its own version of that sequence, in the wrong order: the
+    // alarm went first and the durable obligation only if the alarm was
+    // refused, so an alarm that armed and was then canceled by an unrelated
+    // `cancelAll` left nothing written down about a rule that may still be on.
+    Log.e(RELEASE_TAG, "Releasing without the service was refused; escalating.")
+    escalateWithoutService(context, snooze, reason)
     return false
+}
+
+/**
+ * Walks the release ladder from a receiver, where there is no service to hold a
+ * retry.
+ *
+ * The same decision as the service's, with the performers a receiver actually
+ * has. The in-process rung is *starting the service*, which holds a real
+ * delayed retry of its own — and it is one attempt rather than ten, because a
+ * broadcast receiver has neither the budget nor the lifetime for more, so a
+ * refused start spends that rung outright and the ladder moves on.
+ *
+ * [snooze] is the record this is about, or null where nothing on disk describes
+ * the rule. It decides which alarm carries the obligation onward: a plain cap
+ * check asks "has the record expired yet?", so on an early refused end — a
+ * manual exit hours before the cap — it would restore the snooze, find it
+ * unexpired, and decline to act, having spent the retry.
+ */
+private fun escalateWithoutService(context: Context, snooze: ActiveSnooze?, reason: EndReason) {
+    val pendingFailure = PendingFailureStore(context)
+    val notifications = SnoozeNotifications(context.applicationContext)
+
+    // Seeded from what is already on disk rather than re-written: a previous
+    // escalation may have stored this same obligation, which carries no
+    // identity precisely so it can be shared.
+    var progress = ReleaseProgress(
+        snoozeIdentified = snooze != null,
+        obligationStored = if (pendingFailure.ruleMayBeStuck()) Attempt.TOOK else Attempt.NOT_TRIED,
+    )
+
+    while (true) {
+        when (val step = ReleaseEscalation.next(progress)) {
+            ReleaseStep.StoreObligation -> progress = progress.copy(
+                obligationStored = Attempt.of(pendingFailure.rememberRuleMayBeStuck()),
+            )
+
+            // `Do Not Disturb may still be on`, carrying `Unsnooze`. The last
+            // thing that outlives this receiver, and the only one that hands the
+            // user an exit rather than describing one.
+            ReleaseStep.TellUser -> progress = progress.copy(
+                userTold = Attempt.of(notifications.showStuckRule()),
+            )
+
+            is ReleaseStep.ArmAlarm -> progress = progress.afterArmingAlarm(
+                armReleaseAlarm(context, step, snooze, reason),
+            )
+
+            ReleaseStep.RetryInProcess -> {
+                // The service's refusal is how this function was reached, but
+                // that refusal and this one are a moment apart and a start costs
+                // one call. If it takes, the service runs the rest of this same
+                // ladder with a retry that lives as long as the process does.
+                if (SnoozeService.releaseStuck(context, reason)) {
+                    Log.w(RELEASE_TAG, "The service took the release over; handing it on.")
+                    return
+                }
+                progress = progress.afterFinalInProcessAttempt()
+            }
+
+            ReleaseStep.HandOff -> {
+                Log.w(RELEASE_TAG, "An alarm took the release over; handing it on.")
+                return
+            }
+
+            ReleaseStep.Exhausted -> {
+                // Named rather than fallen off the end. What is left is the
+                // persisted obligation, which every later non-arm start reads
+                // and acts on, and — where a record survives — its own cap.
+                Log.e(RELEASE_TAG, "Every release rung is spent; the user must turn Do Not Disturb off.")
+                return
+            }
+
+            // Unreachable: this walk starts from a refused release and nothing
+            // in it re-tests the rule, so `ruleOff` stays false. Handled rather
+            // than thrown, because a stuck rule is not worth crashing a receiver
+            // over.
+            ReleaseStep.Settled -> return
+        }
+    }
+}
+
+/** Which alarm carries the obligation onward, per the ladder's answer. */
+private fun armReleaseAlarm(
+    context: Context,
+    step: ReleaseStep.ArmAlarm,
+    snooze: ActiveSnooze?,
+    reason: EndReason,
+): Boolean {
+    val at = System.currentTimeMillis() + RELEASE_RETRY_MS
+    return if (step.forIdentifiedSnooze && snooze != null) {
+        CapAlarm.armReleaseRetry(context, at, snooze.startedAt.toEpochMilli(), reason)
+    } else {
+        CapAlarm.arm(context, at)
+    }
 }
 
 /**
