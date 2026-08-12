@@ -18,7 +18,8 @@ release rather than dropped.
 - [x] Claude Code web session hook to provision the Android SDK
       (`.claude/hooks/session-start.sh` + `.claude/settings.json`).
 - [x] Gradle + AGP + Compose skeleton, buildable in CI: application ID `app.snoozemo`,
-      minSdk 33, targetSdk 36, `versionCode` derived from the `main` commit count.
+      minSdk 33 (raised to 34 in Phase 2, below), targetSdk 36, `versionCode` derived from
+      the `main` commit count.
 - [x] Split the core from the UI in the scaffold itself (maintainer, 2026-08-11), starting
       from `SPEC.md` §11's shape: `:app`, `:tile`, `:core`, `:dnd`, `:presence`. The
       requirement is a seam that keeps the core functional, testable, and buildable on its
@@ -50,6 +51,18 @@ release rather than dropped.
       the `TileService` and swappable at runtime via `Tile.setIcon`. What is fixed is the
       *treatment*: the system tints it per tile state, so only the alpha channel survives
       and the asset is effectively a silhouette.
+      - **Draw it for both tints, and check it in both** (maintainer, 2026-08-12). The
+        active tile inverts — light background when off, dark when on, matching the system
+        Do Not Disturb tile — and the system tints the glyph to contrast with whichever it
+        drew. So the same asset is dark-on-light *and* light-on-dark, and the failure mode
+        is one-directional: thin strokes and tight counters read cleanly as dark-on-light
+        and fill in as light-on-dark. On a 1×1 tile this mark is the whole of the
+        armed/inactive signal (`SPEC.md` §4.2), so a glyph that survives only one tint
+        loses the state outright.
+      - **The placeholder's single `Z` has to go** (maintainer, 2026-08-12) — `ZZZ` or
+        similar instead. `SPEC.md` §4.2's `Zz` is not ruled out; that call comes with the
+        drawing. It stays for now so there is something installable to test with, but it is
+        wanted soon rather than at the end of the phase list.
 - [ ] `docs/PRIVACY.md` backing the hosted privacy policy, plus the Play Data Safety
       answers it has to agree with ("no data collected, no data shared", `SPEC.md` §12).
 
@@ -82,28 +95,136 @@ the point is that every other line of the app is worthless if it isn't true.
 
 ## Phase 2 (M2) — Tile, trampoline, notification, cap
 
-- [ ] `SnoozeTileService`: `Zz` icon, `Snooze here` / `Snoozing` labels, subtitle countdown,
+- [x] `SnoozeTileService`: `Zz` icon, `Snooze here` / `Snoozing` labels, subtitle countdown,
       `setStateDescription` for TalkBack, arm-on-tap and end-on-tap, long-press to settings
       via `QS_TILE_PREFERENCES` (`SPEC.md` §4.2). Arming works with the device locked — no
       `unlockAndRun()`.
-- [ ] `ArmTrampolineActivity` (`SPEC.md` §6.9): transparent theme, starts the service in
+- [x] `ArmTrampolineActivity` (`SPEC.md` §6.9): transparent theme, starts the service in
       `onCreate` before any UI, launched via `startActivityAndCollapse(PendingIntent)`.
-- [ ] Ongoing notification on channel `snooze_active`, `IMPORTANCE_LOW`, with `End now` and
+- [x] Ongoing notification on channel `snooze_active`, `IMPORTANCE_LOW`, with `End now` and
       `+30 min` actions (`SPEC.md` §4.3).
 - [x] `SnoozeController` state machine (IDLE / ARMING / ARMED / CHECKING / RELEASED) as
       plain Kotlin over an injected clock — the unit-test surface for everything that
       follows. Covers the three invariants directly: the cap fires (and can't be made to
       fire early by a stray alarm), `end` is idempotent from any state, and every ambiguous
       presence event resolves toward ending.
-- [ ] Duration cap: 8 h default, configurable 30 min – 24 h, `AlarmManager
-      .setAndAllowWhileIdle` as the backstop plus an in-service coroutine timer for the
-      normal case. Armed *before* anything that can throw.
-- [ ] `endSnooze(reason)` as the single idempotent exit path, and the one-shot ended
+- [x] Duration cap: 8 h default, configurable 30 min – 24 h, `AlarmManager
+      .setAndAllowWhileIdle`. Armed *before* anything that can throw, and a snooze that
+      can't schedule it doesn't arm at all — the alarm **is** the cap, with no in-process
+      timer behind it, so arming without it would create a snooze with no time bound
+      (flagged by Codex on PR #8).
+- [x] Restore an active snooze after reboot: `RECEIVE_BOOT_COMPLETED` and a receiver that
+      re-arms the cap alarm from the record and restarts the service (`SPEC.md` §8.1, §8.3).
+      The alarm is re-armed in the receiver, before and independently of the service start,
+      so the cap lands even if starting the service is refused (flagged by Codex on PR #8). A boot
+      that *can't* reschedule the cap ends the snooze instead of restoring it — restoring would
+      re-assert the rule with no guaranteed exit, which is the one state `SPEC.md` §7 forbids.
+- [x] Fail open on a release that finds nothing left to release. A failed release keeps the record
+      so the next cap check or tap retries — but only where a rule still exists. Policy access
+      revoked deletes the app's rules, so retrying would fail identically forever and the record
+      would strand the app showing `Snoozing` over a ringing phone, never keeping `SPEC.md` §8.2's
+      promise (flagged by Codex on PR #8). `ZenFailure.nothingLeftToRelease` draws the line.
+- [x] Request `POST_NOTIFICATIONS` at runtime. Declaring it grants nothing since Android 13,
+      so without the request every degraded-mode and failure message was dropped by the
+      system — the app failed silently by default (flagged by Codex on PR #8). Asked from
+      the app screen **and from the trampoline**: the tile can be added straight from the
+      Quick Settings editor, so a tile-first user may never open the app, and with the tile
+      running 1×1 that user would have an armed snooze with no visible state anywhere. The
+      trampoline is the one place that path passes through; the request is queued behind the
+      service start so it never delays the arm, and skipped on the lock screen.
+- [x] Keep the tile's intents **explicit** (`ComponentName` by string, since `:app` depends on
+      `:tile` and not the reverse). The implicit `Intent(action).setPackage(…)` they started as
+      forced the trampoline to stay `exported`, which let any app on the phone silence it — and the
+      end intent resolved to nothing at all, since the service has no `<intent-filter>` to match
+      (found while addressing the export finding on PR #8).
+- [ ] **The policy-access watch has a gap, and the fix needs a device.** The receiver is
+      registered dynamically because `ACTION_NOTIFICATION_POLICY_ACCESS_GRANTED_CHANGED` is
+      not on the manifest-receiver exemption list, so it lives only as long as
+      `SnoozeService` — and an ordinary started service can be stopped in the background
+      (flagged by Codex on PR #8). Every non-arm wake-up now reconciles, and `MainActivity`
+      reconciles on open, so the window closes on the next event; but between them the tile
+      and notification can claim a snooze the platform already dropped. Note the harm is a
+      **stale claim, not a silent phone** — revoking access deletes the app's rule, so the
+      phone rings. Verify on a device whether a manifest receiver gets this broadcast at all
+      before designing anything heavier; if not, the options are a foreground service in the
+      `play` flavor (which `SPEC.md` §3 deliberately avoids) or living with reconciliation.
+- [x] One owner for "is a snooze running". The Phase 1 debug screen kept its own
+      `DebugSnoozeFlag` and drove the zen rule directly, which was harmless until the tile's
+      long-press landed on that same screen: its End button then turned DND off while leaving
+      the record, cap alarm, service, tile and notification intact, and the next sticky
+      recreation re-asserted the rule with no user action behind it (flagged by Codex on
+      PR #8). The screen now reads `ActiveSnoozeStore` and routes arm/end through
+      `SnoozeService`; `DebugSnoozeFlag` is deleted.
+- [x] Warm the zen rule id at process start and when the tile starts listening, so a
+      cold-process tile tap doesn't wait on a `SharedPreferences` disk read immediately before
+      `STATE_TRUE` (flagged by Codex on PR #8). `SnoozemoApplication` finally does the warming
+      its own comment promised since Phase 0.
+- [x] Always leave a successor for a spent cap alarm. It is one-shot, so a release the platform
+      refused, or a record that wouldn't erase, would be revisited by nothing (flagged by Codex
+      on PR #8). Restoring also re-arms the cap from the record unconditionally — the alarm
+      firing is one of the things that starts the service, so a restore that trusted it could
+      re-assert the rule with no exit behind it.
+- [x] Never depend on `startService` succeeding for the cap. The cap alarm is one-shot and
+      has already fired by the time its receiver runs, so a refused service start there is
+      the loss of the snooze's last exit, not a lost wake-up (flagged by Codex on PR #8 —
+      correcting a comment of ours that claimed the opposite). `CapAlarmReceiver` now
+      releases the rule itself when the service can't be started, and reschedules a short
+      retry if even that is refused.
+- [ ] **User-facing copy is provisionally approved and wants a second pass** (maintainer,
+      2026-08-11): "strings seem ok … I'll tweak them to be shorter later". Three were
+      already shortened on their read — `Couldn't start the snooze` now covers every reason
+      an arm didn't take (which internal step gave way is a debug-log fact, not something a
+      notification should name), `Couldn't resume snoozing` replaced a sentence about time
+      limits and restarts, and `Snooze ended — it couldn't be saved` was deleted for being
+      unparseable outside the code. The rest ship as they are.
+      - **Named for the next pass** (maintainer, 2026-08-12): `Snooze ended — Snoozemo can't keep
+        it going` is too long and wants shortening, and where the *initial* snooze is what failed
+        the message should read more like `Can't snooze`. Worth separating the two cases while
+        rewording, since one message currently has to cover both: a snooze that ran and then lost
+        the capability, and one that never got going at all. The arm-failure path already has its
+        own string (`Couldn't snooze`) — the question is whether the tense is right and whether
+        the ended-message ever fires early enough to be describing an arm.
+- [x] `endSnooze(reason)` as the single idempotent exit path, and the one-shot ended
       notification that names the reason (`SPEC.md` §4.5).
+- [ ] **Next PR: fix the access flow — the status line has to be the thing you tap** (maintainer,
+      2026-08-12). `Snoozemo needs Do Not Disturb access` reads like an action and isn't one; the
+      only live target is a separate `Grant access` button, so tapping the sentence that names the
+      problem does nothing. Make the whole state tappable, and go over the flow end to end rather
+      than patching that one line.
+      - **It is not a runtime permission**, which is part of why the current shape is confusing:
+        Do Not Disturb access is a Settings toggle reached with
+        `ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS`, so the user leaves the app, flips it, and
+        comes back — there is no in-app dialog and no result callback (`SPEC.md` §5.2). What the
+        app *does* own is noticing the return: the service reconciles on every non-arm wake-up and
+        the screen reconciles on open, so the state should update by itself once they are back.
+      - **`POST_NOTIFICATIONS` is the one that really is a runtime prompt**, and the two sit next
+        to each other on the same screen looking alike. Whatever the fix is, it should make the
+        difference legible rather than hide it — one leaves the app, one doesn't.
+      - Covers the tile-first path too: a user who added the tile from the Quick Settings editor
+        may reach this screen only after a failed arm, so it is as much a repair surface as an
+        onboarding one.
 - [ ] `requestAddTileService()` during onboarding — asked once, never again.
-- [ ] Persist `ActiveSnooze` on every transition (DataStore), so process death is
-      recoverable.
-- [ ] **Move the policy-access listener off the activity** (flagged by Codex on PR #5).
+- [ ] Real anchor capture on the arm path. Until Phase 3 lands `PresenceMonitor`, every snooze
+      arms honestly duration-only rather than pretending to track a place it never captured.
+- [x] **minSdk 34** (maintainer, 2026-08-11). The tile's `startActivityAndCollapse` needed the
+      deprecated `Intent` overload on API 33; raising the floor deleted the version branch and the
+      lint suppression together, so the arm path is a single code path again. Reasoning recorded in
+      `SPEC.md` §11.
+- [ ] Verify what the tile looks like in the **compact/collapsed** Quick Settings panel on Pixel
+      and One UI. Some presentations show the icon only — no label, no subtitle — so the glyph has
+      to carry the meaning alone. Widens the §10 question about whether `Tile.setSubtitle` renders
+      at all. **No longer blocking:** the maintainer settled the direction (2026-08-11) — they run
+      the tile as **1×1**, so icon-only is the expected presentation, the notification carries the
+      status, and nothing load-bearing goes on the tile (`SPEC.md` §4.2). What is left is a polish
+      check plus one real design consequence: the icon has to carry armed-vs-inactive on its own,
+      with no label beside it, which is an input to the Phase 0 tile-mark item.
+- [x] Persist `ActiveSnooze` on every transition, so process death is recoverable. Landed on
+      `SharedPreferences` rather than DataStore, deliberately: it is read on the arm path and at
+      every service start, and must not cost a coroutine or a disk wait at tap time. Settings,
+      which are neither hot nor on that path, still go to DataStore when they land.
+- [x] **Move the policy-access listener off the activity** (flagged by Codex on PR #5) — it now
+      lives on `SnoozeService` for as long as a snooze runs.
+- [ ] ~~Move the policy-access listener off the activity~~ (superseded by the line above).
       Phase 1 registers `ACTION_NOTIFICATION_POLICY_ACCESS_GRANTED_CHANGED` in
       `onStart`/`onStop`, so access revoked while the app is backgrounded mid-snooze isn't
       noticed until the user reopens it — the state reconciles on return, but "ends the
@@ -158,6 +279,30 @@ the point is that every other line of the app is worthless if it isn't true.
 
 ## Phase 5 (M5) — Edge cases and degraded modes
 
+- [ ] **Make the refused-release escalation one pure decision in `:core`** (`SPEC.md` §7.1).
+      Behavior-preserving: the ladder is already store obligation → arm alarm → retry in process →
+      tell the user → exhausted. What changes is that it stops being written out separately in the
+      service's two escalations, the cap receiver, the boot receiver and the trampoline fallback,
+      and becomes a state → next-step function each of them advances.
+      - **Why now rather than as polish.** Codex's review of PR #8 produced *nine consecutive
+        rounds* of real findings in this ladder, every one an instance of a single copy forgetting
+        a shared rule, and **four of them were introduced by the fix to the previous one**. The
+        defect rate tracks the number of copies, so removing the copies is the fix; fixing the
+        instances is not converging.
+      - **The shape**: inputs are `ruleOff`, `recordPresent`, `obligationStored`, `alarmArmed`,
+        `inProcessAttemptsUsed`, `userTold` — each meaning *did this actually take*, not *was it
+        attempted*, which is the distinction the duplicated versions kept losing. Output names
+        every rung including `Exhausted`, so no caller can fall off the end while still claiming a
+        retry is underway.
+      - **The payoff is testability, not tidiness.** None of these branches is reachable without a
+        platform that refuses a zen write, so today the whole ladder is argued rather than
+        executed and review is the only thing testing it. As a pure function it is reachable from
+        a JVM test — the same argument `SPEC.md` §11 makes for `SnoozeController`. Cover each rung
+        and each "attempted but refused" transition; add a case whenever a field bug shows one.
+      - **Expect a round or two of review findings on the new shape itself.** That is fine and is
+        the point: they will land against something a test can reach.
+      - Carries no user-visible change, so it is a `refactor:` commit — but the tests it makes
+        possible are the deliverable, not the move.
 - [ ] Service killed and recreated: re-assert the zen rule, resume tracking, and where a
       background context can't get location, degrade to duration-only with a
       `Resume tracking` notification action (`SPEC.md` §8.1).
@@ -165,8 +310,51 @@ the point is that every other line of the app is worthless if it isn't true.
       time. `On restart: resume / end` setting, defaulting to resume (`SPEC.md` §8.3).
 - [ ] Permission revoked mid-snooze — policy access or location — ends the snooze with a
       reason (`SPEC.md` §8.2).
-- [ ] The §8.4 table: airplane mode, location services off, double-arm, short trip and
+- [ ] The §8.5 table: airplane mode, location services off, double-arm, short trip and
       return, bad-accuracy anchor, battery saver, uninstall while snoozed.
+- [ ] The §8.4 cases: `restricted` standby bucket, force-stop, OEM battery management.
+- [ ] **The user turning Do Not Disturb off from the shade may silently end our snooze**
+      (maintainer, 2026-08-12 — "we should handle that soon"). §5.6 covers the *pre-existing*
+      case at arm time; this is the state changing underneath a running snooze. If switching
+      DND off deactivates Snoozemo's rule, the snooze is over while the record, the tile and
+      the notification all still say it is running — state drift in the direction that makes
+      the app look broken rather than unsafe, but drift the user caused deliberately and will
+      expect us to notice.
+      - **Confirm the platform behavior first**, because it decides whether there is anything
+        to build: does turning DND off from the shade deactivate an app-owned
+        `AutomaticZenRule`, leave it active-but-overridden, or neither? On the hardware list.
+      - If it does deactivate: treat it as an ordinary end — clear the record, take the
+        notification down, update the tile, and give it its own `EndReason` so §4.5's "every
+        ending has a reason" holds. It is the user's own action, so there is nothing to warn
+        about and nothing to retry.
+      - **Observable without new cost**: `ACTION_INTERRUPTION_FILTER_CHANGED`, plus reading
+        our own rule's state back. Register it beside the policy-access receiver, which has
+        the same process-lifetime limit (§8.4) — so this is reliable on the wake-ups we
+        already have and **must not** justify adding one.
+      - The two neighboring cases are deliberately *not* in scope: DND turned on by the user
+        or another app while we are idle (harmless; at most the tile reads "not snoozing"
+        beside a quiet phone), and another app's rule ending while ours is on (nothing to do).
+- [ ] **A reboot that stays locked outlasts the cap** (flagged by Codex on PR #8).
+      `BOOT_COMPLETED` reaches credential-unaware components only after the *first unlock*,
+      and the snooze record lives in credential-protected storage, so a phone rebooted
+      mid-snooze and left locked past its cap never runs the boot receiver — while the zen
+      rule may still be on from before. Fixing it means a minimal record in device-protected
+      storage (the cap instant and the rule id, nothing more — the anchor and place name stay
+      credential-protected), a direct-boot-aware receiver on `LOCKED_BOOT_COMPLETED`, and a
+      release path that works with only that. Worth confirming on hardware first: whether
+      DND survives a reboot at all, and whether `setAutomaticZenRuleState` is callable
+      during direct boot — the fix is shaped differently if either answer is no.
+- [ ] **A backwards wall-clock change can outlast the cap** (flagged by Codex on PR #8).
+      The cap alarm is `RTC_WAKEUP` and the controller's expiry test reads `Clock.systemUTC()`,
+      so both move with the wall clock: setting the date back far enough keeps DND on past
+      the 24 h backstop, which is principle 1's failure. The asymmetry is worth noting —
+      a *forward* change ends the snooze early, which is the safe direction; only a
+      deliberate backwards change extends it. Fixing it properly means the live deadline
+      runs on `SystemClock.elapsedRealtime` while the persisted record keeps a wall-clock
+      expiry for reboot recovery (elapsed realtime resets on boot), plus a stored boot
+      reference so a restored record can tell which of the two applies. That touches the
+      record's schema and `SPEC.md` §7's "the alarm *is* the cap", so it is its own change
+      with its own tests rather than a fold-in.
 - [ ] Pre-existing DND: Snoozemo arms on top and, on release, turns off only its own rule
       (`SPEC.md` §5.6).
 - [ ] **Sharing the debug log** (`SPEC.md` §4.6) — the user-facing half of the Phase 3 log,
@@ -243,28 +431,81 @@ that can only be settled on a real device, ordered by risk.
        fallback end conditions stay off the roadmap.
 3. [ ] `setAutomaticZenRuleState` genuinely silences the device. A formality on Pixel — do
        it at Phase 1 anyway, since every other line of the app assumes it.
+4. [ ] **`startService` from the cap alarm and the boot receiver actually starts it.** Both
+       run while the app should be on the temporary allowlist that background-start
+       restrictions exempt — the alarm because `setAndAllowWhileIdle` grants a window, the
+       boot receiver because `BOOT_COMPLETED` does — but "should be" is documentation, and
+       the cap alarm failing to reach the service is a snooze that never ends. The refusal
+       is logged rather than swallowed today; if a device refuses it, the release path has
+       to move into the receiver itself (`goAsync`) or onto a foreground service. Reboot
+       during a snooze and let a short cap expire in Doze on both Pixel and One UI.
+
+5. [ ] **App Standby Buckets, and whether the cap survives `restricted`** (`SPEC.md` §8.4).
+       Stock Android, no OEM needed: an app in the `restricted` bucket has
+       `setAndAllowWhileIdle` and jobs throttled to roughly once a day, which would delay the
+       duration cap — principle 1's backstop — by up to that. Expected to be low-risk in
+       practice, because arming is a tile tap and app interaction promotes toward the active
+       bucket, so the exposure is long snoozes on a phone where Snoozemo is otherwise unused.
+       Force the state rather than waiting for it: `adb shell am set-standby-bucket
+       app.snoozemo restricted`, arm a short cap, and see when it fires. Do the same for
+       force-stop, where the expected answer is that there is *no* in-app recovery and the
+       user's route back is the system DND toggle.
+
+6. [ ] **What the shade's DND toggle does to an app-owned rule.** Blocks the Phase 5 item
+       above: with a Snoozemo snooze running, turn Do Not Disturb off from Quick Settings and
+       read our `AutomaticZenRule` back. Does it deactivate, stay active-but-overridden, or
+       something else? The answer decides whether there is a bug to fix or only a comment to
+       write. Repeat on One UI at Phase 8 — this is the sort of thing Samsung changes.
 
 ### Tuning — these change details, not direction
 
-4. [ ] Real battery draw over a 4-hour stationary snooze versus the `SPEC.md` §9 estimates,
+7. [ ] Real battery draw over a 4-hour stationary snooze versus the `SPEC.md` §9 estimates,
        per flavor.
-5. [ ] Whether the §4.4 sheet is right at all: is now + 1 h a sane default, are 30-minute
+8. [ ] Whether the §4.4 sheet is right at all: is now + 1 h a sane default, are 30-minute
        steps the right granularity, and does anyone reach for the time row often enough to
        justify the calendar in v1.1?
-6. [ ] Does the trampoline activity produce any visible flash (`SPEC.md` §6.9)?
+9. [ ] Does the trampoline activity produce any visible flash (`SPEC.md` §6.9)?
+10. [ ] **Check the raised ongoing notification on a device** (`SPEC.md` §4.3). It moved from
+        `IMPORTANCE_LOW` to `IMPORTANCE_DEFAULT` (maintainer, 2026-08-12) — low grouped it,
+        which made it less discoverable and put an extra tap in front of `End now` and
+        `+30 min`. Confirm the intended effect: both actions reachable without expanding a
+        group, the countdown legible at a glance, and no genuine intrusion over several hours
+        (the premise is that the user isn't looking at the phone during a snooze, and it is
+        in Do Not Disturb anyway). Also check the status-bar icon reads at that size while
+        snoozing. **Test on a fresh install or after clearing app data** — channel importance
+        is fixed at creation, so a device that ran an earlier build keeps the old level.
 
 ### Samsung, at Phase 8
 
-7. [ ] Does `setAutomaticZenRuleState` silence a One UI 8 device, and is the rule visible
+10. [ ] Does `setAutomaticZenRuleState` silence a One UI 8 device, and is the rule visible
        and disableable in Samsung's own Settings?
-8. [ ] Does `Tile.setSubtitle` render on One UI?
-9. [ ] Does Sleeping Apps interfere with geofence delivery, or with a `location`-typed
-       foreground service in the `direct` flavor?
+9. [ ] Does `Tile.setSubtitle` render on One UI?
+10. [ ] Does Sleeping Apps interfere with geofence delivery, or with a `location`-typed
+        foreground service in the `direct` flavor?
 
 ## Deferred
 
 Nothing here is scheduled; each is a sequel that follows from something already built
 (`SPEC.md` §14).
+
+- [ ] **Not v1 — let a snooze choose its zen policy, or which of several rules to use.**
+      Ruled out for v1 by the ownership constraint below (maintainer, 2026-08-12).
+      Today Snoozemo owns exactly one `AutomaticZenRule` with one `ZenPolicy` (`SPEC.md`
+      §5.5: priority filter, alarms and repeat callers through). §5.5 already contemplates
+      "total silence is available in settings"; this is the general version — a small set
+      of named policies (say `Normal`, `Total silence`, `Calls only`) that the tile's sheet
+      or a per-place setting can pick between.
+      - **The constraint to check first**: an app can only drive rules it *owns* (§5.6).
+        So this cannot mean "activate the user's existing Sleeping or Driving mode" — it
+        means Snoozemo creating and owning several rules, or rewriting its one rule's
+        policy at arm time. Those are different designs with different costs: several rules
+        clutter the user's Modes list but are switchable instantly; rewriting one rule is
+        tidier but is a `setAutomaticZenRule` call on the arm path, which §4.1 does not
+        have budget for — it would have to happen at settings-change time, not at arm time.
+      - Interacts with **saved places** below, which already wants a per-place policy, and
+        with `ZenDeviceEffects` on API 35+ (§5.5's "make the phone boring too" idea).
+      - Worth a device check before designing: how do several app-owned rules present in
+        the Modes UI, and does the user experience them as clutter?
 
 - [ ] **Calendar-seeded end times** — the first thing to add once the Play declarations
       land. `READ_CALENDAR`, requested in-context from the sheet, feature hides itself if
@@ -278,7 +519,7 @@ Nothing here is scheduled; each is a sequel that follows from something already 
       places, per-place policies, and caps change that, and losing them on a phone swap is
       its own failure. Don't build anything that assumes never. The options, cheapest
       first:
-      - `dataExtractionRules` (API 31+, and minSdk is 33) can allow **device-to-device
+      - `dataExtractionRules` (API 31+, and minSdk is 34) can allow **device-to-device
         transfer while disabling cloud backup** — settings survive a new phone without a
         place list reaching Google's servers. Probably the answer.
       - Full auto-backup, which does put it in the cloud (encrypted with the device PIN on
@@ -344,3 +585,240 @@ Guessed while building the scaffold (autopilot, 2026-08-11):
   with its consumer or the modules form a cycle. The spec now says so, and the same shape
   applies to the DND interface in Phase 1. Reversible only by merging the modules, so worth
   a second opinion if the layering is ever reconsidered.
+
+Guessed while building the tile and cap (autopilot, 2026-08-12):
+
+- [x] **Resolved 2026-08-12 — the missing "the arm failed and DND may still be on" copy.**
+  The last-resort branch of the refused-arm path used to log and stop, because the only
+  string that fit said `Couldn't end the snooze — trying again`, which contradicted the
+  `Couldn't snooze` already on screen and promised a retry that had just failed to schedule.
+  The maintainer approved `Do Not Disturb may still be on` / `Snoozemo couldn't turn it
+  off.` with `Unsnooze` and `Dismiss` actions, so both give-up paths now say the true thing and
+  offer the
+  exit. The debug screen's `failure_could_not_end` reuse is unchanged and still accurate
+  there, since that path really is retrying.
+- **`Already at the 24-hour limit` → `Already at the time limit`.** The old copy named a
+  number that stopped being true when `+30 min`'s ceiling was corrected from 24 h to the
+  8-hour default (Codex, PR #8 — `SPEC.md` §7 says `+30 min` may not push past the
+  backstop). Dropping the number keeps it true whatever a place's cap turns out to be,
+  rather than swapping in `8-hour` and having to change it again when per-place caps land.
+  Alternative: state the actual ceiling. Reversible — one string, no locales yet, and it is
+  in the wording pass the maintainer already has open.
+
+## Keeping the phone alive: the options ledger
+
+Everything considered for "how does Snoozemo stay able to end a snooze", with why each was or was
+not taken, and **what would make us revisit it**. Written down because the same menu keeps coming
+back around, and the reasoning is expensive to reconstruct (`SPEC.md` §3.3, §3.6, §8.4).
+
+The decision as of 2026-08-12 is **build nothing extra**: the duration cap alone is the floor, and
+Phase 3's wake-up sources give the rest for free.
+
+| Option | Cost | Status | Revisit when |
+|---|---|---|---|
+| **Duration cap alarm** (`setAndAllowWhileIdle`) | One alarm per snooze. No permission, no review | **Built.** The floor everything else sits on | Never remove. If a change makes the cap depend on a service, that change is wrong |
+| **`WorkManager` periodic backstop**, 15–30 min while armed | Deferrable and batched — the cheap kind of periodic | **Planned, Phase 3** (`SPEC.md` §6.10). Exists for geofence reliability; the policy-access check rides along free | Phase 3 must confirm it actually reconciles policy access, or the gap below reopens |
+| **Geofence exit + Wi-Fi loss callbacks** | Event-driven, ~free | **Planned, Phase 3.** The primary and secondary sources | — |
+| **Foreground service** (`specialUse`) | Cheapest at runtime — no wakeups at all — but a Play review | **No, and scoped: not on Play, not for v1.** A permission is not spent on revocation handling. `direct` has one anyway from Phase 7 | Core functionality genuinely requires it. The case to build is in `SPEC.md` §3.3 |
+| **Self-rescheduling `setAndAllowWhileIdle` chain** | The expensive periodic form: punches through Doze, ~32 wakeups per 8 h snooze, puts a floor under §6.7's duty cycle | **No.** Duplicates the `WorkManager` backstop at higher cost | Only if something genuinely needs to beat Doze, which policy-access reconciliation does not |
+| **Manifest-registered policy-access receiver** | Free if it worked | **No.** `ACTION_NOTIFICATION_POLICY_ACCESS_GRANTED_CHANGED` is not on the implicit-broadcast exemption list | A future platform version exempts it |
+| **`READ_PHONE_STATE`** to catch an incoming call as a wake-up | A permission, and a sensitive one | **No** (maintainer leans no, 2026-08-12). The benefit arrives passively anyway: a call ends Doze, which flushes our deferred alarms and jobs without us listening for anything | Only if measurement shows Doze deferral is materially hurting, *and* nothing cheaper fixes it. Expect the answer to stay no |
+| **Accept the gap** | Free | **Taken**, for the policy-access watch specifically — it fails safe (`SPEC.md` §8.2, §8.4) | If revocation ever stops deleting the rule, this becomes principle 1 and must be re-taken |
+
+Two structural rules fall out of the above and constrain future work: the **cap never depends on a
+process staying alive**, and the **release obligation never lives only in memory** — alarm first,
+in-process second (`SPEC.md` §8.1).
+
+## Deferred review findings (Codex, PR #8)
+
+Real but non-blocking, deferred rather than dismissed: the PR took every P1 and parked these. All
+five are staleness, attribution or missing-status bugs — nothing here leaves the phone silently
+quiet, and nothing here loses an exit. Two of them are in `MainActivity`, which Phase 4 replaces
+with real onboarding and settings, so they may be fixed by deletion.
+
+- [ ] **The tile warms the zen rule *id*, but not the rule itself.** `onStartListening` calls
+  `ruleId()`, which fills the cache from disk — it does not check that the rule still exists.
+  Where the id is absent or stale (rule deleted in Settings, or the process died while the
+  user was granting access), the next tap reaches `setSnoozed`'s slow path and does a
+  policy-access check, a rule lookup, possibly a creation, and a persist — all before
+  `STATE_TRUE`, on the one path `SPEC.md` §4.1 says must not wait.
+  - **Consequence is latency, not correctness**: the slow path still creates the rule and
+    arms. So this is a quality bug on the primary interaction, not a snooze that fails.
+  - **Not a one-line fix, which is why it waits.** `ensureRule()` lives on
+    `AndroidZenController`, which needs a `ComponentName` for the rule's
+    `configurationActivity` pointing at `MainActivity` in `:app` — and `:tile` deliberately
+    holds no compile-time reference to `:app` (it launches the trampoline by action for the
+    same reason). Doing this properly needs a seam: either the reverse of
+    `SnoozeTileBridge`, or letting `:dnd` resolve the configuration activity itself so the
+    controller can be built without `:app`.
+  - It must also stay **off the main thread** — `ensureRule` can create a rule, which is a
+    heavier binder call than the id read, and `onStartListening` runs while the shade is
+    opening.
+
+- [ ] **A stale `Couldn't end the snooze` survives the retry that succeeds.** `showEnded` drops
+  `ID_ONGOING` only, so a failure posted under `ID_FAILURE` by an earlier refusal stays in the shade
+  after a later cap or manual retry works. Same class as the successful-arm cleanup, on the other
+  path. Fix: cancel `ID_FAILURE` on the successful-release path.
+
+- [ ] **A stale "rule is switched off in Settings" survives the user re-enabling it.**
+  `ensureRuleInBackground` returns early on `READY`/`MISSING_ACCESS` without touching `lastOutcome`,
+  so the screen keeps claiming the rule is disabled after arming works again. Fix: retire *only* the
+  stale rule-status message — `lastOutcome` is shared with the arm/end paths, so blanket-clearing it
+  would wipe messages that are still true. (`MainActivity`; may be moot after Phase 4.)
+
+- [ ] **A manual release through the no-service fallback is attributed to automation.**
+  `releaseDirectly` hard-codes `ZenTrigger.CONTEXT`, so on API 35+ the platform Modes UI credits the
+  user's own `End now` to the app deciding by itself, contrary to `SPEC.md` §5.4 — which is explicit
+  that the source lets the user tell "I did this" from "my phone did this". Fix: pass the trigger
+  through, `USER_ACTION` for `EndReason.MANUAL`, as the controller path already does.
+
+- [ ] **An access read can survive `onStop` and act after the next `onStart`.** The lifecycle guard
+  and the generation counter together still leave a window: the same activity instance can become
+  `STARTED` again, and a worker holding a stale `DENIED` can land after that but before the deferred
+  refresh bumps the generation — ending a snooze armed in between. Fix: increment
+  `latestAccessRefresh` in `onStop`, invalidating everything from the previous visible session.
+  (`MainActivity`; may be moot after Phase 4.)
+
+- [ ] **A refused manual `End now` waits for the original cap instead of retrying soon.**
+  When the zen write returns `PLATFORM_REFUSED` and `ensureCapAfterRefusedEnd` manages to re-arm
+  the *original* cap, it returns satisfied — but on an early end that deadline can be hours away,
+  so the phone stays quiet until then while the notification says Snoozemo is trying again. The
+  no-service path already handles this by picking `ACTION_CAP_LOST` (which means "end it, whatever
+  the clock says") over a plain cap check; the service path was never given the same treatment.
+  Fix: arm the identified short release retry as well as restoring the cap, so the retry happens in
+  minutes rather than at the deadline. Costs one extra wake-up, and only on a refused end.
+
+- [ ] **A refused `notify` leaves the ongoing notification missing for the whole snooze.**
+  `showOngoing` discards `post`'s result, so a transient throw with `POST_NOTIFICATIONS` *granted*
+  loses the countdown, the degraded-mode line, `End now` and `+30 min` until something else happens
+  to re-post — and on a duration-only snooze nothing does, because there are no intermediate
+  wake-ups between the arm and the cap.
+  - **Deferred because the honest fix is a battery decision, not a one-liner.** Retrying in
+    process dies with the service, which is the case that matters; scheduling a retry alarm buys
+    a rare recovery with a wake-up on every snooze, against `SPEC.md` §9's budget. The cheap
+    version — re-post on the *next* wake-up the snooze already pays for — is free but does
+    nothing for the duration-only snooze this is about. Phase 3's `WorkManager` backstop changes
+    that arithmetic: once there is a periodic wake-up anyway, the re-post rides along for nothing.
+  - **Not an exit lost, which is why it is a P2.** The tile still renders active and still ends
+    the snooze on a tap, and the cap still fires. What is lost is the status surface, and only
+    on a throw the platform does not usually make.
+
+## Maintainer decisions
+
+New questions that are not autopilot's to guess go here, unchecked, with the options and what each
+costs.
+
+- [ ] **Is the stuck-rule notification right to be non-dismissible?** Started at `setOngoing(true)`
+  on the maintainer's lean (2026-08-12), paired with an explicit `Dismiss` action so a deliberate
+  "I know, leave me alone" is available while an accidental swipe is not. The argument for is that
+  this card is the only thing pointing at a rule that may still be silencing the phone, so losing it
+  to a stray swipe reopens the dead end it was added to close. The argument against is that it is
+  insistent about a rule that only *might* be stuck, and the title says so.
+  - Worth knowing before deciding: on API 34+ `setOngoing` is a strong hint rather than a lock —
+    Android 14 made ongoing notifications user-dismissible in most cases. What it reliably buys is
+    exclusion from `Clear all`, which is the accidental loss that actually matters. So the choice is
+    softer than it looks either way.
+  - Settle it on a device, once there is one to look at: does an un-swipeable card here read as
+    protective or as nagging? Reversible in one line.
+
+- [x] **Resolved 2026-08-12 — `SPEC.md` §3.4 said the `play` flavor had "no ongoing notification";
+  §4.2 said the countdown, the degraded-mode reason and the way to end a snooze live *only* there.**
+  Both could not hold for a 1x1 icon-only tile. Maintainer had no strong preference and delegated
+  the call. Decided: **both flavors post it**, and §3.4's wording was what was wrong — what option B
+  buys is the absence of a *foreground service*, not of notifications. Full reasoning is recorded
+  inline in `SPEC.md` §3.4 as a dated amendment, which is the authoritative copy; §9's battery table
+  carried the same conflation and was corrected with it. No code change: this is what the code
+  already did.
+
+- [x] **Resolved 2026-08-12 — nothing watches for a revoked Do Not Disturb grant for most of a
+  snooze.** The policy-access receiver is registered dynamically by `SnoozeService`, which is an
+  ordinary started service (no `startForeground` anywhere). Android can stop it once the app is
+  backgrounded, and `START_STICKY` does not restore a service the system stopped under
+  background-execution limits — so on an eight-hour snooze a revocation at hour one may go unnoticed
+  until the cap fires.
+
+  **Decided: build nothing now.** Two maintainer principles settled it. *A permission is not spent
+  on revocation handling* — on the `play` flavor a foreground service buys nothing the Geofencing
+  API does not already do, so it would exist only for this watch and some retry state. And *the most
+  battery-efficient option wins*: an idle foreground service is effectively free, but we are not
+  entitled to one here, and the remaining option — a self-rescheduling ~15 minute
+  `setAndAllowWhileIdle` chain — is the *expensive* one. It would add ~32 wakeups per eight-hour
+  snooze and put a floor under §6.7's duty cycle, which exists to drive work to zero while the phone
+  is stationary.
+
+  The distinction that decides it is **new wakeups versus wakeups already being paid for.** §9
+  already budgets a 15–30 minute `WorkManager` backstop for the `play` flavor in Phase 3 — and it is
+  there for geofence unreliability (§6.10), not for this. Reconciling policy access on a wake-up
+  that is happening anyway costs nothing extra; building a fresh alarm chain now, when there are
+  currently *zero* wakeups between arming and the cap, adds every one of them. Same for `direct`,
+  whose Phase 7 foreground service makes the watch event-driven and free.
+
+  So the ranking is: an idle foreground service (event-driven, no wakeups) is cheapest but we are
+  not entitled to one; piggybacking an existing wake-up is next and is what Phase 3 gives us; a
+  purpose-built periodic chain is the most expensive and is the only thing available today. Hence
+  wait.
+
+  **And the gap fails in the safe direction, which is the strongest reason of all.** §8.2: once
+  access is revoked the platform has already deleted the rule, so *nothing is silencing the phone* —
+  DND is off and calls ring through. Noticing late therefore costs a stale `Snoozing` on the tile
+  and in the notification, not a phone stuck quiet. That is principle 2 (the UI lying), not
+  principle 1 (silent through something that mattered), and the user finds out the moment their
+  phone rings. A `WorkManager` backstop deferring in Doze is acceptable precisely because the
+  failure it is late to notice is one the platform has already resolved safely.
+
+  Worth stating what would change that: if a future design ever made revocation leave DND *on* —
+  a rule the platform keeps rather than deletes — this stops being a cosmetic gap and becomes a
+  principle 1 one, and the decision above has to be re-taken.
+
+  Cheapest to reverse: if it turns out to matter before Phase 3, the alarm chain is a small,
+  self-contained addition. **Phase 3 must confirm the backstop actually reconciles policy access**,
+  or this reopens.
+
+  The `specialUse` justification worth keeping if core functionality ever needs a foreground
+  service is recorded in `SPEC.md` §3.3; the plan for losing a mechanism entirely is §3.6.
+
+- [x] **Resolved 2026-08-12 — the recordless release's bounded give-up was a dead end.**
+  After an uncertain arm (the platform accepted `STATE_TRUE` on a rule it then refused to
+  reset), the record is erased, no alarm will schedule, and the in-process retry gives up
+  after ten attempts — leaving no record, no alarm and no obligation. The tile read inactive
+  and the failure notification had no action, so the user had no affordance either.
+
+  **Decided: option B, give the user the affordance.** The give-up now posts
+  `Do Not Disturb may still be on` / `Snoozemo couldn't turn it off.` with `Unsnooze` and
+  `Dismiss` actions (copy approved by the maintainer in chat, 2026-08-12).
+
+  What settled it was noticing that **the notification is itself the durable part**, which
+  makes B strictly less machinery than A rather than more. It is posted from the code that
+  is giving up — no detection after the fact is needed — and once in the shade it outlives
+  the process, with its action still live. So no state is persisted, nothing has to be read
+  back, identified against a later snooze, or retired when stale, which is the class of
+  state that produced most of this PR's findings. And it cannot misfire: it only acts when
+  the user taps it, and a user asking for Do Not Disturb off always wants exactly that.
+  Option A's automatic recovery had the opposite property.
+
+  **Amended the same day, twice, because the "no persisted state" claim did not survive
+  review.** The notification is durable *once posted* — but Codex showed two lifecycles
+  where it is never posted or never seen, and in both the app was left exactly where this
+  entry says it should not be. So the obligation is now persisted after all
+  (`PendingFailureStore.rememberRuleMayBeStuck`), written *before* the first attempt rather
+  than at the give-up:
+  - **The service can be stopped mid-retry.** It is an ordinary started service, so Android
+    may stop it under background-execution limits, and `onDestroy` cancels the delayed
+    callback — the code that posts the give-up notification is simply never reached.
+    Recording the obligation at the give-up meant the common teardown recorded nothing.
+  - **`POST_NOTIFICATIONS` may be denied**, which this entry originally waved off by saying
+    the existing replay covers it. It did not: `ACTION_REFRESH` replayed only `ArmFailure`,
+    never the stuck-rule card, so on a tile-first install the exit was permanently absent.
+    `ACTION_REFRESH` now re-attempts the release and re-posts if it is still refused.
+
+  The flag carries **no identity**, unlike every other retry here, and that is what keeps it
+  from being the state-sync hazard this entry feared: it means "our own rule may be on with
+  no snooze behind it", every reader re-checks that there is still no record before acting,
+  and driving an already-off rule off is a no-op. It is cleared on a confirmed release, on a
+  new snooze taking ownership, and on a successful arm.
+
+  The user can still swipe the card away, but it is `setOngoing` now (maintainer lean), so
+  it survives `Clear all`; whether that is right is the open item above.
+
+  `releaseDirectly`'s last-resort branch now posts the same notification, replacing a
+  `Couldn't end the snooze — trying again` that was false on that path in both directions.
