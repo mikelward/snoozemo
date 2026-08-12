@@ -572,16 +572,16 @@ none is load-bearing yet.
   remembers to pass. Left as-is for now because that is a wider change than this PR, and
   every current site is covered.
 
-- **The escalation's *performing* half is still untestable, and that is now the gap.** The
-  ladder itself moved to `:core` and is covered, but what each performer does with a step —
-  which end reason a retry carries, which alarm it arms, whether `HandOff` announces a
-  snooze — lives in `SnoozeService` and `CapAlarm`, where the app module has no test
-  harness at all. Codex found three real bugs in exactly that half across two review
-  rounds; all three were caught by reading, not by a test, and the third (`Couldn't end the
-  snooze` replacing `Couldn't snooze` on the failed-arm unwind) is a user-visible message
-  no JVM test can currently reach. **When the Robolectric harness lands (Phase 4), these
-  are its first targets** — the alternative is moving the performers' remaining decisions
-  into `:core` too, which is the bigger change and probably the right one.
+- **`SnoozeService` is `open` and builds its DND controller through an overridable factory,
+  purely so tests can make the platform refuse.** Every branch of the release escalation is
+  reached only on a refused zen write, which no device or emulator produces on demand, so
+  without this the whole of §7.1's performing half is unreachable by any test — which is how
+  five defects in it reached review rather than a red build. Production overrides nothing.
+  The alternative is moving the performers' remaining decisions into `:core`, which is
+  bigger and probably the better end state; this is the cheap version and is reversible by
+  deleting the factory. Recorded in `SPEC.md` §11 with the reasoning.
+  - Still *not* covered: the failed-arm unwind (zen write lands, `save` fails), which needs
+    a store that can be told to refuse — the next seam if that path grows another bug.
 
 - **`DESIGN.md` renamed to `SPEC.md`** rather than keeping both. The sibling repos split
   product/architecture decisions (`SPEC.md`) from the plan (`TODO.md`), and the design doc

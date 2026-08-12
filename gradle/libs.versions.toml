@@ -7,6 +7,8 @@ junit = "4.13.2"
 kotlin = "2.2.20"
 kotlinxCoroutines = "1.10.2"
 lifecycle = "2.10.0"
+robolectric = "4.16.1"
+androidxTestCore = "1.7.0"
 
 [libraries]
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activity" }
@@ -21,6 +23,8 @@ androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lif
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }
+androidx-test-core = { group = "androidx.test", name = "core", version.ref = "androidxTestCore" }
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

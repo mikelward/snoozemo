@@ -25,6 +25,7 @@ import app.snoozemo.core.SnoozeController
 import app.snoozemo.core.SnoozeState
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
+import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenTrigger
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.dnd.PrefsZenRuleIdStore
@@ -50,7 +51,7 @@ private const val TAG = "SnoozeService"
  * to justify. The `direct` flavor's foreground service arrives in Phase 7 behind
  * `PresenceMonitor`.
  */
-class SnoozeService : Service(), SnoozeController.Listener {
+open class SnoozeService : Service(), SnoozeController.Listener {
 
     private lateinit var store: ActiveSnoozeStore
     /**
@@ -75,8 +76,15 @@ class SnoozeService : Service(), SnoozeController.Listener {
     private lateinit var pendingFailure: PendingFailureStore
     private lateinit var controller: SnoozeController
 
-    /** Shared with the controller, so the cap is read from one clock only. */
-    private val clock: Clock = Clock.systemUTC()
+    /**
+     * Shared with the controller, so the cap is read from one clock only.
+     *
+     * Overridable for tests, which is the only reason it is not private. The
+     * decisions that read it — whether a re-armed cap is imminent, whether a
+     * record has expired — are exactly the ones that must not be driven by real
+     * elapsed time (AGENTS.md, *Testing expectations*).
+     */
+    internal open val clock: Clock = Clock.systemUTC()
 
     /**
      * Whether the last attempt to erase the record actually reached disk. False
@@ -266,13 +274,27 @@ class SnoozeService : Service(), SnoozeController.Listener {
         }
     }
 
-    private val zen by lazy {
+    private val zen by lazy { createZenController() }
+
+    /**
+     * The zen controller this service drives its rule through.
+     *
+     * A factory rather than a constructor parameter because Android builds
+     * services, so there is no constructor to inject into — and overridable
+     * because *every* branch of the release escalation is reached only when the
+     * platform **refuses** a zen write. Nothing else can produce that: a device
+     * grants the write, and an emulator has no DND to refuse it. Without this
+     * seam the whole of SPEC.md §7.1 is unreachable by any test, which is how
+     * five real bugs in it reached review rather than a red build.
+     *
+     * Production overrides nothing; this is the only implementation that ships.
+     */
+    internal open fun createZenController(): ZenController =
         AndroidZenController(
             context = applicationContext,
             store = PrefsZenRuleIdStore(applicationContext),
             configurationActivity = ComponentName(this, MainActivity::class.java),
         )
-    }
 
     override fun onCreate() {
         super.onCreate()
