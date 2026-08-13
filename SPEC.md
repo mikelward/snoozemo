@@ -284,6 +284,29 @@ must never feel slow or refuse.
 - **Locked device:** arming works locked — no `unlockAndRun()` wrapper. The whole point is a
   one-tap action from the shade. Ending also works locked. Only the settings screen requires unlock.
 
+**The app screen keeps a snooze button of its own, and the tile is still the way in** (maintainer,
+2026-08-13). The two are not competing front doors. The button exists so the app is self-sufficient
+— a user who never adds the tile has an installed app that can still do the thing it is for, rather
+than one that cannot do anything with no route back — and it replaces the Phase 1 debug control
+rather than disappearing with it. But the tile is easier and is *where people already go to silence
+a phone*, which is the behavior this app attaches to rather than one it has to teach; so the screen
+should push toward the tile rather than presenting a symmetrical choice. Note what the button can
+never be: one tap from the shade with the phone locked (§4.1). It is a fallback and an
+onboarding-time convenience, not a second primary path.
+
+This **revises** the line below rather than sitting beside it: "the tile is the arm affordance" was
+written when the tile was the only one, and it stays true as a statement of which path the product
+leads with — it is no longer true as a statement that the tile is the *only* way to start a snooze.
+
+The screen leads with a **banner** urging the tile, dismissed **once and forever**, above a tile
+**entry that is permanent** (maintainer, 2026-08-13). Those go together: a banner that can be sent
+away for good is only safe because the entry outlives it, and an entry that were itself conditional
+would put the user back in the dead end where saying no once costs them the tile. The entry states
+the tile's state either way and offers to add it only while it is missing — once the tile is there
+it is a statement, not an offer, because there is nothing left to create. Its dismissal is not
+re-raised when the tile is later removed; the entry is the standing route, so the banner never has
+to ask twice.
+
 **The tile is the arm affordance; the notification is the status surface** (maintainer,
 2026-08-11). The maintainer runs the tile in its **1×1 form**, which shows the icon alone — no
 label, no subtitle — so icon-only is the *expected* presentation here, not a degraded edge case.
@@ -1457,13 +1480,18 @@ things moved the decision:
 - "Ask once and never again" needs a persisted asked-flag and leaves a user who declined with no
   route back. The row needs no flag and stays available.
 
-The row appears only while the tile is missing. Nothing can *ask* whether it is there, so its
-presence is tracked from the three moments the platform volunteers it — the tile being added, being
-removed, and the result of a request. Where the answer is unknown the two defaults deliberately
-disagree: the screen assumes present, so the row cannot flash on every launch, and the store assumes
-missing, so a fresh install is offered the tile. The transient wrong answer is the invisible one;
-the durable wrong answer offers rather than hides, since a false positive would conceal the only
-route to the product's whole interaction.
+The row is **permanent** and states the tile's presence either way, offering to add it only while
+it is missing (§4.2 — it was conditional when first built, and became permanent when the banner
+above it gained a forever-dismissal that needs something to outlive it). Nothing can *ask* whether
+the tile is there, so its presence is tracked from the three moments the platform volunteers it —
+the tile being added, being removed, and the result of a request.
+
+Until one of those has answered, the row renders **nothing**. A permanent row cannot carry a
+default: it would assert `Added` on the first frame of a cold launch and then correct itself, which
+is the same unread-state discipline the access and notification rows follow (§5.2). The *store*
+still defaults to missing, so a fresh install is offered the tile — the durable wrong answer must
+offer rather than hide, since a false positive would conceal the route to the product's whole
+interaction.
 
 ---
 

@@ -43,6 +43,27 @@
     <!-- TODO: translate -->
     <string name="setup_tile_missing" tools:ignore="MissingTranslation">The one-tap way to snooze</string>
     <!-- TODO: translate -->
+    <string name="setup_tile_added" tools:ignore="MissingTranslation">Added</string>
+    <!--
+      The tile banner. The app screen keeps its own snooze button, but the tile
+      is the way in (SPEC.md §4.2) — easier, and where people already go to
+      silence a phone — so the screen leads with it rather than listing it as
+      one option among equals.
+
+      "Don't show again", not "Not now": the dismissal is permanent and is not
+      re-raised even when the tile is later removed, and "Not now" would promise
+      the opposite. The row below the banner is the standing route, so saying it
+      plainly costs the reminder and not the capability.
+    -->
+    <!-- TODO: translate -->
+    <string name="tile_banner_title" tools:ignore="MissingTranslation">Snooze from the shade</string>
+    <!-- TODO: translate -->
+    <string name="tile_banner_body" tools:ignore="MissingTranslation">One tap, without unlocking. It\'s how Snoozemo is meant to be used.</string>
+    <!-- TODO: translate -->
+    <string name="tile_banner_add" tools:ignore="MissingTranslation">Add tile</string>
+    <!-- TODO: translate -->
+    <string name="tile_banner_dismiss" tools:ignore="MissingTranslation">Don\'t show again</string>
+    <!-- TODO: translate -->
     <string name="setup_action_add" tools:ignore="MissingTranslation">Add</string>
     <!-- TODO: translate -->
     <string name="failure_could_not_add_tile" tools:ignore="MissingTranslation">Couldn\'t add the tile</string>

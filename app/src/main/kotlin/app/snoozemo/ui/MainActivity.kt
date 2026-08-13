@@ -33,6 +33,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -128,7 +129,17 @@ class MainActivity : ComponentActivity() {
      * something the user already has is the one wrong answer that costs them a
      * dialog. Read alongside everything else after the first frame.
      */
-    private var tileAdded by mutableStateOf(true)
+    private var tileAdded by mutableStateOf<Boolean?>(null)
+
+    /**
+     * Whether the tile banner has been sent away for good.
+     *
+     * Defaults to **dismissed** so the loud thing cannot flash on a screen that
+     * has not finished reading yet. A boolean is enough where [tileAdded] needs
+     * a third state: there is only one thing to suppress here, while the row has
+     * two states to tell apart.
+     */
+    private var tileBannerDismissed by mutableStateOf(true)
     private var lastOutcome by mutableStateOf<String?>(null)
 
     /**
@@ -231,10 +242,12 @@ class MainActivity : ComponentActivity() {
                         lastOutcome = lastOutcome,
                         notificationsReachTheUser = notificationsReachTheUser,
                         tileAdded = tileAdded,
+                        tileBannerDismissed = tileBannerDismissed,
                         settingsFailure = settingsFailure,
                         onAccessRow = ::openPolicyAccessSettings,
                         onNotificationsRow = ::fixNotifications,
                         onTileRow = ::addTile,
+                        onDismissTileBanner = { tileStore.dismissBanner() },
                         onArm = ::armFromScreen,
                         onRelease = ::endFromScreen,
                     )
@@ -257,7 +270,10 @@ class MainActivity : ComponentActivity() {
         // arrives after a system dialog that can outlive the activity which
         // opened it — a configuration change mid-dialog leaves the replacement
         // with a stale reading and nothing to correct it.
-        tileWatch = tileStore.observe { tileAdded = tileStore.isAdded() }
+        tileWatch = tileStore.observe {
+            tileAdded = tileStore.isAdded()
+            tileBannerDismissed = tileStore.isBannerDismissed()
+        }
     }
 
     /**
@@ -328,6 +344,7 @@ class MainActivity : ComponentActivity() {
                 // rest: it is a preferences file, and no disk read belongs in
                 // front of the first frame.
                 tileAdded = tileStore.isAdded()
+                tileBannerDismissed = tileStore.isBannerDismissed()
             }
         }
     }
@@ -794,13 +811,15 @@ fun DebugScreen(
     access: PolicyAccess?,
     notifications: NotificationPermission?,
     notificationsReachTheUser: Boolean,
-    tileAdded: Boolean,
+    tileAdded: Boolean?,
+    tileBannerDismissed: Boolean,
     snoozing: Boolean?,
     lastOutcome: String?,
     settingsFailure: SetupRowId?,
     onAccessRow: () -> Unit,
     onNotificationsRow: () -> Unit,
     onTileRow: () -> Unit,
+    onDismissTileBanner: () -> Unit,
     onArm: () -> Unit,
     onRelease: () -> Unit,
     modifier: Modifier = Modifier,
@@ -832,6 +851,15 @@ fun DebugScreen(
             text = stringResource(R.string.app_name),
             style = MaterialTheme.typography.headlineMedium,
         )
+        // Above everything, and louder than the rows, because the screen leads
+        // with the tile rather than offering a symmetrical choice (SPEC.md
+        // §4.2): the tile is easier and is where people already go to silence a
+        // phone. Dismissible — a banner that cannot be dismissed is an argument
+        // the user cannot end — and dismissed for good, which only works
+        // because the row below it is permanent.
+        if (tileAdded == false && !tileBannerDismissed) {
+            TileBanner(onAdd = onTileRow, onDismiss = onDismissTileBanner)
+        }
         // Nothing at all until access has been read, rather than a guess in
         // either direction: the wrong guess either tells a user who granted
         // access that they haven't, or offers to arm something that can't.
@@ -895,13 +923,22 @@ fun DebugScreen(
         // — but once it is there this row is clutter on the one screen there
         // is, and the platform's own answer to a redundant request is a dialog
         // saying it is already added.
-        if (!tileAdded) {
+        // Permanent, and null until the store has answered. Permanent because it
+        // is what makes the banner's forever-dismissal safe (SPEC.md §4.2) — the
+        // banner can be sent away for good precisely because this outlives it —
+        // and null-until-read because a permanent row with a default would
+        // assert `Added` on the first frame of a cold launch and then correct
+        // itself, which is the one lie this screen is least entitled to tell.
+        tileAdded?.let { added ->
             SetupRow(
                 title = stringResource(R.string.setup_tile_title),
-                status = stringResource(R.string.setup_tile_missing),
-                // Never absent: the row only exists while the tile is missing,
-                // so there is always something to do here.
-                action = stringResource(R.string.setup_action_add),
+                status = stringResource(
+                    if (added) R.string.setup_tile_added else R.string.setup_tile_missing,
+                ),
+                // Absent once the tile is there: nothing is left to create, and
+                // the platform's own answer to a redundant request is a dialog
+                // saying it is already added. The row becomes a statement.
+                action = stringResource(R.string.setup_action_add).takeUnless { added },
                 onAction = onTileRow,
                 failure = stringResource(R.string.failure_could_not_add_tile)
                     .takeIf { settingsFailure == SetupRowId.TILE },
@@ -964,6 +1001,54 @@ fun DebugScreen(
  * different names — so the row keeps the single target and moves it onto the
  * control that says what it does.
  */
+/**
+ * The screen's one piece of advocacy: add the tile.
+ *
+ * Deliberately not a [SetupRow]. The rows state a fact about a capability and
+ * offer the repair; this makes a case, and looking different is the point —
+ * `SPEC.md` §4.2 asks the screen to push toward the tile rather than list it as
+ * one option among equals. It is the only element here that says *why*.
+ *
+ * Two actions, weighted: adding is the filled button, dismissing is a text one.
+ */
+@Composable
+private fun TileBanner(
+    onAdd: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.tile_banner_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = stringResource(R.string.tile_banner_body),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.tile_banner_dismiss))
+                }
+                Button(onClick = onAdd) {
+                    Text(stringResource(R.string.tile_banner_add))
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun SetupRow(
     title: String,
@@ -1031,12 +1116,14 @@ private fun DebugScreenPreview() {
             notifications = NotificationPermission.GRANTED,
             notificationsReachTheUser = true,
             tileAdded = true,
+            tileBannerDismissed = true,
             snoozing = false,
             lastOutcome = null,
             settingsFailure = null,
             onAccessRow = {},
             onNotificationsRow = {},
             onTileRow = {},
+            onDismissTileBanner = {},
             onArm = {},
             onRelease = {},
         )

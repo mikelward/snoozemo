@@ -71,13 +71,15 @@ class DebugScreenScreenshotTest {
                 access = null,
                 notifications = null,
                 notificationsReachTheUser = true,
-                tileAdded = true,
+                tileAdded = null,
+                tileBannerDismissed = true,
                 snoozing = null,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
+                onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -105,12 +107,14 @@ class DebugScreenScreenshotTest {
                 notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
                 tileAdded = true,
+                tileBannerDismissed = true,
                 snoozing = null,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = { opened++ },
                 onNotificationsRow = {},
                 onTileRow = {},
+                onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -139,12 +143,14 @@ class DebugScreenScreenshotTest {
                 notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
                 tileAdded = true,
+                tileBannerDismissed = true,
                 snoozing = null,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
+                onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -163,12 +169,14 @@ class DebugScreenScreenshotTest {
                 notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
                 tileAdded = true,
+                tileBannerDismissed = true,
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = { tapped++ },
                 onTileRow = {},
+                onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -189,12 +197,14 @@ class DebugScreenScreenshotTest {
                 notifications = NotificationPermission.BLOCKED,
                 notificationsReachTheUser = true,
                 tileAdded = true,
+                tileBannerDismissed = true,
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
+                onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -218,12 +228,14 @@ class DebugScreenScreenshotTest {
                 notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
                 tileAdded = true,
+                tileBannerDismissed = true,
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
+                onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -240,12 +252,14 @@ class DebugScreenScreenshotTest {
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
                 tileAdded = true,
+                tileBannerDismissed = true,
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
+                onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -272,12 +286,14 @@ class DebugScreenScreenshotTest {
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
                 tileAdded = true,
+                tileBannerDismissed = true,
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
+                onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -294,12 +310,14 @@ class DebugScreenScreenshotTest {
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
                 tileAdded = true,
+                tileBannerDismissed = true,
                 snoozing = true,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
+                onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -321,12 +339,14 @@ class DebugScreenScreenshotTest {
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
                 tileAdded = true,
+                tileBannerDismissed = true,
                 snoozing = null,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
+                onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -351,12 +371,14 @@ class DebugScreenScreenshotTest {
                 notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
                 tileAdded = true,
+                tileBannerDismissed = true,
                 snoozing = true,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
+                onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -373,12 +395,14 @@ class DebugScreenScreenshotTest {
                 notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
                 tileAdded = true,
+                tileBannerDismissed = true,
                 snoozing = null,
                 lastOutcome = null,
                 settingsFailure = SetupRowId.DND,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
+                onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -417,12 +441,14 @@ class DebugScreenScreenshotTest {
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
                 tileAdded = true,
+                tileBannerDismissed = true,
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = SetupRowId.DND,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
+                onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -440,12 +466,14 @@ class DebugScreenScreenshotTest {
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = false,
                 tileAdded = true,
+                tileBannerDismissed = true,
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
+                onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -471,12 +499,14 @@ class DebugScreenScreenshotTest {
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
                 tileAdded = false,
+                tileBannerDismissed = true,
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = { tapped++ },
+                onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -490,27 +520,71 @@ class DebugScreenScreenshotTest {
     }
 
     @Test
-    fun `a tile already in the shade is not offered again`() {
+    fun `a tile already in the shade is stated, not offered`() {
         capture("debug-screen-idle.png") {
             DebugScreen(
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
                 tileAdded = true,
+                tileBannerDismissed = true,
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
+                onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
             )
         }
 
-        // Clutter on the one screen this app has, and the platform's own answer
-        // to a redundant request is a dialog saying it is already there.
-        composeRule.onNodeWithText("Quick Settings tile").assertDoesNotExist()
+        // The row stays — "always have it in settings" (maintainer, 2026-08-13),
+        // and its permanence is what makes the banner's forever-dismissal safe.
+        // But it stops offering: nothing is left to create, and the platform's
+        // own answer to a redundant request is a dialog saying it is already
+        // there.
+        composeRule.onNodeWithText("Quick Settings tile").assertExists()
+        composeRule.onNodeWithText("Added").assertExists()
+        composeRule.onNodeWithText("Add").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a first run leads with the tile`() {
+        var added = 0
+        var dismissed = 0
+
+        capture("debug-screen-tile-banner.png") {
+            DebugScreen(
+                access = PolicyAccess.GRANTED,
+                notifications = NotificationPermission.GRANTED,
+                notificationsReachTheUser = true,
+                tileAdded = false,
+                tileBannerDismissed = false,
+                snoozing = false,
+                lastOutcome = null,
+                settingsFailure = null,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onTileRow = { added++ },
+                onDismissTileBanner = { dismissed++ },
+                onArm = {},
+                onRelease = {},
+            )
+        }
+
+        // The screen pushes toward the tile rather than listing it as one
+        // option among equals (SPEC.md §4.2) — the banner is the only element
+        // here that says *why*.
+        composeRule.onNodeWithText("Add tile").performClick()
+        assertEquals(1, added)
+        // And the label is honest about what dismissing costs: the dismissal is
+        // permanent, so "Not now" would promise a return that never comes.
+        composeRule.onNodeWithText("Don't show again").performClick()
+        assertEquals(1, dismissed)
+        // The row is underneath it, which is what makes that permanence safe.
+        composeRule.onNodeWithText("Quick Settings tile").assertExists()
     }
 
     @Test
@@ -521,12 +595,14 @@ class DebugScreenScreenshotTest {
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
                 tileAdded = true,
+                tileBannerDismissed = true,
                 snoozing = false,
                 lastOutcome = "Couldn't snooze",
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
+                onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
             )

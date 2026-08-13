@@ -43,6 +43,33 @@ class TilePresenceStoreTest {
     }
 
     @Test
+    fun `a fresh install has not dismissed the banner`() {
+        assertFalse(newStore().isBannerDismissed())
+    }
+
+    @Test
+    fun `a dismissed banner stays dismissed across instances`() {
+        newStore().dismissBanner()
+
+        assertTrue(newStore().isBannerDismissed())
+    }
+
+    @Test
+    fun `removing the tile does not bring the banner back`() {
+        val store = newStore()
+        store.dismissBanner()
+        store.setAdded(true)
+
+        store.setAdded(false)
+
+        // Forever means forever (SPEC.md §4.2, maintainer). The row offering
+        // the tile is permanent, so the route is still there — re-raising the
+        // banner would be asking a question that has been answered.
+        assertTrue(newStore().isBannerDismissed())
+        assertFalse(newStore().isAdded())
+    }
+
+    @Test
     fun `a removed tile is offered again`() {
         val store = newStore()
         store.setAdded(true)

@@ -66,8 +66,27 @@ class TilePresenceStore(context: Context) {
         return AutoCloseable { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
 
+    /**
+     * Whether the user has dismissed the banner urging them to add the tile.
+     *
+     * Kept beside presence because it is about the same object and read in the
+     * same breath, but it is a different kind of fact and the difference is
+     * worth naming: presence is the platform's answer, this is the user's. It
+     * is also **remembered forever** — not re-raised when the tile is later
+     * removed. Someone who has said "not now" once has been told; the row
+     * underneath the banner is always there while the tile is missing, so the
+     * route stays open without asking again (SPEC.md §4.2).
+     */
+    fun isBannerDismissed(): Boolean = prefs.getBoolean(KEY_BANNER_DISMISSED, false)
+
+    /** The user has dismissed the banner. Not undone by anything. */
+    fun dismissBanner() {
+        prefs.edit().putBoolean(KEY_BANNER_DISMISSED, true).apply()
+    }
+
     private companion object {
         const val FILE_NAME = "tile_presence"
         const val KEY_ADDED = "added"
+        const val KEY_BANNER_DISMISSED = "banner_dismissed"
     }
 }

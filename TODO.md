@@ -297,6 +297,25 @@ the point is that every other line of the app is worthless if it isn't true.
         is in the CI allow-list.
       - Still owed a device: how the rows read at a large font scale with a button beside them, and
         whether a punch-hole cutout in landscape leaves the first row where the test says it does.
+- [x] **The app screen keeps a snooze button, and the screen leads with the tile** (maintainer,
+      2026-08-13: *"we should have a main view that has a snooze button but … we should strongly
+      encourage using the tile"*, then *"dismiss forever from main is fine, always have it in
+      settings"*). The question was whether the tile is the *only* arm path at release — the
+      screen's `Snooze` / `End snooze` is marked Phase 1 scaffolding that "never reaches a release"
+      and nothing was scheduled to replace it. **This revises a decision the spec already stated**
+      (§4.2's "the tile is the arm affordance") rather than filling a gap, so §4.2 carries the
+      revision beside the original line (Codex, PR #22). Only the tile reaches the trampoline *to
+      arm*; the notification actions reach it too, but only to end or extend a running snooze.
+      - **Landed**: a dismissible banner leading with the tile, above a permanent tile row.
+        Dismissal is forever and is not re-raised when the tile is removed; the row is what makes
+        that safe, and it becomes a statement rather than an offer once the tile is there.
+      - Still to do: **promote the debug arm/end controls to real ones** — real copy through the
+        propose-in-chat step, and no longer deleted when the debug screen is.
+      - `Don't show again` rather than `Not now`, since the dismissal is permanent and "not now"
+        promises a return that never comes (Codex, PR #22). Changed without the propose-copy step;
+        flagged for the maintainer.
+      - "Always have it in settings" is a row on the main screen for now, because there is no
+        settings screen yet. When one lands, that row is what moves into it.
 - [ ] Real anchor capture on the arm path. Until Phase 3 lands `PresenceMonitor`, every snooze
       arms honestly duration-only rather than pretending to track a place it never captured.
 - [x] **minSdk 34** (maintainer, 2026-08-11). The tile's `startActivityAndCollapse` needed the
