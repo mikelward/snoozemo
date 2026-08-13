@@ -192,5 +192,4 @@ something this policy does not describe, the policy changes first.
 
 ## Contact
 
-Questions or concerns: open an issue at
-<https://github.com/mikelward/snoozemo/issues>.
+Questions about this policy: mikel@mikelward.com
