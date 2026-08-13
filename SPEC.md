@@ -919,10 +919,25 @@ Note this is not a room-feature problem that arrived with §6.2's BSSID; **it br
 anchor, which is v1's mechanism**. The flag needs `ACCESS_FINE_LOCATION` and location services on
 to actually deliver the fields, which is the same gate the next bullet describes.
 
-**Owed a device.** This is written from the platform's documented behavior and has not been run
-here — the sandbox has no device and the reference pages did not render for a fetch. Phase 3's
-first task on a real handset is to assert that the SSID read comes back as an SSID and not the
-placeholder, in both flavors. A test that accepts `UNKNOWN_SSID` as a value would hide exactly this.
+**Confirmed against the platform reference**, quoting the two pages that decide it:
+
+> **`ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO`** (API 31) — "In Android 12
+> and above, by default the sent objects do not contain any location information, **even if the app
+> holds the necessary permissions** […] Without this flag any `NetworkCapabilities` provided via the
+> callback does not include location sensitive information."
+
+> **`WifiInfo`** — "In the connected state, access to location sensitive fields requires the same
+> permissions as `WifiManager.getScanResults`. If such access is not allowed, `getSSID()` will
+> return `WifiManager.UNKNOWN_SSID` and `getBSSID()` will return `"02:00:00:00:00:00"`."
+
+The "even if the app holds the necessary permissions" clause is the whole trap: holding
+`ACCESS_FINE_LOCATION` is not sufficient, so a permission audit finds nothing wrong.
+
+**Still owed a device**, but for a narrower question than before: that the flag *plus* our
+permissions and location-services state actually yields a real SSID on a handset, in both flavors.
+The platform contract is settled; the end-to-end path is not. A test that accepts `UNKNOWN_SSID` as
+a value would hide exactly this, so Phase 3's assertion rejects the placeholders rather than
+tolerating them.
 
 Two further constraints worth stating plainly:
 
