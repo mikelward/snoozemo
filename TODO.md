@@ -393,9 +393,47 @@ the point is that every other line of the app is worthless if it isn't true.
 - [ ] Three independent wake-up sources feeding one confirmation test (`SPEC.md` §6.10):
       geofence exit, Wi-Fi loss via `NetworkCallback`, and a 15–30 min `WorkManager`
       backstop. No source ends a snooze on its own evidence.
-- [ ] The departure test itself (`SPEC.md` §6.6): accuracy gate, 50 m hysteresis, two
+- [x] The departure test itself (`SPEC.md` §6.6): accuracy gate, 50 m hysteresis, two
       qualifying fixes ≥30 s apart *or* one unambiguous fix beyond radius + 500 m. Covered
-      by recorded fix traces including bad-accuracy jumps.
+      by recorded fix traces including bad-accuracy jumps. Landed in `:core` as `Departure`
+      — pure, no Android, no clock — with `DepartureTest` (14) replaying traces for the
+      vague cell fix, the GPS jump, the walk to the end of the garden, the burst of fixes,
+      and the anchor with no coordinates at all.
+      - **One property worth knowing rather than discovering:** the unambiguous shortcut
+        means a *single* fix ends a snooze when its margin clears radius + 500 m, so a
+        provider reporting a confident wrong fix 900 m out is believed. That is §6.6's
+        deliberate direction — principle 1 prefers a snooze that ends early to one that
+        keeps a phone silent — and it has its own test saying so rather than being left
+        implied. It is also why the *margin* must clear 500 m, not the raw distance.
+      - **The traces are synthesized, not recorded** (Codex, PR #30), and `AGENTS.md` asks
+        for recorded ones. Recording needs a handset walking a real building, and the app
+        has no trace recorder yet — so this is the same dependency as the maintainer's
+        home walk, and it closes when the recorder lands later in Phase 3. The synthesized
+        traces stay either way: what they cannot do is surprise their author with the
+        accuracy pattern a real provider emits, which is precisely what a recorded trace
+        adds rather than replaces.
+      - **Worth measuring in the field: does clearing the window on an inconclusive fix
+        delay real departures?** (Codex, PR #30.) §6.6 asks for two *consecutive*
+        qualifying fixes, so a reading that cannot place the user closes the window — which
+        is the literal rule and stops an ambiguous fix joining two isolated outliers. But
+        leaving a building is exactly when fixes go vague, so in poor signal a genuine
+        departure may need several attempts before two clean readings land in a row. That
+        delays confirmation rather than preventing it (more fixes keep arriving, Wi-Fi loss
+        escalates independently, and the cap bounds it), and the recorded walk is what would
+        show whether the delay is material.
+      - **The maintainer has sanctioned the middle option** (2026-08-13): let an
+        inconclusive fix *hold* the confirmation window open without extending it —
+        "seems completely reasonable, keep that as an option". So this is a live
+        alternative rather than a contingency, and whoever measures the delay does not
+        need to re-open the question of whether it is allowed. What it means concretely:
+        an ambiguous reading neither confirms nor resets, so two qualifying fixes either
+        side of one still confirm on the *original* window's clock — the vague fix costs
+        nothing, and an outlier still cannot bridge to another outlier without a second
+        qualifying reading. The literal reading of §6.6's "consecutive" ships until the
+        walk says otherwise, because that is the conservative direction, not because the
+        alternative is unavailable.
+      - Still owed: the monitor that decides *when* to ask for a fix, which is where the
+        duty cycle (§6.7) and the three wake-up sources (§6.10) live.
 - [ ] Wi-Fi as suppressor only (D4): associated with the anchor SSID suppresses location
       work entirely; loss escalates to `CHECKING` and never ends a snooze on its own.
 - [ ] **The on-device debug log** (`SPEC.md` §4.6), landing here rather than later because this is
