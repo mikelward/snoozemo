@@ -1299,11 +1299,13 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
   harmful direction for a privacy policy. Reversible by trimming those sections; the
   re-verify item in Phase 0 is what stops it being forgotten either way.
 
-- **The policy's contact is the repo's issue tracker, not an email address.** Play's store
-  listing needs a contact email regardless, so whether the maintainer's own address also
-  belongs on a publicly hosted policy page is their call and not a guess worth making —
-  publishing an address cannot be undone. Reversible in the other direction at no cost:
-  adding one later is a one-line edit.
+- ~~**The policy's contact is the repo's issue tracker, not an email address**~~
+  **Answered: `mikel@mikelward.com`** (maintainer, 2026-08-13), matching the sibling apps
+  — Simmo's policy closes with the same address under the same `## Contact` heading and
+  the same sentence, so Snoozemo now reads identically. Autopilot had left this open on
+  the grounds that publishing an address cannot be undone; the maintainer's steer was to
+  use theirs "or whatever we use in the other app privacy policies", which turned out to
+  be the same thing.
 
 - ~~**The BSSID is disclosed as an open question rather than justified or removed**~~
   **Answered: it stays** (maintainer, 2026-08-13). Codex asked in PR #23 whether
