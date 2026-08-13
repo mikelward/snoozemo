@@ -61,6 +61,21 @@ internal object DeviceStamp {
     private var computed = false
 
     /**
+     * Guards *computing and publishing together*, which is the whole point.
+     *
+     * Two threads reach [current] in the ordinary run of things: the warm-up
+     * thread started from `SnoozemoApplication.onCreate`, and whichever thread
+     * saves the first record. With the read, the compute and the publish left
+     * unsynchronized, a slow compute could finish after another thread had
+     * already published — or after [forget] had deliberately dropped the value —
+     * and quietly overwrite it with the older answer. On a device both threads
+     * compute the same thing so nothing is visibly wrong; the moment the inputs
+     * can differ, the losing thread's answer is one that says a record written
+     * here belongs to another phone.
+     */
+    private val lock = Any()
+
+    /**
      * Computes the stamp ahead of the arm path and holds it (SPEC.md §4.1).
      *
      * Called from `ActiveSnoozeStore.warm` at startup, on its thread. The value
@@ -100,9 +115,16 @@ internal object DeviceStamp {
      */
     fun current(context: Context): String? {
         if (computed) return cached
-        return compute(context).also {
-            cached = it
+        // Double-checked, over volatile fields: the fast path stays a field read
+        // for every call after the first, and the slow path computes and
+        // publishes inside one critical section so no result can be published
+        // out of order with a later one.
+        synchronized(lock) {
+            if (computed) return cached
+            val value = compute(context)
+            cached = value
             computed = true
+            return value
         }
     }
 
@@ -156,7 +178,7 @@ internal object DeviceStamp {
     }
 
     /** Test seam: forgets the cached value so a test can change identity. */
-    internal fun forget() {
+    internal fun forget() = synchronized(lock) {
         cached = null
         computed = false
     }
