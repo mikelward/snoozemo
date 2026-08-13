@@ -36,7 +36,7 @@ All of this lives in Snoozemo's private app storage, which other apps cannot rea
 | That a snooze is running, when it started, and when its time limit runs out | So a snooze survives the app being closed, killed, or the phone rebooting — and so the time limit still ends it | Erased when the snooze ends |
 | Where you were when you armed it: coordinates and how accurate the fix was | This is the "here" in "until I leave here". Departures are measured against it | Erased when the snooze ends |
 | The name of the Wi-Fi network you were on (SSID) | Losing that network is a fast, battery-free hint that you have left | Erased when the snooze ends |
-| The identifier of the particular access point you were on (BSSID) | Captured alongside the network name, and never used to decide whether you have left. Nothing reads it today, and whether it stays is an open question — see below | Erased when the snooze ends |
+| The identifier of the particular access point you were on (BSSID) | Captured alongside the network name. Nothing acts on it today, and it is never what a departure is judged against — it is kept because a room is smaller than a network, see below | Erased when the snooze ends |
 | The name of the place, if the snooze has one | So the notification can say *Snoozing at Home* rather than just *Snoozing* | Erased when the snooze ends |
 | Whether tracking is running fully or has degraded | So the notification can tell you when Snoozemo has lost a sensor and is running on the timer alone | Erased when the snooze ends |
 | The identifier of the Do Not Disturb rule Snoozemo created | So it reuses one rule instead of leaving a trail of them in your Settings | Erased once Snoozemo next notices you deleted that rule in Settings, or when you uninstall |
@@ -64,7 +64,7 @@ you already had.
 
 Snoozemo uses location for one thing: deciding whether you have walked away from where you
 armed the snooze. The only other thing it captures is the access point note described under
-**Wi-Fi** below, which nothing currently reads and which is under review.
+**Wi-Fi** below, which nothing currently acts on.
 
 - **Only while a snooze is running.** Arming starts it, ending stops it. With nothing
   snoozed, Snoozemo is not tracking you and is not watching for you to leave. It keeps a
@@ -97,19 +97,20 @@ It does not scan for other networks, and it does not keep a list of the networks
 used.
 
 It also notes *which* access point you were on, which is a separate identifier from the
-network name. It is deliberately not what a departure is judged against: in a building with
-several access points, the one you are on changes as you walk around, and a snooze that
-ended every time you crossed the office would be useless.
+network name. **Nothing acts on it today** — it is captured with the anchor and erased with
+it — and it is not what a departure is judged against.
 
-We will say plainly that this one is under review. It was included as a diagnostic aid, but
-nothing currently reads it, and Snoozemo's diagnostic log is barred from recording an
-access point identifier at all — so it is not clear it earns being kept. If that stays
-true, it goes, and this section goes with it.
+It is kept because a room is smaller than a network. In an office the whole floor is one
+Wi-Fi name, so leaving the meeting room you are sitting in does not change it, and "quiet
+until I leave here" is exactly the case where that matters. If a future version uses this
+to notice you have left a room, it will not do so on the access point alone — phones move
+between access points while you sit still — and this section will say what it does before
+it does it.
 
 Android treats reading the current network's name as a location capability, so this needs
 the location permission too — that is Android's rule rather than ours, and it is why
 denying location also costs you this. The permission is used for the departure detection
-described above and for the diagnostics that go with it — the two things this policy has
+described above and for the two Wi-Fi values described here — the things this policy has
 already listed — and for nothing else.
 
 ## Do Not Disturb access

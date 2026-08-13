@@ -785,13 +785,92 @@ data class Anchor(
 as you roam between access points while you have obviously not gone anywhere. Anchoring on BSSID
 would produce constant false departures in exactly the large venues the app is most useful in.
 
-**Open: does `bssid` earn its place at all?** (Codex, PR #23.) It is carried "for diagnostics", but
-the diagnostic that would consume it is §4.6's log, whose floor forbids a full BSSID outright — and
-the field is erased with the anchor when the snooze ends, so nothing survives the failure it was
-meant to explain. That leaves a strong location identifier held for a purpose nothing can currently
-serve, which is the wrong side of §12 to be on. Either name a real use that lives *inside* the
-snooze and can be described in `docs/PRIVACY.md`, or drop the field. **Maintainer's call**;
-`docs/PRIVACY.md` says the question is open rather than claiming a benefit the app cannot deliver.
+**`bssid` stays, and it has a use: the meeting room** (maintainer, 2026-08-13). Codex asked in PR
+#23 whether the field earned its place — carried "for diagnostics", but §4.6's log may not record a
+full BSSID and the field dies with the anchor, so nothing could consume it. The answer is that
+diagnostics was never the interesting use: **a room is smaller than an SSID**. In an office the
+whole floor is one network, so SSID loss cannot tell you that you left the room you were sitting
+in, and room-scale is exactly the case a "quiet until I leave here" snooze is for.
+
+What the platform will and will not give us, because it bounds the design:
+
+- **The connected AP is cheap.** `WifiInfo.getBSSID()` costs one read, needs no scan, and rides the
+  `ACCESS_FINE_LOCATION` we already hold for the SSID (§6.4). Signal strength on that AP
+  (`getRssi()`) is equally cheap.
+- **"Still in range" is not directly askable.** That needs scan results. `startScan` is throttled
+  to 4 calls per 2 minutes (§6.4) and costs real battery; cached `getScanResults` is free but its
+  freshness depends on whatever else on the phone happened to scan, so an absent AP means "nobody
+  has seen it recently", not "you left". Usable as corroboration, never as the trigger.
+- **A BSSID change does not mean you moved.** Phones roam between APs while sitting still, and band
+  steering moves a phone between the 2.4 and 5 GHz radios of *the same* AP, which present different
+  BSSIDs. This is the original reason SSID is the anchor, and it does not stop being true. The
+  maintainer's framing is the more general one (2026-08-13): *"we could switch networks without
+  moving"* — a hop to a guest SSID, or off Wi-Fi and back, reaches the same place without roaming
+  being involved at all.
+
+**One BSSID, the connected one, captured at arm time.** `Anchor.bssid` is a single value, not a
+list: nothing scans, so Snoozemo knows which AP it is associated with and nothing else about the
+room. The check that follows is correspondingly narrow — compare the currently-connected BSSID
+against the anchor's, and act only on a difference.
+
+So the rule is D4's asymmetry again, one level down: **a BSSID change is a hint that triggers a
+check, never a departure on its own** (confirmed by the maintainer, 2026-08-13: *"keeping it as a
+check again event is good for now"*).
+
+**But the check it triggers cannot be §6.6's** (Codex, PR #24), and an earlier draft of this
+section said it could, which was wrong in a way worth keeping written down. §6.6 is a *location*
+test: a fix outside the anchor's 150 m radius, plus hysteresis and confirmation. Walking out of a
+meeting room and down the corridor is ten meters. **§6.6 as it stands cannot resolve a room** —
+that much is true by construction, not by argument. Reusing it here was a plausible-sounding
+shortcut that quietly made the feature impossible.
+
+**Whether *some* location test could contribute is open, and an earlier draft closed it too
+early** (Codex, PR #24). That draft reasoned from `MAX_ANCHOR_ACCURACY_M = 200f` to "location
+cannot resolve a room, at all" — but that constant is the *rejection ceiling*, the worst fix the
+capture will accept, not the accuracy a fix actually has. A qualifying fix can be far better than
+200 m, so the ceiling proves nothing about the best case. What §6.6 actually rules out is its own
+150 m radius and its balanced-power request; a tighter gate with a higher-accuracy request is a
+different test that has not been evaluated.
+
+It should be evaluated **before** the D4 question below, because if location can corroborate at
+room scale then D4 survives untouched, which is a better outcome than an exception to it. Two
+things decide it, and both are measurements rather than arguments: **how accurate an indoor fix
+actually is** in the buildings this is for, and **what a higher-accuracy duty cycle costs** against
+§9's budget — plausibly affordable here, since a room snooze is a meeting rather than eight hours,
+but that is a guess until measured. The office walk `TODO.md` already asks for should record fix
+accuracy alongside AP roaming, since one trace answers both.
+
+Failing that, the room case needs **its own exit criterion resting on Wi-Fi alone**: the connected
+BSSID differing from the anchor's, held for a dwell (the maintainer's "5 minutes or something"),
+possibly corroborated by signal strength on the anchor AP falling away first (`getRssi()` is as
+cheap as the BSSID read) or by the anchor AP's absence from cached scan results. It is **not
+designed yet**, and this section deliberately does not pretend otherwise.
+
+**That criterion contradicts D4, and reconciling them is the maintainer's call, not this
+section's** (Codex, PR #24). D4 and §6.3 are unambiguous: Wi-Fi is a suppressor and an escalation
+hint, and a snooze never ends on Wi-Fi loss alone — because routers reboot, bands drop in far
+rooms, and phones hop to captive portals, any of which would end a snooze wrongly. A room-scale
+verdict resting on Wi-Fi alone does exactly what D4 forbids. Whether that is *unavoidable* depends
+on the measurement above: if a tighter location test can corroborate at room scale, D4 is satisfied
+and none of this arises.
+
+The argument for a scoped exception is the **failure direction**, which is not symmetric at the two
+scales. A false "you left" rings a phone in a meeting that had a minute to run — an annoyance. A
+false "you're still here" leaves someone silently unreachable, which is principle 1's failure. The
+cheap signal errs toward the first, and the duration cap backstops both. D4's rationale is written
+about the place-scale snooze, where a spurious end wastes the whole feature; it may or may not
+survive being applied to a room the user opted into.
+
+So v1.1 needs, in order: **measure indoor fix accuracy** and see whether a tighter location test
+corroborates a room exit; and only if it does not, **D4 amended with a room-scoped exception**
+(stated as a decision with its reasoning, per the way every other reversal in this document is
+recorded) or the feature dropped. The amendment is not made here — autopilot does not get to
+quietly widen a numbered decision, and "the room case needs it" is an argument for the maintainer
+to weigh rather than a licence.
+
+Scoped as **v1.1 or later**: v1 keeps capturing the field and does not act on it. `docs/PRIVACY.md`
+describes it as captured-and-unacted-on until the feature lands, which is honest and becomes wrong
+the moment it does — so the feature's PR updates the policy in the same change.
 
 ### 6.3 Signals and their asymmetry (D4)
 
@@ -817,16 +896,35 @@ power-saving suppressor and an escalation hint, never as the thing that ends a s
 val request = NetworkRequest.Builder()
     .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
     .build()
-cm.registerNetworkCallback(request, object : ConnectivityManager.NetworkCallback() {
-    override fun onCapabilitiesChanged(n: Network, caps: NetworkCapabilities) {
-        val info = caps.transportInfo as? WifiInfo ?: return   // API 31+
-        onSsid(info.ssid.trim('"'))
-    }
-    override fun onLost(n: Network) = onWifiLost()
-})
+// FLAG_INCLUDE_LOCATION_INFO is not optional here — see below.
+cm.registerNetworkCallback(
+    request,
+    object : ConnectivityManager.NetworkCallback(FLAG_INCLUDE_LOCATION_INFO) {
+        override fun onCapabilitiesChanged(n: Network, caps: NetworkCapabilities) {
+            val info = caps.transportInfo as? WifiInfo ?: return   // API 31+
+            onSsid(info.ssid.trim('"'))
+            onBssid(info.bssid)                                    // §6.2, captured only
+        }
+        override fun onLost(n: Network) = onWifiLost()
+    },
+)
 ```
 
-Two constraints worth stating plainly:
+**The flag is load-bearing, and an earlier version of this snippet omitted it** (Codex, PR #24).
+A `NetworkCallback` built with the no-argument constructor requests no location-sensitive data, so
+the `WifiInfo` reached through `transportInfo` comes back *redacted* — the SSID as
+`WifiManager.UNKNOWN_SSID` and the BSSID as `02:00:00:00:00:00` — regardless of the permissions
+held. The failure is quiet: real objects, plausible strings, an anchor that never matches anything.
+Note this is not a room-feature problem that arrived with §6.2's BSSID; **it breaks the SSID
+anchor, which is v1's mechanism**. The flag needs `ACCESS_FINE_LOCATION` and location services on
+to actually deliver the fields, which is the same gate the next bullet describes.
+
+**Owed a device.** This is written from the platform's documented behavior and has not been run
+here — the sandbox has no device and the reference pages did not render for a fetch. Phase 3's
+first task on a real handset is to assert that the SSID read comes back as an SSID and not the
+placeholder, in both flavors. A test that accepts `UNKNOWN_SSID` as a value would hide exactly this.
+
+Two further constraints worth stating plainly:
 
 - Reading SSID requires `ACCESS_FINE_LOCATION` **and** location services enabled, on all current
   versions. `NEARBY_WIFI_DEVICES` with `neverForLocation` does *not* remove that requirement for
