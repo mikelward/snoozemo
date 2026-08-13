@@ -50,10 +50,12 @@
       silence a phone — so the screen leads with it rather than listing it as
       one option among equals.
 
-      "Don't show again", not "Not now": the dismissal is permanent and is not
-      re-raised even when the tile is later removed, and "Not now" would promise
-      the opposite. The row below the banner is the standing route, so saying it
-      plainly costs the reminder and not the capability.
+      "Don't ask again" (maintainer, 2026-08-13), not "Not now": the dismissal
+      is permanent and is not re-raised even when the tile is later removed, and
+      "Not now" would promise the opposite. The row below the banner is the
+      standing route, so saying it plainly costs the reminder and not the
+      capability. Shorter than the "Don't show again" it replaces, and the more
+      common idiom for a dismissal that sticks.
     -->
     <!-- TODO: translate -->
     <string name="tile_banner_title" tools:ignore="MissingTranslation">Snooze from the shade</string>
@@ -62,7 +64,7 @@
     <!-- TODO: translate -->
     <string name="tile_banner_add" tools:ignore="MissingTranslation">Add tile</string>
     <!-- TODO: translate -->
-    <string name="tile_banner_dismiss" tools:ignore="MissingTranslation">Don\'t show again</string>
+    <string name="tile_banner_dismiss" tools:ignore="MissingTranslation">Don\'t ask again</string>
     <!-- TODO: translate -->
     <string name="setup_action_add" tools:ignore="MissingTranslation">Add</string>
     <!-- TODO: translate -->
