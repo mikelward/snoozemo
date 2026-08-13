@@ -79,8 +79,25 @@ release rather than dropped.
         round caps and joins**, which reads as handwriting, and it is what makes three
         glyphs fit at all: an even-weight stroke costs less area than a filled wedge, so
         the smallest `z` keeps its counters open under the tint that blooms.
-- [ ] `docs/PRIVACY.md` backing the hosted privacy policy, plus the Play Data Safety
+- [x] `docs/PRIVACY.md` backing the hosted privacy policy, plus the Play Data Safety
       answers it has to agree with ("no data collected, no data shared", `SPEC.md` §12).
+      Written from the manifests and the five `SharedPreferences` stores rather than from
+      the spec alone, so the "what Snoozemo keeps" table lists what the code actually
+      writes and when it is erased. Two things it deliberately does **not** do:
+      - **It does not describe the debug log (§4.6).** The log isn't built, and a policy
+        that describes a feature the app doesn't have is inaccurate in the direction that
+        costs trust. The gate stays where it was — the log's own PR adds the section, and
+        Phase 5's "must describe what the log carries **before** the sharing surface ships"
+        is what holds it.
+      - **It is not published by this commit.** Hosting it, and the Play Data Safety form
+        it has to agree with, belong to Phase 6's release plumbing — which is the
+        *internal-track* release, so both are due before the first build reaches a tester,
+        not at some later public launch.
+- [ ] Re-verify `docs/PRIVACY.md` against the shipped manifest before the first release.
+      It describes **v1 as specified**, so it names location, background location and the
+      Wi-Fi read, none of which the app declares yet (Phase 3). That is the safe direction
+      to be wrong in — a policy promising less than the app does is the harmful one — but
+      it has to be true on the day it is hosted, not merely true eventually.
 
 ## Phase 1 (M1) — The DND half
 
@@ -524,6 +541,26 @@ the point is that every other line of the app is worthless if it isn't true.
 - [ ] Data Safety declaration: "no data collected, no data shared" (`SPEC.md` §12).
 - [ ] In-app prominent disclosure before the location permission prompt, and the
       demonstration video the background-location declaration needs.
+- [ ] **Stop a transferred snooze from silencing a new phone** (Codex, PR #23) — a
+      principle 1 bug, and a **prerequisite for shipping below**, not a sequel. It is not
+      part of *Settle the backup story* either; neither branch of that decision fixes it. If an OEM transfers app-private data despite `allowBackup="false"`, an
+      unexpired `active_snooze` lands on the new phone, and `BootReceiver` restores
+      whatever record it finds: cap armable → zen rule re-asserted (`SPEC.md` §8.3). The
+      new phone goes quiet on its first boot for a snooze armed on a different device,
+      which is the failure principle 1 exists to prevent. Bounded by the absolute
+      wall-clock cap, so a swap slower than the remaining cap is already safe — but a swap
+      is usually faster. Two ways to fix it, and the second is better:
+      - A `<device-transfer>` exclude for the `active_snooze` file. Cheap, but it leans on
+        the same `dataExtractionRules` whose broader use is the open decision, and it
+        cannot help if the transfer path ignores it.
+      - **Make a restored record prove it belongs to this device** — stamp the record at
+        arm time with something device-scoped and refuse to restore one that doesn't match,
+        ending the snooze rather than asserting the rule. This is fail-open (D7), works
+        whatever the OEM does, and also covers a record restored from any other route.
+        Needs a device-scoped value that survives reboot but not migration; `ANDROID_ID`
+        is the obvious candidate and wants checking against what D2D actually carries.
+      Whichever lands, it needs a `SnoozeController`/`BootReceiver` test that a foreign
+      record ends the snooze instead of restoring it.
 - [ ] Ship to the internal track — the point at which the declaration outcome becomes
       known.
 
@@ -671,6 +708,18 @@ Nothing here is scheduled; each is a sequel that follows from something already 
         answers, so it is the maintainer's call and not autopilot's.
       - A user-initiated export/import file: no ambient copies, but nobody does it before
         losing the phone.
+      - **The starting point is not where this item assumed it was** (Codex, PR #23).
+        `allowBackup="false"` on its own does not mean "nothing migrates": Android
+        documents that for apps targeting API 31+ it disables cloud backup but, on some
+        manufacturers' devices, **does not disable device-to-device transfer**. With no
+        `dataExtractionRules` declared, a phone swap today does whatever the OEM does. So
+        this is not "no backup, decide later" — it is *undecided*, and the direction that
+        needs a positive action has flipped: allowing D2D costs a rule that says so,
+        refusing it costs a `<device-transfer>` exclude, and doing nothing picks neither.
+        Still the maintainer's call. It needed saying in both places, so `AGENTS.md`
+        principle 3's "loses settings by design" is corrected too: the rule it illustrates
+        is untouched, only the platform fact under it. A false premise left in the file
+        every agent loads is how a later change quietly assumes D2D is already off.
 - [ ] **Auto-arm on arrival** — the obvious sequel, and nearly free in the `play` flavor
       where background location is already paid for.
 - [ ] **"Until I get home"** and other saved-place reverse geofences — needs saved places
@@ -1145,3 +1194,27 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
   or being swallowed. An OEM build or a restricted profile without the screen would otherwise take
   the app down from a tap on a row describing a problem. Reversible, but reversing it picks one of
   those two outcomes.
+
+- **The privacy policy is written for v1 as specified, not for the code as it stands.** It
+  names location, background location and the Wi-Fi read, none of which the app declares
+  yet. The alternative — describe only today's permissions — produces a document that is
+  accurate this week and understates the app by the first release, and understating is the
+  harmful direction for a privacy policy. Reversible by trimming those sections; the
+  re-verify item in Phase 0 is what stops it being forgotten either way.
+
+- **The policy's contact is the repo's issue tracker, not an email address.** Play's store
+  listing needs a contact email regardless, so whether the maintainer's own address also
+  belongs on a publicly hosted policy page is their call and not a guess worth making —
+  publishing an address cannot be undone. Reversible in the other direction at no cost:
+  adding one later is a one-line edit.
+
+- **The BSSID is disclosed as an open question rather than justified or removed** (Codex,
+  PR #23). `Anchor.bssid` is carried "for diagnostics" (`SPEC.md` §6.2), but §4.6's log —
+  the only thing that would consume it — is barred from recording a full BSSID, and the
+  field dies with the anchor when the snooze ends, so nothing outlives the failure it was
+  meant to explain. Removing it is the privacy-positive move and probably right, but it is
+  a spec change and a capability the maintainer may have a use for, so autopilot did not
+  make it. What landed instead: `docs/PRIVACY.md` states plainly that nothing reads it
+  today and that it goes if that stays true, and `SPEC.md` §6.2 carries the question.
+  Reversible either way — naming a real in-snooze use restores it, deleting the field
+  settles it.
