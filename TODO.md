@@ -383,12 +383,28 @@ the point is that every other line of the app is worthless if it isn't true.
         junk for ten minutes, an alarm arriving after the reason for it went away.
       - [ ] `GeofencePresenceMonitor` itself: registration, the exit callback, and the
         `Degraded`/`CapabilityLost` split at the platform boundary. Needs a handset to verify.
+      - [ ] **The grace deadline has to survive process death** (Codex, PR #31). `PresenceState`
+        is in-memory only; a service killed after arming the five-minute grace alarm comes back
+        with no deadline, so the alarm's signal is ignored and the snooze runs to the cap — the
+        silence the grace period exists to bound. The monitor is what owns persistence, so this
+        lands with it, and there are two frames to get right: the deadline is elapsed realtime, so
+        it survives process death but **not** a reboot, where the alarm is gone too and the boot
+        restore has to re-derive it. `ActiveSnooze.bootReference` already exists for exactly this
+        problem on the duration cap.
       - [ ] **The degradation *cause* stops at the controller** (Codex, PR #31). `Presence` now
         tells `FIXES_TOO_VAGUE` from `NO_LOCATION_FIX`, and `SnoozeController` maps both to the
         same `TrackingMode`, which is all `SnoozeService.onDegraded` renders from — so the
         notification says `Wi-Fi only` either way and the distinction never reaches the user.
         Fixing it means new user-facing copy, which needs the propose-in-chat-and-approve step
         (`AGENTS.md`, *Translations*), so it is a follow-up rather than part of the engine PR.
+        - **And the *mode* is wrong too, during the grace period** (Codex, PR #31). `modeFor`
+          picks `WIFI_ONLY` whenever the anchor *has* an SSID, so while the grace period runs —
+          Wi-Fi gone, location vague — the notification claims Wi-Fi is tracking a snooze that
+          nothing is tracking. `DURATION_ONLY` is not the fix: it says only the cap will end
+          this, when in fact a five-minute grace period will. **No existing `TrackingMode`
+          describes "unverifiable, ending shortly unless something recovers"**, which is what
+          the user actually needs to read, so this wants the same approved-copy step and
+          probably a mode of its own. Both halves land together.
       - [ ] **Recovering from degraded mode has no path back** (found while building the engine).
         The engine forgets a degradation once a good fix or the anchor's Wi-Fi returns, and reports
         `StillHere`. But `SnoozeController.onPresenceEvent` only moves `CHECKING` → `ARMED` on that
@@ -904,6 +920,61 @@ Nothing here is scheduled; each is a sequel that follows from something already 
       - `docs/PRIVACY.md` currently says nothing acts on the BSSID. That stops being true
         with this feature, so its PR updates the policy in the same change.
 - [ ] **Wear OS tile.**
+
+## Open questions from the maintainer (2026-08-13)
+
+Raised while the presence engine was being built, and kept open deliberately: each one changes
+what the product *is*, so none is autopilot's to settle. Recorded here rather than answered.
+
+- **Should a snooze ever end without a confirmed departure?** Asked as: *"I'm worried about the
+  case that I'm at a movie and Snoozemo unsnoozes prematurely."* That case is real and it is
+  reachable by exactly one path — the §6.6 grace period, which ends a snooze when the anchor's
+  Wi-Fi is gone *and* location cannot place anyone. A cinema produces both. The confirmed
+  departure test is close to safe there (indoor readings are vague, and vague ends nothing); the
+  remaining hole is a confidently wrong fix past the unambiguous margin.
+  - **The proposed fix, and it is a good one: gate the fail-open endings on significant motion.**
+    `TYPE_SIGNIFICANT_MOTION` needs no permission, costs approximately nothing, and a phone in a
+    pocket in a cinema seat never fires it. Confirmed departures and the duration cap would stay
+    unconditional; only the grace period would additionally require "has moved since the last
+    confirmed presence". This is the maintainer's *"only after the end of my meeting AND if I
+    moved"*, in the form the sensors can actually support.
+  - **The cost**: a phone that leaves in a bag or a car boot without triggering the trigger sensor
+    would hold its snooze to the cap. Whether that is rare is a measurement, not an argument.
+  - **The strongest argument on the other side** (Codex, PR #31), worth having in front of whoever
+    decides: a geofence exit that arrives while the anchor's Wi-Fi is still associated, followed by
+    location going vague, currently arms no grace period at all — so a phone that really did leave
+    while still *claiming* to be on the network holds its snooze to the cap. The engine declines to
+    end there because association is D4's strong presence evidence and the geofence is the signal
+    §6.10 documents as unreliable; but the same reasoning that keeps a cinema quiet is what leaves
+    that case silent. The two questions are one question, and they should be answered together.
+  - Nothing ships either way until the monitors land, so the engine's current behavior is not yet
+    reachable by a user.
+- **Should ending be a prompt rather than an action, at least sometimes?** Asked as: *"prompt me to
+  unsnooze when I unlock as an option, rather than only always unsnoozing automatically."* The
+  natural shape is not a global switch but a split: a *confirmed* departure ends the snooze
+  silently, while an *ambiguous* one waits and asks at the next unlock. It does not fix the cinema
+  case on its own — you do not unlock in a cinema, which is the good half — but if it replaced
+  automatic ending outright, a phone that has genuinely left stays silent until the user happens to
+  unlock, which is principle 1's failure with a friendlier name.
+- **How much of the app is presence, and how much is just "DND is on and nothing says so"?** Asked
+  as: *"I wonder how much of the app is unneeded if we detect when the system is in DND and just
+  show a persistent notification saying 'tap to turn off Do Not Disturb'."*
+  - The observation behind it, from the maintainer's Pixel: **bedtime mode posts a notification and
+    plain DND does not.** That asymmetry is because bedtime mode is Digital Wellbeing — an ordinary
+    app, doing several things at once — while DND is a platform state surfaced the way airplane
+    mode is, with a status-bar glyph and a lit tile. So there is no notification to tap for DND the
+    user turned on themselves, from any source.
+  - **What the reduction would delete**: all of Phase 3, the location permissions, the geofence, the
+    battery budget of §9, and — the big one — the background-location declaration of §3.5, which is
+    the project's largest single risk. What it keeps: the tile, the zen rule, the cap, the
+    notification.
+  - **What it gives up**: the promise. A notification still has to be noticed and tapped; the
+    product exists because people forget. Worth noting the two are not exclusive — noticing DND
+    that *something else* turned on (a schedule, bedtime, a manual toggle) is a distinct, much
+    cheaper feature that Snoozemo does not have today and could ship regardless of what happens to
+    presence.
+  - **Owed**: a written comparison against the current spec — what each option deletes, keeps and
+    costs — before anything is decided.
 
 ## Decisions needing review
 - **A snooze that *becomes* unverifiable now ends on the same 5-minute grace period as one that
