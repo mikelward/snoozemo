@@ -614,10 +614,12 @@ the point is that every other line of the app is worthless if it isn't true.
         cannot, because every one of its successors resolves the record through `load()`,
         which is exactly what refuses this record. `discardForeignRecord` takes an
         injectable `ZenController` (defaulted, so no caller had to change) and
-        `RefusingZen` drives both sides of the branch. **The receiver paths in
-        `CapAlarm.kt` still build their controllers inline** — `releaseDirectly` and
-        friends — so the same seam is worth extending to them; that is what made this
-        branch untestable in the first place.
+        `RefusingZen` drives both sides of the branch. **The other receiver paths now
+        take the same seam too** — `releaseDirectly` and `restoreDirectly`, via a shared
+        `androidZen(context)` factory, covered by `ReceiverRefusalTest` (7). Converting
+        them turned up a real defect rather than only enabling tests: `restoreDirectly`'s
+        expired-record and nothing-left-to-release branches each built a *second*
+        controller instead of forwarding their own.
         Superseded note kept for the shape of the problem: it was covered by
         inspection
         only. `discardForeignRecord` builds its `AndroidZenController` inline, exactly as

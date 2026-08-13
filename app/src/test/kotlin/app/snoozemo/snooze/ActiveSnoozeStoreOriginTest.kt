@@ -48,10 +48,15 @@ class ActiveSnoozeStoreOriginTest {
     private val KEY_STAMP = "device_stamp"
 
     /**
-     * Robolectric leaves `ANDROID_ID` null, which is a legitimate device state
-     * ([RecordOrigin.UNVERIFIABLE]) but not the one under test — so every test
-     * that needs attribution sets it explicitly, and "this phone" versus "that
+     * Robolectric leaves `ANDROID_ID` null, which is a real device state on
+     * modified builds but not the one most tests are about — so every test that
+     * needs two identities sets it explicitly, and "this phone" versus "that
      * phone" is just two different values.
+     *
+     * Note that a null `ANDROID_ID` no longer means the record is
+     * unattributable: the stamp folds in `firstInstallTime` too, so Robolectric's
+     * default yields [RecordOrigin.THIS_DEVICE] rather than
+     * [RecordOrigin.UNVERIFIABLE].
      */
     private fun becomeDevice(id: String) {
         Settings.Secure.putString(context.contentResolver, Settings.Secure.ANDROID_ID, id)

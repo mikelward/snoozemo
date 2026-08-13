@@ -18,9 +18,9 @@ import app.snoozemo.core.RecordOrigin
 import app.snoozemo.core.ReleaseEscalation
 import app.snoozemo.core.ReleaseProgress
 import app.snoozemo.core.ReleaseStep
+import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
-import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenTrigger
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.dnd.PrefsZenRuleIdStore
@@ -416,6 +416,26 @@ private fun releaseDirectlyIfStillOurs(
 }
 
 /**
+ * The real zen controller, built the same way for every receiver path here.
+ *
+ * A function rather than four copies of the constructor call, and a defaulted
+ * parameter on each of those paths rather than a field, for one reason: every
+ * one of them has a branch that only runs when the platform *refuses* to change
+ * the rule, and those branches are where this file's worst bugs have lived
+ * (PR #26 found three in a single new one). A refusal cannot be provoked
+ * through a real `AndroidZenController`, so before this they could only be
+ * checked by reading them.
+ *
+ * Defaulted, so no caller passes anything and no production behavior moves;
+ * the parameter exists for `RefusingZen` and nothing else.
+ */
+private fun androidZen(context: Context): ZenController = AndroidZenController(
+    context = context.applicationContext,
+    store = PrefsZenRuleIdStore(context.applicationContext),
+    configurationActivity = ComponentName(context.applicationContext, MainActivity::class.java),
+)
+
+/**
  * The last line of defense: turn the rule off from a receiver, with no service.
  *
  * Used wherever the release cannot depend on the service starting — the cap
@@ -437,14 +457,13 @@ private fun releaseDirectlyIfStillOurs(
  * still be silent is the quiet-wrong-answer this app's second principle is
  * about. Callers with nothing to report can ignore it.
  */
-internal fun releaseDirectly(context: Context, reason: EndReason): Boolean {
+internal fun releaseDirectly(
+    context: Context,
+    reason: EndReason,
+    zen: ZenController = androidZen(context),
+): Boolean {
     val store = ActiveSnoozeStore(context)
     val snooze = store.load()
-    val zen = AndroidZenController(
-        context = context.applicationContext,
-        store = PrefsZenRuleIdStore(context.applicationContext),
-        configurationActivity = ComponentName(context.applicationContext, MainActivity::class.java),
-    )
 
     val outcome = zen.setSnoozed(
         snoozed = false,
@@ -705,7 +724,11 @@ private fun eraseDirectly(context: Context, recordStartedAtMillis: Long) {
  * *first* — a record whose cap passed while the phone was off is already over,
  * and re-asserting it would silence the phone past the deadline it promised.
  */
-private fun restoreDirectly(context: Context, snooze: ActiveSnooze) {
+internal fun restoreDirectly(
+    context: Context,
+    snooze: ActiveSnooze,
+    zen: ZenController = androidZen(context),
+) {
     Log.w(RELEASE_TAG, "The post-reboot service start was refused; restoring without it.")
 
     // The clock before the rule. The boot receiver arms the cap from the
@@ -715,15 +738,14 @@ private fun restoreDirectly(context: Context, snooze: ActiveSnooze) {
     // interval nothing in the app controls. The snooze is simply over.
     if (snooze.isExpired(SnoozeClock.read())) {
         Log.w(RELEASE_TAG, "The record's cap passed while the phone was off; ending instead.")
-        releaseDirectly(context, EndReason.DURATION_CAP)
+        // Forwarded, not rebuilt: one controller per receiver invocation. Two
+        // would mean this path's release ran against a different object than
+        // the one that had just been asked about the same rule — harmless in
+        // production, and the reason the branch was untestable.
+        releaseDirectly(context, EndReason.DURATION_CAP, zen)
         return
     }
 
-    val zen = AndroidZenController(
-        context = context.applicationContext,
-        store = PrefsZenRuleIdStore(context.applicationContext),
-        configurationActivity = ComponentName(context.applicationContext, MainActivity::class.java),
-    )
     val notifications = SnoozeNotifications(context.applicationContext)
 
     val outcome = zen.setSnoozed(true, ZenTrigger.CONTEXT, snooze.placeName)
@@ -742,7 +764,7 @@ private fun restoreDirectly(context: Context, snooze: ActiveSnooze) {
         // `Snoozing` on the tile over a phone that is already ringing, right
         // up to the cap (§8.2).
         if (outcome.reason.nothingLeftToRelease) {
-            releaseDirectly(context, EndReason.LOST_CAPABILITY)
+            releaseDirectly(context, EndReason.LOST_CAPABILITY, zen)
             return
         }
         // Retryable, so the snooze is still running as far as the app is
@@ -943,11 +965,7 @@ internal fun discardForeignRecord(
     // notification and the only retry, so "covered by inspection" was not good
     // enough for it. Defaulted rather than threaded through every caller: the
     // receivers should not have to know how a zen controller is built.
-    zen: ZenController = AndroidZenController(
-        context = context.applicationContext,
-        store = PrefsZenRuleIdStore(context.applicationContext),
-        configurationActivity = ComponentName(context.applicationContext, MainActivity::class.java),
-    ),
+    zen: ZenController = androidZen(context),
 ) {
     Log.w(
         RELEASE_TAG,
