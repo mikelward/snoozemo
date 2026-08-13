@@ -9,16 +9,18 @@
       been through the propose-copy-in-chat step.
     -->
     <!--
-      The two setup rows. Each is a whole tappable target, so the sentence that
-      names the problem is the thing you tap — the status line used to be inert
-      text beside a separate button (`TODO.md` Phase 2).
+      The setup rows: a title, how the capability stands, and a button carrying
+      the verb — but only while there is something left to do. A row whose
+      capability is in place says so and offers nothing.
 
-      The action line is a separate string on purpose: the two permissions are
-      not the same kind of thing, and the row is where that has to be legible.
-      Do Not Disturb access is a Settings toggle, so the user leaves the app and
-      comes back (SPEC.md §5.2); `POST_NOTIFICATIONS` is a runtime prompt that
-      appears in place — until the system stops showing it, after which Settings
-      is the only route left and the row says so instead.
+      Each action is a verb the user wants, not the route the tap takes. The old
+      copy named the mechanism — `Opens Settings`, `Tap to allow`, `Tap to add`
+      — which reads as a description of what is about to happen rather than an
+      offer, and left a granted row still looking like it wanted something.
+      `Grant` and `Allow` keep the one distinction worth carrying: Do Not
+      Disturb access is a Settings toggle the user goes and flips (SPEC.md
+      §5.2), while `POST_NOTIFICATIONS` is a runtime prompt that appears in
+      place.
     -->
     <!-- TODO: translate -->
     <string name="setup_dnd_title" tools:ignore="MissingTranslation">Do Not Disturb access</string>
@@ -33,15 +35,15 @@
     <!-- TODO: translate -->
     <string name="setup_notifications_missing" tools:ignore="MissingTranslation">Snoozemo can\'t show what a snooze is doing</string>
     <!-- TODO: translate -->
-    <string name="setup_opens_settings" tools:ignore="MissingTranslation">Opens Settings</string>
+    <string name="setup_action_grant" tools:ignore="MissingTranslation">Grant</string>
     <!-- TODO: translate -->
-    <string name="setup_tap_to_allow" tools:ignore="MissingTranslation">Tap to allow</string>
+    <string name="setup_action_allow" tools:ignore="MissingTranslation">Allow</string>
     <!-- TODO: translate -->
     <string name="setup_tile_title" tools:ignore="MissingTranslation">Quick Settings tile</string>
     <!-- TODO: translate -->
     <string name="setup_tile_missing" tools:ignore="MissingTranslation">The one-tap way to snooze</string>
     <!-- TODO: translate -->
-    <string name="setup_tile_add" tools:ignore="MissingTranslation">Tap to add</string>
+    <string name="setup_action_add" tools:ignore="MissingTranslation">Add</string>
     <!-- TODO: translate -->
     <string name="failure_could_not_add_tile" tools:ignore="MissingTranslation">Couldn\'t add the tile</string>
     <!-- TODO: translate -->

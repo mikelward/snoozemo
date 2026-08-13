@@ -612,9 +612,14 @@ is the settings screen above — the user leaves the app, flips a toggle, and co
 in-app dialog and no result callback. `POST_NOTIFICATIONS` (§4.3) is a genuine runtime prompt that
 appears in place. They sit next to each other on the same screen, so three rules apply:
 
-- **The status is the target.** Each capability is one tappable row carrying its name, its state,
-  and what tapping does. A sentence that names a problem and does nothing when tapped is the shape
-  this replaced.
+- **The action is the target, and it is a verb.** Each capability is one row carrying its name, its
+  state, and — while something is actually left to do — a button that does it: `Grant`, `Allow`,
+  `Add`. Two earlier shapes are ruled out by that sentence. A status line that names a problem and
+  does nothing when tapped is the original defect. Making the *whole row* the target fixed it but
+  spent the fix on a second problem: the action then had to be described rather than offered
+  (`Opens Settings`, `Tap to add`), which reads as a note about what is going to happen, and a row
+  that stayed tappable once granted kept offering something to a user with nothing to do (revised
+  2026-08-13, maintainer).
 - **No row offers an action the platform will ignore.** The system shows the notification prompt
   until it has been denied twice and then silently drops every later request, so past that point the
   row stops offering a prompt and points at the app's notification settings instead. Telling the two
@@ -636,9 +641,17 @@ appears in place. They sit next to each other on the same screen, so three rules
   install that cannot report it. It costs nothing today, since the app is unreleased and no install
   predates the flag, and closing it needs a device to choose between the candidate signals
   (`TODO.md`) rather than a guess. An unverifiable inference was tried and withdrawn.
-- **The difference is stated, not implied.** The row says `Opens Settings` or `Tap to allow`, in the
-  same position on both rows, so the reader can tell which one takes them out of the app before they
-  tap it.
+- **A capability that is in place offers nothing.** The button is absent once the row has nothing to
+  fix, so the row is then a statement — `Granted`, `Allowed` — and the screen's remaining controls
+  are the ones that snooze. Turning either capability back *off* is Settings' job, reached
+  deliberately, not a button that looks like setup on a screen where setup is finished. The cost is
+  real and accepted: there is no longer a route from this screen to the Do Not Disturb access
+  toggle for a user who wants to revoke it.
+- **The difference between the two is carried by the verb.** `Grant` for the Settings toggle and
+  `Allow` for the runtime prompt, in the same position on both rows. It says less than the old
+  action lines did — the row no longer states that one of them leaves the app — and that is the
+  trade: naming the route is what made the offer read as a description. Whether the shorter form
+  loses something a first-run user needed is a device question (`TODO.md`).
 
 ### 5.3 Rule lifecycle
 
