@@ -390,6 +390,7 @@ class SnoozeController(
     private fun DegradationCause.modeFor(anchor: Anchor): TrackingMode = when (this) {
         // Location is gone but may come back; Wi-Fi still suppresses if we have it.
         DegradationCause.NO_LOCATION_FIX,
+        DegradationCause.FIXES_TOO_VAGUE,
         DegradationCause.LOCATION_SERVICES_OFF,
         DegradationCause.NO_LOCATION_IN_BACKGROUND,
         -> if (anchor.ssid != null) TrackingMode.WIFI_ONLY else TrackingMode.DURATION_ONLY

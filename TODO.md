@@ -376,6 +376,27 @@ the point is that every other line of the app is worthless if it isn't true.
 
 - [ ] `PresenceMonitor` interface and `GeofencePresenceMonitor`, with everything above the
       interface flavor-agnostic (`SPEC.md` §6.1).
+      - [x] **The engine above the interface**: `Presence`, a pure state machine in `:core` over
+        (state, signal, anchor). Owns escalation and de-escalation, the §6.7 duty cycle, the
+        degraded-tracking report, and the §6.6 grace period. Landed with `PresenceTest` (37),
+        written as sequences rather than single calls — a router rebooting, a provider emitting
+        junk for ten minutes, an alarm arriving after the reason for it went away.
+      - [ ] `GeofencePresenceMonitor` itself: registration, the exit callback, and the
+        `Degraded`/`CapabilityLost` split at the platform boundary. Needs a handset to verify.
+      - [ ] **The degradation *cause* stops at the controller** (Codex, PR #31). `Presence` now
+        tells `FIXES_TOO_VAGUE` from `NO_LOCATION_FIX`, and `SnoozeController` maps both to the
+        same `TrackingMode`, which is all `SnoozeService.onDegraded` renders from — so the
+        notification says `Wi-Fi only` either way and the distinction never reaches the user.
+        Fixing it means new user-facing copy, which needs the propose-in-chat-and-approve step
+        (`AGENTS.md`, *Translations*), so it is a follow-up rather than part of the engine PR.
+      - [ ] **Recovering from degraded mode has no path back** (found while building the engine).
+        The engine forgets a degradation once a good fix or the anchor's Wi-Fi returns, and reports
+        `StillHere`. But `SnoozeController.onPresenceEvent` only moves `CHECKING` → `ARMED` on that
+        event; the `TrackingMode` it lowered stays lowered, so the notification keeps saying
+        tracking is degraded after it recovered. Principle 2 cuts both ways — a stale degraded line
+        is a false statement about the app's own state, and it teaches the user to ignore the line
+        that matters. The fix is a controller change plus, probably, a sixth `PresenceEvent`, which
+        makes it a `SPEC.md` §6.1 change rather than a tidy-up.
 - [ ] Anchor capture at arm time — with the ≤10 s ceiling that degrades to Wi-Fi-only or
       duration-only rather than blocking the arm. **The SSID is the anchor; the connected
       BSSID is recorded alongside it** (`SPEC.md` §6.2). Those are two different
@@ -396,7 +417,7 @@ the point is that every other line of the app is worthless if it isn't true.
 - [x] The departure test itself (`SPEC.md` §6.6): accuracy gate, 50 m hysteresis, two
       qualifying fixes ≥30 s apart *or* one unambiguous fix beyond radius + 500 m. Covered
       by recorded fix traces including bad-accuracy jumps. Landed in `:core` as `Departure`
-      — pure, no Android, no clock — with `DepartureTest` (14) replaying traces for the
+      — pure, no Android, no clock — with `DepartureTest` (17) replaying traces for the
       vague cell fix, the GPS jump, the walk to the end of the garden, the burst of fixes,
       and the anchor with no coordinates at all.
       - **One property worth knowing rather than discovering:** the unambiguous shortcut
@@ -432,8 +453,9 @@ the point is that every other line of the app is worthless if it isn't true.
         qualifying reading. The literal reading of §6.6's "consecutive" ships until the
         walk says otherwise, because that is the conservative direction, not because the
         alternative is unavailable.
-      - Still owed: the monitor that decides *when* to ask for a fix, which is where the
-        duty cycle (§6.7) and the three wake-up sources (§6.10) live.
+      - Still owed: the platform monitors that *deliver* signals. The decisions around the
+        test — escalation, the duty cycle (§6.7), the degraded report, the grace period —
+        landed as `Presence`; what remains is the three wake-up sources (§6.10) feeding it.
 - [ ] Wi-Fi as suppressor only (D4): associated with the anchor SSID suppresses location
       work entirely; loss escalates to `CHECKING` and never ends a snooze on its own.
 - [ ] **The on-device debug log** (`SPEC.md` §4.6), landing here rather than later because this is
@@ -884,6 +906,29 @@ Nothing here is scheduled; each is a sequel that follows from something already 
 - [ ] **Wear OS tile.**
 
 ## Decisions needing review
+- **A snooze that *becomes* unverifiable now ends on the same 5-minute grace period as one that
+  armed that way** (autopilot, 2026-08-13). `SPEC.md` §6.6 wrote the grace period for the anchor
+  that never had a fix; the engine also starts it when a healthy snooze loses the anchor's Wi-Fi
+  *and* location stops being able to place anyone. The two states are identical in the only respect
+  that matters — nothing left can confirm a departure — and without this the ordinary route out of
+  a building ends in silence until the duration cap. **The alternative was to leave it to the cap**,
+  which is defensible on the grounds that ending on a timer discards evidence that might still
+  arrive; against that, principle 1 says a snooze that ends early is a small annoyance and one that
+  never ends is the product failing. Reversible in one place: the grace period is armed from a
+  single branch and the constant is one value. What a device would settle: how often a real walk
+  produces three unusable fixes in a row while the user has not gone anywhere.
+- **A geofence exit escalates even while the phone is still associated with the anchor's SSID**
+  (autopilot, 2026-08-13). D4 makes Wi-Fi association strong evidence of presence and the spec's
+  table had no row for the two subsystems disagreeing. Escalating costs one location request, which
+  then settles it either way; deferring to Wi-Fi would mean a real departure is missed whenever the
+  phone holds a stale association or the SSID exists at both ends of a walk. Recorded in §6.3.
+  Reversible: one branch, and the test that pins it names the trade. Note this is the one case
+  where checking outranks the Wi-Fi suppressor in the duty cycle — otherwise the escalation would
+  change the phase and ask for nothing, which is how it first shipped (Codex, PR #31).
+- **Three unusable readings in a row is the threshold for calling tracking degraded** (autopilot,
+  2026-08-13). One vague fix is ordinary; three at the 90-second checking rate is about four and a
+  half minutes of location saying nothing. Pure tuning, and the field measurement that would settle
+  it is the same recorded walk the departure test is waiting on.
 - **The screenshot refresh commit does not re-trigger CI, and that is unresolved**
   (Codex, PR #15). A push made with `GITHUB_TOKEN` deliberately starts no workflow run, so
   when the screenshot job commits `ci: refresh recorded screenshots` back to a PR branch,

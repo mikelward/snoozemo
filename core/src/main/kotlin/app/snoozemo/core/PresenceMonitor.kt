@@ -89,6 +89,19 @@ enum class DegradationCause {
     /** No fix within the arming ceiling, or none since. */
     NO_LOCATION_FIX,
 
+    /**
+     * Fixes are arriving, but none of them can place the user: every reading is
+     * vaguer than the distance being measured, so the departure test returns
+     * [DepartureVerdict.INCONCLUSIVE] each time.
+     *
+     * Distinct from [NO_LOCATION_FIX] because the two look identical to the app
+     * and completely different to the user — nothing is broken here, the phone
+     * is somewhere with no signal to fix against — and because a cause that lies
+     * about which is which makes the notification's degraded line untrustworthy,
+     * which is the only place §8.1 has to say anything at all.
+     */
+    FIXES_TOO_VAGUE,
+
     /** Location is switched off system-wide (SPEC.md §8.4). */
     LOCATION_SERVICES_OFF,
 
