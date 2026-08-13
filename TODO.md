@@ -366,8 +366,20 @@ the point is that every other line of the app is worthless if it isn't true.
 
 - [ ] `PresenceMonitor` interface and `GeofencePresenceMonitor`, with everything above the
       interface flavor-agnostic (`SPEC.md` §6.1).
-- [ ] Anchor capture at arm time — SSID not BSSID (`SPEC.md` §6.2) — with the ≤10 s ceiling
-      that degrades to Wi-Fi-only or duration-only rather than blocking the arm.
+- [ ] Anchor capture at arm time — with the ≤10 s ceiling that degrades to Wi-Fi-only or
+      duration-only rather than blocking the arm. **The SSID is the anchor; the connected
+      BSSID is recorded alongside it** (`SPEC.md` §6.2). Those are two different
+      statements, and an earlier "SSID not BSSID" here read as an instruction to skip the
+      BSSID entirely, which would leave `Anchor.bssid` permanently null and the room
+      feature unbuildable without a second capture change (Codex, PR #24). Nothing in v1
+      *acts* on the BSSID — it is only captured, and `docs/PRIVACY.md` says so.
+- [ ] **Register the Wi-Fi callback with `FLAG_INCLUDE_LOCATION_INFO`** (`SPEC.md` §6.4),
+      and assert on a real device that the SSID comes back as an SSID. Without the flag a
+      `NetworkCallback` requests no location-sensitive data, so `WifiInfo` arrives redacted
+      — `UNKNOWN_SSID` and `02:00:00:00:00:00` — no matter which permissions are held
+      (Codex, PR #24). This breaks the **SSID anchor**, not just the BSSID, and it fails
+      quietly: real objects, plausible strings, an anchor that matches nothing. Any test
+      here must reject the placeholders rather than accept them as values.
 - [ ] Three independent wake-up sources feeding one confirmation test (`SPEC.md` §6.10):
       geofence exit, Wi-Fi loss via `NetworkCallback`, and a 15–30 min `WorkManager`
       backstop. No source ends a snooze on its own evidence.
@@ -731,6 +743,42 @@ Nothing here is scheduled; each is a sequel that follows from something already 
       fix it invisibly, then have the app pick the fallback itself and say so, and only
       then expose them as standing user choices (`SPEC.md` §6.10).
 - [ ] **Chaining back-to-back meetings**, if using the app shows people actually want it.
+- [ ] **"Until I leave this room"** (maintainer, 2026-08-13) — the use that justifies keeping
+      `Anchor.bssid`. A room is smaller than an SSID: in an office the whole floor is one
+      network, so SSID loss cannot notice you leaving the meeting room you are sitting in,
+      which is exactly the case a "quiet until I leave here" snooze is for. Design
+      constraints in `SPEC.md` §6.2 — the short version:
+      - Reading the *connected* AP is cheap (`WifiInfo.getBSSID()`, no scan, same
+        permission as the SSID). "Is the room AP still in range" is not: that needs scan
+        results, `startScan` is throttled to 4 per 2 min, and cached `getScanResults` is
+        free but only as fresh as whatever else on the phone happened to scan.
+      - **A BSSID change does not mean you moved.** Phones roam between APs while
+        stationary, and band steering moves a phone between the 2.4 and 5 GHz radios of the
+        *same* AP, which present different BSSIDs.
+      - So it is a **trigger for a check, never a verdict** — D4's asymmetry one level
+        down — with a dwell before it counts (maintainer: *"out of range for 5 minutes or
+        something"*).
+      - **The check cannot be §6.6's, and the exit criterion is undesigned** (Codex,
+        PR #24). §6.6 tests against a 150 m radius on a balanced-power request; a room is
+        ten meters, so it can never fire. **Do not conclude from that that location is
+        useless here** — an earlier draft did, reasoning from `MAX_ANCHOR_ACCURACY_M` (a
+        rejection ceiling, not the accuracy of a fix). A tighter gate with a
+        higher-accuracy request is a different test and has not been evaluated.
+      - **Measure before designing.** Whether a location test can corroborate a room exit
+        turns on how accurate an indoor fix really is, and what a higher-accuracy duty
+        cycle costs against §9's budget — plausibly affordable, since a room snooze is a
+        meeting rather than eight hours, but that is a guess. If it can corroborate, D4
+        stands and the design gets much easier; only if it cannot does the Wi-Fi-only
+        verdict (and the D4 exception it needs) come into play.
+      - What makes a Wi-Fi-only verdict acceptable is the **failure direction**: it errs
+        toward ending early, which rings a phone a minute before the meeting ends, rather
+        than toward staying quiet, which is principle 1's failure.
+      - Needs a device: whether roaming in a real office is rare enough for this to be
+        usable at all is a measurement, not an argument. **The same walk should record fix
+        accuracy**, since one trace answers both questions — how often the phone roams
+        while stationary, and whether an indoor fix is ever tight enough to corroborate.
+      - `docs/PRIVACY.md` currently says nothing acts on the BSSID. That stops being true
+        with this feature, so its PR updates the policy in the same change.
 - [ ] **Wear OS tile.**
 
 ## Decisions needing review
@@ -1208,13 +1256,12 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
   publishing an address cannot be undone. Reversible in the other direction at no cost:
   adding one later is a one-line edit.
 
-- **The BSSID is disclosed as an open question rather than justified or removed** (Codex,
-  PR #23). `Anchor.bssid` is carried "for diagnostics" (`SPEC.md` §6.2), but §4.6's log —
-  the only thing that would consume it — is barred from recording a full BSSID, and the
-  field dies with the anchor when the snooze ends, so nothing outlives the failure it was
-  meant to explain. Removing it is the privacy-positive move and probably right, but it is
-  a spec change and a capability the maintainer may have a use for, so autopilot did not
-  make it. What landed instead: `docs/PRIVACY.md` states plainly that nothing reads it
-  today and that it goes if that stays true, and `SPEC.md` §6.2 carries the question.
-  Reversible either way — naming a real in-snooze use restores it, deleting the field
-  settles it.
+- ~~**The BSSID is disclosed as an open question rather than justified or removed**~~
+  **Answered: it stays** (maintainer, 2026-08-13). Codex asked in PR #23 whether
+  `Anchor.bssid` earned its place, since the diagnostic that would consume it may not
+  record a full BSSID and the field dies with the anchor. The maintainer named the use
+  autopilot could not: *"a way to know if I've left a meeting room"*. Diagnostics was never
+  the interesting justification — **a room is smaller than an SSID**, and room-scale is
+  exactly what this app is for. Recorded in `SPEC.md` §6.2 with the platform constraints
+  that bound it, and `docs/PRIVACY.md` now says the field is captured-and-unacted-on rather
+  than under review. The feature itself is the item below.
