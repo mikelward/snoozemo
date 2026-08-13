@@ -581,7 +581,7 @@ class DebugScreenScreenshotTest {
         assertEquals(1, added)
         // And the label is honest about what dismissing costs: the dismissal is
         // permanent, so "Not now" would promise a return that never comes.
-        composeRule.onNodeWithText("Don't show again").performClick()
+        composeRule.onNodeWithText("Don't ask again").performClick()
         assertEquals(1, dismissed)
         // The row is underneath it, which is what makes that permanence safe.
         composeRule.onNodeWithText("Quick Settings tile").assertExists()

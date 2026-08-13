@@ -328,9 +328,19 @@ the point is that every other line of the app is worthless if it isn't true.
         that safe, and it becomes a statement rather than an offer once the tile is there.
       - Still to do: **promote the debug arm/end controls to real ones** — real copy through the
         propose-in-chat step, and no longer deleted when the debug screen is.
-      - `Don't show again` rather than `Not now`, since the dismissal is permanent and "not now"
-        promises a return that never comes (Codex, PR #22). Changed without the propose-copy step;
-        flagged for the maintainer.
+      - `Don't ask again` rather than `Not now`, since the dismissal is permanent and "not now"
+        promises a return that never comes (Codex, PR #22). Landed first as `Don't show again`
+        without the propose-copy step and flagged; **the maintainer approved the shorter form**
+        (2026-08-13), which is also the more common idiom for a dismissal that sticks.
+      - **The permanent tile row stays visible while the banner is showing** (autopilot,
+        2026-08-13, after the maintainer had no preference). The two do overlap — both offer to
+        add the tile — but hiding the row is what the banner's own justification rules out:
+        dismissal is forever precisely *because* the row outlives it. Hide the row and the
+        banner's `Don't ask again` becomes a promise the screen cannot keep, since a user who
+        dismisses before adding the tile would be left with no route at all until the banner
+        logic happened to bring one back. Cheap to revisit if the doubled offer looks noisy on a
+        real screen — it is a single `if` — but the ordering matters: any change here has to
+        answer the permanence question first.
       - "Always have it in settings" is a row on the main screen for now, because there is no
         settings screen yet. When one lands, that row is what moves into it.
 - [ ] Real anchor capture on the arm path. Until Phase 3 lands `PresenceMonitor`, every snooze
@@ -781,6 +791,9 @@ Nothing here is scheduled; each is a sequel that follows from something already 
         principle 3's "loses settings by design" is corrected too: the rule it illustrates
         is untouched, only the platform fact under it. A false premise left in the file
         every agent loads is how a later change quietly assumes D2D is already off.
+        **The maintainer approved both `AGENTS.md` edits** (2026-08-13) — this one, and the
+        `developer.android.com` note under *Remote build environments* recording that the
+        reference pages are reachable and a fetch tool saying otherwise is the tool.
 - [ ] **Auto-arm on arrival** — the obvious sequel, and nearly free in the `play` flavor
       where background location is already paid for.
 - [ ] **"Until I get home"** and other saved-place reverse geofences — needs saved places
