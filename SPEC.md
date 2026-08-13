@@ -1510,6 +1510,15 @@ Kotlin · Compose + Material 3 · coroutines/Flow · Hilt · DataStore (settings
 flavor; the geofencing surface is only touched by the `play` flavor, and the `direct` flavor
 degrades to `LocationManager` if Play Services is absent, §6.5).
 
+**Every window is drawn edge to edge, and that is a description before it is a choice.** Android 15
+made it the behavior for anything targeting SDK 35 and up, and Android 16 removed the opt-out, so
+the only decision left is whether the app handles the consequences. It does, in three places: the
+activity declares it (`enableEdgeToEdge`), which is also what makes the bars transparent and picks
+icon contrast to sit over what the app draws; every screen pads itself by **`safeDrawing`** — system
+bars *and* display cutout, outside any scroll container, so a row cannot slide under the status bar
+as the user scrolls; and the XML themes are DayNight, including the trampoline's transparent one,
+because with the bars transparent the background showing through them is the app's own.
+
 Application ID `app.snoozemo`; module packages hang off it (`app.snoozemo.tile`,
 `app.snoozemo.dnd`, `app.snoozemo.presence`). The zen rule's condition URI is
 `snoozemo://snooze` (§5.3).
@@ -1590,6 +1599,12 @@ image is the only artifact that makes such a collapse show up in review. The til
 recorded the same way and for a sharper reason: the system tints it per tile state, so it must
 be checked in both directions, at its real size, or the failure only appears on a device
 (§4.2).
+
+Insets are dispatched by the test rather than assumed: Robolectric reports none of its own, so a
+screen that ignores the status bar and one that pads for it render identically, and the defect that
+prompted the edge-to-edge work would have been invisible to every snapshot in the suite. The
+edge-to-edge tests hand the window a phone's worth of bars and a cutout, then assert positions —
+the first row below the status bar, the way out above the gesture bar, scrolled to the end.
 
 CI records rather than verifies, and commits the recording back to the branch. Rendering differs
 between a laptop and a runner — fonts, renderer version — and a verify-only job makes that
