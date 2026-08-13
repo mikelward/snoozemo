@@ -39,6 +39,7 @@ All of this lives in Snoozemo's private app storage, which other apps cannot rea
 | The identifier of the particular access point you were on (BSSID) | Captured alongside the network name. Nothing acts on it today, and it is never what a departure is judged against — it is kept because a room is smaller than a network, see below | Erased when the snooze ends |
 | The name of the place, if the snooze has one | So the notification can say *Snoozing at Home* rather than just *Snoozing* | Erased when the snooze ends |
 | Whether tracking is running fully or has degraded | So the notification can tell you when Snoozemo has lost a sensor and is running on the timer alone | Erased when the snooze ends |
+| A scrambled marker of which phone the snooze was started on | So a snooze copied onto a new phone is not resumed there, silencing a phone you never armed it on. It is a one-way hash, never the identifier itself, and only ever compared for a match | Erased when the snooze ends |
 | The identifier of the Do Not Disturb rule Snoozemo created | So it reuses one rule instead of leaving a trail of them in your Settings | Erased once Snoozemo next notices you deleted that rule in Settings, or when you uninstall |
 | Whether the Quick Settings tile has been added, and whether you dismissed the tile suggestion | So the app stops suggesting something you already did, or already said no to | Until you uninstall |
 | Whether you have turned down the notification permission | So the app asks once and then stops asking | Erased as soon as you allow notifications, or when you uninstall |
@@ -138,12 +139,32 @@ reliably turns cloud backup off, but on some manufacturers' phones it does **not
 So whether Snoozemo's stored data comes across with you depends on the phone. What it does
 not do, on any phone, is sit in a cloud backup.
 
-In practice there is usually little there to travel: the location anchor is erased when the
-snooze ends, so most of the time what could be copied is the short list of settings in the
-table above. Two exceptions — a snooze actually running when you make the switch, and the
-rare case described earlier where the erase has not yet succeeded. We would rather tell you
-this than let "no backup" imply more than it does, and this section changes when the
-behavior is settled either way.
+Snoozemo now asks Android, in its manifest, **not** to carry a running snooze onto a new
+phone — along with the tile and permission reminders, which describe a phone that is not the
+new one either. That request is the reliable half of this and should be the end of it.
+
+The catch is that it is a request to the same transfer machinery that may already ignore
+`allowBackup`, and there is no way to know from inside the app whether a given phone
+honored it. So a running snooze also records **which phone it was started on**, and Snoozemo
+refuses to resume one that started somewhere else. That is the half that does not depend on
+the transfer tool cooperating, and it is there so a new phone never goes quiet for a snooze
+you started on an old one.
+
+That record is a scrambled value, not a device identity: it is derived from an Android
+identifier through a one-way hash, and the only question ever asked of it is whether it
+matches the one on this phone. It is stored with the snooze and erased with it, and
+Snoozemo never sends it anywhere — there is no permission in the app that could. The one
+way it can move is the same device-to-device transfer described above, and that is not an
+exception so much as the point: if the transfer copies the snooze, the marker has to travel
+with it, because comparing it is how the new phone knows to refuse. If
+Snoozemo cannot read that identifier at all — which happens on some builds — it says so in
+its log and carries on without the check rather than ending snoozes it cannot vouch for.
+
+Beyond the running snooze there is usually little to travel: the location anchor is erased
+when the snooze ends, so most of the time what could be copied is the short list of settings
+in the table above. Those are deliberately left transferable — they are yours, and losing
+them on a new phone is its own kind of failure. This section changes when that question is
+settled either way.
 
 ## Deleting your data
 

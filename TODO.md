@@ -553,26 +553,69 @@ the point is that every other line of the app is worthless if it isn't true.
 - [ ] Data Safety declaration: "no data collected, no data shared" (`SPEC.md` §12).
 - [ ] In-app prominent disclosure before the location permission prompt, and the
       demonstration video the background-location declaration needs.
-- [ ] **Stop a transferred snooze from silencing a new phone** (Codex, PR #23) — a
-      principle 1 bug, and a **prerequisite for shipping below**, not a sequel. It is not
-      part of *Settle the backup story* either; neither branch of that decision fixes it. If an OEM transfers app-private data despite `allowBackup="false"`, an
-      unexpired `active_snooze` lands on the new phone, and `BootReceiver` restores
-      whatever record it finds: cap armable → zen rule re-asserted (`SPEC.md` §8.3). The
-      new phone goes quiet on its first boot for a snooze armed on a different device,
-      which is the failure principle 1 exists to prevent. Bounded by the absolute
-      wall-clock cap, so a swap slower than the remaining cap is already safe — but a swap
-      is usually faster. Two ways to fix it, and the second is better:
-      - A `<device-transfer>` exclude for the `active_snooze` file. Cheap, but it leans on
-        the same `dataExtractionRules` whose broader use is the open decision, and it
-        cannot help if the transfer path ignores it.
-      - **Make a restored record prove it belongs to this device** — stamp the record at
-        arm time with something device-scoped and refuse to restore one that doesn't match,
-        ending the snooze rather than asserting the rule. This is fail-open (D7), works
-        whatever the OEM does, and also covers a record restored from any other route.
-        Needs a device-scoped value that survives reboot but not migration; `ANDROID_ID`
-        is the obvious candidate and wants checking against what D2D actually carries.
-      Whichever lands, it needs a `SnoozeController`/`BootReceiver` test that a foreign
-      record ends the snooze instead of restoring it.
+- [x] **Stop a transferred snooze from silencing a new phone** (Codex, PR #23) — a
+      principle 1 bug and a prerequisite for shipping below. If an OEM transfers
+      app-private data despite `allowBackup="false"`, an unexpired `active_snooze` lands on
+      the new phone and `BootReceiver` restores whatever record it finds, re-asserting the
+      zen rule (`SPEC.md` §8.3) — a new phone going quiet on its first boot for a snooze
+      armed on a different device. **Both proposed fixes landed, because they fail in
+      different places:**
+      - `res/xml/data_extraction_rules.xml` declares a `<device-transfer>` exclude — the
+        maintainer's suggestion, and the better mechanism, since the record never arrives.
+        It names `active_snooze`, `pending_failure`, `notification_prompt`, `zen_rule` and
+        `tile_presence`: each one *acts* on the new phone rather than merely sitting there
+        (a stale failure notice, a suppressed permission prompt, a rule id that could name
+        someone else's rule, a tile claimed but absent). **Excluded by name, never in
+        bulk** — saved places and per-place policies stay transferable, so *Settle the
+        backup story* below is exactly as open as it was.
+      - The record also carries a **device stamp** (`RecordOrigin`, `DeviceStamp`), and
+        `ActiveSnoozeStore.load()` refuses one written elsewhere. This is the backstop: the
+        platform note that makes the bug possible says OEM behavior "varies", so a tool
+        that ignores `allowBackup` may equally ignore `dataExtractionRules`, and nothing
+        can enumerate which. The stamp is a **salted SHA-256 of `ANDROID_ID`**, never the
+        raw value — equality is the only question asked of it. **It folds in this install's
+        `firstInstallTime` as well as `ANDROID_ID`** (Codex, PR #26): the two fail
+        independently, so a phone where `ANDROID_ID` reads null still has an identity, and
+        the "no identity at all" state that would have restored a transferred record
+        unchecked stops being reachable in practice rather than being argued about. It is
+        stamped by the
+        store on every write rather than by callers at arm, so no construction site can
+        write a record the device cannot later vouch for.
+      - **A device that cannot stamp restores anyway, and that asymmetry is the design.**
+        Refusing there would end every snooze on such a handset at its next process death:
+        failing closed, not safe. `RecordOrigin.UNVERIFIABLE` is about the device's
+        capability; `UNATTRIBUTED` (this device stamps, the record doesn't) is about the
+        record, and refuses. Found by running the tests — the first version refused both
+        and broke 8 existing tests, which was the design telling the truth.
+      - Covered by `RecordOriginTest` (JVM, 7) and `ActiveSnoozeStoreOriginTest`
+        (Robolectric, 6), including the bug itself: arm as one phone, read as another.
+      - **Still owed a device:** whether a real OEM transfer honors `<device-transfer>` at
+        all. The stamp is what makes that question non-urgent rather than answered.
+      - **The shape worth remembering, because three of PR #26's findings were the
+        same fact:** hiding a record from `ActiveSnoozeStore.load()` silently removes it
+        from *every* mechanism that resolves a record that way — the cap check, the
+        release ladder's successors, and `TimeChangedReceiver`'s clock-change handling.
+        A record that is refused is therefore a record with no cap, no retry and no
+        clock safety unless something is built for it explicitly. Anything future that
+        adds a reason to refuse a record inherits this and should say how it is covered.
+      - **The refused-release branch is now tested** (Codex, PR #26). If
+        `setSnoozed(false)` is refused, the record and cap are kept and a *dedicated*
+        `ACTION_DISCARD_RETRY` carries the obligation — the ordinary release ladder
+        cannot, because every one of its successors resolves the record through `load()`,
+        which is exactly what refuses this record. `discardForeignRecord` takes an
+        injectable `ZenController` (defaulted, so no caller had to change) and
+        `RefusingZen` drives both sides of the branch. **The receiver paths in
+        `CapAlarm.kt` still build their controllers inline** — `releaseDirectly` and
+        friends — so the same seam is worth extending to them; that is what made this
+        branch untestable in the first place.
+        Superseded note kept for the shape of the problem: it was covered by
+        inspection
+        only. `discardForeignRecord` builds its `AndroidZenController` inline, exactly as
+        `releaseDirectly` beside it does, so `RefusingZen` cannot be injected the way
+        `TestSnoozeService` injects it. The escalation it delegates to
+        (`escalateWithoutService`) *is* covered. Fixing this properly means giving the
+        receiver paths in `CapAlarm.kt` an injectable controller the way the service has
+        one — worth doing, and larger than this PR.
 - [ ] Ship to the internal track — the point at which the declaration outcome becomes
       known.
 
@@ -724,10 +767,16 @@ Nothing here is scheduled; each is a sequel that follows from something already 
         `allowBackup="false"` on its own does not mean "nothing migrates": Android
         documents that for apps targeting API 31+ it disables cloud backup but, on some
         manufacturers' devices, **does not disable device-to-device transfer**. With no
-        `dataExtractionRules` declared, a phone swap today does whatever the OEM does. So
+        `dataExtractionRules` declared, a phone swap did whatever the OEM does. So
         this is not "no backup, decide later" — it is *undecided*, and the direction that
         needs a positive action has flipped: allowing D2D costs a rule that says so,
         refusing it costs a `<device-transfer>` exclude, and doing nothing picks neither.
+      - **A `dataExtractionRules` file now exists, and it does not settle this.** The
+        transferred-snooze fix (Phase 6) added one, but its `<device-transfer>` section
+        names only runtime state that misbehaves on a new phone. Saved places and
+        per-place policies are not in it and stay transferable, which is the status quo
+        rather than a decision — so this item is unchanged except that the mechanism is
+        now wired up and the answer is one `<exclude>` or its absence.
         Still the maintainer's call. It needed saying in both places, so `AGENTS.md`
         principle 3's "loses settings by design" is corrected too: the rule it illustrates
         is untouched, only the platform fact under it. A false premise left in the file

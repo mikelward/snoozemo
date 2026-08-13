@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.Anchor
+import app.snoozemo.core.RecordOrigin
 import app.snoozemo.core.TrackingMode
 import java.time.Instant
 
@@ -25,7 +26,9 @@ import java.time.Instant
  */
 class ActiveSnoozeStore(context: Context) {
 
-    private val prefs = context.applicationContext
+    private val context = context.applicationContext
+
+    private val prefs = this.context
         .getSharedPreferences(FILE_NAME, Context.MODE_PRIVATE)
 
     /**
@@ -41,6 +44,57 @@ class ActiveSnoozeStore(context: Context) {
      * given rather than from this.
      */
     fun load(): ActiveSnooze? {
+        val record = read() ?: return null
+        // Refused here rather than at each call site, for exactly the reason a
+        // released record is: there are a dozen callers and every one of them
+        // would otherwise read a record this phone never wrote as a live snooze
+        // and turn Do Not Disturb on. Filtering once, at the only door, is what
+        // makes that unmissable. [originOfStored] is how the boot path asks the
+        // question it needs the *answer* to rather than just the safe default.
+        val origin = originOf(record)
+        if (origin.isDegraded) {
+            // Not a refusal — a capability this device does not have, which the
+            // `<device-transfer>` exclude still covers. Said out loud because a
+            // protection that quietly isn't running is principle 2's failure.
+            Log.w(
+                TAG,
+                "This device cannot attribute snooze records; restoring without the transfer check.",
+            )
+        }
+        if (origin.mayRestore) return record
+        Log.w(
+            TAG,
+            "The snooze record was not written by this device ($origin); refusing to restore it.",
+        )
+        return null
+    }
+
+    /**
+     * Which device wrote the record on disk, or null when there is no record to
+     * attribute.
+     *
+     * Separate from [load] because the two questions differ: [load] answers "is
+     * there a snooze to run", where a foreign record is simply absent, and this
+     * answers "is there a record here that should not be", which is what the
+     * boot path needs in order to clear it and say why (principle 2).
+     */
+    fun originOfStored(): RecordOrigin? = read()?.let { originOf(it) }
+
+    /**
+     * The record exactly as written, refusal and all.
+     *
+     * Only the discard path may use this, and only because it is the one caller
+     * that needs to act *on* an unusable record rather than around it — naming
+     * it in a retry, and knowing whether a notification was posted for it.
+     * Everything else goes through [load], which is where the refusal lives.
+     */
+    internal fun readUnverified(): ActiveSnooze? = read()
+
+    private fun originOf(record: ActiveSnooze): RecordOrigin =
+        RecordOrigin.of(record.deviceStamp, DeviceStamp.current(context))
+
+    /** The record as written, with no judgment about whether it may be used. */
+    private fun read(): ActiveSnooze? {
         if (prefs.getBoolean(KEY_RELEASED, false)) return null
         val startedAt = prefs.getLong(KEY_STARTED_AT, 0L)
         val capExpiresAt = prefs.getLong(KEY_CAP_EXPIRES_AT, 0L)
@@ -79,6 +133,12 @@ class ActiveSnoozeStore(context: Context) {
                     startedAt + ActiveSnooze.DEFAULT_CAP.toMillis(),
                 ),
             ),
+            // Absent for a record written before stamping existed, and absent
+            // for one written on a device that could not stamp. On a device that
+            // *can* stamp, absent reads as `UNATTRIBUTED` and does not restore;
+            // see `RecordOrigin.mayRestore` for why that asymmetry is the right
+            // one.
+            deviceStamp = prefs.getString(KEY_DEVICE_STAMP, null),
         )
     }
 
@@ -127,7 +187,16 @@ class ActiveSnoozeStore(context: Context) {
      * close it, since a fast enough tap can still overtake the warm-up.
      */
     fun warm() {
-        Thread { load() }.start()
+        Thread {
+            load()
+            // The stamp too, and for the same reason the record is: it is read
+            // on the write that happens *during* `ARMING`, before the zen rule
+            // goes on (Codex, PR #26). `DeviceStamp.current` is a
+            // `Settings.Secure` provider read plus a hash — small, but it is
+            // still IPC, and `AGENTS.md`'s arm-path rule admits none between
+            // the tap and `STATE_TRUE`. Warmed here it is a field read by then.
+            DeviceStamp.warm(this.context)
+        }.start()
     }
 
     /**
@@ -144,7 +213,10 @@ class ActiveSnoozeStore(context: Context) {
      * [save] forces it down the moment the rule is on.
      */
     fun saveAsync(snooze: ActiveSnooze) {
-        prefs.edit().putAll(snooze).apply()
+        // `allowLookup = false`: this is the one write that happens between the
+        // tile tap and the zen rule going on, and nothing on that path may do
+        // IPC (`AGENTS.md`). See `DeviceStamp.cachedOrNull`.
+        prefs.edit().putAll(snooze, allowLookup = false).apply()
     }
 
     /**
@@ -155,10 +227,11 @@ class ActiveSnoozeStore(context: Context) {
      * turn the rule off after process death, so a snooze that isn't on disk is
      * one the app cannot promise to end.
      */
-    fun save(snooze: ActiveSnooze): Boolean = prefs.edit().putAll(snooze).commit()
+    fun save(snooze: ActiveSnooze): Boolean = prefs.edit().putAll(snooze, allowLookup = true).commit()
 
     private fun SharedPreferences.Editor.putAll(
         snooze: ActiveSnooze,
+        allowLookup: Boolean,
     ): SharedPreferences.Editor = this
         // A new snooze clears any marker left by one whose erase failed —
         // otherwise this record would be born already invisible to [load].
@@ -169,6 +242,41 @@ class ActiveSnoozeStore(context: Context) {
         // a clock change moves both, and a ceiling left in the old frame is one
         // `+30 min` can walk the snooze past.
         .putLong(KEY_CAP_CEILING_AT, snooze.capCeilingAt.toEpochMilli())
+        // Stamped from the device here rather than read off [snooze], and on
+        // every save rather than once at arm.
+        //
+        // Taking it from the record would mean every construction site had to
+        // remember to set it, and the one that forgot would write a record this
+        // device could never afterwards vouch for — which fails closed (the
+        // snooze ends at the next restore) but fails *silently and often*,
+        // turning a safety net into a bug that looks like the safety net
+        // working. Stamping at the single point where records reach disk is
+        // what makes "every record written here carries this device's stamp"
+        // true by construction instead of by convention.
+        //
+        // Null is written as an absent key rather than an empty string: a
+        // device that cannot stamp should leave no stamp. `RecordOrigin` reads
+        // blank and absent identically, but only one of the two is honest, and
+        // the difference shows up in a `SharedPreferences` dump when someone is
+        // working out why a snooze ended at boot.
+        .also { editor ->
+            val stamp =
+                if (allowLookup) DeviceStamp.current(context) else DeviceStamp.cachedOrNull()
+            when {
+                !stamp.isNullOrBlank() -> editor.putString(KEY_DEVICE_STAMP, stamp)
+                // Not yet warm, on the arm path. Leave whatever is there rather
+                // than removing: the blocking `save` moments later writes the
+                // real value, and clearing it here would only widen the window
+                // in which the record reads as unattributed.
+                !allowLookup -> Unit
+                // A lookup was allowed and still produced nothing, so this
+                // device genuinely has no identity. Absent, not empty — only
+                // one of the two is honest, and the difference shows up in a
+                // `SharedPreferences` dump when someone is working out why a
+                // snooze ended at boot.
+                else -> editor.remove(KEY_DEVICE_STAMP)
+            }
+        }
         // Written with the deadline, never separately: the two are only
         // meaningful as a pair, and a reference stamped from a later reading
         // would describe a different frame than the deadline beside it.
@@ -251,6 +359,7 @@ class ActiveSnoozeStore(context: Context) {
         const val KEY_CAP_EXPIRES_AT = "cap_expires_at"
         const val KEY_BOOT_REFERENCE = "boot_reference"
         const val KEY_CAP_CEILING_AT = "cap_ceiling_at"
+        const val KEY_DEVICE_STAMP = "device_stamp"
         const val KEY_CAPTURED_AT = "captured_at"
         const val KEY_MODE = "mode"
         const val KEY_PLACE = "place"

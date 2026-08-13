@@ -14,11 +14,13 @@ import app.snoozemo.core.ClockChange
 import app.snoozemo.core.ClockChangeAction
 import app.snoozemo.core.ClockReading
 import app.snoozemo.core.EndReason
+import app.snoozemo.core.RecordOrigin
 import app.snoozemo.core.ReleaseEscalation
 import app.snoozemo.core.ReleaseProgress
 import app.snoozemo.core.ReleaseStep
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
+import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenTrigger
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.dnd.PrefsZenRuleIdStore
@@ -84,6 +86,42 @@ object CapAlarm {
             SystemClock.elapsedRealtime() + delayMillis.coerceAtLeast(0L),
             AlarmManager.ELAPSED_REALTIME_WAKEUP,
             SnoozeService.ACTION_CHECK_CAP,
+        )
+
+    /**
+     * Arms a wake-up that retries **discarding** a record this device cannot
+     * vouch for (SPEC.md §12).
+     *
+     * A fourth distinct action, and for the same reason as the other three:
+     * what a wake-up means has to travel with it. This one cannot borrow the
+     * release retries, because every one of them resolves its record through
+     * `ActiveSnoozeStore.load()` — which refuses precisely the record this is
+     * about. A retry that cannot see its own subject silently does nothing.
+     *
+     * No identity extra, unlike the others. Those carry one because they can
+     * outlive their snooze and would otherwise act on whatever record replaced
+     * it; this cannot, because the discard path re-reads the origin and does
+     * nothing at all unless what it finds is still unvouchable. A snooze the
+     * user armed in the meantime is stamped by this device and simply does not
+     * match.
+     *
+     * **Elapsed realtime, unlike the other two retries** (Codex, PR #26). They
+     * use `RTC_WAKEUP` and can afford to: the cap still stands behind them. This
+     * one is different in exactly the way that matters — the record it is about
+     * is refused by `load()`, so the cap check cannot adopt it and
+     * `TimeChangedReceiver` cannot see it either. That makes this alarm the only
+     * remaining exit from the silence, and an `RTC_WAKEUP` exit slides with the
+     * wall clock: winding the clock back postpones it by the shift, with
+     * nothing else scheduled to notice. Elapsed realtime counts from boot and
+     * nothing can move it — the same reasoning as [armCheckIn], for the same
+     * reason.
+     */
+    fun armDiscardRetry(context: Context, delayMillis: Long): Boolean =
+        schedule(
+            context,
+            SystemClock.elapsedRealtime() + delayMillis.coerceAtLeast(0L),
+            AlarmManager.ELAPSED_REALTIME_WAKEUP,
+            SnoozeService.ACTION_DISCARD_RETRY,
         )
 
     /**
@@ -204,6 +242,12 @@ object CapAlarm {
             if (everything) {
                 existing(context, SnoozeService.ACTION_ERASE_RETRY)?.let(alarmManager::cancel)
                 existing(context, SnoozeService.ACTION_CAP_LOST)?.let(alarmManager::cancel)
+                // Dropped with the rest once a discard has actually finished.
+                // Harmless if it were left — the retry re-reads the origin and
+                // does nothing unless it finds another unvouchable record — but
+                // a wake-up scheduled for work that is done is still a wake-up
+                // the user's battery pays for (SPEC.md §9).
+                existing(context, SnoozeService.ACTION_DISCARD_RETRY)?.let(alarmManager::cancel)
             }
         }.onFailure {
             // An alarm that outlives its snooze is harmless — the service
@@ -302,6 +346,19 @@ class CapAlarmReceiver : BroadcastReceiver() {
             val recordStartedAt = intent.getLongExtra(SnoozeService.EXTRA_RECORD_STARTED_AT, 0L)
             if (!SnoozeService.retryErase(context, recordStartedAt)) {
                 eraseDirectly(context, recordStartedAt)
+            }
+            return
+        }
+        if (intent?.action == SnoozeService.ACTION_DISCARD_RETRY) {
+            // A record this device cannot vouch for whose rule would not release
+            // last time. Re-enters the discard rather than any of the ordinary
+            // release paths, which cannot see this record at all — see
+            // `armDiscardRetry`. Re-reads the origin first, so a snooze the user
+            // has armed since is left entirely alone.
+            val store = ActiveSnoozeStore(context)
+            val origin = store.originOfStored()
+            if (origin != null && !origin.mayRestore) {
+                discardForeignRecord(context, store, origin)
             }
             return
         }
@@ -859,23 +916,140 @@ private fun restateDirectly(
 }
 
 /**
- * Puts a snooze back together after a reboot (SPEC.md §8.1, §8.3).
+ * Throws away a snooze record this device cannot vouch for, and makes sure Do
+ * Not Disturb is not on because of it (SPEC.md §12).
  *
- * A reboot clears every scheduled alarm and does not restart a stopped service,
- * so without this a snooze survives in the record and in the platform's zen rule
- * while nothing in the app is left to end it — the phone stays quiet past its
- * cap, which is principle 1's failure.
+ * Two arrivals, and the difference between them decides what the user is told.
+ * [RecordOrigin.ANOTHER_DEVICE] is a record carried across by a device-to-device
+ * transfer despite `res/xml/data_extraction_rules.xml` — a snooze this phone's
+ * owner never started. [RecordOrigin.UNATTRIBUTED] is most likely *their own*
+ * snooze, written by a build from before stamping and met by an update.
  *
- * The cap alarm is re-armed here rather than left to the service, and first: it
- * needs nothing but the persisted record and an `AlarmManager` handle, so it
- * still lands if starting the service is refused. The cap continues from its
- * original expiry — a reboot does not extend a snooze — so a cap that passed
- * while the phone was off is already in the past and fires immediately.
+ * **The rule is driven off before anything is thrown away, and the record only
+ * goes if that worked** (Codex, PR #26). An earlier version cleared the record
+ * and canceled the cap regardless of the outcome, which on a refused
+ * `setSnoozed(false)` left a phone silent with every durable obligation to
+ * un-silence it deleted — principle 1's worst case, produced by the cleanup
+ * meant to prevent it. On a refusal this keeps the record *and* its cap and
+ * hands the obligation to the release ladder (§7.1), which is the machinery
+ * that already knows how to carry one.
  */
+internal fun discardForeignRecord(
+    context: Context,
+    store: ActiveSnoozeStore,
+    origin: RecordOrigin,
+    // Injected so the refused-release branch below is reachable from a test
+    // (Codex, PR #26). It owns the record, the stuck-rule obligation, the
+    // notification and the only retry, so "covered by inspection" was not good
+    // enough for it. Defaulted rather than threaded through every caller: the
+    // receivers should not have to know how a zen controller is built.
+    zen: ZenController = AndroidZenController(
+        context = context.applicationContext,
+        store = PrefsZenRuleIdStore(context.applicationContext),
+        configurationActivity = ComponentName(context.applicationContext, MainActivity::class.java),
+    ),
+) {
+    Log.w(
+        RELEASE_TAG,
+        "A snooze record this device cannot vouch for ($origin) is on disk; discarding it.",
+    )
+
+    // Read past the refusal deliberately: `load()` hides this record from every
+    // ordinary caller, and this is the one path that has to see it — to name it
+    // in a retry, and to know whether a notification was ever posted for it.
+    val stranded = store.readUnverified()
+    val outcome = zen.setSnoozed(
+        snoozed = false,
+        trigger = ZenTrigger.CONTEXT,
+        placeName = stranded?.placeName ?: ActiveSnooze.DEFAULT_PLACE_NAME,
+    )
+    val released = outcome is ZenOutcome.Applied ||
+        (outcome is ZenOutcome.NotApplied && outcome.reason.nothingLeftToRelease)
+
+    if (!released) {
+        // Nothing is cleared and nothing is canceled: the record and its cap are
+        // the only things left that can end this silence.
+        //
+        // **The ordinary release ladder cannot carry this one** (Codex, PR #26).
+        // An earlier version handed it to `escalateWithoutService`, whose
+        // successors all resolve the record through `load()` — and `load()` is
+        // exactly what refuses this record. The `ACTION_CAP_LOST` retry would
+        // reach a service that reads null, treats the release as recordless,
+        // and never clears the record, cap, or stale notification;
+        // `releaseDirectlyIfStillOurs` would read null, conclude the retry was
+        // stale, and drop it. Arming either also suppresses the stuck-rule
+        // card, so the phone could stay silent to its original cap with nothing
+        // on screen saying so. The obligation has to stay on a path that can
+        // still see the record, which means this one.
+        Log.e(RELEASE_TAG, "The stranded snooze's rule would not release; retrying the discard itself.")
+
+        // The durable half first, before the alarm: if this process dies here,
+        // the next start still knows the rule may be on (SPEC.md §7.1).
+        PendingFailureStore(context).rememberRuleMayBeStuck()
+        // And say so, rather than leaving a silent phone with nothing to act on.
+        // The ordinary ladder suppresses this card while a retry is pending,
+        // which is right when the retry can actually finish the job; here it
+        // cannot be relied on to, so the user gets the card *and* the retry.
+        SnoozeNotifications(context.applicationContext).showStuckRule()
+
+        if (!CapAlarm.armDiscardRetry(context, RELEASE_RETRY_MS)) {
+            Log.e(RELEASE_TAG, "The discard retry could not be armed; the stuck-rule card is what is left.")
+        }
+        return
+    }
+
+    val notifications = SnoozeNotifications(context.applicationContext)
+    // An update does not take the ongoing notification down, so without this it
+    // keeps saying `Snoozing` over a record that is gone, offering an `End now`
+    // with nothing to end (Codex, PR #26).
+    //
+    // Which one the user gets turns on whose snooze it was. `UNATTRIBUTED` is
+    // most likely theirs, started on this phone before the update — they saw it
+    // begin, so they are owed the ending. `ANOTHER_DEVICE` is a snooze from a
+    // handset they may not even still own: `Snooze ended` there describes
+    // something that never happened here and sends them looking for a fault
+    // that isn't one, so the stale card comes down without a replacement.
+    if (origin == RecordOrigin.UNATTRIBUTED && stranded != null) {
+        notifications.showEnded(EndReason.LOST_CAPABILITY)
+    } else {
+        notifications.cancelOngoing()
+    }
+    notifications.cancelStuckRule()
+    PendingFailureStore(context).run { if (ruleMayBeStuck()) clearRuleStuck() }
+
+    CapAlarm.cancelAll(context)
+    if (!store.clear()) {
+        // Not a dead end: `load()` refuses this record on every future read, so
+        // the snooze cannot come back. It just means the same discard runs again
+        // at the next boot or update, which is harmless and self-healing.
+        Log.w(RELEASE_TAG, "The stranded snooze record could not be erased; it stays refused either way.")
+    }
+    SnoozeTileBridge.refresh(context.applicationContext)
+}
+
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        if (intent?.action != Intent.ACTION_BOOT_COMPLETED) return
+        if (intent?.action !in HANDLED_ACTIONS) return
         val store = ActiveSnoozeStore(context)
+
+        // Before anything else, because these are the two moments it matters:
+        // the first boot after a device-to-device transfer, and the first run
+        // after an update that introduced stamping over a snooze already
+        // running.
+        //
+        // `load()` already refuses a record this device cannot vouch for, so
+        // nothing below would restore it — but a refusal on its own is not a
+        // fix. It leaves the record on disk, the zen rule possibly still on,
+        // and the snooze invisible to the UI and to `End now`, which is a
+        // silence the user cannot see or stop (Codex, PR #26). Only this path
+        // knows the record is *unusable* rather than merely absent, which is
+        // what makes it the one place that can drive the rule off and clear it.
+        val origin = store.originOfStored()
+        if (origin != null && !origin.mayRestore) {
+            discardForeignRecord(context, store, origin)
+            return
+        }
+
         val stored = store.load() ?: return
 
         // The offset first, before the alarm and before the rule. A reboot has
@@ -932,5 +1106,33 @@ class BootReceiver : BroadcastReceiver() {
                 releaseDirectly(context, EndReason.LOST_CAPABILITY)
             }
         }
+    }
+
+    private companion object {
+        /**
+         * A reboot and an app update, handled identically.
+         *
+         * Both leave a record on disk with no process alive to act on it, and
+         * the repair is the same in each case — restate the clock frame, re-arm
+         * the cap, re-assert the rule — so sharing the path is what keeps the
+         * update case from being the one nobody exercises.
+         *
+         * `ACTION_MY_PACKAGE_REPLACED` matters here beyond the general tidiness
+         * (Codex, PR #26): an update is the one moment a snooze can outlive the
+         * build that armed it, so it is exactly when a record written before
+         * stamping meets a build that expects one. Without this, such a record
+         * reads as absent to every caller while the zen rule stays on — a
+         * silence with no way to see or end it — until the cap eventually
+         * fires. It is a protected broadcast, delivered only to the app that
+         * was replaced, and is exempt from the implicit-broadcast restrictions,
+         * so a plain manifest receiver is all it needs.
+         *
+         * `rebasedOnto` is a no-op on this path rather than a hazard: uptime has
+         * not reset, so the reading it stamps in is the one already stored.
+         */
+        val HANDLED_ACTIONS = setOf(
+            Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_MY_PACKAGE_REPLACED,
+        )
     }
 }

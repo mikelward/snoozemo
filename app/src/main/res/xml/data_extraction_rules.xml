@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Keeps a running snooze from following the user onto a new phone.
+
+  `android:allowBackup="false"` does not cover this. Google's Auto Backup guide
+  is explicit: "For apps targeting Android 12 (API level 31) or higher, this
+  behavior varies. On devices from some device manufacturers, specifying
+  android:allowBackup="false" disables cloud-based backup and restore (such as
+  Google Drive backups) but doesn't disable device-to-device transfers for the
+  app." So the `<device-transfer>` section below is the only declarative control
+  over a phone swap, and without it a snooze armed on the old handset arrives on
+  the new one, gets restored at first boot, and takes a phone quiet that nobody
+  asked to be quiet (SPEC.md §12, principle 1).
+
+  Excluded by name, never in bulk. Saved places, per-place policies and caps are
+  the user's configuration and must survive a phone swap (principle 3), so this
+  list names the ephemeral runtime state and nothing else. Anything added here
+  is a decision that the user loses it on a new phone.
+
+  No `<cloud-backup>` section: `allowBackup="false"` already settles that half,
+  and restating it here would be two places to keep in step. minSdk is 34, so
+  the `fullBackupContent` companion for API =< 30 is not needed either.
+-->
+<data-extraction-rules>
+    <device-transfer>
+        <!--
+          The running snooze itself. This is the record BootReceiver restores
+          and re-asserts the zen rule from.
+        -->
+        <exclude domain="sharedpref" path="active_snooze.xml" />
+
+        <!--
+          An arm failure that has not been delivered yet. Transferred, the new
+          phone reports a failure that happened on the old one, about a snooze
+          it never had.
+        -->
+        <exclude domain="sharedpref" path="pending_failure.xml" />
+
+        <!--
+          Records that a permission has already been asked for. Permissions do
+          not transfer, so carrying this across suppresses the prompt on a phone
+          that has granted nothing — the user ends up with a silent app and no
+          way to discover why.
+        -->
+        <exclude domain="sharedpref" path="notification_prompt.xml" />
+
+        <!--
+          The id of Snoozemo's own zen rule. Rule ids are issued by the platform
+          on the device that created them, so a transferred one names nothing
+          here — `ensureRule()` already recovers from that by creating a fresh
+          rule. The reason to exclude it anyway is §5.6: Snoozemo drives only
+          its own rule, and an id that happened to match one belonging to
+          another app or a user schedule on the new phone would have us turning
+          off somebody else's. Vanishingly unlikely, and the exact invariant the
+          spec singles out, so it costs one line to make impossible.
+        -->
+        <exclude domain="sharedpref" path="zen_rule.xml" />
+
+        <!--
+          Whether the Quick Settings tile has been added. The tile's real
+          presence is system state that does not travel with app data, so a
+          transferred "yes" claims a tile the new phone's shade does not have,
+          and the prompt that would have offered to add it stays hidden.
+        -->
+        <exclude domain="sharedpref" path="tile_presence.xml" />
+    </device-transfer>
+</data-extraction-rules>
