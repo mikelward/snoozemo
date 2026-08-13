@@ -10,8 +10,16 @@
 
     <!-- The trampoline (SPEC.md §6.9): transparent rather than NoDisplay, so it
          can host the end-condition sheet and a runtime permission request when
-         those land. -->
-    <style name="Theme.Snoozemo.Transparent" parent="android:Theme.Material.Light.NoActionBar">
+         those land.
+
+         Parented on Theme.Snoozemo rather than on the framework theme directly,
+         which is what makes it follow dark mode: the parent is resolved per
+         configuration, so this picks up the values-night override instead of
+         being pinned light the way it was. The window is transparent, so today
+         that changes nothing on screen — it is the sheet arriving here in Phase
+         4 that would otherwise render light-themed decor over a dark shade
+         (SPEC.md §6.9 calls for a DayNight theme, which this now is). -->
+    <style name="Theme.Snoozemo.Transparent" parent="Theme.Snoozemo">
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowAnimationStyle">@null</item>

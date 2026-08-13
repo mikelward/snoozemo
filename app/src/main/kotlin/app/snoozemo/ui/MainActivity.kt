@@ -16,6 +16,7 @@ import android.util.Log
 import android.view.Choreographer
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -191,6 +193,24 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The window is drawn edge to edge whether or not we ask for it —
+        // Android 15 made that the behavior for every app targeting SDK 35 and
+        // up, and Android 16 dropped the opt-out — so the only real choice is
+        // between handling the insets and drawing the title underneath the
+        // status bar. Declared here as well as handled in the layout, because
+        // this is also what makes the bars transparent and picks the icon
+        // contrast to sit on top of them, and it has to run before the first
+        // frame.
+        //
+        // The default `auto` bar styling is right for this app, unlike the
+        // sibling Simmo repo, which passes an explicit style: `auto` reads the
+        // system's day/night setting, and `SnoozemoTheme` follows that same
+        // setting rather than a per-app Light/Dark choice, so the icons cannot
+        // end up contrasting against a background the app didn't draw.
+        //
+        // Cheap enough to sit in front of the record read below: it is window
+        // flags and an insets-controller call, no disk and no binder.
+        enableEdgeToEdge()
         store = ActiveSnoozeStore(applicationContext)
         promptStore = NotificationPromptStore(applicationContext)
         tileStore = TilePresenceStore(applicationContext)
@@ -765,6 +785,15 @@ fun DebugScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
+            // Outside the scroll, so the whole column — not just its resting
+            // position — stays clear of the status bar, the navigation bar and
+            // any display cutout. `safeDrawing` rather than `systemBars`
+            // because a cutout on a rotated phone takes a side inset that the
+            // bars alone do not describe, and a title half under a cutout is
+            // the same defect as one under the status bar. Inside the scroll it
+            // would only pad the content, leaving a row to slide under the
+            // status bar as soon as the user scrolled.
+            .safeDrawingPadding()
             // Scrolls, and this is not cosmetic. Two three-line rows, a title
             // and two buttons overflow a landscape window or a large font
             // scale, and an unscrolled `Column` clips its later children — the
