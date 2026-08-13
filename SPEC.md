@@ -768,6 +768,16 @@ Two implementations: `GeofencePresenceMonitor` (`play` flavor, §3 option B) and
 flavor-agnostic — the state machine, the DND handling, the tile, and the §4.4 sheet are all shared,
 and neither flavor is aware of the other.
 
+**The judgment lives above the interface, not inside a monitor.** A monitor's job is to deliver what
+its sensors said — a geofence fired, Wi-Fi went, here is a fix — and nothing else. Which signals are
+worth escalating for, how hard location should be running (§6.7), when to admit tracking has
+degraded (§8.1), and when an unverifiable state has gone on long enough to end the snooze (§6.6) are
+all decided once, in one place, from those signals. Two reasons, and the second is the load-bearing
+one: the flavors would otherwise drift into subtly different products, and every rule that lives in
+a monitor can only be tested on a device, where the sequences that break it — a router rebooting, a
+provider emitting junk for ten minutes, an alarm arriving after the reason for it went away — cannot
+be replayed on demand.
+
 ### 6.2 The anchor
 
 Captured once at arm time:
@@ -881,6 +891,15 @@ the moment it does — so the feature's PR updates the policy in the same change
 | Significant motion fired | Might be moving | Escalate to `CHECKING` |
 | Fix outside radius + hysteresis | Evidence of leaving | Confirm, then end |
 | Fix inside radius | Still here | De-escalate to `ARMED` |
+| Fix that places nobody | Nothing either way | Stay where we are; report if it persists |
+| Geofence exit while still associated | The two subsystems disagree | Escalate anyway; a fix settles it |
+
+Two rows there are easy to get wrong in the same direction. A reading whose uncertainty swallows the
+whole question — 400 m out with ±500 m of accuracy — is not weak evidence of presence, it is no
+evidence at all, and folding it into "still here" would have the duty cycle back off precisely when
+tracking has stopped working. And a geofence exit that arrives while the phone is still on the
+anchor's network is worth one location request rather than a shrug: the cost of checking is a fix,
+the cost of trusting Wi-Fi blindly is a departure the app never notices.
 
 The asymmetry matters. Wi-Fi dropping is a terrible departure signal on its own — the router
 reboots, the user toggles Wi-Fi off to save battery, the 5 GHz band drops in a far room, the phone
@@ -994,6 +1013,21 @@ making you wait out a debounce.
 Anchor with no location fix at all (arming indoors with no signal): Wi-Fi-only mode. Losing the
 anchor SSID escalates, but with no location to confirm with, resolve after a 5-minute grace period
 in which Wi-Fi does not return — then end (D7, fail open).
+
+**The same grace period covers a snooze that *becomes* unverifiable, not only one that armed that
+way.** A snooze can arm with good coordinates and then lose both signals — walk out of a building,
+the anchor's network goes, and every fix since has been too vague to place anyone. That state is
+indistinguishable from the Wi-Fi-only one in the only respect that matters: nothing left can confirm
+a departure. Without this, the ordinary route into the worst case would be silence until the
+duration cap, hours later, for a user who left the building five minutes in. So the grace period
+starts when location gives up rather than only when it never started, and it is called off the
+moment either signal answers again.
+
+**A run of readings that place nobody is reported, not absorbed.** One vague fix is ordinary —
+walking past a lift shaft produces one. Several in a row means location has stopped answering, and
+the user is owed that in the notification (§8.1) rather than left with a snooze that looks tracked
+and is not. The count is what distinguishes the two; reporting the first would make the line noise,
+and noise is how a user learns to ignore the line that matters.
 
 ### 6.7 Duty cycle
 
