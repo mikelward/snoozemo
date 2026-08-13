@@ -637,6 +637,10 @@ apostrophes (`\'`) in any locale's string resources.
   `curl -s -o /dev/null -w "%{http_code}"` at `https://maven.google.com/` (200 / 302 / 404 =
   reachable; 403 from the sandbox-egress TLS-inspection CA = blocked). If you find it
   blocked when this file says it shouldn't be, flag it.
+- **`developer.android.com` is reachable — `curl` it and strip tags.** Its reference pages
+  render client-side, so an HTML-to-text fetch returns only the nav index, which reads as
+  "the page doesn't document that" and gets platform facts filed as unverifiable.
+  `android.googlesource.com` *is* blocked; `sdkmanager` offers `sources;android-36`.
 
 ## Cost and reliability
 
