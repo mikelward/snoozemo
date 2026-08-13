@@ -1426,10 +1426,31 @@ Three areas need real-device verification, not assumption:
    `Tile.setSubtitle` is displayed at all, since the countdown text lives there. Have a fallback
    that folds the remaining time into the label if not.
 
-`StatusBarManager.requestAddTileService()` (API 33+) works on both; use it during onboarding rather
-than telling the user to go edit their shade by hand. It requires the app to be in the foreground
-and the tile service to be `exported="true"`, and the system auto-denies after repeated dismissals,
-so ask once and never again.
+`StatusBarManager.requestAddTileService()` (API 33+) works on both, and is how the tile gets added
+— never by telling the user to go edit their shade by hand. It requires the app to be in the
+foreground and the tile service to be `exported="true"`, and the system auto-denies after repeated
+dismissals.
+
+**It is offered from a row on the app screen, not fired automatically at launch** (revised
+2026-08-13; the original text here said to ask once during onboarding and never again). Three
+things moved the decision:
+
+- The setup rows exist now (§5.2), and mixing an unprompted dialog with a permanent row is the
+  precise pattern that had to be removed from the notification permission — the dialog pre-empts
+  the row's own affordance and fires over a choice the user may have just made.
+- Google's guidance is to call it in response to a user action rather than on launch, which is also
+  what keeps the system's auto-deny out of reach: a request that only ever follows a tap is not
+  one the user can accumulate dismissals against.
+- "Ask once and never again" needs a persisted asked-flag and leaves a user who declined with no
+  route back. The row needs no flag and stays available.
+
+The row appears only while the tile is missing. Nothing can *ask* whether it is there, so its
+presence is tracked from the three moments the platform volunteers it — the tile being added, being
+removed, and the result of a request. Where the answer is unknown the two defaults deliberately
+disagree: the screen assumes present, so the row cannot flash on every launch, and the store assumes
+missing, so a fresh install is offered the tile. The transient wrong answer is the invisible one;
+the durable wrong answer offers rather than hides, since a false positive would conceal the only
+route to the product's whole interaction.
 
 ---
 

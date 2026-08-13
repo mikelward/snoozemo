@@ -2,12 +2,14 @@ package app.snoozemo.ui
 
 import android.Manifest
 import android.app.NotificationManager
+import android.app.StatusBarManager
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager.PERMISSION_GRANTED
+import android.graphics.drawable.Icon
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
@@ -54,6 +56,9 @@ import app.snoozemo.snooze.NotificationPromptStore
 import app.snoozemo.snooze.SnoozeNotifications
 import app.snoozemo.snooze.SnoozeService
 import app.snoozemo.snooze.releaseDirectly
+import app.snoozemo.tile.SnoozeTileService
+import app.snoozemo.tile.TilePresenceStore
+import app.snoozemo.tile.R as TileR
 
 private const val TAG = "MainActivity"
 
@@ -68,7 +73,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var zen: ZenController
     private lateinit var store: ActiveSnoozeStore
     private lateinit var promptStore: NotificationPromptStore
+    private lateinit var tileStore: TilePresenceStore
     private var recordWatch: AutoCloseable? = null
+    private var tileWatch: AutoCloseable? = null
 
     /**
      * Read from the persisted record, never kept independently.
@@ -108,6 +115,16 @@ class MainActivity : ComponentActivity() {
      * anyway.
      */
     private var notificationsReachTheUser by mutableStateOf(true)
+
+    /**
+     * Whether the tile is known to be in Quick Settings.
+     *
+     * Defaults to **true** so the row does not flash on every launch before the
+     * store has been read: the tile is normally there, and offering to add
+     * something the user already has is the one wrong answer that costs them a
+     * dialog. Read alongside everything else after the first frame.
+     */
+    private var tileAdded by mutableStateOf(true)
     private var lastOutcome by mutableStateOf<String?>(null)
 
     /**
@@ -176,6 +193,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         store = ActiveSnoozeStore(applicationContext)
         promptStore = NotificationPromptStore(applicationContext)
+        tileStore = TilePresenceStore(applicationContext)
         zen = AndroidZenController(
             context = applicationContext,
             store = PrefsZenRuleIdStore(applicationContext),
@@ -190,9 +208,11 @@ class MainActivity : ComponentActivity() {
                         snoozing = snoozing,
                         lastOutcome = lastOutcome,
                         notificationsReachTheUser = notificationsReachTheUser,
+                        tileAdded = tileAdded,
                         settingsFailure = settingsFailure,
                         onAccessRow = ::openPolicyAccessSettings,
                         onNotificationsRow = ::fixNotifications,
+                        onTileRow = ::addTile,
                         onArm = ::armFromScreen,
                         onRelease = ::endFromScreen,
                     )
@@ -210,6 +230,12 @@ class MainActivity : ComponentActivity() {
         // reading it once.
         refreshSnoozing()
         recordWatch = store.observe { refreshSnoozing() }
+        // Followed rather than read once. The tile service writes this when the
+        // tile is added or removed from the shade, and the add-request's answer
+        // arrives after a system dialog that can outlive the activity which
+        // opened it — a configuration change mid-dialog leaves the replacement
+        // with a stale reading and nothing to correct it.
+        tileWatch = tileStore.observe { tileAdded = tileStore.isAdded() }
     }
 
     /**
@@ -274,7 +300,13 @@ class MainActivity : ComponentActivity() {
      */
     private fun readNotificationsAfterFirstFrame() {
         Choreographer.getInstance().postFrameCallback {
-            window.decorView.post { refreshNotifications() }
+                window.decorView.post {
+                refreshNotifications()
+                // Read here rather than in `onStart` for the same reason as the
+                // rest: it is a preferences file, and no disk read belongs in
+                // front of the first frame.
+                tileAdded = tileStore.isAdded()
+            }
         }
     }
 
@@ -409,6 +441,8 @@ class MainActivity : ComponentActivity() {
         }
         recordWatch?.close()
         recordWatch = null
+        tileWatch?.close()
+        tileWatch = null
     }
 
     /**
@@ -611,6 +645,65 @@ class MainActivity : ComponentActivity() {
      * this screen owns is noticing the return — `accessReceiver` and the
      * `onStart` refresh both do — so nothing here waits for an answer.
      */
+    /**
+     * Offers to put the tile in Quick Settings.
+     *
+     * `requestAddTileService` is the only sanctioned route — there is no way to
+     * add a tile without the user's consent, and no way to *ask* whether it is
+     * already there. The platform answers this one request, and that answer is
+     * the third and last place the tile's presence is knowable, so it is
+     * recorded like the other two.
+     *
+     * `TILE_ALREADY_ADDED` is a success for our purposes: the user has it, the
+     * row was wrong, and the row should go. Everything else leaves the row where
+     * it is, since the tile still isn't there.
+     *
+     * Contained because this is a binder call into the system UI, and the
+     * failure this screen must never have is a row that describes something and
+     * does nothing when tapped.
+     */
+    private fun addTile() {
+        val manager = getSystemService(StatusBarManager::class.java)
+        if (manager == null) {
+            Log.e(TAG, "No StatusBarManager; cannot offer to add the tile.")
+            settingsFailure = SetupRowId.TILE
+            return
+        }
+        // Cleared on the way in, not only on success. A failure describes the
+        // *last* attempt, and the next tap supersedes it whatever it returns —
+        // otherwise an error from a rapid double-tap
+        // (`TILE_ADD_REQUEST_ERROR_REQUEST_IN_PROGRESS`) would still be on
+        // screen after the dialog it collided with came back declined, which is
+        // not an error at all (flagged by Codex on PR #20).
+        if (settingsFailure == SetupRowId.TILE) settingsFailure = null
+        runCatching {
+            manager.requestAddTileService(
+                ComponentName(this, SnoozeTileService::class.java),
+                getString(TileR.string.tile_snooze_here),
+                Icon.createWithResource(this, TileR.drawable.ic_tile_snooze),
+                mainExecutor,
+            ) { result ->
+                val added = result == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED ||
+                    result == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED
+                if (added) {
+                    // The store only — the watch above puts it on screen, and
+                    // does so on whichever activity is current rather than the
+                    // one this callback closed over.
+                    tileStore.setAdded(true)
+                } else if (result >= StatusBarManager.TILE_ADD_REQUEST_ERROR_MISMATCHED_PACKAGE) {
+                    // An error, as against the user simply declining. Declining
+                    // is an answer and needs no message; a refused *request* is
+                    // a tap that achieved nothing and has to say so.
+                    Log.e(TAG, "The system refused the add-tile request (result $result).")
+                    settingsFailure = SetupRowId.TILE
+                }
+            }
+        }.onFailure {
+            Log.e(TAG, "Requesting the tile be added was refused.", it)
+            settingsFailure = SetupRowId.TILE
+        }
+    }
+
     private fun openPolicyAccessSettings() {
         openSettings(SetupRowId.DND, Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
     }
@@ -650,6 +743,7 @@ fun SnoozemoTheme(content: @Composable () -> Unit) {
 enum class SetupRowId {
     DND,
     NOTIFICATIONS,
+    TILE,
 }
 
 @Composable
@@ -657,11 +751,13 @@ fun DebugScreen(
     access: PolicyAccess?,
     notifications: NotificationPermission?,
     notificationsReachTheUser: Boolean,
+    tileAdded: Boolean,
     snoozing: Boolean?,
     lastOutcome: String?,
     settingsFailure: SetupRowId?,
     onAccessRow: () -> Unit,
     onNotificationsRow: () -> Unit,
+    onTileRow: () -> Unit,
     onArm: () -> Unit,
     onRelease: () -> Unit,
     modifier: Modifier = Modifier,
@@ -743,6 +839,24 @@ fun DebugScreen(
                 onClick = onNotificationsRow,
                 failure = stringResource(R.string.failure_could_not_open_settings)
                     .takeIf { settingsFailure == SetupRowId.NOTIFICATIONS },
+            )
+        }
+        // Only while it is missing. The tile is the product (SPEC.md §4.2), so
+        // a user without it has an app whose whole interaction is out of reach
+        // — but once it is there this row is clutter on the one screen there
+        // is, and the platform's own answer to a redundant request is a dialog
+        // saying it is already added.
+        if (!tileAdded) {
+            SetupRow(
+                title = stringResource(R.string.setup_tile_title),
+                status = stringResource(R.string.setup_tile_missing),
+                // In place, like the notification prompt and unlike the
+                // Settings rows: `requestAddTileService` puts a system dialog
+                // over the app and answers through a callback.
+                action = stringResource(R.string.setup_tile_add),
+                onClick = onTileRow,
+                failure = stringResource(R.string.failure_could_not_add_tile)
+                    .takeIf { settingsFailure == SetupRowId.TILE },
             )
         }
 
@@ -841,11 +955,13 @@ private fun DebugScreenPreview() {
             access = PolicyAccess.GRANTED,
             notifications = NotificationPermission.GRANTED,
             notificationsReachTheUser = true,
+            tileAdded = true,
             snoozing = false,
             lastOutcome = null,
             settingsFailure = null,
             onAccessRow = {},
             onNotificationsRow = {},
+            onTileRow = {},
             onArm = {},
             onRelease = {},
         )

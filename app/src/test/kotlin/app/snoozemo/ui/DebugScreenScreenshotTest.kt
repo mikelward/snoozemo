@@ -67,11 +67,13 @@ class DebugScreenScreenshotTest {
                 access = null,
                 notifications = null,
                 notificationsReachTheUser = true,
+                tileAdded = true,
                 snoozing = null,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onTileRow = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -98,11 +100,13 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.DENIED,
                 notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
+                tileAdded = true,
                 snoozing = null,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = { opened++ },
                 onNotificationsRow = {},
+                onTileRow = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -130,11 +134,13 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.DENIED,
                 notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
+                tileAdded = true,
                 snoozing = null,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onTileRow = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -152,11 +158,13 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
+                tileAdded = true,
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = { tapped++ },
+                onTileRow = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -177,11 +185,13 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.BLOCKED,
                 notificationsReachTheUser = true,
+                tileAdded = true,
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onTileRow = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -203,11 +213,13 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
+                tileAdded = true,
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onTileRow = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -223,11 +235,13 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
+                tileAdded = true,
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onTileRow = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -250,11 +264,13 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
+                tileAdded = true,
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onTileRow = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -270,11 +286,13 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
+                tileAdded = true,
                 snoozing = true,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onTileRow = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -295,11 +313,13 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
+                tileAdded = true,
                 snoozing = null,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onTileRow = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -323,11 +343,13 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
+                tileAdded = true,
                 snoozing = true,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onTileRow = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -343,11 +365,13 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.DENIED,
                 notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
+                tileAdded = true,
                 snoozing = null,
                 lastOutcome = null,
                 settingsFailure = SetupRowId.DND,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onTileRow = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -368,11 +392,13 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = false,
+                tileAdded = true,
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onTileRow = {},
                 onArm = {},
                 onRelease = {},
             )
@@ -389,17 +415,70 @@ class DebugScreenScreenshotTest {
     }
 
     @Test
+    fun `a missing tile is offered, and only while it is missing`() {
+        var tapped = 0
+
+        capture("debug-screen-tile-missing.png") {
+            DebugScreen(
+                access = PolicyAccess.GRANTED,
+                notifications = NotificationPermission.GRANTED,
+                notificationsReachTheUser = true,
+                tileAdded = false,
+                snoozing = false,
+                lastOutcome = null,
+                settingsFailure = null,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onTileRow = { tapped++ },
+                onArm = {},
+                onRelease = {},
+            )
+        }
+
+        // The tile is the product (SPEC.md §4.2) — a user without it has an app
+        // whose whole interaction is out of reach, so the screen offers it.
+        composeRule.onNodeWithText("The one-tap way to snooze").performClick()
+        assertEquals(1, tapped)
+    }
+
+    @Test
+    fun `a tile already in the shade is not offered again`() {
+        capture("debug-screen-idle.png") {
+            DebugScreen(
+                access = PolicyAccess.GRANTED,
+                notifications = NotificationPermission.GRANTED,
+                notificationsReachTheUser = true,
+                tileAdded = true,
+                snoozing = false,
+                lastOutcome = null,
+                settingsFailure = null,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onTileRow = {},
+                onArm = {},
+                onRelease = {},
+            )
+        }
+
+        // Clutter on the one screen this app has, and the platform's own answer
+        // to a redundant request is a dialog saying it is already there.
+        composeRule.onNodeWithText("Quick Settings tile").assertDoesNotExist()
+    }
+
+    @Test
     fun `a failure is said, not swallowed`() {
         capture("debug-screen-outcome.png") {
             DebugScreen(
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
+                tileAdded = true,
                 snoozing = false,
                 lastOutcome = "Couldn't snooze",
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onTileRow = {},
                 onArm = {},
                 onRelease = {},
             )

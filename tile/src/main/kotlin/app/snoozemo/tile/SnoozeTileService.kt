@@ -43,6 +43,26 @@ class SnoozeTileService : TileService() {
     @Volatile
     private var listening: TileSnapshot? = null
 
+    /**
+     * The tile has been added to Quick Settings.
+     *
+     * Recorded because nothing else can answer the question later: the app
+     * screen has to decide whether to offer to add the tile, and the platform
+     * has no "is it there?" call. This callback and [onTileRemoved] are two of
+     * the three moments it volunteers the answer (the third is the result of an
+     * add request).
+     */
+    override fun onTileAdded() {
+        super.onTileAdded()
+        TilePresenceStore(applicationContext).setAdded(true)
+    }
+
+    /** The mirror image, so the screen offers the tile again once it is gone. */
+    override fun onTileRemoved() {
+        super.onTileRemoved()
+        TilePresenceStore(applicationContext).setAdded(false)
+    }
+
     override fun onStartListening() {
         super.onStartListening()
         // The shade is open and a tap may be a moment away, so pull the zen rule

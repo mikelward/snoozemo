@@ -37,6 +37,14 @@
     <!-- TODO: translate -->
     <string name="setup_tap_to_allow" tools:ignore="MissingTranslation">Tap to allow</string>
     <!-- TODO: translate -->
+    <string name="setup_tile_title" tools:ignore="MissingTranslation">Quick Settings tile</string>
+    <!-- TODO: translate -->
+    <string name="setup_tile_missing" tools:ignore="MissingTranslation">The one-tap way to snooze</string>
+    <!-- TODO: translate -->
+    <string name="setup_tile_add" tools:ignore="MissingTranslation">Tap to add</string>
+    <!-- TODO: translate -->
+    <string name="failure_could_not_add_tile" tools:ignore="MissingTranslation">Couldn\'t add the tile</string>
+    <!-- TODO: translate -->
     <string name="failure_could_not_open_settings" tools:ignore="MissingTranslation">Couldn\'t open Settings</string>
     <!-- TODO: translate -->
     <string name="debug_arm" tools:ignore="MissingTranslation">Snooze</string>

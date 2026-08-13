@@ -258,7 +258,20 @@ the point is that every other line of the app is worthless if it isn't true.
           permission and `DevicePolicyManager.getPermissionGrantState` needs to be the admin, so an
           ordinary app cannot read either. Worth re-checking if Snoozemo is ever aimed at managed
           fleets; until then it shares whatever fix the item above gets.
-- [ ] `requestAddTileService()` during onboarding — asked once, never again.
+- [x] **Offer to add the tile from the app screen.** `requestAddTileService` behind a third setup
+      row, shown only while the tile is missing. `TilePresenceStore` in `:tile` keeps the answer,
+      written from `onTileAdded` / `onTileRemoved` and from the request's own result — the three
+      moments the platform volunteers it, since nothing can be *asked* whether the tile is there.
+      - **Not an automatic prompt during onboarding, which is what this item originally said**
+        (autopilot, 2026-08-13). The row is the same shape the access flow just took, Google's own
+        guidance is to call `requestAddTileService` in response to a user action rather than on
+        launch, and PR #18 had already removed an unprompted dialog for behaving exactly this way.
+        Reversible — one call at the end of the post-first-frame read — and worth the maintainer's
+        eye, since "asked once, never again" was their wording.
+      - The default is **added**, so the row does not flash on every launch before the store is
+        read; the store's own default is **missing**, so a fresh install is offered the tile. The
+        two disagree deliberately: the transient wrong answer should be the invisible one, and the
+        durable wrong answer should be the one that offers rather than hides.
 - [ ] Real anchor capture on the arm path. Until Phase 3 lands `PresenceMonitor`, every snooze
       arms honestly duration-only rather than pretending to track a place it never captured.
 - [x] **minSdk 34** (maintainer, 2026-08-11). The tile's `startActivityAndCollapse` needed the
