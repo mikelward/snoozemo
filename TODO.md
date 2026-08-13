@@ -272,6 +272,31 @@ the point is that every other line of the app is worthless if it isn't true.
         read; the store's own default is **missing**, so a fresh install is offered the tile. The
         two disagree deliberately: the transient wrong answer should be the invisible one, and the
         durable wrong answer should be the one that offers rather than hides.
+- [x] **Keep the app screen out from under the system bars, and make each row offer a verb**
+      (maintainer, 2026-08-13). Reported as the screen appearing behind the status bar and cutout —
+      which it was: nothing declared edge to edge and nothing padded for insets, and every window
+      is drawn edge to edge whatever it asks for from targetSdk 35 onward. **Landed** as
+      `enableEdgeToEdge()` plus `safeDrawingPadding()` outside the scroll, with the trampoline's
+      transparent theme re-parented so it follows dark mode too, and the setup rows reshaped in the
+      same pass (`SPEC.md` §5.2, §11).
+      - **Prior art followed rather than invented**: the sibling Simmo repo's `applyEdgeToEdgeForThemeMode`
+        + per-screen `safeDrawingPadding()`, and its `GrantRow` — label block, then either a button
+        or nothing. Simmo passes an explicit `SystemBarStyle` because its theme can be pinned Light
+        or Dark against the system setting; Snoozemo's follows the system, so the default `auto`
+        styling cannot disagree with what the app draws and the helper is not needed here.
+      - **`safeDrawing`, not `systemBars`, and outside the scroll.** A cutout on a rotated phone
+        takes a side inset the bars alone do not describe; inside the scroll the padding would move
+        with the content and let a row slide under the status bar mid-scroll.
+      - **The rows now carry `Grant` / `Allow` / `Add`, and nothing once the capability is in
+        place.** Reverses two entries under *Decisions needing review* below — the granted rows
+        stay tappable, and the `Opens Settings` / `Tap to allow` copy — both of which the
+        maintainer asked for directly.
+      - **Robolectric reports no insets**, so the tests dispatch a set onto the content view: with
+        zero insets, a screen that handles them and one that ignores them render identically, and
+        the snapshots would have kept passing through the reported bug. `EdgeToEdgeScreenshotTest`
+        is in the CI allow-list.
+      - Still owed a device: how the rows read at a large font scale with a button beside them, and
+        whether a punch-hole cutout in landscape leaves the first row where the test says it does.
 - [ ] Real anchor capture on the arm path. Until Phase 3 lands `PresenceMonitor`, every snooze
       arms honestly duration-only rather than pretending to track a place it never captured.
 - [x] **minSdk 34** (maintainer, 2026-08-11). The tile's `startActivityAndCollapse` needed the
@@ -344,6 +369,10 @@ the point is that every other line of the app is worthless if it isn't true.
 - [ ] Dismissing the sheet, or never seeing it, leaves the user correctly snoozed.
 - [ ] Setting to disable the sheet entirely — the trampoline then finishes in `onCreate`.
 - [ ] Screenshot tests for the sheet, wired into the CI allow-list.
+- [ ] The sheet handles its own insets. It arrives in the trampoline, whose theme is transparent
+      and now follows dark mode, but which deliberately declares no edge-to-edge of its own —
+      nothing may run between `onCreate` and the service start (`SPEC.md` §6.9), so the call
+      belongs after it, in the same posted block the sheet is rendered from.
 
 ## Phase 5 (M5) — Edge cases and degraded modes
 
@@ -1067,19 +1096,23 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
 - **New user-facing copy that did not go through the propose-in-chat step.** Six strings, all on
   the setup rows: `Do Not Disturb access` / `Granted` / `Snoozemo can't snooze without it`,
   `Notifications` / `Allowed` / `Snoozemo can't show what a snooze is doing`, plus the two action
-  lines `Opens Settings` and `Tap to allow` and a `Couldn't open Settings` failure. It replaces
-  `Snoozemo needs Do Not Disturb access`, `Grant access` and the transient
-  `Notifications are off — …`. Reversible — no locales yet, and this screen's copy is already in
-  the wording pass the maintainer has open. **Approved as they stand** (maintainer, 2026-08-12:
-  "strings seem ok"), so they are the current answer rather than an open question; they still
-  belong to that later wording pass like the rest of the screen's copy.
-- **The rows stay tappable once granted**, going to the same Settings screen the not-granted state
-  goes to. The alternative — an inert row when there is nothing to fix — reintroduces the exact
-  defect this change removed, on the state the user is most likely to tap out of curiosity.
-  Reversible by making the `onClick` conditional.
-- **Tapping the notifications row when the permission is granted opens the app's notification
-  settings.** It is the only live destination left, and it is where the user turns it back off.
-  Alternative: no action. Same objection as above.
+  lines and a `Couldn't open Settings` failure. It replaces `Snoozemo needs Do Not Disturb access`,
+  `Grant access` and the transient `Notifications are off — …`. Reversible — no locales yet, and
+  this screen's copy is already in the wording pass the maintainer has open. **Approved as they
+  stand** (maintainer, 2026-08-12: "strings seem ok"), so they are the current answer rather than
+  an open question; they still belong to that later wording pass like the rest of the screen's
+  copy. **The action lines were replaced on 2026-08-13** at the maintainer's request: `Opens
+  Settings` and `Tap to allow` and `Tap to add` are now the buttons `Grant`, `Allow` and `Add`,
+  and they are absent entirely once the capability is in place.
+- ~~**The rows stay tappable once granted**~~ — **reversed** (maintainer, 2026-08-13: "if it's
+  allowed i'm not sure we need a button at all"). A granted row now shows its state and no control,
+  which is the sibling Simmo repo's `GrantRow` shape. The objection recorded here still stands and
+  is the cost being paid: there is no route from this screen to the Do Not Disturb access toggle
+  for a user who wants to revoke it, and no route to the notification settings for one who wants to
+  mute the app. Reversible — the `action` argument becomes unconditional again.
+- ~~**Tapping the notifications row when the permission is granted opens the app's notification
+  settings**~~ — **reversed** with the item above, and only for the fully-working state: held but
+  blocked in Settings still shows `Allow`, because that one is broken and repairable.
 - **A new one-boolean preferences file (`notification_prompt`) rather than a key on an existing
   one.** `PendingFailureStore`'s file is about a snooze that failed; this is about the app's own
   request history and is read by two activities. Reversible — one key, one file, and nothing

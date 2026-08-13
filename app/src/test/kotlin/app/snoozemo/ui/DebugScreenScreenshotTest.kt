@@ -13,8 +13,8 @@ import androidx.compose.ui.Modifier
 // not be, which is a compile error that reads like a missing dependency.
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsEnabled
-import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -23,6 +23,7 @@ import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -44,9 +45,12 @@ import org.robolectric.annotation.GraphicsMode
  * Each null state is recorded here so a refactor that quietly picks a default
  * shows up as a diff.
  *
- * The other invariant these tests hold is that **every row that states a
- * problem is the thing you tap**. The status used to be inert text beside a
- * separate button, so tapping the sentence naming the problem did nothing.
+ * The other invariant these tests hold is about the rows' one control:
+ * **a row offers a button exactly while something is left to do**, carrying the
+ * verb for it, and a capability that is already in place offers nothing. Both
+ * halves are regressions waiting to happen — a button that survives the grant
+ * is a tap with nothing behind it, and an action named after its route
+ * (`Opens Settings`) reads as a description rather than an offer.
  *
  * Capture is skipped unless `-Proborazzi.test.record` / `-Proborazzi.test.verify`
  * is passed, so `./gradlew test` still runs these as ordinary render-and-assert
@@ -112,15 +116,15 @@ class DebugScreenScreenshotTest {
             )
         }
 
-        // The defect this flow was reworked for: the sentence that names the
-        // problem is the target, not a label beside one.
-        composeRule.onNodeWithText("Snoozemo can't snooze without it").performClick()
+        // The row states the problem and offers the fix beside it, and the
+        // button is what carries the tap.
+        composeRule.onNodeWithText("Snoozemo can't snooze without it").assertExists()
+        composeRule.onNodeWithText("Grant").performClick()
         assertEquals(1, opened)
-        // And the two rows say different things about where the tap goes: Do
-        // Not Disturb access is a Settings toggle with no in-app dialog
-        // (SPEC.md §5.2), while notifications really is a runtime prompt.
-        composeRule.onNodeWithText("Opens Settings").assertExists()
-        composeRule.onNodeWithText("Tap to allow").assertExists()
+        // And the two verbs keep the one distinction worth carrying: Do Not
+        // Disturb access is a Settings toggle with no in-app dialog (SPEC.md
+        // §5.2), while notifications really is a runtime prompt.
+        composeRule.onNodeWithText("Allow").assertExists()
         // Nothing to arm with: the controls only appear once access is granted.
         composeRule.onNodeWithText("Snooze").assertDoesNotExist()
     }
@@ -170,12 +174,11 @@ class DebugScreenScreenshotTest {
             )
         }
 
-        // The distinction the two rows exist to make legible: this one is a
-        // runtime prompt that appears in place, the row above leaves for
-        // Settings. Both are stated, side by side, in the same position.
-        composeRule.onNodeWithText("Tap to allow").performClick()
+        composeRule.onNodeWithText("Allow").performClick()
         assertEquals(1, tapped)
-        composeRule.onNodeWithText("Opens Settings").assertExists()
+        // Access is granted in this state, so its row has nothing left to
+        // offer and the only button on screen belongs to notifications.
+        composeRule.onNodeWithText("Grant").assertDoesNotExist()
     }
 
     @Test
@@ -197,11 +200,12 @@ class DebugScreenScreenshotTest {
             )
         }
 
-        // Still stated as a problem, but no longer offering a prompt: the
-        // system silently ignores the request by now, so `Tap to allow` would
-        // be the dead tap this screen was fixed to remove.
+        // Still stated as a problem, and still offered — the button is the
+        // same `Allow` whichever route the tap takes, because what the user
+        // wants is the same and the system has merely stopped showing its own
+        // prompt (the row sends them to Settings instead).
         composeRule.onNodeWithText("Snoozemo can't show what a snooze is doing").assertExists()
-        composeRule.onNodeWithText("Tap to allow").assertDoesNotExist()
+        composeRule.onNodeWithText("Allow").assertExists()
     }
 
     @Test
@@ -225,7 +229,7 @@ class DebugScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("Tap to allow").assertExists()
+        composeRule.onNodeWithText("Allow").assertExists()
     }
 
     @Test
@@ -248,11 +252,14 @@ class DebugScreenScreenshotTest {
         }
 
         composeRule.onNodeWithText("Snooze").assertIsEnabled()
-        // Both rows stay live once everything is granted. Neither is a dead
-        // tap: one is where access gets turned back off, the other is where
-        // notifications do.
-        composeRule.onNodeWithText("Granted").assertHasClickAction()
-        composeRule.onNodeWithText("Allowed").assertHasClickAction()
+        // Nothing left to do, so neither row offers anything: they are
+        // statements now. A button that only re-opens a screen the user has
+        // already finished with is a tap with nothing behind it, and keeps
+        // first-run urgency on a screen where everything is fine.
+        composeRule.onNodeWithText("Granted").assertExists()
+        composeRule.onNodeWithText("Allowed").assertExists()
+        composeRule.onNodeWithText("Grant").assertDoesNotExist()
+        composeRule.onNodeWithText("Allow").assertDoesNotExist()
     }
 
     @Test
@@ -381,8 +388,48 @@ class DebugScreenScreenshotTest {
         // is not looking. Without this the tap reads as doing nothing — the
         // defect this screen exists to remove, reintroduced by its own error
         // path.
-        composeRule.onNodeWithText("Do Not Disturb access")
-            .assertTextContains("Couldn't open Settings")
+        composeRule.onNodeWithText("Couldn't open Settings").assertExists()
+        // And under the row that was tapped, not the one below it: the two
+        // rows are adjacent and identical in shape, so a message under the
+        // wrong one sends the user to fix a capability that is not broken.
+        val row = composeRule.onNodeWithText("Do Not Disturb access").getUnclippedBoundsInRoot()
+        val message = composeRule.onNodeWithText("Couldn't open Settings").getUnclippedBoundsInRoot()
+        val nextRow = composeRule.onNodeWithText("Notifications").getUnclippedBoundsInRoot()
+        assertTrue(
+            "The failure drew at ${message.top}, outside its own row",
+            message.top > row.top && message.top < nextRow.top,
+        )
+    }
+
+    @Test
+    fun `a failure does not outlive the offer it belongs to`() {
+        // A refused Settings trip, and then access arrives anyway — from
+        // another route into Settings, or an administrator, while this screen
+        // is up. The row loses its button at that moment, so a message about a
+        // tap that could not happen would sit under `Granted` with nothing left
+        // to clear it (flagged by Codex on PR #21).
+        // Recorded over the idle snapshot deliberately: with the message
+        // suppressed this state is pixel-identical to having no failure at all,
+        // which is the claim being made.
+        capture("debug-screen-idle.png") {
+            DebugScreen(
+                access = PolicyAccess.GRANTED,
+                notifications = NotificationPermission.GRANTED,
+                notificationsReachTheUser = true,
+                tileAdded = true,
+                snoozing = false,
+                lastOutcome = null,
+                settingsFailure = SetupRowId.DND,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onTileRow = {},
+                onArm = {},
+                onRelease = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Granted").assertExists()
+        composeRule.onNodeWithText("Couldn't open Settings").assertDoesNotExist()
     }
 
     @Test
@@ -406,12 +453,12 @@ class DebugScreenScreenshotTest {
 
         // The permission is held, so the old reading said `Allowed` — over a
         // snooze whose countdown and end reason were both being dropped.
-        composeRule.onNodeWithText("Notifications")
-            .assertTextContains("Snoozemo can't show what a snooze is doing")
+        composeRule.onNodeWithText("Snoozemo can't show what a snooze is doing").assertExists()
         composeRule.onNodeWithText("Allowed").assertDoesNotExist()
-        // And it points at the one place that can fix a blocked channel: there
-        // is no runtime prompt for this, the permission is already held.
-        composeRule.onNodeWithText("Notifications").assertTextContains("Opens Settings")
+        // And the row still offers the fix, which is the half a status line
+        // alone would lose: held-but-blocked is repairable, and the button is
+        // what says so.
+        composeRule.onNodeWithText("Allow").assertHasClickAction()
     }
 
     @Test
@@ -437,7 +484,8 @@ class DebugScreenScreenshotTest {
 
         // The tile is the product (SPEC.md §4.2) — a user without it has an app
         // whose whole interaction is out of reach, so the screen offers it.
-        composeRule.onNodeWithText("The one-tap way to snooze").performClick()
+        composeRule.onNodeWithText("The one-tap way to snooze").assertExists()
+        composeRule.onNodeWithText("Add").performClick()
         assertEquals(1, tapped)
     }
 

@@ -21,6 +21,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -38,6 +39,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
@@ -360,7 +362,20 @@ class MainActivity : ComponentActivity() {
             rationale = rationale,
         )
         notifications = current
+        // Same as the access row: once messages actually reach the user this
+        // row has no button left, so a failure recorded before that would have
+        // nothing to clear it. Working means *delivered*, not merely granted —
+        // the permission can be held while a channel is switched off, which is
+        // a state the row still offers to fix.
+        if (current == NotificationPermission.GRANTED && notificationsReachTheUser) {
+            clearFailure(SetupRowId.NOTIFICATIONS)
+        }
         return current
+    }
+
+    /** Drops [row]'s failure message, if that is the one currently shown. */
+    private fun clearFailure(row: SetupRowId) {
+        if (settingsFailure == row) settingsFailure = null
     }
 
     /**
@@ -539,6 +554,14 @@ class MainActivity : ComponentActivity() {
         if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return
         if (refresh != latestAccessRefresh) return
         access = current
+        // A failure describes a tap that could not reach Settings, and the row
+        // carrying it loses its button the moment access is granted — so
+        // nothing would clear it, and the row would read `Granted` above
+        // `Couldn't open Settings` until the activity was recreated. Access can
+        // arrive from anywhere while this screen is up: another route into
+        // Settings, an administrator, the receiver above (flagged by Codex on
+        // PR #21).
+        if (current == PolicyAccess.GRANTED) clearFailure(SetupRowId.DND)
         when (PolicyAccessChange.resolve(current, running)) {
             // The invariant from SPEC.md §8.2: access lost mid-snooze ends the
             // snooze rather than leaving the phone quiet with nothing to release
@@ -695,7 +718,7 @@ class MainActivity : ComponentActivity() {
         // (`TILE_ADD_REQUEST_ERROR_REQUEST_IN_PROGRESS`) would still be on
         // screen after the dialog it collided with came back declined, which is
         // not an error at all (flagged by Codex on PR #20).
-        if (settingsFailure == SetupRowId.TILE) settingsFailure = null
+        clearFailure(SetupRowId.TILE)
         runCatching {
             manager.requestAddTileService(
                 ComponentName(this, SnoozeTileService::class.java),
@@ -743,7 +766,7 @@ class MainActivity : ComponentActivity() {
             // Cleared on success as well as set on failure: a refusal that has
             // since stopped happening must not keep an error under a row that
             // now works.
-            .onSuccess { if (settingsFailure == row) settingsFailure = null }
+            .onSuccess { clearFailure(row) }
             .onFailure {
                 Log.e(TAG, "Opening a Settings screen was refused.", it)
                 settingsFailure = row
@@ -813,23 +836,24 @@ fun DebugScreen(
         // either direction: the wrong guess either tells a user who granted
         // access that they haven't, or offers to arm something that can't.
         access?.let {
+            val granted = it == PolicyAccess.GRANTED
             SetupRow(
                 title = stringResource(R.string.setup_dnd_title),
                 status = stringResource(
-                    if (it == PolicyAccess.GRANTED) {
-                        R.string.setup_dnd_granted
-                    } else {
-                        R.string.setup_dnd_missing
-                    },
+                    if (granted) R.string.setup_dnd_granted else R.string.setup_dnd_missing,
                 ),
-                // Always, and in both states. Do Not Disturb access is a
-                // Settings toggle with no in-app dialog and no result callback
-                // (SPEC.md §5.2), so the tap leaves the app whichever way the
-                // switch is currently set — and a row that stopped being
-                // tappable once granted would be a dead tap for anyone who came
-                // back to check or to turn it off.
-                action = stringResource(R.string.setup_opens_settings),
-                onClick = onAccessRow,
+                // `Grant` rather than `Allow`: this one is a Settings toggle
+                // with no in-app dialog and no result callback (SPEC.md §5.2),
+                // and the pair of verbs is what is left of saying so now that
+                // the row no longer spends a line on the mechanism.
+                //
+                // Absent once it is granted, which is the whole of what the row
+                // then is: a statement that this is done. A button offering to
+                // grant what is already granted is a tap with nothing behind
+                // it, and turning access back off is Settings' job — the user
+                // goes there deliberately or not at all.
+                action = stringResource(R.string.setup_action_grant).takeUnless { granted },
+                onAction = onAccessRow,
                 failure = stringResource(R.string.failure_could_not_open_settings)
                     .takeIf { settingsFailure == SetupRowId.DND },
             )
@@ -838,34 +862,30 @@ fun DebugScreen(
         // first frame like everything else here, so this is briefly absent
         // rather than briefly wrong.
         notifications?.let {
+            // Granted is necessary and not sufficient. The permission can be
+            // held while the app is switched off in Settings or either channel
+            // is blocked, and the system then drops every post — so the row may
+            // only say `Allowed`, and only drop its button, when a message
+            // would actually arrive (flagged by Codex on PR #18).
+            val working = it == NotificationPermission.GRANTED && notificationsReachTheUser
             SetupRow(
                 title = stringResource(R.string.setup_notifications_title),
-                // Granted is necessary and not sufficient. The permission can
-                // be held while the app is switched off in Settings or either
-                // channel is blocked, and the system then drops every post —
-                // so the row may only say `Allowed` when a message would
-                // actually arrive (flagged by Codex on PR #18).
                 status = stringResource(
-                    if (it == NotificationPermission.GRANTED && notificationsReachTheUser) {
+                    if (working) {
                         R.string.setup_notifications_granted
                     } else {
                         R.string.setup_notifications_missing
                     },
                 ),
-                // The one place the two permissions visibly differ, which is
-                // the point of stating the action separately: `ASKABLE` is a
-                // prompt in place, and the other two leave for Settings —
-                // `BLOCKED` because the system has stopped showing that prompt
-                // and would silently ignore a request, `GRANTED` because
-                // Settings is where it gets turned back off.
-                action = stringResource(
-                    if (it == NotificationPermission.ASKABLE) {
-                        R.string.setup_tap_to_allow
-                    } else {
-                        R.string.setup_opens_settings
-                    },
-                ),
-                onClick = onNotificationsRow,
+                // One verb for all three broken states, deliberately. What the
+                // tap does differs — `ASKABLE` is a prompt in place, and the
+                // other two leave for Settings, because the system has stopped
+                // showing that prompt or the permission is held and something
+                // else is dropping the post — but what the user wants is the
+                // same in each, and naming the route was what made the old row
+                // read as a description instead of an offer.
+                action = stringResource(R.string.setup_action_allow).takeUnless { working },
+                onAction = onNotificationsRow,
                 failure = stringResource(R.string.failure_could_not_open_settings)
                     .takeIf { settingsFailure == SetupRowId.NOTIFICATIONS },
             )
@@ -879,11 +899,10 @@ fun DebugScreen(
             SetupRow(
                 title = stringResource(R.string.setup_tile_title),
                 status = stringResource(R.string.setup_tile_missing),
-                // In place, like the notification prompt and unlike the
-                // Settings rows: `requestAddTileService` puts a system dialog
-                // over the app and answers through a callback.
-                action = stringResource(R.string.setup_tile_add),
-                onClick = onTileRow,
+                // Never absent: the row only exists while the tile is missing,
+                // so there is always something to do here.
+                action = stringResource(R.string.setup_action_add),
+                onAction = onTileRow,
                 failure = stringResource(R.string.failure_could_not_add_tile)
                     .takeIf { settingsFailure == SetupRowId.TILE },
             )
@@ -921,56 +940,83 @@ fun DebugScreen(
 }
 
 /**
- * One capability, as a single tappable target.
+ * One capability: what it is, how it stands, and — only while something is
+ * actually left to do — the button that fixes it.
  *
- * The shape is the fix: the status used to be inert text with the only live
- * target beside it, so tapping the sentence that named the problem did nothing
- * (`TODO.md` Phase 2). Here the sentence *is* the button — `Surface(onClick)`
- * carries the ripple and the button semantics, so TalkBack announces the whole
- * row, title and status and action together, as one thing to activate.
+ * The trailing-button shape is the sibling Simmo repo's `GrantRow`, and the two
+ * halves of it are load-bearing separately.
  *
- * [action] is a separate line rather than a suffix on [status] so its position
- * is fixed down the column: the reader compares "what happens if I tap this"
- * between the rows without reading either sentence to the end.
+ * **A verb, not a route.** The action line used to describe the mechanism —
+ * `Opens Settings`, `Tap to add` — which reads as a note about what will happen
+ * rather than an offer to do it, and made a granted row look like it still
+ * wanted something. `Grant`, `Allow` and `Add` say what the user gets.
+ *
+ * **Nothing to tap once it is done.** [action] is null when the capability is
+ * in place, and the row is then a statement: title and status, no control. A
+ * button that only re-opens a screen the user has already finished with is a
+ * tap with nothing behind it, and it keeps first-run urgency on a screen where
+ * everything is already fine.
+ *
+ * That is a deliberate trade against the shape this row had before, where the
+ * whole surface was clickable so the sentence naming the problem was itself the
+ * target (`TODO.md` Phase 2). One target per row is what TalkBack can announce
+ * unambiguously — a button nested inside a clickable row gives the same tap two
+ * different names — so the row keeps the single target and moves it onto the
+ * control that says what it does.
  */
 @Composable
 private fun SetupRow(
     title: String,
     status: String,
-    action: String,
-    onClick: () -> Unit,
+    action: String?,
+    onAction: () -> Unit,
     failure: String? = null,
 ) {
     Surface(
-        onClick = onClick,
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceVariant,
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(
+        Row(
             modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            // The same gap the sibling repo keeps between a label block and its
+            // trailing control: the text takes whatever width the button
+            // leaves, so a status long enough to wrap would otherwise end flush
+            // against the button and read as one object with it.
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(text = title, style = MaterialTheme.typography.titleMedium)
-            Text(text = status, style = MaterialTheme.typography.bodyMedium)
-            Text(
-                text = action,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-            )
-            // Inside the row, not at the foot of the screen. A tap that could
-            // not open Settings has to say so where the tap was: the column
-            // scrolls now, so a message appended below the buttons is off
-            // screen in landscape or at a large font scale, and the row would
-            // read as the dead tap this whole change removes (flagged by Codex
-            // on PR #18).
-            failure?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(text = title, style = MaterialTheme.typography.titleMedium)
+                Text(text = status, style = MaterialTheme.typography.bodyMedium)
+                // Inside the row, not at the foot of the screen. A tap that
+                // could not open Settings has to say so where the tap was: the
+                // column scrolls, so a message appended below the buttons is
+                // off screen in landscape or at a large font scale, and the row
+                // would read as the dead tap this screen exists to remove
+                // (flagged by Codex on PR #18).
+                //
+                // And only beside an offer. The message is about a tap, so a
+                // row with nothing left to tap has nothing to report — showing
+                // it there would put `Couldn't open Settings` under `Granted`,
+                // which is the screen contradicting itself about the user's own
+                // phone. The state is cleared as well, in the two places that
+                // learn the capability recovered; this is what keeps the two
+                // from disagreeing in the frame between.
+                failure?.takeIf { action != null }?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+            action?.let {
+                Button(onClick = onAction) { Text(it) }
             }
         }
     }
