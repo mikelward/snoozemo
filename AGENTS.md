@@ -61,12 +61,9 @@ with one of them, the principle wins and the rule is what needs fixing.
    it is reproducible from anywhere else. Where a real constraint seems to force a loss,
    the loss is a **last resort after the alternatives are exhausted**, and any genuine
    trade-off is **the user's to make, stated plainly**, not taken quietly on their behalf.
-   Note the interaction with the backup decision (`SPEC.md` §12): `allowBackup="false"`
-   is a deliberate privacy choice, so today a device migration loses settings by design —
-   exactly the kind of trade-off that gets written down rather than discovered. It is also
-   explicitly *open*, not settled: once there are settings worth keeping, "survives a new
-   phone" and "lives in Google's cloud" are separable questions (`TODO.md`). Don't write
-   code or copy that treats never-backing-up as permanent.
+   `allowBackup="false"` is a choice about the *cloud* and does not decide what a phone
+   swap does — migration is **undecided, not off** (`SPEC.md` §12, `TODO.md`), so don't
+   write code or copy treating never-backing-up as permanent, or as current.
 4. **Do the work ahead of time.** Anything the arm path needs should already be in memory
    before the tile is tapped: the zen rule id, the settings, the last known SSID. Arming
    must never feel slow or refuse (`SPEC.md` §4.1) — preparation is what buys that.

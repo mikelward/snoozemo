@@ -785,6 +785,14 @@ data class Anchor(
 as you roam between access points while you have obviously not gone anywhere. Anchoring on BSSID
 would produce constant false departures in exactly the large venues the app is most useful in.
 
+**Open: does `bssid` earn its place at all?** (Codex, PR #23.) It is carried "for diagnostics", but
+the diagnostic that would consume it is §4.6's log, whose floor forbids a full BSSID outright — and
+the field is erased with the anchor when the snooze ends, so nothing survives the failure it was
+meant to explain. That leaves a strong location identifier held for a purpose nothing can currently
+serve, which is the wrong side of §12 to be on. Either name a real use that lives *inside* the
+snooze and can be described in `docs/PRIVACY.md`, or drop the field. **Maintainer's call**;
+`docs/PRIVACY.md` says the question is open rather than claiming a benefit the app cannot deliver.
+
 ### 6.3 Signals and their asymmetry (D4)
 
 | Signal | Meaning | Action |
@@ -1598,6 +1606,11 @@ Persisted on every state transition so a process death is fully recoverable.
 
 ## 12. Privacy
 
+The user-facing statement of everything below is `docs/PRIVACY.md`, which backs the hosted policy
+Play links to. It is written from the manifests and the stores rather than from this section, so it
+is a check on the section as much as a restatement of it: a store that keeps something this list
+doesn't mention shows up as a row with no rationale behind it.
+
 - **No `INTERNET` permission.** Nothing can be exfiltrated, and the Play Data Safety declaration is
   "no data collected, no data shared" — trivially true and trivially auditable.
 - Coordinates never leave the device. The v1 anchor is discarded when the snooze ends.
@@ -1621,6 +1634,29 @@ Persisted on every state transition so a process death is fully recoverable.
   **device-to-device transfer is not cloud backup**, so "your settings survive a new phone"
   does not have to mean "your places are in Google's cloud". Settled before the first
   release that has settings worth keeping (`TODO.md`).
+- **Correction: today's config does not actually decide the migration question** (Codex,
+  PR #23). The premise that a device migration currently loses settings *by design* does
+  not hold. For apps targeting API 31+, Android documents that `allowBackup="false"`
+  disables cloud backup but, **on devices from some manufacturers, does not disable
+  device-to-device transfer**. Snoozemo targets 36 and declares no `dataExtractionRules`,
+  so what happens on a phone swap today is the OEM's choice rather than ours — not "off",
+  and not knowably "on" either. It changes what the decision *costs*: choosing
+  D2D-transfer-yes is not a new exposure so much as writing down what may already happen,
+  and choosing no now requires a `<device-transfer>` exclude rather than the absence of a
+  setting. `docs/PRIVACY.md` states the uncertainty plainly rather than repeating the old
+  premise.
+- **The active snooze record is the part of this that is urgent, and it is a principle 1
+  problem rather than a settings one** (Codex, PR #23). A first pass at the correction
+  above called migration non-urgent "while the only durable state is a zen rule id and
+  three flags". That is wrong: `active_snooze` is durable too, and it is the one record
+  that *does something* when it lands somewhere new. `BootReceiver` loads whatever record
+  it finds and, if the cap can still be armed, re-asserts the zen rule (§8.3) — so on an
+  OEM that transfers app-private data, a snooze armed on the old phone can silence the new
+  one on its first boot, with nothing the user did behind it. The absolute wall-clock cap
+  bounds it, and a swap slower than the remaining cap makes it moot, but a swap is usually
+  faster than that. **Neither branch of the settings decision fixes this**, which is why it
+  is not waiting on it: the record must be excluded from device transfer, or a restored
+  record must be able to tell it did not originate on this device. Tracked in `TODO.md`.
 
 ---
 
