@@ -1643,6 +1643,14 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         const val ACTION_ERASE_RETRY = "app.snoozemo.action.ERASE_RETRY"
 
         /**
+         * Retries discarding a record this device cannot vouch for, when the
+         * rule would not release (SPEC.md §12). Distinct from the release
+         * retries because those resolve their record through
+         * `ActiveSnoozeStore.load()`, which refuses this one.
+         */
+        const val ACTION_DISCARD_RETRY = "app.snoozemo.action.DISCARD_RETRY"
+
+        /**
          * The user tapping `Unsnooze` on the stuck-rule notification — the last
          * exit, and the only one driven entirely by them.
          *

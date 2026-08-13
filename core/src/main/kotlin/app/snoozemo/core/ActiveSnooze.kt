@@ -96,6 +96,34 @@ data class ActiveSnooze(
      * what a record written before this field existed also falls back to.
      */
     val capCeilingAt: Instant = startedAt.plus(DEFAULT_CAP),
+    /**
+     * Which device wrote this record, as an opaque stamp, or null for a record
+     * that carries none (SPEC.md §12).
+     *
+     * A record that reaches a new phone by device-to-device transfer would
+     * otherwise be restored there and turn Do Not Disturb on for a snooze armed
+     * on a different handset. `res/xml/data_extraction_rules.xml` is what should
+     * stop it arriving; this is what stops it *acting* if a transfer tool
+     * ignores that, and [RecordOrigin] holds the comparison.
+     *
+     * Opaque by construction — a salted hash, not the identifier it derives
+     * from. Equality is the only question ever asked of it, so nothing is lost
+     * by making it unreadable, and §12's floor is easier to hold when the value
+     * on disk identifies nothing on its own.
+     *
+     * **Read-back only.** The store stamps records as it writes them, so this
+     * is meaningful on a record loaded from disk and null on one just built in
+     * memory. Setting it here does not change what gets persisted — that is
+     * deliberate, so no construction site can write a record the device cannot
+     * afterwards vouch for by forgetting a parameter.
+     *
+     * Nullable for the same reason [bootReference] is: a record written before
+     * this field existed carries none, and a device that could not read its own
+     * identifier must say so rather than invent one. Null is not a free pass —
+     * [RecordOrigin.of] reads it as [RecordOrigin.UNATTRIBUTED] on a device that
+     * can stamp, which does not restore.
+     */
+    val deviceStamp: String? = null,
 ) {
     /**
      * How long is left before the cap fires, floored at zero. Never negative: an

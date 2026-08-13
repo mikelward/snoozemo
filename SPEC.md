@@ -1751,13 +1751,19 @@ doesn't mention shows up as a row with no rationale behind it.
   PR #23). The premise that a device migration currently loses settings *by design* does
   not hold. For apps targeting API 31+, Android documents that `allowBackup="false"`
   disables cloud backup but, **on devices from some manufacturers, does not disable
-  device-to-device transfer**. Snoozemo targets 36 and declares no `dataExtractionRules`,
-  so what happens on a phone swap today is the OEM's choice rather than ours — not "off",
-  and not knowably "on" either. It changes what the decision *costs*: choosing
-  D2D-transfer-yes is not a new exposure so much as writing down what may already happen,
-  and choosing no now requires a `<device-transfer>` exclude rather than the absence of a
-  setting. `docs/PRIVACY.md` states the uncertainty plainly rather than repeating the old
-  premise.
+  device-to-device transfer**. Snoozemo targets 36, so what happens on a phone swap was the
+  OEM's choice rather than ours — not "off", and not knowably "on" either. It changes what
+  the decision *costs*: choosing D2D-transfer-yes is not a new exposure so much as writing
+  down what may already happen, and choosing no requires a `<device-transfer>` exclude
+  rather than the absence of a setting.
+- **The runtime state now carries that exclude; the settings question is still open.**
+  `res/xml/data_extraction_rules.xml` names `active_snooze`, `pending_failure` and
+  `notification_prompt` under `<device-transfer>`, because each of those *acts* on the new
+  phone rather than merely existing there (the bullet below). It deliberately excludes by
+  name rather than in bulk: saved places, per-place policies and caps are what principle 3
+  says must survive a phone swap, so they stay transferable and the migration decision
+  stays exactly as open as it was. Adding a file to that list is a decision that the user
+  loses it on a new phone.
 - **The active snooze record is the part of this that is urgent, and it is a principle 1
   problem rather than a settings one** (Codex, PR #23). A first pass at the correction
   above called migration non-urgent "while the only durable state is a zen rule id and
@@ -1768,8 +1774,21 @@ doesn't mention shows up as a row with no rationale behind it.
   one on its first boot, with nothing the user did behind it. The absolute wall-clock cap
   bounds it, and a swap slower than the remaining cap makes it moot, but a swap is usually
   faster than that. **Neither branch of the settings decision fixes this**, which is why it
-  is not waiting on it: the record must be excluded from device transfer, or a restored
-  record must be able to tell it did not originate on this device. Tracked in `TODO.md`.
+  did not wait on it.
+- **Both halves of that fix are in, and they are not redundant.** The `<device-transfer>`
+  exclude above is the declarative half and does the real work; the record also carries a
+  **device stamp**, and a restore that finds a stamp other than this device's ends the
+  snooze instead of asserting the rule. The exclude is the better mechanism — it means the
+  record never arrives — but it is only as good as the transfer tool's respect for it, and
+  the very sentence that makes this bug possible says OEM behavior "varies". A tool that
+  ignores `allowBackup` may equally ignore `dataExtractionRules`, and there is no way to
+  enumerate which. So the stamp is the backstop for the case the declaration does not
+  reach, which is the same fail-open discipline D7 applies everywhere else: the ambiguous
+  state resolves toward ending the snooze. The stamp is a salted hash, never the raw
+  identifier, and Snoozemo never transmits it — §12's floor is unchanged. It does travel on
+  the one path that copies the record itself, which is not a leak but the mechanism: if a
+  transfer carries the snooze across, the stamp has to come too, or the new phone has
+  nothing to compare against.
 
 ---
 

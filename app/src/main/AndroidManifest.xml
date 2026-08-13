@@ -37,6 +37,7 @@
     <application
         android:name=".SnoozemoApplication"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
@@ -111,6 +112,16 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <!--
+                  An update leaves the same wreckage a reboot does — a record on
+                  disk, no process alive, and the zen rule still on — so it takes
+                  the same repair. It is also the one moment a snooze outlives
+                  the build that armed it, which is when a record written by an
+                  older build meets a newer one that will not vouch for it: left
+                  unhandled, that reads as no snooze at all while the phone stays
+                  quiet (SPEC.md §12).
+                -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 
