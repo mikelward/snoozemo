@@ -70,7 +70,10 @@ internal object DeviceStamp {
      *
      * A failed read is cached too, deliberately: it means this device cannot
      * stamp, which is as stable a fact as a successful read and should not be
-     * retried once per save.
+     * retried once per save. [cachedOrNull] is what the arm path uses, and it
+     * never falls back to a lookup — so warming is what decides whether the
+     * first snooze of a cold start is stamped by its async write or by the
+     * blocking one just after.
      */
     fun warm(context: Context) {
         current(context)
@@ -84,12 +87,13 @@ internal object DeviceStamp {
      * modified builds. (An earlier version of this comment also claimed it
      * during early boot — that was unverified, and it was quietly load-bearing
      * in `RecordOrigin`'s design, so it is stated no more strongly than it can
-     * be supported.) Inventing a value
-     * would be worse than admitting none — a fabricated stamp either matches
-     * nothing (ending every snooze across a reboot) or matches everything
-     * (defeating the check). [app.snoozemo.core.RecordOrigin.of] reads null as
-     * `UNVERIFIABLE`, which restores without the check rather than refusing
-     * everything.
+     * be supported.)
+     *
+     * Inventing a value would be worse than admitting none: a fabricated stamp
+     * either matches nothing, ending every snooze across a reboot, or matches
+     * everything, defeating the check. Reaching null now takes *both* inputs
+     * failing, which is why [app.snoozemo.core.RecordOrigin.UNVERIFIABLE] —
+     * the one origin that restores without a check — is close to unreachable.
      *
      * Cached after the first call, which [warm] makes at startup so this is a
      * field read by the time the arm path reaches it.
