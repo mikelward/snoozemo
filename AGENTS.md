@@ -238,50 +238,39 @@ it in the same commit.
   pushes every comment, check run and bot reply into the conversation as a raw event, which
   buries the thread the user is actually reading under machine chatter they didn't ask for.
   Subscribe only when asked to, and unsubscribe as soon as the reason for it passes.
-- **Poll your own open PRs — fast while a merge gate is pending, slow otherwise.** The two
-  things nothing else reports are CI going green and the Codex 👍 (its "no suggestions"
-  outcome is a reaction, not a comment), so a PR waiting on either gets a ~5-minute check;
-  once nothing is left but a human, drop to ~30 minutes — that's a queue, not work in
-  flight. Never end a turn by going idle with one of yours still open: arm the next check
-  with whatever the client offers (`send_later`, a scheduled task / cron, `/loop`), and arm
-  it *without asking*. Scheduling your own follow-up is routine hygiene, not a decision that
-  needs approval. Someone else's open PR is not your polling job — adopt one only when
-  asked. Merged or closed unmerged is terminal: wait for one more check to see CI and Codex
-  report on the final head, but don't block on a report that may never land — an early
-  manual merge, a docs-only push a path filter never runs CI on, a down review service —
-  settle for whatever's known by then and move on. Either way, run one last reply-or-resolve
-  pass, then cancel the watch in full: the pending scheduled trigger, *and*
-  `unsubscribe_pr_activity` if you ever subscribed. Open a follow-up PR (with its own watch)
-  for anything a merged PR still needs.
+- **Poll your own open PRs — every ~5 minutes while CI or the verdict is outstanding, ~30
+  once only a human is left.** Those two are what nothing else reports. Never end a turn
+  idle with one of yours open: arm the next check with whatever the client offers
+  (`send_later`, a scheduled task / cron, `/loop`), and arm it *without asking* — that is
+  hygiene, not a decision. Someone else's PR is not your polling job unless you're asked.
+  Merged or closed is terminal: take one more check for CI and Codex on the final head, but
+  settle for what's known if a report may never land, then run a last reply-or-resolve pass
+  and cancel the watch in full — the pending trigger, *and* `unsubscribe_pr_activity` if you
+  ever subscribed. Open a follow-up PR, with its own watch, for anything a merged one still
+  needs.
 - **What the polling costs.** Twelve wake-ups an hour per PR at the fast cadence, two at
   the slow one — each a model turn plus a few GitHub API calls, so roughly a dollar an
   hour while a PR is waiting on its merge gate. The scheduler is the single point of
   failure: one missed re-arm ends the watch silently, with no error anywhere. If you can't
   arm the next check, say so in the reply rather than leaving a PR that looks watched and
   isn't.
-- **One pending check per PR, settled at the top of the turn.** Two failures meet here.
-  Arming a second check because a webhook started a turn while one was already pending
-  leaves two chains, each re-arming itself, and the cost doubles every time it happens.
-  Parking the re-arm at the *end* of the turn is the opposite one — an interrupted turn
-  takes it with it, and that once left a PR unwatched for two hours. So settle the trigger
-  before anything else, and settle it to exactly one: leave a correctly-timed pending check
-  alone, since pushing its deadline forward every turn is how a busy PR never gets polled at
-  all, and only when it's missing, already fired, or mis-timed either update it in place
-  with `update_trigger` — which leaves no window where none is pending — or arm the
-  replacement before deleting the old, because an overlap beats a gap. Then diagnose, fix,
-  and reply.
-- **Permissions are granted before the session starts, so a rule here can't fix them.**
-  Claude Code loads `.claude/settings.json` from the session's own root, so a session opened
-  on the parent of several repos loads none of them and prompts for every scheduler and
-  GitHub call this repo already allows — and a watch stalls on a dialog nobody is there to
-  answer. `$HOME/.claude/settings.json` is the file that reaches every repo in the
-  container, under full MCP identifiers (`mcp__Claude_Code_Remote__send_later`,
-  `…__create_trigger`, `…__list_triggers`, `…__update_trigger`, `…__delete_trigger`, plus
-  the lowercase-server `mcp__claude-code-remote__*` variants — bare names match nothing).
-  But settings load at **startup**: writing that file from inside a running session does
-  nothing for that session, so it belongs in the environment's setup script, not in an
-  agent's task list. If calls are prompting, say so once and carry on — don't spend the turn
-  writing a file that can't take effect.
+- **One pending check per PR, settled at the top of the turn.** Two chains each re-arming
+  themselves double the cost every time a webhook starts a turn while one is already
+  pending; parking the re-arm at the *end* of the turn loses it when the turn is
+  interrupted, which once left a PR unwatched for two hours. So settle it first, and settle
+  it to exactly one: leave a correctly-timed check alone — pushing its deadline forward
+  every turn is how a busy PR never gets polled — and when it's missing, already fired, or
+  mis-timed, either `update_trigger` it in place or arm the replacement before deleting the
+  old, because an overlap beats a gap. Then diagnose, fix, and reply.
+- **Permissions are granted before the session starts, so a rule here can't fix them.** Copy
+  the scheduler entries — the MCP ones and `ScheduleWakeup`, which is not one — plus the
+  GitHub *reads* from this repo's `.claude/settings.json` into
+  `$HOME/.claude/settings.json`, from the environment's setup script, under full MCP
+  identifiers and both server-name spellings, since bare names match nothing. The `Bash`
+  entries and the GitHub *writes* stay repo-local: globally, merging, commenting and `git
+  push` would need no prompt in any repo the account opens. Settings load at startup, so
+  writing that file mid-session does nothing for that session; if calls are prompting, say
+  so once and carry on.
 - **A fired check doesn't necessarily retire itself.** A `send_later` one-shot has come
   back re-armed +24 h, turning a five-minute check into a daily wake-up while the session
   still looked watched. Reconcile it when it fires — update it into the next check, or
@@ -297,9 +286,9 @@ it in the same commit.
   the work it describes; one fired naming a commit four behind head. Same for CI status
   and review counts: name what to re-read, not what it contained.
 - **"Drive" means run the loop automatically**: pick the next task, implement it, open the
-  PR, wait for the automatic Codex review, address every comment, merge once CI is green
-  and Codex has left its thumbs up — then pick the next actionable `TODO.md` item and go
-  around again. Actionable means ready to build: skip anything explicitly deferred or
+  PR, wait for the automatic Codex review, address every comment, merge once CI is green and
+  Codex's verdict for the current head is in — then pick the next actionable `TODO.md` item
+  and go around again. Actionable means ready to build: skip anything explicitly deferred or
   waiting on a product decision rather than guessing the decision. Driving ends when the
   work runs out or the user says stop, not when one PR merges.
 - **A red baseline is the next task.** Before pulling anything from `TODO.md`, run
@@ -342,10 +331,11 @@ it in the same commit.
   wait for the automatic Codex review, address every review comment — fix it if you agree,
   reply on the thread saying why if you don't — and merge once CI is green and Codex has
   left its thumbs up.
-- **Merge when green + Codex thumbs up, then continue.** Once a PR's CI is green and Codex
-  has finished its pass with no unaddressed suggestions (its "no suggestions" outcome is a
-  👍 reaction; suggestion threads count as addressed once fixed or answered), rebase-merge
-  the PR without waiting for a further go-ahead, then pick up the next `TODO.md` item.
+- **Merge when green and Codex has passed the current head.** Once a PR's CI is green and
+  Codex has finished its pass with no unaddressed suggestions (its "no suggestions" outcome
+  is a 👍 reaction, and `get_reviews` names the commit it read; suggestion threads count as
+  addressed once fixed or answered), rebase-merge the PR without waiting for a further
+  go-ahead, then pick up the next `TODO.md` item.
 - **Codex is the automated reviewer on this repo** — not Copilot. Its reviews are triggered
   automatically; you don't request them.
 - **Address Codex comments automatically — don't wait to be asked.** When a Codex review
@@ -364,6 +354,21 @@ it in the same commit.
   comment count, e.g. `Codex reviewed 87d9f02 — 0 comments` or `Codex reviewed 87d9f02 — 3
   comments, addressing now`. Tie it to the *latest* pushed SHA so a stale review of a
   superseded commit isn't conflated with the current state.
+- **Read the Codex verdict, don't infer it.** It reacts to the PR **body** — `issue_read` →
+  `reactions` — not to a review thread, whose `Useful?` bar a page fetch finds instead and
+  which reads true on any PR Codex has commented on. `eyes` while it reads, `+1` when it
+  finds nothing, and the reaction is revoked as a new push lands, so what you can see
+  belongs to the head you can see: `+1` on green CI is a merge, with nothing further to wait
+  for. No reaction five minutes after a push means it never picked the push up — comment
+  `@codex review`, once. A review that *finds* something leaves no reaction at all, so a
+  sweep of reactions alone reads a PR with findings waiting on it as an empty one: read
+  `get_review_comments` and `get_comments` every poll. An unresolved finding blocks the
+  merge whatever the reaction says; one you have answered or fixed does not. Check who left
+  each — the reaction count is anonymous, so leave PR-body reactions to Codex, and a human's
+  review carries the same `commit_id` as Codex's.
+- **A finding can arrive as a top-level PR comment.** `get_review_comments` returns only
+  inline threads, so read `get_comments` too — a P1 sat unanswered for two hours because a
+  sweep of the threads never saw it.
 - **Judge every review comment on merit, whoever wrote it.** Verify the claim before
   acting; if it doesn't hold up, reply saying why and decline.
 - **A review comment citing a rule is a *reading* of that rule, not the rule.** Go back to
