@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import app.snoozemo.core.ActiveSnooze
+import app.snoozemo.core.EndReason
 import app.snoozemo.core.Anchor
 import app.snoozemo.core.RecordOrigin
 import app.snoozemo.core.TrackingMode
@@ -113,6 +114,7 @@ class ActiveSnoozeStore(context: Context) {
             startedAt = Instant.ofEpochMilli(startedAt),
             capExpiresAt = Instant.ofEpochMilli(capExpiresAt),
             mode = loadMode(),
+            armed = prefs.getBoolean(KEY_ARMED, false),
             placeName = prefs.getString(KEY_PLACE, ActiveSnooze.DEFAULT_PLACE_NAME)
                 ?: ActiveSnooze.DEFAULT_PLACE_NAME,
             // Absent for a record written before this key existed. Null is the
@@ -237,6 +239,8 @@ class ActiveSnoozeStore(context: Context) {
         // A new snooze clears any marker left by one whose erase failed —
         // otherwise this record would be born already invisible to [load].
         .remove(KEY_RELEASED)
+        .remove(KEY_RELEASING_REASON)
+        .putBoolean(KEY_ARMED, snooze.armed)
         .putLong(KEY_STARTED_AT, snooze.startedAt.toEpochMilli())
         .putLong(KEY_CAP_EXPIRES_AT, snooze.capExpiresAt.toEpochMilli())
         // Written with the deadline for the same reason the boot reference is:
@@ -321,6 +325,56 @@ class ActiveSnoozeStore(context: Context) {
     fun markReleased(): Boolean = prefs.edit().putBoolean(KEY_RELEASED, true).commit()
 
     /**
+     * Records *why* a release is being attempted, before it is attempted.
+     *
+     * Unlike [markReleased] this does not suppress the record — it only answers
+     * the question a recovering process cannot otherwise answer: a live record
+     * sitting over a rule that is already off means either the user turned Do
+     * Not Disturb off while nothing of ours was running, or we did and died
+     * before clearing up. `STATE_FALSE` alone cannot tell those apart (Codex,
+     * PR #36), and guessing "the user" suppresses the ending notification,
+     * because that ending is the one deliberately kept silent.
+     *
+     * Safe to be stale: it is read only in that specific recovery case, and it
+     * is cleared by both [save] and [clear].
+     */
+    fun markReleasing(reason: EndReason): Boolean =
+        prefs.edit().putString(KEY_RELEASING_REASON, reason.name).commit()
+
+    /**
+     * Whether the rule actually went on for the stored record (SPEC.md §5.8).
+     *
+     * The record is deliberately written *before* the rule (§4.1, and so that a
+     * crash never leaves the rule on with nothing to turn it off), which means
+     * a record over an off rule is ambiguous: either the arm never completed,
+     * or it completed and the user has since turned Do Not Disturb off. Those
+     * want opposite answers — finish the arm, or end the snooze — so the
+     * difference has to be recorded rather than guessed.
+     *
+     * Written after `STATE_TRUE` lands, so it costs the arm path nothing.
+     */
+    fun wasArmed(): Boolean = prefs.getBoolean(KEY_ARMED, false)
+
+    /**
+     * Forgets a release reason whose release did not happen.
+     *
+     * Not merely tidy: a marker that outlives its failed attempt is read as the
+     * explanation for whatever ends the snooze *next*, which may be the user
+     * turning Do Not Disturb off — and they would be told they had left
+     * somewhere instead.
+     */
+    fun clearReleasing(): Boolean = prefs.edit().remove(KEY_RELEASING_REASON).commit()
+
+    /** The reason recorded by [markReleasing], if one survived. */
+    fun releasingReason(): EndReason? =
+        prefs.getString(KEY_RELEASING_REASON, null)?.let { name ->
+            // An unrecognized name is a record from a build that knew a reason
+            // this one doesn't. Null, so the caller falls back rather than
+            // throwing on a downgrade.
+            EndReason.entries.firstOrNull { it.name == name }
+        }
+
+    /**
      * Forgets the snooze, returning false if the erase didn't reach disk.
      *
      * The result matters as much as [save]'s, in the opposite direction: a
@@ -360,6 +414,8 @@ class ActiveSnoozeStore(context: Context) {
         const val FILE_NAME = "active_snooze"
         const val KEY_STARTED_AT = "started_at"
         const val KEY_RELEASED = "released"
+        const val KEY_RELEASING_REASON = "releasing_reason"
+        const val KEY_ARMED = "armed"
         const val KEY_CAP_EXPIRES_AT = "cap_expires_at"
         const val KEY_BOOT_REFERENCE = "boot_reference"
         const val KEY_CAP_CEILING_AT = "cap_ceiling_at"

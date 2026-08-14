@@ -1276,28 +1276,143 @@ the point is that every other line of the app is worthless if it isn't true.
       reason (`SPEC.md` §8.2).
 - [ ] The §8.5 table: airplane mode, location services off, double-arm, short trip and
       return, bad-accuracy anchor, battery saver, uninstall while snoozed.
+- [ ] **The read-back may end every snooze that spans a reboot** (Codex, PR #36) — the finding that
+      makes the decision below urgent rather than tidy. Boot and app update both enter through
+      `ACTION_RESTORE`, which is exactly where the rule-state read-back runs. If the platform resets
+      an app-owned rule's condition to `STATE_FALSE` across a reboot — which `restore()` re-asserting
+      `STATE_TRUE` exists to handle, so the code already assumes it might — then an armed record over
+      that reset reads as **the user turned Do Not Disturb off**: the snooze ends, silently, with the
+      platform told it was a user action. That contradicts "the record survives process death and
+      reboots".
+      - **Needs a device to settle**, and it is the crux: if the condition *does* persist across a
+        reboot there is no bug at all. Not answerable in the sandbox (no DND-capable device), so it
+        joins the hardware-verification list.
+      - Note the direction: the earlier fix that stopped a restore *re-asserting* over a user's
+        deactivation is what makes this reachable. The same read-back now has failure modes in both
+        directions — re-silencing a phone the user un-silenced, and ending a snooze the user still
+        wants — which is the strongest argument that the mechanism is wrong rather than incomplete.
+
+- [ ] **A record written before `armed` existed reads as an unfinished arm** (Codex, PR #36).
+      `getBoolean(KEY_ARMED, false)` treats *absent* as *not armed*, but absent only happens for a
+      record from a build predating the field — which was, by definition, armed the old way. On an
+      update with a live snooze, the next restoring wake-up therefore re-asserts the rule over a Do
+      Not Disturb the user may have switched off. **Currently unreachable**: nothing has shipped, so
+      no such record exists outside a dev device that updated mid-snooze.
+      - The one-line fix is defaulting absent to `true`, which is safe because every record this
+        build writes carries the key explicitly. It is *deliberately not applied yet* — it is the
+        fourth instance of one bug class in this mechanism, and the pending decision below either
+        removes the flag or replaces it with a lifecycle state that answers migration once.
+      - **Blocked on the maintainer's call**: keep the zen-rule read-back as it stands, model the
+        record's lifecycle explicitly (one state on `ActiveSnooze`, the four causes of "live record
+        over an off rule" enumerated in one place), or drop the read-back and let the broadcast
+        stand alone. Seven consecutive Codex findings landed in this mechanism; three of them were
+        caused by the fix for the previous one.
+
 - [ ] The §8.4 cases: `restricted` standby bucket, force-stop, OEM battery management.
-- [ ] **The user turning Do Not Disturb off from the shade may silently end our snooze**
-      (maintainer, 2026-08-12 — "we should handle that soon"). §5.6 covers the *pre-existing*
-      case at arm time; this is the state changing underneath a running snooze. If switching
-      DND off deactivates Snoozemo's rule, the snooze is over while the record, the tile and
-      the notification all still say it is running — state drift in the direction that makes
-      the app look broken rather than unsafe, but drift the user caused deliberately and will
-      expect us to notice.
-      - **Confirm the platform behavior first**, because it decides whether there is anything
-        to build: does turning DND off from the shade deactivate an app-owned
-        `AutomaticZenRule`, leave it active-but-overridden, or neither? On the hardware list.
-      - If it does deactivate: treat it as an ordinary end — clear the record, take the
-        notification down, update the tile, and give it its own `EndReason` so §4.5's "every
-        ending has a reason" holds. It is the user's own action, so there is nothing to warn
-        about and nothing to retry.
-      - **Observable without new cost**: `ACTION_INTERRUPTION_FILTER_CHANGED`, plus reading
-        our own rule's state back. Register it beside the policy-access receiver, which has
-        the same process-lifetime limit (§8.4) — so this is reliable on the wake-ups we
-        already have and **must not** justify adding one.
-      - The two neighboring cases are deliberately *not* in scope: DND turned on by the user
-        or another app while we are idle (harmless; at most the tile reads "not snoozing"
-        beside a quiet phone), and another app's rule ending while ours is on (nothing to do).
+- [x] **The user turning Do Not Disturb off from the shade may silently end our snooze**
+      (maintainer, 2026-08-12 — "we should handle that soon"). Done, and the platform question
+      that gated it turned out to be documented rather than empirical:
+      `ACTION_AUTOMATIC_ZEN_RULE_STATUS_CHANGED` reports `AUTOMATIC_RULE_STATUS_DEACTIVATED` when
+      the user switches an app-owned rule off (API 35+), so no interruption-filter inference is
+      needed and no wake-up is added.
+      - **The broadcast is the timely answer; the read-back is the reliable one.** A receiver can
+        be refused registration, and this process only lives between wake-ups, so a snooze can
+        outlive the only thing watching it. `ruleActivation()` re-asks on every non-arm wake-up,
+        which turns that into *late* rather than *never* — and it has to run **before** the
+        restore, because restoring re-asserts the rule and overwrites the evidence (Codex, PR #36).
+        Both mechanisms are API 35, which is also the floor this app installs on (minSdk was
+        raised to 35 in PR #88, after this item's first draft), so there is no version below
+        them to caveat.
+      - **It was more urgent than "state drift".** A deactivated rule stays deactivated until its
+        owner sets it back to `STATE_FALSE`, so leaving the snooze running would have left the
+        *next* tap arming a rule the platform ignores — the tile reading `Snoozing` over a phone
+        that still rings. Ending the snooze is what issues that `STATE_FALSE`.
+      - `REMOVED` and `DISABLED` fail open as `LOST_CAPABILITY`; a removed rule is recreated when
+        idle, a disabled one never is. All of it gated on the rule being ours (§5.6 for reads).
+      - **Still owed a device**: that the shade toggle really does produce `DEACTIVATED` for our
+        rule on a Pixel.
+- [x] **Decide: can a PR merge with deferred review findings?** (found on PR #36,
+      2026-08-25). `AGENTS.md` said to resolve a review thread "unless you are deferring the
+      work", while the branch ruleset requires every conversation resolved before a merge — so
+      any genuinely deferred finding blocked its PR permanently. PR #36 hit exactly that: green
+      CI, a clean Codex verdict, five open threads all saying "recorded in `TODO.md`, not doing
+      it here".
+      **Answered (maintainer, 2026-08-25): recording a to-do and resolving is allowed**, with a
+      comment on the thread saying it is tracked for a later PR. `AGENTS.md` amended. The point
+      the open thread was protecting — not losing the finding — is what the `TODO.md` entry is
+      for; the thread is not the durable place.
+
+- [ ] **A record update erases the release marker** (Codex, PR #36, raised rather than
+      built). `ActiveSnoozeStore.save` clears `KEY_RELEASING_REASON` on every write, and its
+      comment only justifies the case it was written for — a *new* snooze, which must not be
+      born carrying an old one's marker. But `save` is also how a live record is **updated**:
+      the boot receiver rebases the clock frame and saves, the controller saves on every
+      `ARMED`/`CHECKING` transition. So an app-driven release that turned the rule off and died
+      before cleanup can have its only durable cause deleted by an unrelated update — and
+      recovery then reads its own ending as the user's, silently, since that is the ending with
+      no notification. The same failure §5.8 keeps producing from a different direction.
+      **Not fixed on PR #36** because the fix is a judgment call at every `save` call site
+      (which writes are "a new arm" and which are "an update"), and that is precisely the kind
+      of change that went wrong repeatedly on that PR — three sibling call sites missed across
+      as many rounds. Worth doing deliberately: either split `save` into `arm` and `update`, so
+      the distinction is in the type rather than in each caller's head, or move the marker out
+      of the record's own preferences file so record writes cannot touch it.
+      **A third gap in the same subsystem** (Codex, PR #36): `releaseDirectly`, the no-service
+      release path, never writes a marker at all. A cap or capability-driven release that
+      succeeds there and dies before erasing the record leaves the same live-record-over-an-off-rule
+      state with no durable cause, read back as the user's doing. All three want fixing together
+      — the marker is only worth having if every release path writes one and no record write
+      erases one.
+      **The same shape, one field over** (Codex, PR #36): the no-service restore path does not
+      record that it re-asserted the rule, so a record written before its rule ever went on
+      stays marked unfinished even after that path successfully turns the rule on. Writing it
+      there was attempted and withdrawn — three rounds found three ways for it to be wrong,
+      ending with the one that has no cheap answer: a write that fails leaves the rule **on**
+      with disk saying the arm never finished, which a later wake re-asserts over a user who has
+      since switched Do Not Disturb off. Doing it properly needs a durable retry or a rollback
+      of the activation it just performed, which is more machinery than a fallback should carry
+      — and it is the same question as the rest of this item, namely which writes state what
+      about a record and what happens when one of them does not land.
+      **And two more on the same subsystem** (Codex, PR #36): *both* of §5.8's endings — the
+      status broadcast's and the pre-restore read-back's — call `controller.end` without
+      following a refused release with `ensureCapAfterRefusedEnd`. Every other ending on the
+      service does: the explicit end, presence, the cap, a clock change. Neither of these
+      trigger events is guaranteed to repeat, so a retryable refusal leaves the record, tile
+      and notification claiming a snooze, and the rule stuck deactivated, until an unrelated
+      wake or the cap. Plausibly one line each; left with the rest because it is the same
+      question about what a refused release leaves behind, and because they arrived on this
+      PR's eighth and ninth review rounds. **Fix both together** — an earlier note here said
+      the broadcast was the *only* such path, which was wrong in exactly the way that lets the
+      second one survive a fix.
+
+- [ ] **Tie a snooze to the rule that was enforcing it** (Codex, PR #36, raised rather than
+      built). Ownership is answered against whatever rule id the app holds *now*, and nothing
+      else. Two cases slip through it, both starting the same way — the user deletes the rule
+      and the tile's shade-open `ensureRule()` mints a replacement:
+      - **A `REMOVED` broadcast racing that replacement** names an id the app no longer holds,
+        so it is read as somebody else's and discarded.
+      - **With no process alive to hear the broadcast at all**, the next restoring wake's
+        read-back looks at the *replacement* — enabled, `STATE_FALSE` — and reports `INACTIVE`.
+        The snooze ends as `DND_TURNED_OFF`, which is silent, when the truth is
+        `LOST_CAPABILITY`, which explains itself. A lost capability disappearing behind the one
+        ending designed to be quiet is the failure §5.8 keeps re-finding in different clothes.
+      **A short-lived memory of the displaced id was tried here and taken out again**
+      (2026-08-25). It closed the broadcast race and then produced a fresh defect on each of
+      three consecutive review rounds — retained forever, so a late status change ended an
+      unrelated later snooze; then consumed, but unconditionally, so a concurrent replacement
+      had its own memory wiped instead. Each guard was correct and each exposed the next,
+      which is the signal that the mechanism was wrong rather than unfinished: ownership
+      inferred from a value that moves needs a new guard for every way it can move. Ownership
+      is back to the id the app holds now, and the broadcast race is a known gap again — the
+      same one this item exists to close properly.
+      **The fix is to stop inferring ownership and record it**: put the enforcing rule's id on
+      `ActiveSnooze`, so both the broadcast and the read-back compare against the rule *this
+      snooze* was armed with rather than against whatever the app holds now. That also retires
+      the displaced-id memory entirely, since there would be nothing left to infer.
+      Deliberately not folded into PR #36: it changes the persisted record's shape, and it
+      arrived late on a PR whose ownership fixes were themselves generating findings. Worth
+      doing on its own, with its own migration story and a clear head.
+
 - [ ] **A reboot that stays locked outlasts the cap** (flagged by Codex on PR #8).
       `BOOT_COMPLETED` reaches credential-unaware components only after the *first unlock*,
       and the snooze record lives in credential-protected storage, so a phone rebooted
@@ -2484,7 +2599,7 @@ Nothing here is scheduled; each is a sequel that follows from something already 
       places, per-place policies, and caps change that, and losing them on a phone swap is
       its own failure. Don't build anything that assumes never. The options, cheapest
       first:
-      - `dataExtractionRules` (API 31+, and minSdk is 34) can allow **device-to-device
+      - `dataExtractionRules` (API 31+, and minSdk is 35) can allow **device-to-device
         transfer while disabling cloud backup** — settings survive a new phone without a
         place list reaching Google's servers. Probably the answer.
       - Full auto-backup, which does put it in the cloud (encrypted with the device PIN on

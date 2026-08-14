@@ -8,6 +8,7 @@ import app.snoozemo.core.EndReason
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
+import app.snoozemo.core.ZenRuleActivation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -177,6 +178,49 @@ class ReceiverRefusalTest {
             "a retryable refusal leaves a live snooze; the record and its cap are the retry",
             storedSnooze(),
         )
+    }
+
+    @Test
+    fun `the fallback does not re-silence a phone the user un-silenced`() {
+        // This path runs precisely when no process was alive to hear the status
+        // broadcast, so it is the likeliest one to meet a user who turned Do Not
+        // Disturb off while the app was gone. Re-asserting first would overrule
+        // them (Codex, PR #36).
+        // `armed = true` is what makes an off rule mean the *user* turned it
+        // off: the arm completed, so the rule was on and is not any more.
+        val snooze = aSnooze().copy(armed = true)
+        ActiveSnoozeStore(context).save(snooze)
+        val zen = RefusingZen().apply {
+            outcome = ZenOutcome.Applied
+            activation = ZenRuleActivation.INACTIVE
+        }
+
+        restoreDirectly(context, snooze, zen)
+
+        assertNull("the snooze is over; the record must not survive", storedSnooze())
+        assertFalse(
+            "the rule must never be turned back on for a user who turned it off",
+            zen.calls.any { it.first },
+        )
+    }
+
+    @Test
+    fun `an interrupted arm is completed by the fallback, not erased`() {
+        // An off rule looks the same whether the user switched it off or the arm
+        // never got it on, and `armed` is the only thing that tells them apart
+        // (Codex, PR #36). Reading an unfinished arm as the user's doing would
+        // throw away a snooze that only needed finishing.
+        val unfinished = aSnooze().copy(armed = false)
+        ActiveSnoozeStore(context).save(unfinished)
+        val zen = RefusingZen().apply {
+            outcome = ZenOutcome.Applied
+            activation = ZenRuleActivation.INACTIVE
+        }
+
+        restoreDirectly(context, unfinished, zen)
+
+        assertNotNull("the arm only needed finishing", storedSnooze())
+        assertTrue("and finishing it means turning the rule on", zen.calls.any { it.first })
     }
 
     @Test

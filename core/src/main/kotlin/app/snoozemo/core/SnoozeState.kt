@@ -45,11 +45,44 @@ enum class EndReason {
     MANUAL,
 
     /**
+     * The user turned Do Not Disturb off themselves — the shade toggle, or the
+     * Modes UI — deactivating Snoozemo's rule underneath a running snooze
+     * (SPEC.md §5.8).
+     *
+     * Separate from [MANUAL] because it did not come through Snoozemo at all,
+     * and separate from [LOST_CAPABILITY] because nothing is broken: the user
+     * asked for the phone to ring, and got it. Both distinctions are for the
+     * debug log's benefit — the user needs no explanation for something they
+     * just did.
+     */
+    DND_TURNED_OFF,
+
+    /**
      * Snoozemo could no longer do its job — policy access revoked, location
      * permission downgraded — so it ended the snooze rather than staying armed
      * on state it cannot verify (SPEC.md D7, §8.2).
      */
     LOST_CAPABILITY,
+}
+
+/**
+ * Who the platform is told ended the snooze (SPEC.md §5.4).
+ *
+ * Here rather than at either call site, because there are two — the controller
+ * and the no-service fallback — and keeping the mapping in both is what let
+ * [EndReason.DND_TURNED_OFF] be reported as automation twice: once when it was
+ * introduced, and again on the fallback when a later fix made that path reach
+ * it (Codex, PR #36). Exhaustive, so the next reason added has to be decided
+ * rather than defaulted.
+ */
+fun EndReason.zenTrigger(): ZenTrigger = when (this) {
+    // Both are the user, reaching the same switch from different directions:
+    // our tile or notification, or the platform's own Do Not Disturb toggle.
+    EndReason.MANUAL, EndReason.DND_TURNED_OFF -> ZenTrigger.USER_ACTION
+    EndReason.DEPARTURE,
+    EndReason.DURATION_CAP,
+    EndReason.LOST_CAPABILITY,
+    -> ZenTrigger.CONTEXT
 }
 
 /**
