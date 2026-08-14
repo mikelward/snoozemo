@@ -1005,8 +1005,24 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     own* rule, which is the one thing any app can do. It is also `SPEC.md` D1 and §5.6 restated —
     Snoozemo ends only the rule it created, and that is the mechanism the platform sanctions, so
     nothing in the current design is threatened by this.
-  - **Owed**: a written comparison against the current spec — what each option deletes, keeps and
-    costs — before anything is decided.
+  - **Half of this is now answered** (maintainer, 2026-08-14, on reading the platform finding
+    above): *"so it just means we need this after all, the notification only approach won't work,
+    we also need to start and own the DND."* The detect-and-offer app was never a smaller Snoozemo
+    — it was a different app that cannot do the one thing it promises. Owning the rule is what
+    makes ending a snooze possible at all, so `SPEC.md` D1 and §5 stand as the product's floor
+    rather than an implementation choice.
+  - **What stays open is presence, and only presence**: *"it's an open question whether we need to
+    geofence, maybe showing a persistent notification is enough. tbd"* Note the reduced version is
+    stronger than it looked an hour ago, and for the same reason: because Snoozemo owns the rule, a
+    persistent notification with an end action is a **reliable one-tap exit**, not a deep link into
+    Settings. So the comparison is no longer "notification versus presence" — it is whether
+    *leaving* should end a snooze on top of an exit that already works, against Phase 3's whole
+    cost: the location permissions, the geofence, §9's battery budget, and §3.5's
+    background-location declaration.
+  - **Owed**: that written comparison against the current spec — what presence adds, what dropping
+    it deletes, and what each costs — before anything is decided. Nothing in Phase 3 is being built
+    against this question in the meantime; the engine work already landed stands either way, since
+    a snooze that ends on a duration cap needs the same controller.
 
 ## Decisions needing review
 - **A snooze that *becomes* unverifiable now ends on the same 5-minute grace period as one that
