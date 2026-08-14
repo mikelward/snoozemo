@@ -48,6 +48,8 @@ class SnoozeControllerTest {
     ) : ZenController {
         val calls = mutableListOf<Pair<Boolean, ZenTrigger>>()
         override fun policyAccess() = access
+        override fun ruleActivation() = ZenRuleActivation.ACTIVE
+        override fun ownsRule(ruleId: String?) = true
         override fun ensureRule() = ZenRuleState.READY
         override fun setSnoozed(snoozed: Boolean, trigger: ZenTrigger, placeName: String): ZenOutcome {
             calls += snoozed to trigger
@@ -63,6 +65,12 @@ class SnoozeControllerTest {
         val failures = mutableListOf<Pair<ZenFailure, Boolean>>()
         /** The mode each transition carried, so "reported once, already correct" is testable. */
         val announced = mutableListOf<TrackingMode?>()
+        val releasing = mutableListOf<EndReason>()
+
+        override fun onReleasing(reason: EndReason) {
+            releasing += reason
+        }
+
         override fun onStateChanged(state: SnoozeState, snooze: ActiveSnooze?, reason: EndReason?) {
             states += state to reason
             announced += snooze?.mode
@@ -76,6 +84,9 @@ class SnoozeControllerTest {
     }
 
     private val zen = FakeZen()
+
+    /** The controller under test in the per-reason loop below. */
+    private lateinit var pending: FakeZen
     private val listener = Recorder()
     private val controller = SnoozeController(zen, readClock, listener)
 
@@ -251,6 +262,68 @@ class SnoozeControllerTest {
         assertEquals(SnoozeState.IDLE, controller.state)
         assertNull(controller.active)
         assertEquals(listOf(ZenFailure.RULE_DISABLED to true), listener.failures)
+    }
+
+    @Test
+    fun `the record says armed as soon as the rule is on, not when the anchor lands`() {
+        // Anchor capture can be up to the 10 s ceiling after the rule goes on
+        // (SPEC.md §4.1). For that whole window the record used to claim the arm
+        // never completed, so a process death in it — then the user turning Do
+        // Not Disturb off — had the next wake-up "finish" an already-finished
+        // arm and silence the phone again (Codex, PR #36).
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+
+        assertEquals(true, controller.active?.armed)
+    }
+
+    @Test
+    fun `a tile tap writes nothing before the phone gets its sound back`() {
+        // Principle 5, and the marker would have bought nothing here anyway:
+        // losing a MANUAL ending to a crash falls back to DND_TURNED_OFF, which
+        // is silent and user-attributed exactly like MANUAL is. So the path
+        // with someone waiting on it does no disk work (Codex, PR #36).
+        armFully()
+
+        controller.end(EndReason.MANUAL)
+
+        assertEquals(emptyList<EndReason>(), listener.releasing)
+    }
+
+    @Test
+    fun `an ending the phone decided on records its reason first`() {
+        armFully()
+
+        controller.end(EndReason.DURATION_CAP)
+
+        assertEquals(listOf(EndReason.DURATION_CAP), listener.releasing)
+    }
+
+    @Test
+    fun `the user turning DND off is reported to the platform as a user action`() {
+        // SPEC.md §5.4: the Modes UI shows this so the user can tell "I did
+        // this" from "my phone did this". Reaching the platform's own toggle is
+        // still the user reaching a switch.
+        armFully()
+
+        controller.end(EndReason.DND_TURNED_OFF)
+
+        assertEquals(false to ZenTrigger.USER_ACTION, zen.calls.last())
+    }
+
+    @Test
+    fun `only the endings the user caused are reported as user actions`() {
+        for (reason in EndReason.entries) {
+            val fresh = SnoozeController(FakeZen().also { zen -> pending = zen }, readClock, Recorder())
+            fresh.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+            fresh.onAnchorCaptured(anchor)
+            fresh.end(reason)
+            val expected = when (reason) {
+                EndReason.MANUAL, EndReason.DND_TURNED_OFF -> ZenTrigger.USER_ACTION
+                EndReason.DEPARTURE, EndReason.DURATION_CAP, EndReason.LOST_CAPABILITY ->
+                    ZenTrigger.CONTEXT
+            }
+            assertEquals("$reason", false to expected, pending.calls.last())
+        }
     }
 
     @Test
@@ -549,7 +622,9 @@ class SnoozeControllerTest {
         controller.restore(running)
 
         assertEquals(SnoozeState.ARMED, controller.state)
-        assertEquals(running, controller.active)
+        // Identical but for `armed`, which the re-assertion has just made true
+        // (see the §5.8 restore tests below).
+        assertEquals(running.copy(armed = true), controller.active)
     }
 
     @Test
@@ -670,6 +745,48 @@ class SnoozeControllerTest {
         )
 
         assertEquals(armed, controller.active)
+    }
+
+    @Test
+    fun `a restore that re-asserts the rule records that the rule is on`() {
+        // An arm that died before the rule went on leaves `armed = false`, and
+        // the §5.8 read uses exactly that to tell an unfinished arm from a user
+        // who turned Do Not Disturb off. Restoring re-asserts the rule, so the
+        // record has to stop saying the arm never finished — otherwise the next
+        // process death lands in the same branch and re-silences a phone the
+        // user had just un-silenced (Codex, PR #36).
+        val running = ActiveSnooze(
+            anchor = anchor,
+            startedAt = start.minus(Duration.ofHours(1)),
+            capExpiresAt = start.plus(Duration.ofHours(7)),
+            mode = TrackingMode.FULL,
+            armed = false,
+        )
+
+        controller.restore(running)
+
+        // Same value the listener is handed, and so the same value the service
+        // persists — `restore` sets both from one record.
+        assertEquals(true, controller.active?.armed)
+    }
+
+    @Test
+    fun `a restore the platform refuses does not claim the rule is on`() {
+        // The refusal path deliberately stays armed without the rule being
+        // confirmed, so it must not mark the record either — that would erase
+        // the very distinction the test above preserves.
+        zen.outcome = ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED)
+        val running = ActiveSnooze(
+            anchor = anchor,
+            startedAt = start.minus(Duration.ofHours(1)),
+            capExpiresAt = start.plus(Duration.ofHours(7)),
+            mode = TrackingMode.FULL,
+            armed = false,
+        )
+
+        controller.restore(running)
+
+        assertEquals(false, controller.active?.armed ?: false)
     }
 
     @Test

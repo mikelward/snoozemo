@@ -387,8 +387,15 @@ it in the same commit.
   Autopilot does not change this: guessing is allowed on reversible implementation calls,
   not on what a privacy rule means.
 - Never leave a review comment thread silently dismissed: answer on the thread — a
-  disagreement is an answer, so say why — then resolve it unless you are deferring the
-  work. When a comment is a false positive, say why on the thread.
+  disagreement is an answer, so say why — then resolve it. When a comment is a false
+  positive, say why on the thread.
+- **Deferring a finding is an answer too, and it resolves the thread** (maintainer,
+  2026-08-25). Record it in `TODO.md`, say on the thread that it is tracked there for a
+  later PR, and resolve. The branch ruleset requires every conversation resolved before a
+  merge, so a thread left open for deferred work blocks its PR permanently — and the
+  `TODO.md` entry, not the thread, is the durable place a finding lives. What is not
+  allowed is resolving without both halves: no entry, or no comment naming it, is the
+  silent dismissal the rule above forbids.
 - **Report the Android `versionCode` after every merge to `main`.** Fetch `main` and run
   `git rev-list --count origin/main` (`app/build.gradle.kts` derives the versionCode from
   this count, once Phase 0 lands it). Report it as e.g. `Need versionCode 72 (b81c23d) or

@@ -57,6 +57,24 @@ data class ActiveSnooze(
     // (SPEC.md §8.1) — the wrong value here is a silent failure, not a cosmetic
     // one. Callers state it, or derive it with [TrackingMode.from].
     val mode: TrackingMode,
+
+    /**
+     * Whether the zen rule actually went on for this snooze (SPEC.md §5.8).
+     *
+     * On the record rather than beside it, and that is the whole point: the
+     * record is written *before* the rule, so a wake-up that finds it over an
+     * off rule cannot otherwise tell an arm that never completed from a snooze
+     * whose Do Not Disturb the user has since switched off. Those want opposite
+     * answers — finish the arm, or end it.
+     *
+     * It lived in a separate preferences key for exactly one round, where every
+     * later `save` — a clock change, a tracking update — wiped it and made a
+     * running snooze look unfinished, which re-asserted the rule and re-silenced
+     * a phone the user had deliberately un-silenced (Codex, PR #36). Carried
+     * here it survives every update by construction, because it is part of the
+     * thing being updated.
+     */
+    val armed: Boolean = false,
     val placeName: String = DEFAULT_PLACE_NAME,
     /**
      * The [ClockReading.bootReference] in force when this record was written, or

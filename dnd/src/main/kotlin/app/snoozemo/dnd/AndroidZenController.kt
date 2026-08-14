@@ -5,11 +5,14 @@ import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.service.notification.Condition
 import android.service.notification.ZenPolicy
 import android.util.Log
 import app.snoozemo.core.PolicyAccess
+import app.snoozemo.core.RuleOwnership
 import app.snoozemo.core.ZenController
+import app.snoozemo.core.ZenRuleActivation
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
 import app.snoozemo.core.ZenRuleState
@@ -69,6 +72,70 @@ class AndroidZenController(
      * didn't complete, so the rule's state is unknown rather than absent.
      * `setSnoozed` maps it to `PLATFORM_REFUSED`, the retryable outcome.
      */
+    override fun ruleActivation(): ZenRuleActivation {
+        // API 35, and honestly unanswerable below it. That is not a gap this
+        // read introduces: AUTOMATIC_RULE_STATUS_DEACTIVATED is API 35 too, so
+        // on 34 neither mechanism exists and the drift of SPEC.md §5.8 is
+        // simply not observable.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            return ZenRuleActivation.UNKNOWN
+        }
+        // No id is "cannot tell", never "gone": a failed store read would
+        // otherwise end a snooze as a lost capability on the strength of a disk
+        // error.
+        val ruleId = runCatching { store.ruleId() }.getOrNull()
+            ?: return ZenRuleActivation.UNKNOWN
+
+        val state = runCatching { notificationManager.getAutomaticZenRuleState(ruleId) }
+            .getOrElse {
+                Log.w(TAG, "Reading the zen rule's activation state failed.", it)
+                return ZenRuleActivation.UNKNOWN
+            }
+        if (state == Condition.STATE_TRUE) return ZenRuleActivation.ACTIVE
+
+        // Only now, and only because the answer wasn't a plain yes: the
+        // platform reports STATE_UNKNOWN for a rule that is merely unreadable
+        // *and* for one that has been deleted, and those need opposite
+        // responses (Codex, PR #36). One extra lookup separates them, off the
+        // arm path and only on the branch that needs it.
+        val rule = runCatching { notificationManager.getAutomaticZenRule(ruleId) }
+            .getOrElse {
+                Log.w(TAG, "Reading the zen rule back failed.", it)
+                return ZenRuleActivation.UNKNOWN
+            }
+        return when {
+            rule == null -> ZenRuleActivation.MISSING
+            // Before the condition is read, not after: a disabled rule reports
+            // `STATE_FALSE` too, so judging by the condition alone would call a
+            // capability we have lost a preference the user expressed (Codex,
+            // PR #36).
+            !rule.isEnabled -> ZenRuleActivation.DISABLED
+            state == Condition.STATE_FALSE -> ZenRuleActivation.INACTIVE
+            // It exists, it is enabled, and the platform will not say. Not off,
+            // so nothing ends.
+            else -> ZenRuleActivation.UNKNOWN
+        }
+    }
+
+    override fun ownsRule(ruleId: String?): Boolean {
+        // Read, never created: this runs on a broadcast, and a status change for
+        // somebody else's rule must not be the thing that mints ours.
+        //
+        // The id we hold *now*, and nothing more. A short-lived memory of the
+        // id a replacement had just displaced lived here briefly and was taken
+        // out again (Codex, PR #36): it closed a narrow race and opened three
+        // wider ones over as many review rounds, because ownership inferred
+        // from whatever the app happens to hold needs a new guard for every
+        // way that value can move. The recorded fix is to stop inferring —
+        // record the enforcing rule on the snooze itself (TODO.md) — and this
+        // stays deliberately simple until then.
+        val ours = runCatching { store.ruleId() }.getOrElse {
+            Log.w(TAG, "Reading the rule id failed; treating the changed rule as not ours.", it)
+            return false
+        }
+        return RuleOwnership.isOurs(ruleId, current = ours)
+    }
+
     override fun ensureRule(): ZenRuleState =
         runCatching { synchronized(RULE_CREATION) { ensureRuleLocked() } }.getOrElse {
             Log.e(TAG, "Preparing the zen rule failed; reporting the state as unknown.", it)

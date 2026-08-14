@@ -25,6 +25,7 @@ interface ZenRuleIdStore {
     fun setRuleId(id: String): Boolean
 
     fun clear(): Boolean
+
 }
 
 /**

@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
 import android.util.Log
+import app.snoozemo.core.endReason
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.Attempt
 import app.snoozemo.core.ClockChange
@@ -22,6 +23,7 @@ import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
 import app.snoozemo.core.ZenTrigger
+import app.snoozemo.core.zenTrigger
 import app.snoozemo.dnd.AndroidZenController
 import java.time.Instant
 
@@ -579,12 +581,16 @@ internal fun releaseDirectly(
 
     val outcome = zen.setSnoozed(
         snoozed = false,
-        // The same mapping `SnoozeController.end` applies. This path is the
+        // The one mapping, shared with `SnoozeController.end` rather than
+        // restated here (Codex, PR #36): a second copy of the rule went stale
+        // exactly as a second copy does — it kept crediting a user's own Do Not
+        // Disturb toggle to the app once a later fix made this path reach it.
+        // The rest of the reasoning stands: this path is the
         // no-service stand-in for it, and the trampoline routes the user's own
         // `End now` here whenever the service refuses to start — so a
         // hard-coded `CONTEXT` credited that tap to the app deciding by
         // itself in the platform's Modes UI, contrary to SPEC.md §5.4.
-        trigger = if (reason == EndReason.MANUAL) ZenTrigger.USER_ACTION else ZenTrigger.CONTEXT,
+        trigger = reason.zenTrigger(),
         placeName = snooze?.placeName ?: ActiveSnooze.DEFAULT_PLACE_NAME,
     )
     val released = outcome is ZenOutcome.Applied ||
@@ -868,6 +874,31 @@ internal fun restoreDirectly(
         return
     }
 
+    // Then what the rule is actually doing, before re-asserting it and
+    // destroying the evidence — the same order `SnoozeService` takes, and
+    // missing here (Codex, PR #36). This fallback runs precisely when no
+    // process was alive to hear the status broadcast, so it is the *likeliest*
+    // path to meet a user who turned Do Not Disturb off while the app was
+    // gone. Re-asserting first would silence their phone again, which is the
+    // one thing an explicit instruction from the user must never get.
+    val reason = runCatching { zen.ruleActivation().endReason() }.getOrElse {
+        // Unreadable ends nothing: a failed read must not be the reason a
+        // snooze is dropped, and the cap still bounds it either way.
+        Log.w(RELEASE_TAG, "Reading the rule state after a reboot failed; restoring anyway.")
+        null
+    }
+    // Gated on the arm having completed, the same way the service path gates its
+    // own version (Codex, PR #36). A record written *before* its rule ever went
+    // on is an interrupted arm, not a user switching Do Not Disturb off — and an
+    // off rule looks identical from here. Ending on that inference would erase a
+    // snooze that only needed finishing, so an unfinished arm falls through and
+    // is re-asserted below instead.
+    if (reason != null && snooze.armed) {
+        Log.w(RELEASE_TAG, "The rule is no longer on; ending instead of re-asserting.")
+        releaseDirectly(context, reason, zen)
+        return
+    }
+
     val notifications = SnoozeNotifications(context.applicationContext)
 
     val outcome = zen.setSnoozed(true, ZenTrigger.CONTEXT, snooze.placeName)
@@ -898,6 +929,17 @@ internal fun restoreDirectly(
         // separate ids, so the failure explains itself while the snooze stays
         // legible and endable.
     }
+    // Deliberately NOT recording that the arm completed here (Codex, PR #36).
+    // Writing it looked like the obvious mirror of `SnoozeController.restore`,
+    // and three review rounds found three different ways for it to be wrong in
+    // this path: marked on a refusal that never activated anything, and — with
+    // that fixed — a write that fails leaves the rule on with disk still saying
+    // the arm never finished, which a later wake re-asserts over a user who has
+    // since switched Do Not Disturb off. Getting it right needs a durable retry
+    // or a rollback of the activation, which is more machinery than this
+    // no-service fallback should carry. The gap it would have closed is
+    // recorded in TODO.md with the rest of the record's ownership story, and it
+    // is the state this path was already in.
     notifications.showOngoing(snooze)
     SnoozeTileBridge.refresh()
 }
