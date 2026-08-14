@@ -382,7 +382,9 @@ the point is that every other line of the app is worthless if it isn't true.
         written as sequences rather than single calls — a router rebooting, a provider emitting
         junk for ten minutes, an alarm arriving after the reason for it went away.
       - [ ] `GeofencePresenceMonitor` itself: registration, the exit callback, and the
-        `Degraded`/`CapabilityLost` split at the platform boundary. Needs a handset to verify.
+        recoverable/fatal split at the platform boundary — a degraded *level* on the
+        `PresenceUpdate` versus a `CapabilityLost` event, which is the one distinction the monitor
+        must never get wrong (`SPEC.md` §6.1). Needs a handset to verify.
       - [ ] **The grace deadline has to survive process death** (Codex, PR #31). `PresenceState`
         is in-memory only; a service killed after arming the five-minute grace alarm comes back
         with no deadline, so the alarm's signal is ignored and the snooze runs to the cap — the
@@ -393,7 +395,7 @@ the point is that every other line of the app is worthless if it isn't true.
         problem on the duration cap.
       - [ ] **The degradation *cause* stops at the controller** (Codex, PR #31). `Presence` now
         tells `FIXES_TOO_VAGUE` from `NO_LOCATION_FIX`, and `SnoozeController` maps both to the
-        same `TrackingMode`, which is all `SnoozeService.onDegraded` renders from — so the
+        same `TrackingMode`, which is all `SnoozeService.onTrackingChanged` renders from — so the
         notification says `Wi-Fi only` either way and the distinction never reaches the user.
         Fixing it means new user-facing copy, which needs the propose-in-chat-and-approve step
         (`AGENTS.md`, *Translations*), so it is a follow-up rather than part of the engine PR.
@@ -406,29 +408,16 @@ the point is that every other line of the app is worthless if it isn't true.
           the user actually needs to read, so this wants the same approved-copy step and
           probably a mode of its own. Both halves land together.
       - [x] **Recovering from degraded mode has no path back** (found while building the engine).
-        The engine forgot a degradation once a good fix or the anchor's Wi-Fi returned and reported
-        `StillHere`, but `SnoozeController` only moved `CHECKING` → `ARMED` on it and left the
-        `TrackingMode` lowered, so the notification kept saying tracking was degraded after it
-        recovered. Fixed by restoring the mode on `StillHere` and reporting it through a new
-        `Listener.onTrackingRestored` for the case with no transition to carry it (degraded while
-        `ARMED`, recovered while `ARMED`). What was mainly missing was *which* signal confirmed
-        presence, so `StillHere` carries `PresenceEvidence` — restoring `FULL` on a Wi-Fi
-        association would have announced working location tracking on evidence that proves nothing
-        about location, which is the same lie in the worse direction. The sixth event did turn out
-        to be needed, for one case only: `TrackingRecovered`, for a fix good enough to measure with
-        that places the user outside the radius, which proves location works while settling nothing
-        about presence (Codex, PR #33). Recovery uses existing copy (it removes the degraded line
-        rather than adding one), so no approval step was needed. `SPEC.md` §6.1 updated.
-        - **A step carries one event, so a recovery that collides with an escalation is owed
-          rather than dropped** — `PresenceState.pendingRecovery`, delivered by the next event that
-          goes out (Codex, PR #33, three orderings). It has to survive as far as the Wi-Fi
-          association, which is the event with no second chance: association suppresses location
-          entirely (§6.7), so a `StillHere` reporting only Wi-Fi there strands the snooze on
-          `WIFI_ONLY` until the cap. Codex found this family three times from three directions —
-          association-then-fix, fix-then-association, and resting-degradation-then-both — which is
-          the argument for `PresenceStep` eventually carrying a *list* of events instead of one
-          plus precedence rules. Mechanical but wide (every test asserts on `.event`), so it stays
-          a follow-up rather than growing a bug-fix PR further.
+        The engine forgot a degradation once location or the anchor's Wi-Fi returned, but the
+        controller left the `TrackingMode` lowered, so the notification kept reporting degraded
+        tracking for the rest of the snooze. Fixed in PR #33, then **rebuilt in PR #34**: the first
+        version announced each recovery as an event and took nine review rounds, because every
+        ordering question became "did the announcement survive?" Health is now a level on
+        `PresenceUpdate` and the controller acts on the difference, which is why none of that
+        machinery — `Degraded`, `TrackingRecovered`, `PresenceEvidence`, `pendingRecovery`, the
+        paired callbacks — exists any more. **Do not reintroduce it**: a recovery that has to be
+        delivered is a recovery that can be lost, and `SPEC.md` §6.1 records the four invariants
+        that survive whatever shape the engine takes.
 - [ ] Anchor capture at arm time — with the ≤10 s ceiling that degrades to Wi-Fi-only or
       duration-only rather than blocking the arm. **The SSID is the anchor; the connected
       BSSID is recorded alongside it** (`SPEC.md` §6.2). Those are two different
@@ -1025,25 +1014,16 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     a snooze that ends on a duration cap needs the same controller.
 
 ## Decisions needing review
-- **Report tracking *health* on every step instead of recovery *events*** — the follow-up PR, and
-  a bigger idea than the one first recorded here (autopilot, 2026-08-14). Seven Codex rounds on
-  #33, **four of them in code written during the PR** and the last two caused by the round before,
-  all share a shape: a recovery is a one-shot announcement, so every ordering question becomes
-  "did the announcement survive?" That is what forced `pendingRecovery` and its
-  deliver/preserve/invalidate rules, `TrackingRecovered`, the evidence on `StillHere`, and then a
-  time boundary to stop a cached reading forging the announcement.
-  - **`PresenceStep` already carries `duty` as a computed *level*, not an event.** Tracking health
-    is the same shape and should be reported the same way: the controller reads it each step and
-    moves the mode when it changes. No debt to carry, no precedence between an escalation and a
-    recovery, no question of which event a recovery rides out on — the three interacting fields
-    collapse to one, and the staleness rule applies in a single place instead of several.
-  - This **subsumes** the earlier "make `PresenceStep` carry a list of events" note, which solved
-    only the collision case and would have left the rest.
-  - **Held out of #33** because #33 is a bug fix that works and is now covered by seven rounds of
-    adversarial tests — which are exactly what protects a rewrite. Landing the fix first means the
-    follow-up is a pure simplification with the behavior already pinned. Reversible in the cheap
-    direction: a separate PR can be dropped, a mixed one cannot be un-mixed. **Note it may be moot**: if presence loses open question 3, the engine stops
-  being the product's critical path and the refactor is polish on code nothing depends on.
+- ~~**Report tracking *health* on every step instead of recovery *events***~~ — **done** (PR #34).
+  Nine Codex rounds on #33, four of them in code written during that PR, all shared one shape: a
+  recovery was a one-shot announcement, so every ordering question became "did the announcement
+  survive?" Health is now a level on `PresenceUpdate`, restated on every update the way
+  `LocationDuty` always was, and the controller acts on the difference between what it is told and
+  what it believes. Deleted with it: `PresenceEvent.Degraded`, `TrackingRecovered`,
+  `PresenceEvidence`, `PresenceState.pendingRecovery` and its deliver/preserve/invalidate rules,
+  `SnoozeController.restoreTracking`, and the paired `onDegraded`/`onTrackingRestored` callbacks
+  (now one `onTrackingChanged`). "Reported once, not once per bad fix" stopped being an engine rule
+  and became a property of the comparison.
 - **A snooze that *becomes* unverifiable now ends on the same 5-minute grace period as one that
   armed that way** (autopilot, 2026-08-13). `SPEC.md` §6.6 wrote the grace period for the anchor
   that never had a fix; the engine also starts it when a healthy snooze loses the anchor's Wi-Fi

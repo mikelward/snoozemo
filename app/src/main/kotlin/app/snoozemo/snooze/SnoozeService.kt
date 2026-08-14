@@ -1579,19 +1579,21 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         }, IN_PROCESS_RETRY_MS)
     }
 
-    override fun onDegraded(snooze: ActiveSnooze, cause: DegradationCause) {
+    override fun onTrackingChanged(snooze: ActiveSnooze, degradation: DegradationCause?) {
         // Said where the user is already looking, rather than left to be
-        // discovered when the snooze doesn't end (SPEC.md §8.1).
+        // discovered when the snooze doesn't end (SPEC.md §8.1) — and the same
+        // three writes whichever way it moved, which is why there is one
+        // callback rather than a pair (PR #34).
         //
-        // A refused write is not fatal and not silent. The notification this
-        // process posts is right either way, and the stored cap is untouched, so
-        // the snooze still ends on time — what a cold start would lose is the
-        // *reason*, coming back to a record claiming better tracking than the
-        // engine found. Logged rather than retried: the retry machinery here
-        // exists for the release path, where the cost of losing it is a phone
-        // that stays quiet, and this is not that.
+        // A refused record write is not fatal and not silent. The notification
+        // this process posts is right either way, and the stored cap is
+        // untouched, so the snooze still ends on time — what a cold start would
+        // lose is the *reason*, coming back to a record that misstates tracking.
+        // Logged rather than retried: the retry machinery here exists for the
+        // release path, where the cost of losing it is a phone that stays quiet,
+        // and this is not that.
         if (!store.save(snooze)) {
-            Log.w(TAG, "Recording degraded tracking failed; a restart would overstate tracking.")
+            Log.w(TAG, "Recording the tracking mode failed; a restart would misstate tracking.")
         }
         notifications.showOngoing(snooze)
         // The tile renders the mode too — its subtitle drops to `timer only`
@@ -1599,18 +1601,6 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // else, so without this the shade keeps the old subtitle until the
         // system happens to restart listening. Every state transition already
         // refreshes; a mode change is the one that doesn't have one.
-        SnoozeTileBridge.refresh(applicationContext)
-    }
-
-    override fun onTrackingRestored(snooze: ActiveSnooze) {
-        // Same two writes as a degradation, for the same reason: the record is
-        // what a restarted process would rebuild the notification from, so
-        // leaving it at the old mode would bring the stale line back on the
-        // next cold start (Codex, PR #33).
-        if (!store.save(snooze)) {
-            Log.w(TAG, "Recording restored tracking failed; a restart would show the old mode.")
-        }
-        notifications.showOngoing(snooze)
         SnoozeTileBridge.refresh(applicationContext)
     }
 

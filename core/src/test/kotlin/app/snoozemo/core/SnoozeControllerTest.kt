@@ -57,8 +57,8 @@ class SnoozeControllerTest {
 
     private class Recorder : SnoozeController.Listener {
         val states = mutableListOf<Pair<SnoozeState, EndReason?>>()
-        val degraded = mutableListOf<DegradationCause>()
-        val restored = mutableListOf<TrackingMode>()
+        /** Every tracking report, in order: the mode it carried and why. */
+        val tracking = mutableListOf<Pair<TrackingMode, DegradationCause?>>()
         val failures = mutableListOf<Pair<ZenFailure, Boolean>>()
         /** The mode each transition carried, so "reported once, already correct" is testable. */
         val announced = mutableListOf<TrackingMode?>()
@@ -66,11 +66,8 @@ class SnoozeControllerTest {
             states += state to reason
             announced += snooze?.mode
         }
-        override fun onDegraded(snooze: ActiveSnooze, cause: DegradationCause) {
-            degraded += cause
-        }
-        override fun onTrackingRestored(snooze: ActiveSnooze) {
-            restored += snooze.mode
+        override fun onTrackingChanged(snooze: ActiveSnooze, degradation: DegradationCause?) {
+            tracking += snooze.mode to degradation
         }
         override fun onZenFailure(failure: ZenFailure, whileArming: Boolean) {
             failures += failure to whileArming
@@ -126,7 +123,7 @@ class SnoozeControllerTest {
 
         assertEquals(SnoozeState.ARMED, controller.state)
         assertEquals(TrackingMode.WIFI_ONLY, controller.active?.mode)
-        assertEquals(1, listener.degraded.size)
+        assertEquals(1, listener.tracking.size)
     }
 
     @Test
@@ -136,7 +133,7 @@ class SnoozeControllerTest {
         controller.onAnchorUnavailable(ssid = null)
 
         assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
-        assertEquals(1, listener.degraded.size)
+        assertEquals(1, listener.tracking.size)
     }
 
     @Test
@@ -233,12 +230,16 @@ class SnoozeControllerTest {
         assertEquals(capExpiresAt, controller.active?.capExpiresAt)
     }
 
+    /** Healthy tracking, which is the common case and the boring one. */
+    private fun update(event: PresenceEvent? = null, degradation: DegradationCause? = null) =
+        PresenceUpdate(event, degradation)
+
     @Test
     fun `probably-left escalates but never ends the snooze`() {
         // No single source ends a snooze on its own evidence (SPEC.md §6.10).
         armFully()
 
-        controller.onPresenceEvent(PresenceEvent.ProbablyLeft)
+        controller.onPresenceUpdate(update(PresenceEvent.ProbablyLeft))
 
         assertEquals(SnoozeState.CHECKING, controller.state)
         assertEquals(1, zen.calls.size)
@@ -247,92 +248,97 @@ class SnoozeControllerTest {
     @Test
     fun `coming back de-escalates to armed`() {
         armFully()
-        controller.onPresenceEvent(PresenceEvent.ProbablyLeft)
+        controller.onPresenceUpdate(update(PresenceEvent.ProbablyLeft))
 
-        controller.onPresenceEvent(PresenceEvent.StillHere(PresenceEvidence.ANCHOR_WIFI))
+        controller.onPresenceUpdate(update(PresenceEvent.StillHere))
 
         assertEquals(SnoozeState.ARMED, controller.state)
     }
 
     @Test
-    fun `a fix after a degradation puts tracking back and says so`() {
+    fun `health recovering puts tracking back and says so`() {
         // A degraded line left up after tracking recovered is a false statement
         // about the app's own state, and it teaches the user to ignore the line
         // that matters (principle 2).
         armFully()
-        controller.onPresenceEvent(PresenceEvent.Degraded(DegradationCause.NO_LOCATION_FIX))
+        controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX))
         assertEquals(TrackingMode.WIFI_ONLY, controller.active?.mode)
 
-        controller.onPresenceEvent(PresenceEvent.StillHere(PresenceEvidence.LOCATION_FIX))
+        controller.onPresenceUpdate(update())
 
         assertEquals(TrackingMode.FULL, controller.active?.mode)
-        assertEquals(listOf(TrackingMode.FULL), listener.restored)
-    }
-
-    @Test
-    fun `rejoining the anchor's wifi does not claim location came back`() {
-        // The whole reason the evidence is on the event: an association proves
-        // Wi-Fi works and says nothing about location, so announcing FULL here
-        // would replace a stale degraded line with a false healthy one.
-        armFully()
-        controller.onPresenceEvent(PresenceEvent.Degraded(DegradationCause.LOCATION_SERVICES_OFF))
-
-        controller.onPresenceEvent(PresenceEvent.StillHere(PresenceEvidence.ANCHOR_WIFI))
-
-        assertEquals(TrackingMode.WIFI_ONLY, controller.active?.mode)
-        assertEquals("nothing rose, so there is nothing to report", emptyList<TrackingMode>(), listener.restored)
-    }
-
-    @Test
-    fun `location coming back mid-check restores tracking without ending the check`() {
-        armFully()
-        controller.onPresenceEvent(PresenceEvent.Degraded(DegradationCause.NO_LOCATION_FIX))
-        controller.onPresenceEvent(PresenceEvent.ProbablyLeft)
-
-        controller.onPresenceEvent(
-            PresenceEvent.TrackingRecovered(PresenceEvidence.LOCATION_FIX),
+        assertEquals(
+            listOf(
+                TrackingMode.WIFI_ONLY to DegradationCause.NO_LOCATION_FIX,
+                TrackingMode.FULL to null,
+            ),
+            listener.tracking,
         )
+    }
+
+    @Test
+    fun `an unchanged level is not reported again`() {
+        // The level is restated on every update; only movement is news. Without
+        // this the record and the notification would be rewritten every 90
+        // seconds — the flapping the engine avoids, reintroduced at the
+        // controller.
+        armFully()
+        controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX))
+        listener.tracking.clear()
+
+        controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX))
+        controller.onPresenceUpdate(update(degradation = DegradationCause.FIXES_TOO_VAGUE))
+
+        assertEquals(
+            "same mode either way, so neither update moved anything",
+            emptyList<Pair<TrackingMode, DegradationCause?>>(),
+            listener.tracking,
+        )
+    }
+
+    @Test
+    fun `health recovering mid-check does not end the check`() {
+        armFully()
+        controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX))
+        controller.onPresenceUpdate(update(PresenceEvent.ProbablyLeft, DegradationCause.NO_LOCATION_FIX))
+
+        controller.onPresenceUpdate(update())
 
         assertEquals("the user may still turn out to have left", SnoozeState.CHECKING, controller.state)
         assertEquals(TrackingMode.FULL, controller.active?.mode)
-        assertEquals(listOf(TrackingMode.FULL), listener.restored)
+        assertEquals(TrackingMode.FULL to null, listener.tracking.last())
     }
 
     @Test
-    fun `recovery never claims more than the anchor ever supported`() {
+    fun `tracking never claims more than the anchor ever supported`() {
         // An anchor captured with a 500 m fix has nothing for the departure test
-        // to measure against, however good the reading that arrives later.
+        // to measure against, however healthy location becomes later.
         armFully(anchor.copy(fixAccuracyM = 500f))
         assertEquals(TrackingMode.WIFI_ONLY, controller.active?.mode)
+        listener.tracking.clear()
 
-        controller.onPresenceEvent(PresenceEvent.StillHere(PresenceEvidence.LOCATION_FIX))
+        controller.onPresenceUpdate(update(PresenceEvent.StillHere))
 
         assertEquals(TrackingMode.WIFI_ONLY, controller.active?.mode)
-        assertEquals(emptyList<TrackingMode>(), listener.restored)
+        assertEquals(emptyList<Pair<TrackingMode, DegradationCause?>>(), listener.tracking)
     }
 
     @Test
-    fun `recovery arriving with a de-escalation is reported once, already correct`() {
-        // The transition carries the restored mode, so the notification is
-        // posted once rather than as a stale line followed by a correction.
-        armFully()
-        controller.onPresenceEvent(PresenceEvent.Degraded(DegradationCause.NO_LOCATION_FIX))
-        controller.onPresenceEvent(PresenceEvent.ProbablyLeft)
-        assertEquals(SnoozeState.CHECKING, controller.state)
+    fun `losing location without an SSID falls all the way to duration-only`() {
+        // Claiming WIFI_ONLY for an anchor with no network would tell the user
+        // tracking is better than it is.
+        armFully(anchor.copy(ssid = null))
 
-        controller.onPresenceEvent(PresenceEvent.StillHere(PresenceEvidence.LOCATION_FIX))
+        controller.onPresenceUpdate(update(degradation = DegradationCause.LOCATION_SERVICES_OFF))
 
-        assertEquals(SnoozeState.ARMED, controller.state)
-        assertEquals(TrackingMode.FULL, controller.active?.mode)
-        assertEquals("the transition carried the restored mode", TrackingMode.FULL, listener.announced.last())
-        assertEquals("so there is nothing left to report", emptyList<TrackingMode>(), listener.restored)
+        assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
     }
 
     @Test
     fun `a confirmed departure ends the snooze as context, not user action`() {
         armFully()
 
-        controller.onPresenceEvent(PresenceEvent.Departed)
+        controller.onPresenceUpdate(update(PresenceEvent.Departed))
 
         assertEquals(SnoozeState.IDLE, controller.state)
         assertEquals(false to ZenTrigger.CONTEXT, zen.calls.last())
@@ -345,35 +351,12 @@ class SnoozeControllerTest {
         // how a phone stays silent with nothing left to release it.
         armFully()
 
-        controller.onPresenceEvent(
-            PresenceEvent.CapabilityLost(CapabilityLossCause.LOCATION_PERMISSION_REVOKED),
+        controller.onPresenceUpdate(
+            update(PresenceEvent.CapabilityLost(CapabilityLossCause.LOCATION_PERMISSION_REVOKED)),
         )
 
         assertEquals(SnoozeState.IDLE, controller.state)
         assertEquals(EndReason.LOST_CAPABILITY, listener.states.last { it.second != null }.second)
-    }
-
-    @Test
-    fun `degrading keeps the snooze but reports the drop`() {
-        armFully()
-
-        controller.onPresenceEvent(PresenceEvent.Degraded(DegradationCause.NO_LOCATION_FIX))
-
-        assertEquals(SnoozeState.ARMED, controller.state)
-        assertEquals(TrackingMode.WIFI_ONLY, controller.active?.mode)
-        assertEquals(listOf(DegradationCause.NO_LOCATION_FIX), listener.degraded)
-    }
-
-    @Test
-    fun `degrading without an SSID falls all the way to duration-only`() {
-        // Claiming WIFI_ONLY for an anchor with no network would tell the user
-        // tracking is better than it is.
-        val noWifi = anchor.copy(ssid = null)
-        armFully(noWifi)
-
-        controller.onPresenceEvent(PresenceEvent.Degraded(DegradationCause.LOCATION_SERVICES_OFF))
-
-        assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
     }
 
     @Test
@@ -383,7 +366,7 @@ class SnoozeControllerTest {
         assertTrue(armFully(vague))
 
         assertEquals(TrackingMode.WIFI_ONLY, controller.active?.mode)
-        assertEquals(1, listener.degraded.size)
+        assertEquals(1, listener.tracking.size)
     }
 
     @Test

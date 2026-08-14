@@ -62,6 +62,22 @@ class PresenceTest {
         return events to state
     }
 
+    /**
+     * Every step's reported health, so a level that moves at the wrong moment is
+     * as visible as an event fired at the wrong moment used to be.
+     */
+    private fun levels(
+        anchor: Anchor,
+        from: PresenceState = PresenceState(),
+        vararg signals: PresenceSignal,
+    ): List<DegradationCause?> {
+        var state = from
+        return signals.map { signal ->
+            state = Presence.advance(state, signal, anchor).state
+            state.degradation
+        }
+    }
+
     private fun associated(atSeconds: Long) =
         PresenceSignal.AnchorWifiAssociated(atSeconds * 1_000L)
 
@@ -131,10 +147,10 @@ class PresenceTest {
                 PresenceEvent.ProbablyLeft,
                 null,
                 null,
-                PresenceEvent.StillHere(PresenceEvidence.ANCHOR_WIFI),
+                PresenceEvent.StillHere,
                 null,
                 PresenceEvent.ProbablyLeft,
-                PresenceEvent.StillHere(PresenceEvidence.ANCHOR_WIFI),
+                PresenceEvent.StillHere,
             ),
             events,
         )
@@ -204,7 +220,7 @@ class PresenceTest {
 
         // Only the fix settles it.
         val settled = Presence.advance(state, atHome(150), tracked)
-        assertEquals(PresenceEvent.StillHere(PresenceEvidence.LOCATION_FIX), settled.event)
+        assertEquals(PresenceEvent.StillHere, settled.event)
         assertEquals(LocationDuty.NONE, Presence.duty(settled.state, tracked))
     }
 
@@ -227,7 +243,7 @@ class PresenceTest {
 
         // A reading taken after the exit is the one that counts, either way.
         val fresh = Presence.advance(state, atHome(330), tracked)
-        assertEquals(PresenceEvent.StillHere(PresenceEvidence.LOCATION_FIX), fresh.event)
+        assertEquals(PresenceEvent.StillHere, fresh.event)
         assertEquals(PresencePhase.RESTING, fresh.state.phase)
     }
 
@@ -313,7 +329,7 @@ class PresenceTest {
 
         assertEquals(listOf(null, PresenceEvent.ProbablyLeft, null, null, null), events)
         assertEquals(1, state.uselessObservations)
-        assertNull(state.reportedDegradation)
+        assertNull(state.degradation)
         assertNull("no grace period may be armed by one failed request", state.graceDeadlineMs)
     }
 
@@ -335,7 +351,7 @@ class PresenceTest {
 
         // An association from *after* the exit is the real thing, and settles it.
         val current = Presence.advance(state, associated(330), tracked)
-        assertEquals(PresenceEvent.StillHere(PresenceEvidence.ANCHOR_WIFI), current.event)
+        assertEquals(PresenceEvent.StillHere, current.event)
         assertEquals(PresencePhase.RESTING, current.state.phase)
     }
 
@@ -351,7 +367,7 @@ class PresenceTest {
 
         assertEquals(listOf(null, PresenceEvent.ProbablyLeft, null, null, null), events)
         assertEquals(1, state.uselessObservations)
-        assertNull(state.reportedDegradation)
+        assertNull(state.degradation)
         assertNull("no grace period may be armed by one reading", state.graceDeadlineMs)
     }
 
@@ -371,13 +387,13 @@ class PresenceTest {
             listOf(
                 null,
                 PresenceEvent.ProbablyLeft,
-                PresenceEvent.StillHere(PresenceEvidence.ANCHOR_WIFI),
+                PresenceEvent.StillHere,
                 null,
             ),
             events,
         )
         assertEquals(0, state.uselessObservations)
-        assertNull(state.reportedDegradation)
+        assertNull(state.degradation)
     }
 
     @Test
@@ -396,7 +412,7 @@ class PresenceTest {
             listOf(
                 null,
                 PresenceEvent.ProbablyLeft,
-                PresenceEvent.StillHere(PresenceEvidence.ANCHOR_WIFI),
+                PresenceEvent.StillHere,
                 null,
             ),
             events,
@@ -418,7 +434,7 @@ class PresenceTest {
 
         assertEquals(listOf(PresenceEvent.ProbablyLeft, null, null, null), events)
         assertEquals(0, state.uselessObservations)
-        assertNull(state.reportedDegradation)
+        assertNull(state.degradation)
     }
 
     @Test
@@ -445,7 +461,7 @@ class PresenceTest {
         assertEquals(
             listOf(
                 PresenceEvent.ProbablyLeft,
-                PresenceEvent.StillHere(PresenceEvidence.LOCATION_FIX),
+                PresenceEvent.StillHere,
             ),
             events,
         )
@@ -469,18 +485,27 @@ class PresenceTest {
     }
 
     @Test
-    fun `degraded tracking is reported once, not once per bad fix`() {
-        val (events, state) = replay(
-            tracked,
-            from = PresenceState(atAnchorWifi = false),
-            signals = arrayOf(vague(0), vague(60), vague(120), vague(180), vague(240)),
-        )
+    fun `tracking health goes down on the third failure and stays down`() {
+        // The level replaces the one-shot report (PR #34). "Reported once" is now
+        // the controller's business — it acts on changes — so what the engine
+        // owes is a level that moves at the right moment and then holds still.
+        val signals = arrayOf(vague(0), vague(60), vague(120), vague(180), vague(240))
+        val from = PresenceState(atAnchorWifi = false)
 
+        val (events, state) = replay(tracked, from = from, signals = signals)
+
+        assertEquals("health is a level, not news", listOf(null, null, null, null, null), events)
         assertEquals(
-            listOf(null, null, PresenceEvent.Degraded(DegradationCause.FIXES_TOO_VAGUE), null, null),
-            events,
+            listOf(
+                null,
+                null,
+                DegradationCause.FIXES_TOO_VAGUE,
+                DegradationCause.FIXES_TOO_VAGUE,
+                DegradationCause.FIXES_TOO_VAGUE,
+            ),
+            levels(tracked, from = from, signals = signals),
         )
-        assertEquals(DegradationCause.FIXES_TOO_VAGUE, state.reportedDegradation)
+        assertEquals(DegradationCause.FIXES_TOO_VAGUE, state.degradation)
     }
 
     @Test
@@ -488,37 +513,33 @@ class PresenceTest {
         // Nothing coming back and something useless coming back look identical
         // to the app and completely different to the user, so they must not
         // share a cause (SPEC.md §8.1).
-        val (events, _) = replay(
-            tracked,
-            from = PresenceState(atAnchorWifi = false),
-            signals = arrayOf(noFix(0), noFix(60), noFix(120)),
-        )
-
         assertEquals(
-            listOf(null, null, PresenceEvent.Degraded(DegradationCause.NO_LOCATION_FIX)),
-            events,
+            listOf(null, null, DegradationCause.NO_LOCATION_FIX),
+            levels(
+                tracked,
+                from = PresenceState(atAnchorWifi = false),
+                signals = arrayOf(noFix(0), noFix(60), noFix(120)),
+            ),
         )
     }
 
     @Test
     fun `a run of bad fixes is forgiven once a real one arrives`() {
-        val (events, state) = replay(
-            tracked,
-            from = PresenceState(atAnchorWifi = false),
-            signals = arrayOf(vague(0), vague(60), vague(120), atHome(180)),
-        )
+        val signals = arrayOf(vague(0), vague(60), vague(120), atHome(180))
+        val from = PresenceState(atAnchorWifi = false)
 
+        val (events, state) = replay(tracked, from = from, signals = signals)
+
+        // No event anywhere: the phase never moved (a useless reading is not
+        // evidence of presence, so it does not open a check), and health is a
+        // level rather than news.
+        assertEquals(listOf(null, null, null, null), events)
         assertEquals(
-            listOf(
-                null,
-                null,
-                PresenceEvent.Degraded(DegradationCause.FIXES_TOO_VAGUE),
-                PresenceEvent.StillHere(PresenceEvidence.LOCATION_FIX),
-            ),
-            events,
+            listOf(null, null, DegradationCause.FIXES_TOO_VAGUE, null),
+            levels(tracked, from = from, signals = signals),
         )
         assertEquals(0, state.uselessObservations)
-        assertNull(state.reportedDegradation)
+        assertNull(state.degradation)
     }
 
     @Test
@@ -533,7 +554,7 @@ class PresenceTest {
         )
 
         assertEquals(listOf(null, null, null, null, null), events)
-        assertNull(state.reportedDegradation)
+        assertNull(state.degradation)
         assertEquals(LocationDuty.NONE, Presence.duty(state, wifiOnly))
     }
 
@@ -642,10 +663,11 @@ class PresenceTest {
                 PresenceEvent.ProbablyLeft,
                 null,
                 null,
-                PresenceEvent.Degraded(DegradationCause.FIXES_TOO_VAGUE),
+                null,
             ),
             events,
         )
+        assertEquals(DegradationCause.FIXES_TOO_VAGUE, state.degradation)
         assertNotNull("an unverifiable snooze must have a deadline", state.graceDeadlineMs)
         assertEquals(210_000L + Presence.WIFI_GRACE.toMillis(), state.graceDeadlineMs)
 
@@ -663,139 +685,93 @@ class PresenceTest {
 
         val found = Presence.advance(state, atHome(240), tracked)
 
-        assertEquals(PresenceEvent.StillHere(PresenceEvidence.LOCATION_FIX), found.event)
+        assertEquals(PresenceEvent.StillHere, found.event)
         assertNull("location answered, so the timer has nothing left to do", found.state.graceDeadlineMs)
     }
 
     @Test
-    fun `a qualifying fix reports that location came back`() {
+    fun `a qualifying fix restores health without settling the check`() {
         // A reading good enough to measure with proves location works even while
-        // it says the user may be leaving, and that is the one combination
-        // StillHere cannot express (Codex, PR #33). Unreported, the degradation
-        // was cleared here and the only evidence left was Wi-Fi, which cannot
-        // restore full tracking — so the notification kept saying Wi-Fi only for
-        // the rest of a snooze whose location had recovered.
-        val (_, state) = replay(
+        // it says the user may be leaving. As an event that combination had
+        // nowhere to go (Codex, PR #33, four rounds); as a level it needs no
+        // announcement at all.
+        val (_, degraded) = replay(
             tracked,
             signals = arrayOf(associated(0), wifiLost(60), vague(90), vague(150), vague(210)),
         )
-        assertEquals(DegradationCause.FIXES_TOO_VAGUE, state.reportedDegradation)
-        assertEquals(PresencePhase.CHECKING, state.phase)
+        assertEquals(DegradationCause.FIXES_TOO_VAGUE, degraded.degradation)
+        assertEquals(PresencePhase.CHECKING, degraded.phase)
 
-        val recovered = Presence.advance(state, outside(240), tracked)
+        val recovered = Presence.advance(degraded, outside(240), tracked)
 
-        assertEquals(
-            PresenceEvent.TrackingRecovered(PresenceEvidence.LOCATION_FIX),
-            recovered.event,
-        )
-        assertNull("reported, so it is no longer outstanding", recovered.state.reportedDegradation)
+        assertNull("location answered", recovered.state.degradation)
         assertEquals("the check it arrived during carries on", PresencePhase.CHECKING, recovered.state.phase)
     }
 
     @Test
-    fun `an escalation outranks the recovery but does not lose it`() {
-        // One event per step, and the controller has to hear about the check —
-        // so the recovery is owed rather than dropped, and rides out on the next
-        // event (Codex, PR #33).
-        val (_, degraded) = replay(
-            tracked,
-            from = PresenceState(atAnchorWifi = true),
-            signals = arrayOf(wifiLost(60), vague(90), vague(150), vague(210), associated(240)),
-        )
-        assertEquals(PresencePhase.RESTING, degraded.phase)
-        assertNotNull(degraded.reportedDegradation)
+    fun `health survives every ordering that used to lose it`() {
+        // The four sequences Codex found against the event-shaped version (PR
+        // #33), replayed against the level. Each one asks the same question —
+        // is location working right now — and the level answers it the same way
+        // whatever order the signals arrive in, which is the entire argument for
+        // the rewrite.
+        val degraded = arrayOf(vague(90), vague(150), vague(210))
 
-        val escalated = Presence.advance(degraded, outside(300), tracked)
-
-        assertEquals(PresenceEvent.ProbablyLeft, escalated.event)
-        assertEquals(PresenceEvidence.LOCATION_FIX, escalated.state.pendingRecovery)
-
-        val settled = Presence.advance(escalated.state, atHome(360), tracked)
-        assertEquals(PresenceEvent.StillHere(PresenceEvidence.LOCATION_FIX), settled.event)
-        assertNull(settled.state.pendingRecovery)
-    }
-
-    @Test
-    fun `an owed recovery rides out on the wifi association that would bury it`() {
-        // The case that has no second chance (Codex, PR #33): rejoining the
-        // anchor's network suppresses location entirely (§6.7), so if this event
-        // reports only Wi-Fi, no later fix ever arrives to correct a snooze that
-        // would read `Wi-Fi only` to the cap.
-        // Degrading during the resting sanity poll, off the anchor's network:
-        // `useless` leaves the phase alone, so the escalation is still ahead.
-        val (_, degraded) = replay(
-            tracked,
-            signals = arrayOf(vague(90), vague(150), vague(210)),
-        )
-        assertEquals(PresencePhase.RESTING, degraded.phase)
-
-        val escalated = Presence.advance(degraded, outside(300), tracked)
-        assertEquals(PresenceEvent.ProbablyLeft, escalated.event)
-        assertEquals(PresenceEvidence.LOCATION_FIX, escalated.state.pendingRecovery)
-
-        val rejoined = Presence.advance(escalated.state, associated(360), tracked)
-
-        assertEquals(PresenceEvent.StillHere(PresenceEvidence.LOCATION_FIX), rejoined.event)
-        assertNull("delivered, so nothing is owed", rejoined.state.pendingRecovery)
-        assertEquals(LocationDuty.NONE, Presence.duty(rejoined.state, tracked))
-    }
-
-    @Test
-    fun `a second qualifying fix does not discharge the owed recovery`() {
-        // The second fix of a confirmation window arrives with no degradation
-        // left to notice and no escalation to make, so it reports nothing — and
-        // must not quietly clear a recovery that has never been delivered
-        // (Codex, PR #33).
-        val (_, degraded) = replay(
-            tracked,
-            signals = arrayOf(vague(90), vague(150), vague(210)),
-        )
-        val escalated = Presence.advance(degraded, outside(300), tracked)
-        assertEquals(PresenceEvidence.LOCATION_FIX, escalated.state.pendingRecovery)
-
-        val second = Presence.advance(escalated.state, outside(320), tracked)
-
-        assertNull("nothing to report from this one", second.event)
+        // 1. Escalation and recovery on the same signal: no event can carry both,
+        //    and the level does not need to be carried.
         assertEquals(
-            "still owed until something carries it",
-            PresenceEvidence.LOCATION_FIX,
-            second.state.pendingRecovery,
+            listOf(DegradationCause.FIXES_TOO_VAGUE, null, null),
+            levels(tracked, signals = arrayOf(*degraded, outside(300), associated(360)).drop(2).toTypedArray(),
+                from = replay(tracked, signals = arrayOf(vague(90), vague(150))).second),
         )
 
-        val rejoined = Presence.advance(second.state, associated(380), tracked)
-        assertEquals(PresenceEvent.StillHere(PresenceEvidence.LOCATION_FIX), rejoined.event)
+        // 2. Rejoining the anchor's network, which suppresses location entirely
+        //    and used to be the event with no second chance.
+        val (_, afterFix) = replay(
+            tracked,
+            from = replay(tracked, signals = degraded).second,
+            signals = arrayOf(outside(300)),
+        )
+        val rejoined = Presence.advance(afterFix, associated(360), tracked)
+        assertNull("still healthy after the association", rejoined.state.degradation)
+        assertEquals(LocationDuty.NONE, Presence.duty(rejoined.state, tracked))
+
+        // 3. A second qualifying fix inside the confirmation window, which used
+        //    to overwrite the debt the first one left.
+        val second = Presence.advance(afterFix, outside(320), tracked)
+        assertNull(second.state.degradation)
+
+        // 4. And it goes back down when location breaks again.
+        val (_, broken) = replay(
+            tracked,
+            from = second.state,
+            signals = arrayOf(vague(380), vague(440), vague(500)),
+        )
+        assertEquals(DegradationCause.FIXES_TOO_VAGUE, broken.degradation)
     }
 
     @Test
-    fun `a stale usable fix still reports that location came back`() {
+    fun `a stale usable fix still restores health`() {
         // The two halves of a fix go stale at different rates (Codex, PR #33).
         // A queued reading delivered just after the phone rejoins the anchor's
         // network says nothing about where the user is — but it is the only
         // proof location recovered, and after the association nothing else will
         // ever arrive to say so.
-        val (_, degraded) = replay(
-            tracked,
-            signals = arrayOf(vague(90), vague(150), vague(210)),
-        )
+        val (_, degraded) = replay(tracked, signals = arrayOf(vague(90), vague(150), vague(210)))
         val rejoined = Presence.advance(degraded, associated(300), tracked)
-        assertEquals(PresenceEvent.StillHere(PresenceEvidence.ANCHOR_WIFI), rejoined.event)
-        assertNotNull(rejoined.state.reportedDegradation)
+        assertEquals(
+            "Wi-Fi says nothing about location",
+            DegradationCause.FIXES_TOO_VAGUE,
+            rejoined.state.degradation,
+        )
         assertEquals(LocationDuty.NONE, Presence.duty(rejoined.state, tracked))
 
         // Taken after the failures, before the association, delivered after it.
         val late = Presence.advance(rejoined.state, atHome(250), tracked)
 
-        assertEquals(
-            PresenceEvent.TrackingRecovered(PresenceEvidence.LOCATION_FIX),
-            late.event,
-        )
-        assertNull(late.state.reportedDegradation)
-        assertEquals("the presence half is still discarded", PresencePhase.RESTING, late.state.phase)
-        assertEquals(
-            "and it must not move the evidence bar",
-            rejoined.state.latestEvidenceMs,
-            late.state.latestEvidenceMs,
-        )
+        assertNull(late.state.degradation)
+        assertNull("the presence half is still discarded", late.event)
+        assertEquals("and it must not move the evidence bar", rejoined.state.latestEvidenceMs, late.state.latestEvidenceMs)
     }
 
     @Test
@@ -803,55 +779,29 @@ class PresenceTest {
         // The overstating direction, and the one this whole change exists to
         // prevent (Codex, PR #33). A cached reading from before the trouble
         // started, handed over long afterwards, would otherwise clear the
-        // degradation and promote the snooze to full tracking on evidence older
-        // than the problem — hiding a degradation while departure tracking is
-        // still broken.
-        val (_, degraded) = replay(
-            tracked,
-            signals = arrayOf(vague(90), vague(150), vague(210)),
-        )
+        // degradation on evidence older than the problem — hiding a broken
+        // tracker rather than reporting it.
+        val (_, degraded) = replay(tracked, signals = arrayOf(vague(90), vague(150), vague(210)))
         val rejoined = Presence.advance(degraded, associated(300), tracked)
 
         val cached = Presence.advance(rejoined.state, atHome(60), tracked)
 
-        assertNull("older than the failures it claims to be over", cached.event)
         assertEquals(
+            "older than the failures it claims to be over",
             DegradationCause.FIXES_TOO_VAGUE,
-            cached.state.reportedDegradation,
+            cached.state.degradation,
         )
     }
 
     @Test
-    fun `a stale vague fix reports nothing at all`() {
-        val (_, degraded) = replay(
-            tracked,
-            signals = arrayOf(vague(90), vague(150), vague(210)),
-        )
+    fun `a stale vague fix proves nothing either way`() {
+        val (_, degraded) = replay(tracked, signals = arrayOf(vague(90), vague(150), vague(210)))
         val rejoined = Presence.advance(degraded, associated(300), tracked)
 
         val late = Presence.advance(rejoined.state, vague(250), tracked)
 
-        assertNull("it could not have placed anyone either", late.event)
-        assertNotNull(late.state.reportedDegradation)
-    }
-
-    @Test
-    fun `location breaking again cancels a recovery that was still owed`() {
-        val (_, degraded) = replay(
-            tracked,
-            signals = arrayOf(vague(90), vague(150), vague(210)),
-        )
-        val escalated = Presence.advance(degraded, outside(300), tracked)
-        assertEquals(PresenceEvidence.LOCATION_FIX, escalated.state.pendingRecovery)
-
-        val (_, broken) = replay(
-            tracked,
-            from = escalated.state,
-            signals = arrayOf(vague(360), vague(420), vague(480)),
-        )
-
-        assertNull("no longer true, so it must not be delivered later", broken.pendingRecovery)
-        assertNotNull(broken.reportedDegradation)
+        assertNull("it could not have placed anyone", late.event)
+        assertEquals(DegradationCause.FIXES_TOO_VAGUE, late.state.degradation)
     }
 
     @Test
@@ -875,13 +825,13 @@ class PresenceTest {
         assertEquals(
             "the association resolves the check, not the degradation",
             DegradationCause.FIXES_TOO_VAGUE,
-            state.reportedDegradation,
+            state.degradation,
         )
 
         val recovered = Presence.advance(state, atHome(300), tracked)
 
-        assertEquals(PresenceEvent.StillHere(PresenceEvidence.LOCATION_FIX), recovered.event)
-        assertNull(recovered.state.reportedDegradation)
+        assertNull("the association already settled the check", recovered.event)
+        assertNull("and this is what says location is back", recovered.state.degradation)
     }
 
     @Test
@@ -905,27 +855,26 @@ class PresenceTest {
     }
 
     @Test
-    fun `failures that alternate are still reported once`() {
-        // Vague fixes and no fixes at all, interleaved. Reporting the change of
-        // cause would emit an event per sample — each one rewriting the
-        // persisted record and the notification — which is the flapping this
-        // engine exists to prevent, produced by its own reporting.
-        val (events, _) = replay(
-            tracked,
-            from = PresenceState(atAnchorWifi = false),
-            signals = arrayOf(vague(0), noFix(60), vague(120), noFix(180), vague(240), noFix(300)),
-        )
-
+    fun `failures that alternate do not flap the level`() {
+        // Vague fixes and no fixes at all, interleaved. Moving the level on a
+        // changed cause would have the controller rewrite the record and the
+        // notification per sample — the flapping this engine exists to prevent,
+        // produced by its own reporting. Both causes lower tracking the same way
+        // and say the same thing to the user.
         assertEquals(
             listOf(
                 null,
                 null,
-                PresenceEvent.Degraded(DegradationCause.FIXES_TOO_VAGUE),
-                null,
-                null,
-                null,
+                DegradationCause.FIXES_TOO_VAGUE,
+                DegradationCause.FIXES_TOO_VAGUE,
+                DegradationCause.FIXES_TOO_VAGUE,
+                DegradationCause.FIXES_TOO_VAGUE,
             ),
-            events,
+            levels(
+                tracked,
+                from = PresenceState(atAnchorWifi = false),
+                signals = arrayOf(vague(0), noFix(60), vague(120), noFix(180), vague(240), noFix(300)),
+            ),
         )
     }
 

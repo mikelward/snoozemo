@@ -17,7 +17,7 @@ import kotlinx.coroutines.flow.Flow
 interface PresenceMonitor {
 
     /** Starts watching [anchor]. The flow runs until [stop] or cancellation. */
-    fun start(anchor: Anchor): Flow<PresenceEvent>
+    fun start(anchor: Anchor): Flow<PresenceUpdate>
 
     /**
      * Stops watching and releases everything `start` acquired — network
@@ -27,21 +27,39 @@ interface PresenceMonitor {
     fun stop()
 }
 
+/**
+ * One report from the engine: what just happened, and how well tracking is
+ * currently working.
+ *
+ * The two halves are deliberately different shapes. [event] is *news* — it
+ * fires once, when something changes, and null is the common answer.
+ * [degradation] is a **level**: the engine's current view of whether location
+ * can still answer the question, restated on every update whether it moved or
+ * not, exactly like [LocationDuty].
+ *
+ * That difference is the lesson of PR #33. Recovery was originally reported as
+ * an event, and every ordering question then became "did the announcement
+ * survive?" — through an escalation that outranked it, through a Wi-Fi
+ * association that suppressed location before it could be sent again, through a
+ * second fix that overwrote it. Nine review rounds, most of them that one
+ * question wearing different clothes. A level cannot be lost in transit, so
+ * none of those questions exist: the controller compares what it is told to
+ * what it believes, and acts on the difference.
+ */
+data class PresenceUpdate(
+    val event: PresenceEvent?,
+    /** Null when location is answering normally; the reason when it is not. */
+    val degradation: DegradationCause?,
+)
+
 /** What the presence engine has concluded, in increasing order of confidence. */
 sealed interface PresenceEvent {
 
     /**
      * Positive evidence the user has not left — associated with the anchor SSID,
      * or a fix inside the radius. De-escalates back to `ARMED`.
-     *
-     * [confirmedBy] is what actually answered, and it is on the event because
-     * the controller uses this to *undo* a degradation (SPEC.md §8.1): the two
-     * sources prove different things, and restoring more than the evidence
-     * supports is the same false statement as leaving a stale degraded line up.
-     * Rejoining the anchor's network says nothing about whether location
-     * started working again.
      */
-    data class StillHere(val confirmedBy: PresenceEvidence) : PresenceEvent
+    data object StillHere : PresenceEvent
 
     /**
      * Something suggests departure but nothing has confirmed it: Wi-Fi dropped,
@@ -58,67 +76,20 @@ sealed interface PresenceEvent {
     data object Departed : PresenceEvent
 
     /**
-     * A capability that had degraded is working again, with presence still
-     * unsettled — a fix good enough to measure with that puts the user outside
-     * the radius, mid-check.
-     *
-     * Distinct from [StillHere] because it makes no claim about where the user
-     * is: the check it arrived during carries on, and the controller changes
-     * only the tracking mode. Without it that recovery has nowhere to travel,
-     * since a step carries one event and the alternatives are an escalation the
-     * controller needs or nothing at all (SPEC.md §8.1).
-     */
-    data class TrackingRecovered(val confirmedBy: PresenceEvidence) : PresenceEvent
-
-    /**
-     * Tracking is working less well than it should, but the snooze stays armed:
-     * no fix yet, location services switched off, no location from a background
-     * start. The controller drops to a lesser [TrackingMode] and **says so** in
-     * the ongoing notification rather than quietly becoming a timer
-     * (SPEC.md §8.1).
-     *
-     * Recoverable by construction — the fix arrives, the user turns location
-     * back on, the `Resume tracking` action is tapped — so this must stay
-     * distinct from [CapabilityLost], which is not.
-     */
-    data class Degraded(val cause: DegradationCause) : PresenceEvent
-
-    /**
      * Presence tracking cannot be done at all any more, and no amount of waiting
      * will change that. The controller ends the snooze with
      * [EndReason.LOST_CAPABILITY] and says why (SPEC.md §8.2, D7) — staying
      * armed on state it cannot verify is exactly the "silently quiet phone"
      * failure.
      *
-     * Separate from [Degraded] because the two demand opposite responses, and
-     * the difference must be in the type: a controller that had to tell them
-     * apart by reading a display string would eventually get it wrong, and the
-     * cost of getting it wrong in this direction is a phone that never comes
-     * back.
+     * This is an *event* and [PresenceUpdate.degradation] is a level, and the
+     * split is the point: a degradation keeps the snooze armed in a lesser mode
+     * and can be taken back, while this ends the snooze and cannot. The
+     * difference must be in the type rather than in a value the controller has
+     * to interpret — the cost of getting it wrong in this direction is a phone
+     * that never comes back.
      */
     data class CapabilityLost(val cause: CapabilityLossCause) : PresenceEvent
-}
-
-/**
- * Which signal confirmed presence, and so which capability has just been
- * observed working.
- *
- * The ceiling on what a recovery may restore. An enum rather than a boolean
- * because "location is back" and "Wi-Fi is back" are different claims about the
- * app's own state, and the notification makes exactly that claim to the user.
- */
-enum class PresenceEvidence {
-    /**
-     * Associated with the anchor's SSID. Proves Wi-Fi tracking works; proves
-     * nothing about location, which may still be off, denied, or blind.
-     */
-    ANCHOR_WIFI,
-
-    /**
-     * A fix good enough to place the user inside the radius. Location is
-     * working, so tracking can go back to whatever the anchor supports.
-     */
-    LOCATION_FIX,
 }
 
 /**
