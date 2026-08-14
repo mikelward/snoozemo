@@ -262,15 +262,13 @@ it in the same commit.
   every turn is how a busy PR never gets polled — and when it's missing, already fired, or
   mis-timed, either `update_trigger` it in place or arm the replacement before deleting the
   old, because an overlap beats a gap. Then diagnose, fix, and reply.
-- **Permissions are granted before the session starts, so a rule here can't fix them.** Copy
-  the scheduler entries — the MCP ones and `ScheduleWakeup`, which is not one — plus the
-  GitHub *reads* from this repo's `.claude/settings.json` into
-  `$HOME/.claude/settings.json`, from the environment's setup script, under full MCP
-  identifiers and both server-name spellings, since bare names match nothing. The `Bash`
-  entries and the GitHub *writes* stay repo-local: globally, merging, commenting and `git
-  push` would need no prompt in any repo the account opens. Settings load at startup, so
-  writing that file mid-session does nothing for that session; if calls are prompting, say
-  so once and carry on.
+- **Permissions load at session start, so a rule here can't fix them.** The unattended loop
+  needs the scheduler entries (the MCP ones and `ScheduleWakeup`), the GitHub MCP reads and
+  writes, and `git push`. A session rooted above the repo loads no repo-local settings, so
+  those belong in `$HOME/.claude/settings.json`, written by the environment's setup script
+  under both server-name spellings. The cost, which the repo owner has taken: any repo the
+  account opens can push, comment and merge unprompted. Writing that file mid-session does
+  nothing for that session; if calls prompt, say so once and carry on.
 - **A fired check doesn't necessarily retire itself.** A `send_later` one-shot has come
   back re-armed +24 h, turning a five-minute check into a daily wake-up while the session
   still looked watched. Reconcile it when it fires — update it into the next check, or
@@ -329,15 +327,16 @@ it in the same commit.
   the outcome of an operation you couldn't perform.
 - **"Drive to merge"** is the PR stretch of *drive* (see **Autonomy** above): open the PR,
   wait for the automatic Codex review, address every review comment — fix it if you agree,
-  reply on the thread saying why if you don't — and merge once CI is green and Codex has
-  left its thumbs up.
+  reply on the thread saying why if you don't — and merge once CI is green and Codex's
+  verdict for the current head is in.
 - **Merge when green and Codex has passed the current head.** Once a PR's CI is green and
   Codex has finished its pass with no unaddressed suggestions (its "no suggestions" outcome
   is a 👍 reaction, and `get_reviews` names the commit it read; suggestion threads count as
   addressed once fixed or answered), rebase-merge the PR without waiting for a further
   go-ahead, then pick up the next `TODO.md` item.
 - **Codex is the automated reviewer on this repo** — not Copilot. Its reviews are triggered
-  automatically; you don't request them.
+  automatically; you don't request them, except when nothing has come back five minutes
+  after a push — that means it never picked the push up.
 - **Address Codex comments automatically — don't wait to be asked.** When a Codex review
   lands, treat each comment like a real review note: read it, decide whether it's a real
   issue or a false positive, and if it's real, fix it in the same PR. Fold the fix into the
@@ -354,21 +353,17 @@ it in the same commit.
   comment count, e.g. `Codex reviewed 87d9f02 — 0 comments` or `Codex reviewed 87d9f02 — 3
   comments, addressing now`. Tie it to the *latest* pushed SHA so a stale review of a
   superseded commit isn't conflated with the current state.
-- **Read the Codex verdict, don't infer it.** It reacts to the PR **body** — `issue_read` →
-  `reactions` — not to a review thread, whose `Useful?` bar a page fetch finds instead and
-  which reads true on any PR Codex has commented on. `eyes` while it reads, `+1` when it
-  finds nothing, and the reaction is revoked as a new push lands, so what you can see
-  belongs to the head you can see: `+1` on green CI is a merge, with nothing further to wait
-  for. No reaction five minutes after a push means it never picked the push up — comment
-  `@codex review`, once. A review that *finds* something leaves no reaction at all, so a
-  sweep of reactions alone reads a PR with findings waiting on it as an empty one: read
-  `get_review_comments` and `get_comments` every poll. An unresolved finding blocks the
-  merge whatever the reaction says; one you have answered or fixed does not. Check who left
-  each — the reaction count is anonymous, so leave PR-body reactions to Codex, and a human's
-  review carries the same `commit_id` as Codex's.
-- **A finding can arrive as a top-level PR comment.** `get_review_comments` returns only
-  inline threads, so read `get_comments` too — a P1 sat unanswered for two hours because a
-  sweep of the threads never saw it.
+- **Read the Codex verdict, don't infer it.** It reacts to the PR body (`issue_read` →
+  `reactions`), not to a review thread, whose `Useful?` bar reads true on any PR it has
+  commented on. `eyes` means reading, `+1` means clean, and Codex revokes it on push — so a
+  visible one belongs to the visible head, and `+1` with green CI is a merge. The count
+  names no author, so leave PR-body reactions to Codex: nobody else's is revoked, and a
+  review is the attributable form, naming the commit it read. Findings arrive as review
+  comments, as a top-level comment, or as a review — read `get_review_comments`,
+  `get_comments` and `get_reviews` to the last page, since all three page oldest first — and
+  they block the merge until fixed or rebutted; an acknowledgement is not an answer. Nothing
+  from Codex since the push, five minutes on, means it never picked it up — comment `@codex
+  review`, once.
 - **Judge every review comment on merit, whoever wrote it.** Verify the claim before
   acting; if it doesn't hold up, reply saying why and decline.
 - **A review comment citing a rule is a *reading* of that rule, not the rule.** Go back to
