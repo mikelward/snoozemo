@@ -973,6 +973,22 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     that *something else* turned on (a schedule, bedtime, a manual toggle) is a distinct, much
     cheaper feature that Snoozemo does not have today and could ship regardless of what happens to
     presence.
+  - **The cheap version cannot be built as described** (verified against the platform behavior-changes
+    doc, 2026-08-14). An app targeting Android 15+ "can no longer change the global state or policy of
+    Do Not Disturb (either by modifying user settings, or turning off DND mode)"; `setInterruptionFilter`
+    is redirected into an *implicit* `AutomaticZenRule` owned by the caller, and the doc is explicit
+    that the change bites exactly when an app "is calling `setInterruptionFilter(INTERRUPTION_FILTER_ALL)`
+    and expects that call to deactivate an `AutomaticZenRule` that was previously activated by their
+    owners." So a notification reading `tap to turn off Do Not Disturb` would turn off nothing the user
+    turned on: DND from the Quick Settings toggle, a schedule, or bedtime mode all belong to someone
+    else. **Detecting** it is still fine — `getCurrentInterruptionFilter()` under the policy access the
+    app already holds — so the honest version of the idea is a notification that says DND is on and
+    deep-links into Settings. That is two taps and a settings screen instead of one tap, which is most
+    of what made the reduction attractive.
+  - The same constraint is why the Pixel asymmetry exists: bedtime mode's notification turns off *its
+    own* rule, which is the one thing any app can do. It is also `SPEC.md` D1 and §5.6 restated —
+    Snoozemo ends only the rule it created, and that is the mechanism the platform sanctions, so
+    nothing in the current design is threatened by this.
   - **Owed**: a written comparison against the current spec — what each option deletes, keeps and
     costs — before anything is decided.
 
