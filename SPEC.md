@@ -750,47 +750,53 @@ own rule* — whatever else was making the phone quiet stays. This is the concre
 
 ```kotlin
 interface PresenceMonitor {
-    fun start(anchor: Anchor): Flow<PresenceEvent>
+    fun start(anchor: Anchor): Flow<PresenceUpdate>
     fun stop()
 }
 ```
 
-`PresenceEvent` is `StillHere`, `ProbablyLeft`, `Departed`, `Degraded(cause)`, and
-`CapabilityLost(cause)`, plus whatever the engine needs to report that a degradation is over — see
-below. The last two must stay separate types, because they demand opposite
-responses and the difference cannot be left to a monitor's judgment or to a display string:
-**`Degraded` keeps the snooze armed** in a lesser tracking mode with the notification saying so
-(§8.1), while **`CapabilityLost` ends it** with `EndReason.LOST_CAPABILITY` (§8.2, D7). A monitor
-that reports a revoked location permission as `Degraded` leaves the phone silent with nothing left
-to end the snooze — principle 1's failure — so a fatal cause is never reported as a recoverable one.
+Each `PresenceUpdate` carries two things of deliberately different shapes: an **event**, which is
+news and usually absent, and a **tracking health level**, restated every time whether it moved or
+not.
+
+`PresenceEvent` is `StillHere`, `ProbablyLeft`, `Departed`, and `CapabilityLost(cause)` — the four
+things that can *happen*. `CapabilityLost` must stay a type of its own rather than a value the
+controller interprets: **a degraded level keeps the snooze armed** in a lesser tracking mode with the
+notification saying so (§8.1), while **`CapabilityLost` ends it** with `EndReason.LOST_CAPABILITY`
+(§8.2, D7). A monitor that reported a revoked location permission as mere degradation would leave
+the phone silent with nothing left to end the snooze — principle 1's failure — so a fatal cause is
+never reported as a recoverable one.
+
+**Health is a level and not an event, and that is a decision with a history.** It was originally
+reported as a pair of events, one for degrading and one for recovering, and every ordering question
+then became *did the announcement survive?* — through an escalation that outranked it, through a
+Wi-Fi association that suppressed location before it could be said again, through a second fix that
+overwrote it, through a staleness gate that dropped it. A level cannot be lost in transit, so none
+of those questions exist. The controller compares what it is told against what it believes and acts
+on the difference, which also makes "report it once, not once per bad fix" a property of the
+comparison rather than a rule the engine has to remember.
 
 **A degradation must be withdrawn once tracking recovers.** One the app announced and then never
 took back is a false statement about its own state, and the kind that teaches the user to disbelieve
-the line that matters when it is true (principle 2). So evidence that a capability is working again
-raises the tracking mode back.
+the line that matters when it is true (principle 2).
 
-**And it raises it only as far as the evidence supports** — never past what the anchor could ever
-support, and never past what that particular signal proves. Rejoining the anchor's network proves
-Wi-Fi works and says nothing whatever about location, so it may lift `DURATION_ONLY` to `WIFI_ONLY`
-and may never claim `FULL`. Replacing a stale degraded line with a false healthy one is the same
-failure in the more dangerous direction: the user would read that departure detection is running
-when nothing is watching for it.
-
-**A recovery must not be lost, whatever else the same moment is saying.** Location can prove it is
-working at a moment that settles nothing about presence, or at a moment the engine is busy
-escalating — and there is rarely a second chance to say so. Rejoining the anchor's network
-suppresses location entirely (§6.7), so a recovery dropped just before that is a snooze reading
-`Wi-Fi only` until the cap with nothing left that could ever correct it.
+**Health is about location, and Wi-Fi is not evidence about location.** Rejoining the anchor's
+network proves Wi-Fi works and says nothing whatever about whether location started working, so it
+does not clear a degradation — which is what stops a snooze claiming `FULL` while nothing is
+watching for a departure. Replacing a stale degraded line with a false healthy one is the same
+failure in the more dangerous direction.
 
 **The two halves of a fix go stale at different rates.** *Where the user was* expires as soon as
 newer evidence lands (§6.6's staleness rule). *That location managed a reading good enough to
 measure with* does not expire at all — the subsystem either did or it didn't. So a reading too old
-to say where anyone is can still be the thing that says tracking recovered.
+to say where anyone is can still be the thing that says location is working again — which matters
+because the next thing that happens may be rejoining the anchor's network, and that suppresses
+location entirely (§6.7).
 
-**A recovery must be newer than the failure it claims is over.** The same cached and batched
+**Evidence of health must be newer than the failure it claims is over.** The same cached and batched
 delivery that makes the rule above necessary can also hand over a reading captured *before* the
-trouble started; accepting that would restore `FULL` on evidence older than the problem and hide a
-degradation while departure tracking is still broken. That is the overstating direction, so the
+trouble started; accepting that would restore full tracking on evidence older than the problem, and
+hide a degradation while departure tracking is still broken. That is the overstating direction, so the
 boundary is explicit: capability evidence counts only if it post-dates the last unusable
 observation.
 

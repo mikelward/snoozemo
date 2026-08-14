@@ -39,23 +39,17 @@ class SnoozeController(
         fun onStateChanged(state: SnoozeState, snooze: ActiveSnooze?, reason: EndReason?)
 
         /**
-         * Tracking degraded but the snooze continues — the notification must say
-         * so rather than quietly becoming a timer (SPEC.md §8.1).
-         */
-        fun onDegraded(snooze: ActiveSnooze, cause: DegradationCause)
-
-        /**
-         * Tracking recovered, with no transition to carry the news: the mode on
-         * [snooze] has risen and the notification has to stop claiming a
-         * degradation that is over.
+         * How well tracking is working has changed, with no transition to carry
+         * the news — [snooze] holds the new mode and [degradation] the reason,
+         * or null now that there isn't one.
          *
-         * Separate from [onStateChanged] because nothing changed state — the
-         * snooze was `ARMED` before and after — and separate from [onDegraded]
-         * because the two move in opposite directions and a caller that told
-         * them apart by comparing modes would be re-deriving what the callback
-         * already knows.
+         * One callback for both directions, because there is one fact: the
+         * caller does the same three things either way (record, notification,
+         * tile), and a pair of opposite callbacks was an invitation to handle
+         * the recovery half less carefully than the degradation half — which is
+         * exactly what happened (SPEC.md §8.1).
          */
-        fun onTrackingRestored(snooze: ActiveSnooze)
+        fun onTrackingChanged(snooze: ActiveSnooze, degradation: DegradationCause?)
 
         /**
          * Arm or release didn't take. The caller surfaces this; it is never
@@ -157,7 +151,7 @@ class SnoozeController(
         // Armed, but say so if it armed degraded: a snooze that is really only a
         // timer must not look like a tracked one (SPEC.md §4.1, §8.1).
         if (armed.mode != TrackingMode.FULL) {
-            listener.onDegraded(armed, DegradationCause.NO_LOCATION_FIX)
+            listener.onTrackingChanged(armed, DegradationCause.NO_LOCATION_FIX)
         }
     }
 
@@ -284,30 +278,39 @@ class SnoozeController(
         if (snooze.isExpired(readClock())) end(EndReason.DURATION_CAP)
     }
 
-    /** What the presence engine concluded (SPEC.md §6.1). */
-    fun onPresenceEvent(event: PresenceEvent) {
+    /**
+     * One report from the presence engine: how well tracking is working, and
+     * what (if anything) just happened (SPEC.md §6.1).
+     *
+     * The tracking level is applied **first, and silently**, so that when the
+     * event also produces a transition the notification is posted once, already
+     * correct, rather than as a stale line followed by a correction.
+     */
+    fun onPresenceUpdate(update: PresenceUpdate) {
+        val snooze = active ?: return
+
+        val mode = modeFor(update.degradation, snooze.anchor)
+        val moved = mode != snooze.mode
+        if (moved) active = snooze.copy(mode = mode)
+
+        val before = state
+        update.event?.let { report(it) }
+
+        // Only when nothing else has already said it. A transition carries the
+        // record — and therefore the mode — to the same three places this would
+        // (SPEC.md §8.1), and `end` has made the question moot.
+        val current = active
+        if (moved && current != null && state == before) {
+            listener.onTrackingChanged(current, update.degradation)
+        }
+    }
+
+    private fun report(event: PresenceEvent) {
         val snooze = active ?: return
         when (event) {
-            is PresenceEvent.StillHere -> {
-                // Presence confirmed, so whatever the degradation was claiming
-                // is now out of date in at least one respect. Undone before the
-                // transition is announced, so the notification is posted once,
-                // already correct.
-                val restored = restoreTracking(snooze, event.confirmedBy)
-                if (restored != null) active = restored
-                val current = restored ?: snooze
-                if (state == SnoozeState.CHECKING) {
-                    state = SnoozeState.ARMED
-                    listener.onStateChanged(state, current, null)
-                } else if (restored != null) {
-                    // No transition to carry it: a snooze that degraded while
-                    // ARMED recovers while ARMED. Without this the ongoing
-                    // notification keeps saying tracking is degraded after it
-                    // stopped being, which is principle 2's failure pointed the
-                    // other way — and it teaches the user to disbelieve the
-                    // line that matters.
-                    listener.onTrackingRestored(current)
-                }
+            PresenceEvent.StillHere -> if (state == SnoozeState.CHECKING) {
+                state = SnoozeState.ARMED
+                listener.onStateChanged(state, snooze, null)
             }
 
             PresenceEvent.ProbablyLeft -> if (state == SnoozeState.ARMED) {
@@ -317,24 +320,7 @@ class SnoozeController(
                 listener.onStateChanged(state, snooze, null)
             }
 
-            // Tracking only. The check that this fix arrived during is still
-            // running, so the state is left exactly where it was — the user may
-            // yet turn out to have left.
-            is PresenceEvent.TrackingRecovered -> {
-                val restored = restoreTracking(snooze, event.confirmedBy)
-                if (restored != null) {
-                    active = restored
-                    listener.onTrackingRestored(restored)
-                }
-            }
-
             PresenceEvent.Departed -> end(EndReason.DEPARTURE)
-
-            is PresenceEvent.Degraded -> {
-                val degraded = snooze.copy(mode = event.cause.modeFor(snooze.anchor))
-                active = degraded
-                listener.onDegraded(degraded, event.cause)
-            }
 
             // Fail open: tracking cannot be done at all, so the snooze ends
             // rather than staying armed on state nothing can verify.
@@ -423,52 +409,25 @@ class SnoozeController(
     }
 
     /**
-     * How far a degradation actually knocks tracking down, which depends on what
-     * the anchor had to begin with: losing location leaves Wi-Fi *only if there
-     * was an SSID*, and claiming `WIFI_ONLY` for an anchor with no network would
-     * tell the user tracking is better than it is.
-     */
-    private fun DegradationCause.modeFor(anchor: Anchor): TrackingMode = when (this) {
-        // Location is gone but may come back; Wi-Fi still suppresses if we have it.
-        DegradationCause.NO_LOCATION_FIX,
-        DegradationCause.FIXES_TOO_VAGUE,
-        DegradationCause.LOCATION_SERVICES_OFF,
-        DegradationCause.NO_LOCATION_IN_BACKGROUND,
-        -> if (anchor.ssid != null) TrackingMode.WIFI_ONLY else TrackingMode.DURATION_ONLY
-    }
-
-    /**
-     * The snooze with its tracking mode raised to what presence has just proven,
-     * or null when nothing rises.
+     * The tracking mode a given level of health adds up to.
      *
-     * Two ceilings, and applying only one of them is the bug this exists to
-     * avoid. **What the anchor could ever support**: an anchor with no usable
-     * fix is not [TrackingMode.FULL] however good the reading that just
-     * arrived, because the departure test has nothing to measure against.
-     * **What this particular evidence proves**: rejoining the anchor's network
-     * says Wi-Fi works and says nothing whatever about location, so it may lift
-     * [TrackingMode.DURATION_ONLY] to [TrackingMode.WIFI_ONLY] and must never
-     * claim `FULL` — announcing recovered location tracking on the strength of
-     * a Wi-Fi association is the same lie as leaving the stale degraded line up,
-     * told in the more dangerous direction.
+     * Two inputs and no memory, which is the whole point of reporting health as
+     * a level: there is nothing to restore, nothing owed, and no ordering to get
+     * right — the mode is a function of what the anchor could ever support and
+     * whether location is currently answering.
      *
-     * Only ever raises. A confirmation of presence is not evidence that
-     * anything broke, so it cannot lower the mode — that is [onDegraded]'s job
-     * and it has its own signal.
+     * The rule that used to need its own ceiling falls out of that. Rejoining
+     * the anchor's network does not clear the engine's degradation, because
+     * every cause is a *location* cause and Wi-Fi says nothing about location —
+     * so the mode stays `WIFI_ONLY` without anyone having to remember not to
+     * claim `FULL`.
      */
-    private fun restoreTracking(
-        snooze: ActiveSnooze,
-        evidence: PresenceEvidence,
-    ): ActiveSnooze? {
-        val provenBy = when (evidence) {
-            PresenceEvidence.LOCATION_FIX -> TrackingMode.FULL
-            PresenceEvidence.ANCHOR_WIFI -> TrackingMode.WIFI_ONLY
-        }
-        // The enum runs FULL → WIFI_ONLY → DURATION_ONLY, most capable first,
-        // so of two ceilings the *later* one is the lower claim and `maxOf`
-        // picks it. Likewise `<` reads as "more capable than", which is what
-        // makes this a rise rather than a change.
-        val restored = maxOf(TrackingMode.from(snooze.anchor), provenBy)
-        return if (restored < snooze.mode) snooze.copy(mode = restored) else null
+    private fun modeFor(degradation: DegradationCause?, anchor: Anchor): TrackingMode = when {
+        degradation == null -> TrackingMode.from(anchor)
+        // Losing location leaves Wi-Fi *only if there was an SSID*; claiming
+        // `WIFI_ONLY` for an anchor with no network would tell the user tracking
+        // is better than it is.
+        anchor.ssid != null -> TrackingMode.WIFI_ONLY
+        else -> TrackingMode.DURATION_ONLY
     }
 }
