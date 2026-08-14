@@ -1025,6 +1025,25 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     a snooze that ends on a duration cap needs the same controller.
 
 ## Decisions needing review
+- **Report tracking *health* on every step instead of recovery *events*** — the follow-up PR, and
+  a bigger idea than the one first recorded here (autopilot, 2026-08-14). Seven Codex rounds on
+  #33, **four of them in code written during the PR** and the last two caused by the round before,
+  all share a shape: a recovery is a one-shot announcement, so every ordering question becomes
+  "did the announcement survive?" That is what forced `pendingRecovery` and its
+  deliver/preserve/invalidate rules, `TrackingRecovered`, the evidence on `StillHere`, and then a
+  time boundary to stop a cached reading forging the announcement.
+  - **`PresenceStep` already carries `duty` as a computed *level*, not an event.** Tracking health
+    is the same shape and should be reported the same way: the controller reads it each step and
+    moves the mode when it changes. No debt to carry, no precedence between an escalation and a
+    recovery, no question of which event a recovery rides out on — the three interacting fields
+    collapse to one, and the staleness rule applies in a single place instead of several.
+  - This **subsumes** the earlier "make `PresenceStep` carry a list of events" note, which solved
+    only the collision case and would have left the rest.
+  - **Held out of #33** because #33 is a bug fix that works and is now covered by seven rounds of
+    adversarial tests — which are exactly what protects a rewrite. Landing the fix first means the
+    follow-up is a pure simplification with the behavior already pinned. Reversible in the cheap
+    direction: a separate PR can be dropped, a mixed one cannot be un-mixed. **Note it may be moot**: if presence loses open question 3, the engine stops
+  being the product's critical path and the refactor is polish on code nothing depends on.
 - **A snooze that *becomes* unverifiable now ends on the same 5-minute grace period as one that
   armed that way** (autopilot, 2026-08-13). `SPEC.md` §6.6 wrote the grace period for the anchor
   that never had a fix; the engine also starts it when a healthy snooze loses the anchor's Wi-Fi
