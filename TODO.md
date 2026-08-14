@@ -553,28 +553,60 @@ the point is that every other line of the app is worthless if it isn't true.
       reason (`SPEC.md` §8.2).
 - [ ] The §8.5 table: airplane mode, location services off, double-arm, short trip and
       return, bad-accuracy anchor, battery saver, uninstall while snoozed.
+- [ ] **The read-back may end every snooze that spans a reboot** (Codex, PR #36) — the finding that
+      makes the decision below urgent rather than tidy. Boot and app update both enter through
+      `ACTION_RESTORE`, which is exactly where the rule-state read-back runs. If the platform resets
+      an app-owned rule's condition to `STATE_FALSE` across a reboot — which `restore()` re-asserting
+      `STATE_TRUE` exists to handle, so the code already assumes it might — then an armed record over
+      that reset reads as **the user turned Do Not Disturb off**: the snooze ends, silently, with the
+      platform told it was a user action. That contradicts "the record survives process death and
+      reboots".
+      - **Needs a device to settle**, and it is the crux: if the condition *does* persist across a
+        reboot there is no bug at all. Not answerable in the sandbox (no DND-capable device), so it
+        joins the hardware-verification list.
+      - Note the direction: the earlier fix that stopped a restore *re-asserting* over a user's
+        deactivation is what makes this reachable. The same read-back now has failure modes in both
+        directions — re-silencing a phone the user un-silenced, and ending a snooze the user still
+        wants — which is the strongest argument that the mechanism is wrong rather than incomplete.
+
+- [ ] **A record written before `armed` existed reads as an unfinished arm** (Codex, PR #36).
+      `getBoolean(KEY_ARMED, false)` treats *absent* as *not armed*, but absent only happens for a
+      record from a build predating the field — which was, by definition, armed the old way. On an
+      update with a live snooze, the next restoring wake-up therefore re-asserts the rule over a Do
+      Not Disturb the user may have switched off. **Currently unreachable**: nothing has shipped, so
+      no such record exists outside a dev device that updated mid-snooze.
+      - The one-line fix is defaulting absent to `true`, which is safe because every record this
+        build writes carries the key explicitly. It is *deliberately not applied yet* — it is the
+        fourth instance of one bug class in this mechanism, and the pending decision below either
+        removes the flag or replaces it with a lifecycle state that answers migration once.
+      - **Blocked on the maintainer's call**: keep the zen-rule read-back as it stands, model the
+        record's lifecycle explicitly (one state on `ActiveSnooze`, the four causes of "live record
+        over an off rule" enumerated in one place), or drop the read-back and let the broadcast
+        stand alone. Seven consecutive Codex findings landed in this mechanism; three of them were
+        caused by the fix for the previous one.
+
 - [ ] The §8.4 cases: `restricted` standby bucket, force-stop, OEM battery management.
-- [ ] **The user turning Do Not Disturb off from the shade may silently end our snooze**
-      (maintainer, 2026-08-12 — "we should handle that soon"). §5.6 covers the *pre-existing*
-      case at arm time; this is the state changing underneath a running snooze. If switching
-      DND off deactivates Snoozemo's rule, the snooze is over while the record, the tile and
-      the notification all still say it is running — state drift in the direction that makes
-      the app look broken rather than unsafe, but drift the user caused deliberately and will
-      expect us to notice.
-      - **Confirm the platform behavior first**, because it decides whether there is anything
-        to build: does turning DND off from the shade deactivate an app-owned
-        `AutomaticZenRule`, leave it active-but-overridden, or neither? On the hardware list.
-      - If it does deactivate: treat it as an ordinary end — clear the record, take the
-        notification down, update the tile, and give it its own `EndReason` so §4.5's "every
-        ending has a reason" holds. It is the user's own action, so there is nothing to warn
-        about and nothing to retry.
-      - **Observable without new cost**: `ACTION_INTERRUPTION_FILTER_CHANGED`, plus reading
-        our own rule's state back. Register it beside the policy-access receiver, which has
-        the same process-lifetime limit (§8.4) — so this is reliable on the wake-ups we
-        already have and **must not** justify adding one.
-      - The two neighboring cases are deliberately *not* in scope: DND turned on by the user
-        or another app while we are idle (harmless; at most the tile reads "not snoozing"
-        beside a quiet phone), and another app's rule ending while ours is on (nothing to do).
+- [x] **The user turning Do Not Disturb off from the shade may silently end our snooze**
+      (maintainer, 2026-08-12 — "we should handle that soon"). Done, and the platform question
+      that gated it turned out to be documented rather than empirical:
+      `ACTION_AUTOMATIC_ZEN_RULE_STATUS_CHANGED` reports `AUTOMATIC_RULE_STATUS_DEACTIVATED` when
+      the user switches an app-owned rule off (API 35+), so no interruption-filter inference is
+      needed and no wake-up is added.
+      - **The broadcast is the timely answer; the read-back is the reliable one.** A receiver can
+        be refused registration, and this process only lives between wake-ups, so a snooze can
+        outlive the only thing watching it. `ruleActivation()` re-asks on every non-arm wake-up,
+        which turns that into *late* rather than *never* — and it has to run **before** the
+        restore, because restoring re-asserts the rule and overwrites the evidence (Codex, PR #36).
+        Both mechanisms are API 35, so on 34 the drift is not observable and the cap is the bound.
+      - **It was more urgent than "state drift".** A deactivated rule stays deactivated until its
+        owner sets it back to `STATE_FALSE`, so leaving the snooze running would have left the
+        *next* tap arming a rule the platform ignores — the tile reading `Snoozing` over a phone
+        that still rings. Ending the snooze is what issues that `STATE_FALSE`.
+      - `REMOVED` and `DISABLED` fail open as `LOST_CAPABILITY`; a removed rule is recreated when
+        idle, a disabled one never is. All of it gated on the rule being ours (§5.6 for reads).
+      - **Still owed a device**: that the shade toggle really does produce `DEACTIVATED` for our
+        rule on a Pixel, and what API 34 does instead — the receiver is correct either way, but
+        on 34 the drift this fixes may simply still happen.
 - [ ] **A reboot that stays locked outlasts the cap** (flagged by Codex on PR #8).
       `BOOT_COMPLETED` reaches credential-unaware components only after the *first unlock*,
       and the snooze record lives in credential-protected storage, so a phone rebooted

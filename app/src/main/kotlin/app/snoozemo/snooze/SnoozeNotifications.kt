@@ -188,9 +188,13 @@ class SnoozeNotifications(private val context: Context) {
             EndReason.DEPARTURE -> R.string.ended_departure
             EndReason.DURATION_CAP -> R.string.ended_cap
             EndReason.LOST_CAPABILITY -> R.string.ended_lost_capability
-            // A manual end needs no notification: the user just did it and can
-            // see the result. Telling them what they already know is noise.
-            EndReason.MANUAL, null -> return
+            // Neither of these needs a notification: the user just did it and
+            // can hear the result. Telling them what they already know is
+            // noise, and `DND_TURNED_OFF` is the more emphatic case of it —
+            // they turned Do Not Disturb off *because* they wanted the phone
+            // back, so a card explaining that the phone is back is worse than
+            // nothing (SPEC.md §5.7).
+            EndReason.MANUAL, EndReason.DND_TURNED_OFF, null -> return
         }
         post(
             ID_ENDED,
