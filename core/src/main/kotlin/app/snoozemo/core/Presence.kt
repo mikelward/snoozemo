@@ -136,6 +136,22 @@ data class PresenceState(
      * matters.
      */
     val reportedDegradation: DegradationCause? = null,
+    /**
+     * When location last failed to say anything usable, or null if it never has.
+     *
+     * The boundary a recovery has to beat (Codex, PR #33). A reading captured
+     * *before* the failures proves nothing about whether they are over, and
+     * cached and batched delivery means one can arrive long afterwards —
+     * promoting the snooze to [TrackingMode.FULL] on evidence older than the
+     * problem, which hides a degradation while departure tracking is still
+     * broken. That is the overstating direction, and the one this whole change
+     * exists to prevent.
+     *
+     * Only the stale path needs it: a reading new enough to be accepted for
+     * presence is already newer than every observation, since a failed one
+     * moves the evidence bar too.
+     */
+    val lastUnusableAtMs: Long? = null,
     /** When the anchor's Wi-Fi went away, or null if it is present or never was. */
     val wifiLostAtMs: Long? = null,
     /**
@@ -178,6 +194,19 @@ data class PresenceState(
      * [PresenceSignal.GraceElapsed]; a null means there is nothing to arm.
      */
     val graceDeadlineMs: Long? = null,
+    /**
+     * A recovery the engine has established but has not been able to report
+     * yet, or null when there is nothing owed.
+     *
+     * One signal can prove location works *and* demand an escalation — a
+     * qualifying fix taken while resting — and a step carries one event, which
+     * the escalation has to win. Dropping the recovery there is how a snooze
+     * ends up reading `Wi-Fi only` for good: the phone rejoins the anchor's
+     * network, Wi-Fi suppresses location entirely (§6.7), and no later fix ever
+     * arrives to correct it (Codex, PR #33). Held here instead, and attached to
+     * the next event that goes out.
+     */
+    val pendingRecovery: PresenceEvidence? = null,
     /**
      * Whether this engine has already concluded the snooze is over.
      *
@@ -356,7 +385,18 @@ object Presence {
             atAnchorWifi = true,
             progress = DepartureProgress.NONE,
             uselessObservations = 0,
-            reportedDegradation = null,
+            // The degradation deliberately survives this (Codex, PR #33). Every
+            // cause is a *location* cause, and rejoining the anchor's network
+            // says nothing about whether location started working — so clearing
+            // it here would drop the engine's only memory that location is
+            // broken. What that cost: a fix arriving afterward finds neither a
+            // check nor a degradation outstanding, reports nothing, and the
+            // controller keeps a `WIFI_ONLY` claim that has stopped being true —
+            // the stale line this event exists to withdraw. A usable fix is the
+            // only thing that clears it, in `evaluate`, because a usable fix is
+            // the only evidence that says location is back.
+            // Reported below if there was one, so it stops being owed.
+            pendingRecovery = null,
             wifiLostAtMs = null,
             graceDeadlineMs = null,
             checkingSinceMs = null,
@@ -368,8 +408,16 @@ object Presence {
         // Reported only when it resolves something: rejoining the anchor's
         // network after a check or a degraded run is news, and arriving at a
         // state the controller is already in is not.
-        val changed = state.phase == PresencePhase.CHECKING || state.reportedDegradation != null
-        return step(next, if (changed) PresenceEvent.StillHere else null, anchor)
+        val changed = state.phase == PresencePhase.CHECKING ||
+            state.reportedDegradation != null ||
+            state.pendingRecovery != null
+        // The evidence is the best tracking this event can vouch for, which is
+        // not always the signal that produced it. An owed recovery rides out
+        // here (Codex, PR #33): location proved itself before the phone rejoined
+        // the network, and this is the last event that will go out before Wi-Fi
+        // suppresses location and takes the chance to say so with it.
+        val proven = state.pendingRecovery ?: PresenceEvidence.ANCHOR_WIFI
+        return step(next, if (changed) PresenceEvent.StillHere(proven) else null, anchor)
     }
 
     private fun wifiLost(state: PresenceState, atMs: Long, anchor: Anchor): PresenceStep {
@@ -416,7 +464,7 @@ object Presence {
         // whose notification already says it is Wi-Fi-only.
         if (!anchor.hasUsableFix) return step(state, null, anchor)
 
-        if (isStale(state, fix.elapsedRealtimeMs)) return step(state, null, anchor)
+        if (isStale(state, fix.elapsedRealtimeMs)) return staleFix(state, fix, anchor)
 
         val outcome = Departure.consider(fix, anchor, state.progress)
         val accepted = state.copy(latestEvidenceMs = fix.elapsedRealtimeMs)
@@ -424,11 +472,45 @@ object Presence {
             DepartureVerdict.DEPARTED -> departed(accepted, anchor)
 
             DepartureVerdict.AWAITING_CONFIRMATION -> {
+                // This reading says location works while saying nothing settled
+                // about presence, which is the one combination `StillHere`
+                // cannot express — so the recovery travels on its own event
+                // (Codex, PR #33). Without it the degradation was cleared here
+                // and never reported: the engine is already `CHECKING`, so
+                // `escalationEvent` returns null, and after this the only
+                // evidence left is Wi-Fi, which by design cannot restore
+                // `FULL`. The notification then reads `Wi-Fi only` for the rest
+                // of a snooze whose location came back.
+                val escalation = escalationEvent(state)
+                val recovery = if (state.reportedDegradation != null) {
+                    PresenceEvent.TrackingRecovered(PresenceEvidence.LOCATION_FIX)
+                } else {
+                    null
+                }
+                val emitted = escalation ?: recovery
                 val next = accepted.copy(
                     phase = PresencePhase.CHECKING,
                     progress = outcome.progress,
                     uselessObservations = 0,
+                    // Location answered, so the engine no longer believes it is
+                    // broken whatever it manages to report.
                     reportedDegradation = null,
+                    pendingRecovery = when {
+                        // Delivered by this step, so nothing is left owed.
+                        recovery != null && emitted === recovery -> null
+                        // Established now, but the escalation took the one event
+                        // this step carries. Owed rather than dropped.
+                        recovery != null -> recovery.confirmedBy
+                        // Nothing new established, so a debt from an earlier fix
+                        // stays a debt (Codex, PR #33). The second qualifying fix
+                        // of a confirmation window arrives here with no
+                        // degradation left to notice and no escalation to make,
+                        // and overwriting would discharge a recovery that was
+                        // never reported — leaving the association to report
+                        // Wi-Fi alone, after which nothing asks for location
+                        // again.
+                        else -> state.pendingRecovery
+                    },
                     // Location is answering again, so the grace period's premise
                     // — that nothing can confirm a departure — no longer holds,
                     // and an alarm left armed would end the snooze on a timer
@@ -438,7 +520,7 @@ object Presence {
                     graceDeadlineMs = null,
                     checkingSinceMs = state.checkingSinceMs ?: fix.elapsedRealtimeMs,
                 )
-                step(next, escalationEvent(state), anchor)
+                step(next, emitted, anchor)
             }
 
             DepartureVerdict.STILL_HERE -> {
@@ -450,12 +532,19 @@ object Presence {
                     progress = DepartureProgress.NONE,
                     uselessObservations = 0,
                     reportedDegradation = null,
+                    // This event carries the recovery itself, so nothing is owed.
+                    pendingRecovery = null,
                     graceDeadlineMs = null,
                     checkingSinceMs = null,
                 )
                 val changed = state.phase == PresencePhase.CHECKING ||
-                    state.reportedDegradation != null
-                step(next, if (changed) PresenceEvent.StillHere else null, anchor)
+                    state.reportedDegradation != null ||
+                    state.pendingRecovery != null
+                step(
+                    next,
+                    if (changed) PresenceEvent.StillHere(PresenceEvidence.LOCATION_FIX) else null,
+                    anchor,
+                )
             }
 
             DepartureVerdict.INCONCLUSIVE -> useless(
@@ -465,6 +554,56 @@ object Presence {
                 anchor,
             )
         }
+    }
+
+    /**
+     * A reading whose question has already been answered — but which may still
+     * be the only proof that location started working again (Codex, PR #33).
+     *
+     * The two halves of a fix go stale at different rates. *Where the user was*
+     * expires the moment newer evidence lands, which is what [isStale] is for.
+     * *That location produced a reading good enough to measure with* does not
+     * expire at all: the subsystem either managed it or it didn't.
+     *
+     * Dropping the whole reading strands a snooze whenever a queued fix is
+     * delivered just after the phone rejoins the anchor's network — the
+     * association bumps the evidence bar past the fix, and then suppresses
+     * location entirely (§6.7), so nothing else will ever arrive to say
+     * tracking recovered. The notification sits on `Wi-Fi only` until the next
+     * time Wi-Fi drops.
+     *
+     * So the presence half is discarded exactly as before — no phase change, no
+     * progress, no advance of the evidence bar — and only the capability is
+     * reported.
+     */
+    private fun staleFix(state: PresenceState, fix: Fix, anchor: Anchor): PresenceStep {
+        if (state.reportedDegradation == null) return step(state, null, anchor)
+
+        // A reading captured *before* the failures says nothing about whether
+        // they are over (Codex, PR #33). Cached and batched delivery makes this
+        // reachable — a last-known location from before the trouble started,
+        // handed over long after — and accepting it would promote the snooze to
+        // FULL on evidence older than the problem, hiding a degradation while
+        // departure tracking is still broken.
+        val newerThanTheFailure = fix.elapsedRealtimeMs > (state.lastUnusableAtMs ?: Long.MIN_VALUE)
+        if (!newerThanTheFailure) return step(state, null, anchor)
+
+        // Only this reading's precision is being read. The verdict is computed
+        // against a fresh [DepartureProgress] and then thrown away, so a stale
+        // fix cannot advance the confirmation window it was never part of.
+        val couldPlaceAnyone = Departure.consider(fix, anchor, DepartureProgress.NONE).verdict !=
+            DepartureVerdict.INCONCLUSIVE
+        if (!couldPlaceAnyone) return step(state, null, anchor)
+
+        val next = state.copy(
+            // The run of failures is over: location managed a usable reading.
+            // Left standing, the count would re-report a degradation on the
+            // very next vague fix rather than after a fresh run of them.
+            uselessObservations = 0,
+            reportedDegradation = null,
+            pendingRecovery = null,
+        )
+        return step(next, PresenceEvent.TrackingRecovered(PresenceEvidence.LOCATION_FIX), anchor)
     }
 
     /**
@@ -505,7 +644,13 @@ object Presence {
         val next = state.copy(
             uselessObservations = count,
             latestEvidenceMs = maxOfNullable(state.latestEvidenceMs, atMs),
+            // Moves forward only, so a re-delivered failure cannot pull the
+            // boundary back and let an older reading through.
+            lastUnusableAtMs = maxOfNullable(state.lastUnusableAtMs, atMs),
             reportedDegradation = if (nowDegraded) cause else state.reportedDegradation,
+            // Location has broken again, so a recovery still owed from before is
+            // no longer true and must not be delivered by a later event.
+            pendingRecovery = if (nowDegraded) null else state.pendingRecovery,
             // Location has just stopped being able to answer, so if Wi-Fi is
             // also gone the snooze is now unverifiable and the §6.6 grace period
             // starts here rather than never. Without this, a snooze that armed

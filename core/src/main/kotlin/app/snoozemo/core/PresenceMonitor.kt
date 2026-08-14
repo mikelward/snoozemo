@@ -33,8 +33,15 @@ sealed interface PresenceEvent {
     /**
      * Positive evidence the user has not left — associated with the anchor SSID,
      * or a fix inside the radius. De-escalates back to `ARMED`.
+     *
+     * [confirmedBy] is what actually answered, and it is on the event because
+     * the controller uses this to *undo* a degradation (SPEC.md §8.1): the two
+     * sources prove different things, and restoring more than the evidence
+     * supports is the same false statement as leaving a stale degraded line up.
+     * Rejoining the anchor's network says nothing about whether location
+     * started working again.
      */
-    data object StillHere : PresenceEvent
+    data class StillHere(val confirmedBy: PresenceEvidence) : PresenceEvent
 
     /**
      * Something suggests departure but nothing has confirmed it: Wi-Fi dropped,
@@ -49,6 +56,19 @@ sealed interface PresenceEvent {
      * or one fix unambiguously beyond the radius (SPEC.md §6.6).
      */
     data object Departed : PresenceEvent
+
+    /**
+     * A capability that had degraded is working again, with presence still
+     * unsettled — a fix good enough to measure with that puts the user outside
+     * the radius, mid-check.
+     *
+     * Distinct from [StillHere] because it makes no claim about where the user
+     * is: the check it arrived during carries on, and the controller changes
+     * only the tracking mode. Without it that recovery has nowhere to travel,
+     * since a step carries one event and the alternatives are an escalation the
+     * controller needs or nothing at all (SPEC.md §8.1).
+     */
+    data class TrackingRecovered(val confirmedBy: PresenceEvidence) : PresenceEvent
 
     /**
      * Tracking is working less well than it should, but the snooze stays armed:
@@ -77,6 +97,28 @@ sealed interface PresenceEvent {
      * back.
      */
     data class CapabilityLost(val cause: CapabilityLossCause) : PresenceEvent
+}
+
+/**
+ * Which signal confirmed presence, and so which capability has just been
+ * observed working.
+ *
+ * The ceiling on what a recovery may restore. An enum rather than a boolean
+ * because "location is back" and "Wi-Fi is back" are different claims about the
+ * app's own state, and the notification makes exactly that claim to the user.
+ */
+enum class PresenceEvidence {
+    /**
+     * Associated with the anchor's SSID. Proves Wi-Fi tracking works; proves
+     * nothing about location, which may still be off, denied, or blind.
+     */
+    ANCHOR_WIFI,
+
+    /**
+     * A fix good enough to place the user inside the radius. Location is
+     * working, so tracking can go back to whatever the anchor supports.
+     */
+    LOCATION_FIX,
 }
 
 /**

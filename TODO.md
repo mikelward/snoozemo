@@ -405,14 +405,30 @@ the point is that every other line of the app is worthless if it isn't true.
           describes "unverifiable, ending shortly unless something recovers"**, which is what
           the user actually needs to read, so this wants the same approved-copy step and
           probably a mode of its own. Both halves land together.
-      - [ ] **Recovering from degraded mode has no path back** (found while building the engine).
-        The engine forgets a degradation once a good fix or the anchor's Wi-Fi returns, and reports
-        `StillHere`. But `SnoozeController.onPresenceEvent` only moves `CHECKING` → `ARMED` on that
-        event; the `TrackingMode` it lowered stays lowered, so the notification keeps saying
-        tracking is degraded after it recovered. Principle 2 cuts both ways — a stale degraded line
-        is a false statement about the app's own state, and it teaches the user to ignore the line
-        that matters. The fix is a controller change plus, probably, a sixth `PresenceEvent`, which
-        makes it a `SPEC.md` §6.1 change rather than a tidy-up.
+      - [x] **Recovering from degraded mode has no path back** (found while building the engine).
+        The engine forgot a degradation once a good fix or the anchor's Wi-Fi returned and reported
+        `StillHere`, but `SnoozeController` only moved `CHECKING` → `ARMED` on it and left the
+        `TrackingMode` lowered, so the notification kept saying tracking was degraded after it
+        recovered. Fixed by restoring the mode on `StillHere` and reporting it through a new
+        `Listener.onTrackingRestored` for the case with no transition to carry it (degraded while
+        `ARMED`, recovered while `ARMED`). What was mainly missing was *which* signal confirmed
+        presence, so `StillHere` carries `PresenceEvidence` — restoring `FULL` on a Wi-Fi
+        association would have announced working location tracking on evidence that proves nothing
+        about location, which is the same lie in the worse direction. The sixth event did turn out
+        to be needed, for one case only: `TrackingRecovered`, for a fix good enough to measure with
+        that places the user outside the radius, which proves location works while settling nothing
+        about presence (Codex, PR #33). Recovery uses existing copy (it removes the degraded line
+        rather than adding one), so no approval step was needed. `SPEC.md` §6.1 updated.
+        - **A step carries one event, so a recovery that collides with an escalation is owed
+          rather than dropped** — `PresenceState.pendingRecovery`, delivered by the next event that
+          goes out (Codex, PR #33, three orderings). It has to survive as far as the Wi-Fi
+          association, which is the event with no second chance: association suppresses location
+          entirely (§6.7), so a `StillHere` reporting only Wi-Fi there strands the snooze on
+          `WIFI_ONLY` until the cap. Codex found this family three times from three directions —
+          association-then-fix, fix-then-association, and resting-degradation-then-both — which is
+          the argument for `PresenceStep` eventually carrying a *list* of events instead of one
+          plus precedence rules. Mechanical but wide (every test asserts on `.event`), so it stays
+          a follow-up rather than growing a bug-fix PR further.
 - [ ] Anchor capture at arm time — with the ≤10 s ceiling that degrades to Wi-Fi-only or
       duration-only rather than blocking the arm. **The SSID is the anchor; the connected
       BSSID is recorded alongside it** (`SPEC.md` §6.2). Those are two different

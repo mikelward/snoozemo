@@ -45,6 +45,19 @@ class SnoozeController(
         fun onDegraded(snooze: ActiveSnooze, cause: DegradationCause)
 
         /**
+         * Tracking recovered, with no transition to carry the news: the mode on
+         * [snooze] has risen and the notification has to stop claiming a
+         * degradation that is over.
+         *
+         * Separate from [onStateChanged] because nothing changed state — the
+         * snooze was `ARMED` before and after — and separate from [onDegraded]
+         * because the two move in opposite directions and a caller that told
+         * them apart by comparing modes would be re-deriving what the callback
+         * already knows.
+         */
+        fun onTrackingRestored(snooze: ActiveSnooze)
+
+        /**
          * Arm or release didn't take. The caller surfaces this; it is never
          * assumed away.
          */
@@ -275,9 +288,26 @@ class SnoozeController(
     fun onPresenceEvent(event: PresenceEvent) {
         val snooze = active ?: return
         when (event) {
-            PresenceEvent.StillHere -> if (state == SnoozeState.CHECKING) {
-                state = SnoozeState.ARMED
-                listener.onStateChanged(state, snooze, null)
+            is PresenceEvent.StillHere -> {
+                // Presence confirmed, so whatever the degradation was claiming
+                // is now out of date in at least one respect. Undone before the
+                // transition is announced, so the notification is posted once,
+                // already correct.
+                val restored = restoreTracking(snooze, event.confirmedBy)
+                if (restored != null) active = restored
+                val current = restored ?: snooze
+                if (state == SnoozeState.CHECKING) {
+                    state = SnoozeState.ARMED
+                    listener.onStateChanged(state, current, null)
+                } else if (restored != null) {
+                    // No transition to carry it: a snooze that degraded while
+                    // ARMED recovers while ARMED. Without this the ongoing
+                    // notification keeps saying tracking is degraded after it
+                    // stopped being, which is principle 2's failure pointed the
+                    // other way — and it teaches the user to disbelieve the
+                    // line that matters.
+                    listener.onTrackingRestored(current)
+                }
             }
 
             PresenceEvent.ProbablyLeft -> if (state == SnoozeState.ARMED) {
@@ -285,6 +315,17 @@ class SnoozeController(
                 // evidence (SPEC.md §6.10).
                 state = SnoozeState.CHECKING
                 listener.onStateChanged(state, snooze, null)
+            }
+
+            // Tracking only. The check that this fix arrived during is still
+            // running, so the state is left exactly where it was — the user may
+            // yet turn out to have left.
+            is PresenceEvent.TrackingRecovered -> {
+                val restored = restoreTracking(snooze, event.confirmedBy)
+                if (restored != null) {
+                    active = restored
+                    listener.onTrackingRestored(restored)
+                }
             }
 
             PresenceEvent.Departed -> end(EndReason.DEPARTURE)
@@ -394,5 +435,40 @@ class SnoozeController(
         DegradationCause.LOCATION_SERVICES_OFF,
         DegradationCause.NO_LOCATION_IN_BACKGROUND,
         -> if (anchor.ssid != null) TrackingMode.WIFI_ONLY else TrackingMode.DURATION_ONLY
+    }
+
+    /**
+     * The snooze with its tracking mode raised to what presence has just proven,
+     * or null when nothing rises.
+     *
+     * Two ceilings, and applying only one of them is the bug this exists to
+     * avoid. **What the anchor could ever support**: an anchor with no usable
+     * fix is not [TrackingMode.FULL] however good the reading that just
+     * arrived, because the departure test has nothing to measure against.
+     * **What this particular evidence proves**: rejoining the anchor's network
+     * says Wi-Fi works and says nothing whatever about location, so it may lift
+     * [TrackingMode.DURATION_ONLY] to [TrackingMode.WIFI_ONLY] and must never
+     * claim `FULL` — announcing recovered location tracking on the strength of
+     * a Wi-Fi association is the same lie as leaving the stale degraded line up,
+     * told in the more dangerous direction.
+     *
+     * Only ever raises. A confirmation of presence is not evidence that
+     * anything broke, so it cannot lower the mode — that is [onDegraded]'s job
+     * and it has its own signal.
+     */
+    private fun restoreTracking(
+        snooze: ActiveSnooze,
+        evidence: PresenceEvidence,
+    ): ActiveSnooze? {
+        val provenBy = when (evidence) {
+            PresenceEvidence.LOCATION_FIX -> TrackingMode.FULL
+            PresenceEvidence.ANCHOR_WIFI -> TrackingMode.WIFI_ONLY
+        }
+        // The enum runs FULL → WIFI_ONLY → DURATION_ONLY, most capable first,
+        // so of two ceilings the *later* one is the lower claim and `maxOf`
+        // picks it. Likewise `<` reads as "more capable than", which is what
+        // makes this a rise rather than a change.
+        val restored = maxOf(TrackingMode.from(snooze.anchor), provenBy)
+        return if (restored < snooze.mode) snooze.copy(mode = restored) else null
     }
 }
