@@ -756,12 +756,43 @@ interface PresenceMonitor {
 ```
 
 `PresenceEvent` is `StillHere`, `ProbablyLeft`, `Departed`, `Degraded(cause)`, and
-`CapabilityLost(cause)`. The last two must stay separate types, because they demand opposite
+`CapabilityLost(cause)`, plus whatever the engine needs to report that a degradation is over — see
+below. The last two must stay separate types, because they demand opposite
 responses and the difference cannot be left to a monitor's judgment or to a display string:
 **`Degraded` keeps the snooze armed** in a lesser tracking mode with the notification saying so
 (§8.1), while **`CapabilityLost` ends it** with `EndReason.LOST_CAPABILITY` (§8.2, D7). A monitor
 that reports a revoked location permission as `Degraded` leaves the phone silent with nothing left
 to end the snooze — principle 1's failure — so a fatal cause is never reported as a recoverable one.
+
+**A degradation must be withdrawn once tracking recovers.** One the app announced and then never
+took back is a false statement about its own state, and the kind that teaches the user to disbelieve
+the line that matters when it is true (principle 2). So evidence that a capability is working again
+raises the tracking mode back.
+
+**And it raises it only as far as the evidence supports** — never past what the anchor could ever
+support, and never past what that particular signal proves. Rejoining the anchor's network proves
+Wi-Fi works and says nothing whatever about location, so it may lift `DURATION_ONLY` to `WIFI_ONLY`
+and may never claim `FULL`. Replacing a stale degraded line with a false healthy one is the same
+failure in the more dangerous direction: the user would read that departure detection is running
+when nothing is watching for it.
+
+**A recovery must not be lost, whatever else the same moment is saying.** Location can prove it is
+working at a moment that settles nothing about presence, or at a moment the engine is busy
+escalating — and there is rarely a second chance to say so. Rejoining the anchor's network
+suppresses location entirely (§6.7), so a recovery dropped just before that is a snooze reading
+`Wi-Fi only` until the cap with nothing left that could ever correct it.
+
+**The two halves of a fix go stale at different rates.** *Where the user was* expires as soon as
+newer evidence lands (§6.6's staleness rule). *That location managed a reading good enough to
+measure with* does not expire at all — the subsystem either did or it didn't. So a reading too old
+to say where anyone is can still be the thing that says tracking recovered.
+
+**A recovery must be newer than the failure it claims is over.** The same cached and batched
+delivery that makes the rule above necessary can also hand over a reading captured *before* the
+trouble started; accepting that would restore `FULL` on evidence older than the problem and hide a
+degradation while departure tracking is still broken. That is the overstating direction, so the
+boundary is explicit: capability evidence counts only if it post-dates the last unusable
+observation.
 
 Two implementations: `GeofencePresenceMonitor` (`play` flavor, §3 option B) and
 `ForegroundPresenceMonitor` (`direct` flavor, §3 option A). Everything above this line is

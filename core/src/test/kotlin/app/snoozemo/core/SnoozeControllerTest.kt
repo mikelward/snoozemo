@@ -58,12 +58,19 @@ class SnoozeControllerTest {
     private class Recorder : SnoozeController.Listener {
         val states = mutableListOf<Pair<SnoozeState, EndReason?>>()
         val degraded = mutableListOf<DegradationCause>()
+        val restored = mutableListOf<TrackingMode>()
         val failures = mutableListOf<Pair<ZenFailure, Boolean>>()
+        /** The mode each transition carried, so "reported once, already correct" is testable. */
+        val announced = mutableListOf<TrackingMode?>()
         override fun onStateChanged(state: SnoozeState, snooze: ActiveSnooze?, reason: EndReason?) {
             states += state to reason
+            announced += snooze?.mode
         }
         override fun onDegraded(snooze: ActiveSnooze, cause: DegradationCause) {
             degraded += cause
+        }
+        override fun onTrackingRestored(snooze: ActiveSnooze) {
+            restored += snooze.mode
         }
         override fun onZenFailure(failure: ZenFailure, whileArming: Boolean) {
             failures += failure to whileArming
@@ -242,9 +249,83 @@ class SnoozeControllerTest {
         armFully()
         controller.onPresenceEvent(PresenceEvent.ProbablyLeft)
 
-        controller.onPresenceEvent(PresenceEvent.StillHere)
+        controller.onPresenceEvent(PresenceEvent.StillHere(PresenceEvidence.ANCHOR_WIFI))
 
         assertEquals(SnoozeState.ARMED, controller.state)
+    }
+
+    @Test
+    fun `a fix after a degradation puts tracking back and says so`() {
+        // A degraded line left up after tracking recovered is a false statement
+        // about the app's own state, and it teaches the user to ignore the line
+        // that matters (principle 2).
+        armFully()
+        controller.onPresenceEvent(PresenceEvent.Degraded(DegradationCause.NO_LOCATION_FIX))
+        assertEquals(TrackingMode.WIFI_ONLY, controller.active?.mode)
+
+        controller.onPresenceEvent(PresenceEvent.StillHere(PresenceEvidence.LOCATION_FIX))
+
+        assertEquals(TrackingMode.FULL, controller.active?.mode)
+        assertEquals(listOf(TrackingMode.FULL), listener.restored)
+    }
+
+    @Test
+    fun `rejoining the anchor's wifi does not claim location came back`() {
+        // The whole reason the evidence is on the event: an association proves
+        // Wi-Fi works and says nothing about location, so announcing FULL here
+        // would replace a stale degraded line with a false healthy one.
+        armFully()
+        controller.onPresenceEvent(PresenceEvent.Degraded(DegradationCause.LOCATION_SERVICES_OFF))
+
+        controller.onPresenceEvent(PresenceEvent.StillHere(PresenceEvidence.ANCHOR_WIFI))
+
+        assertEquals(TrackingMode.WIFI_ONLY, controller.active?.mode)
+        assertEquals("nothing rose, so there is nothing to report", emptyList<TrackingMode>(), listener.restored)
+    }
+
+    @Test
+    fun `location coming back mid-check restores tracking without ending the check`() {
+        armFully()
+        controller.onPresenceEvent(PresenceEvent.Degraded(DegradationCause.NO_LOCATION_FIX))
+        controller.onPresenceEvent(PresenceEvent.ProbablyLeft)
+
+        controller.onPresenceEvent(
+            PresenceEvent.TrackingRecovered(PresenceEvidence.LOCATION_FIX),
+        )
+
+        assertEquals("the user may still turn out to have left", SnoozeState.CHECKING, controller.state)
+        assertEquals(TrackingMode.FULL, controller.active?.mode)
+        assertEquals(listOf(TrackingMode.FULL), listener.restored)
+    }
+
+    @Test
+    fun `recovery never claims more than the anchor ever supported`() {
+        // An anchor captured with a 500 m fix has nothing for the departure test
+        // to measure against, however good the reading that arrives later.
+        armFully(anchor.copy(fixAccuracyM = 500f))
+        assertEquals(TrackingMode.WIFI_ONLY, controller.active?.mode)
+
+        controller.onPresenceEvent(PresenceEvent.StillHere(PresenceEvidence.LOCATION_FIX))
+
+        assertEquals(TrackingMode.WIFI_ONLY, controller.active?.mode)
+        assertEquals(emptyList<TrackingMode>(), listener.restored)
+    }
+
+    @Test
+    fun `recovery arriving with a de-escalation is reported once, already correct`() {
+        // The transition carries the restored mode, so the notification is
+        // posted once rather than as a stale line followed by a correction.
+        armFully()
+        controller.onPresenceEvent(PresenceEvent.Degraded(DegradationCause.NO_LOCATION_FIX))
+        controller.onPresenceEvent(PresenceEvent.ProbablyLeft)
+        assertEquals(SnoozeState.CHECKING, controller.state)
+
+        controller.onPresenceEvent(PresenceEvent.StillHere(PresenceEvidence.LOCATION_FIX))
+
+        assertEquals(SnoozeState.ARMED, controller.state)
+        assertEquals(TrackingMode.FULL, controller.active?.mode)
+        assertEquals("the transition carried the restored mode", TrackingMode.FULL, listener.announced.last())
+        assertEquals("so there is nothing left to report", emptyList<TrackingMode>(), listener.restored)
     }
 
     @Test
