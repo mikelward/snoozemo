@@ -232,14 +232,17 @@ it in the same commit.
   until the user lifts it. This file is the repo owner's standing request for that PR, so a
   client-level rule reading "open a PR only when the user explicitly asks" is already
   satisfied — the ask is here, and it doesn't need repeating per branch.
-- **Opening the PR arms the first scheduled check.** That check *is* the watch: when it
-  fires it reads CI, review comments and the Codex reaction, and it is what catches anything
-  a webhook drops. `subscribe_pr_activity` is a separate thing and it is **opt-in** — it
-  pushes every comment, check run and bot reply into the conversation as a raw event, which
-  buries the thread the user is actually reading under machine chatter they didn't ask for.
-  Subscribe only when asked to, and unsubscribe as soon as the reason for it passes.
-- **Poll your own open PRs — every ~5 minutes while CI or the verdict is outstanding, ~30
-  once only a human is left.** Those two are what nothing else reports. Never end a turn
+- **Stay subscribed to PR activity on your own PRs — events are the watch.** Keep (or
+  create) the `subscribe_pr_activity` subscription for every PR you open, so CI failures,
+  reviews, and comments wake the session and get acted on the moment they land, without the
+  operator having to relay them. Subscribed events render as raw payloads in the operator's
+  conversation and nothing session-side can filter them; that cost is accepted — reaction
+  latency outranks a quiet chat. Arm auto-merge at PR open too, so a clean verdict merges
+  without a turn. Unsubscribe only when the PR merges or closes.
+- **Keep one scheduled fallback check per open PR alongside the subscription — ~5 minutes
+  while CI or the Codex verdict is outstanding, ~30 once only a human is left.** Events are
+  the primary signal; the check covers what webhooks drop — CI success, merges, and Codex's
+  clean verdict, which is a reaction and emits no event at all. Never end a turn
   idle with one of yours open: arm the next check with whatever the client offers
   (`send_later`, a scheduled task / cron, `/loop`), and arm it *without asking* — that is
   hygiene, not a decision. Someone else's PR is not your polling job unless you're asked.
@@ -358,7 +361,11 @@ it in the same commit.
   `get_comments` and `get_reviews` to the last page, since all three page oldest first — and
   they block the merge until fixed or rebutted; an acknowledgement is not an answer. Nothing
   from Codex since the push, five minutes on, means it never picked it up — comment `@codex
-  review`, once.
+  review`, once. Reading the verdict is a protocol, not a glance: a state report draws on
+  ALL the sources — the PR-body reactions, the reviews, the review comments and issue
+  comments to their last pages, and the `codex` commit status where the ruleset requires it
+  (a separate API surface from check runs) — because the reaction is only the clean channel,
+  and `updated_at` moving without a reaction usually means unread findings.
 - **Judge every review comment on merit, whoever wrote it.** Verify the claim before
   acting; if it doesn't hold up, reply saying why and decline.
 - **A review comment citing a rule is a *reading* of that rule, not the rule.** Go back to
