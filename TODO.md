@@ -1047,19 +1047,21 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   2026-08-13). One vague fix is ordinary; three at the 90-second checking rate is about four and a
   half minutes of location saying nothing. Pure tuning, and the field measurement that would settle
   it is the same recorded walk the departure test is waiting on.
-- **The screenshot refresh commit does not re-trigger CI, and that is unresolved**
-  (Codex, PR #15). A push made with `GITHUB_TOKEN` deliberately starts no workflow run, so
-  when the screenshot job commits `ci: refresh recorded screenshots` back to a PR branch,
-  the new head carries no checks: the PR view shows results against its parent, and a repo
-  with required status checks would sit pending forever. The exposure here is narrow —
-  the refresh commit's diff is confined to snapshot PNGs, nothing in the build reads them,
-  and the job that pushed them is the one that rendered them — so the head's *code* is
-  exactly what was checked. But "checks ran on the parent" is not the same claim as
-  "checks ran on the head", and the difference is the maintainer's to accept.
-  - **Not taken unilaterally, because every fix costs something outside this repo.** A PAT
-    or GitHub App token would trigger CI but adds a secret to maintain and rotate; dropping
-    the auto-commit and failing on drift instead moves the re-recording work onto whoever
-    opened the PR; leaving it as-is keeps the convention all four sibling repos share.
+- **The screenshot refresh commit now re-triggers CI via `workflow_dispatch`**
+  (Codex, PR #15; resolved in PR #43, forced by the `gate` check becoming required — a
+  refreshed head with no checks would sit blocked forever, not just under-verified). A
+  push made with `GITHUB_TOKEN` deliberately starts no workflow run, but a *dispatch*
+  made with the same token is GitHub's documented exception, so the refresh step now
+  dispatches `android-ci.yml` onto the branch it just pushed and fails loudly if the
+  dispatch is refused. The dispatched run is a non-PR event, so `classify` sends it down
+  the code lane and every heavy job runs against the refreshed head; its check runs land
+  on that head SHA and satisfy the ruleset like any other. This fix was not among the
+  three priced earlier because it costs none of what they cost: no secret to rotate, the
+  auto-commit convention stays, and no work moves onto the PR author.
+  - The trigger only works once it exists on `main` (GitHub dispatches workflows it can
+    see on the default branch), so the first refresh after PR #43 merges is the first
+    covered one; a refresh before then fails the job loudly rather than stranding the PR
+    silently.
   - Related and now fixed: a *failed* refresh push used to warn and exit 0, which could
     leave the job green over drifted snapshots (most plausibly on a Dependabot PR, whose
     token is read-only). That path now fails the job.

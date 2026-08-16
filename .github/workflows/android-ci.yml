@@ -7,18 +7,39 @@ name: Android CI
 # config would only be a red check nobody reads.
 
 on:
+  # No paths filter on pull_request, deliberately: the main ruleset requires
+  # the `gate` check, and a required check that never reports blocks the PR
+  # forever — which is exactly what a path-filtered-out workflow produces.
+  # Housekeeping-only PRs skip the heavy jobs via `classify` instead, and
+  # `gate` verifies the skip was justified (scripts/docs-lane.sh has the
+  # full design rationale).
   pull_request:
-    # Skip CI when every changed path is housekeeping with no effect on the app
-    # build: markdown docs, or root dotfiles/dotdirs — with
-    # `.github/workflows/**` re-included so workflow edits validate themselves.
-    # `paths` is an allow-list: patterns apply in order, last match wins per
-    # file; a push runs when at least one changed file survives as included.
-    paths:
-      - '**'
-      - '!**/*.md'
-      - '!.*'
-      - '!.*/**'
-      - '.github/workflows/**'
+  # Exists for exactly one caller: the screenshot job's refresh step, whose
+  # `ci: refresh recorded screenshots` push is made with `GITHUB_TOKEN` and
+  # therefore starts no workflow run on its own (GitHub's loop-prevention
+  # rule). A dispatch made with that same token is the documented exception,
+  # so the step starts this workflow on the head it just pushed — otherwise
+  # the required `gate` check would exist only on the refreshed commit's
+  # parent and the PR could never satisfy branch protection. Dispatched runs
+  # are non-PR events, so `classify` sends them down the code lane and every
+  # heavy job runs against the refreshed head. (GitHub only dispatches
+  # workflows it can see on the default branch, so this trigger becomes
+  # effective once it lands on main.)
+  #
+  # The `pr` input is REQUIRED so a dispatched run can never produce a weaker
+  # verdict than the PR run it stands in for: without it, `docs_only` would be
+  # forced false, the heavy jobs would run against the branch alone, and the
+  # resulting green `gate` on the head SHA could replace a red PR gate —
+  # bypassing the prefix lint and the merge-ref build. With it, classify and
+  # gate judge the named PR's real diff and commits, and the build checks out
+  # that PR's merge ref, so the dispatched verdict is the PR verdict.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: >-
+          Pull request number this run reports for. Classification, the
+          prefix lint, and the build's merge-ref checkout all come from it.
+        required: true
   push:
     branches:
       - main
@@ -30,9 +51,44 @@ on:
       - '.github/workflows/**'
 
 jobs:
+  # Decides whether the heavy jobs may skip: true only when every changed
+  # file in the PR is housekeeping (markdown, root dotfiles — see
+  # scripts/docs-lane.sh for the rule and its carve-outs). Pushes to main are
+  # always classified as code, so they run everything; a dispatched run
+  # classifies the PR its required `pr` input names, exactly as the PR run
+  # would.
+  classify:
+    name: Classify the diff
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      docs_only: ${{ steps.run.outputs.docs_only }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          persist-credentials: false
+      - name: Self-test the lane rules
+        # Before trusting the classification, prove the rule engine against
+        # its fixture matrix (stubbed gh, both directions per behavior). A
+        # broken rule fails here, the heavy jobs skip on the failed
+        # dependency, and the gate goes red — fail closed, never green.
+        run: bash scripts/docs-lane.test.sh
+      - name: Classify
+        id: run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number || inputs.pr }}
+        run: scripts/docs-lane.sh classify >> "$GITHUB_OUTPUT"
+
   build:
     name: Build and unit test
     runs-on: ubuntu-latest
+    needs: classify
+    if: needs.classify.outputs.docs_only != 'true'
     # Fail fast if a test deadlocks instead of burning the 6-hour default.
     timeout-minutes: 30
     permissions:
@@ -47,6 +103,10 @@ jobs:
           # versionCode is the commit count (app/build.gradle.kts), so a shallow
           # clone would silently produce a lower number than the real build.
           fetch-depth: 0
+          # A dispatched run builds the same thing the PR run would have: the
+          # named PR's merge ref, not the bare branch — otherwise a dispatch
+          # could green the gate without ever compiling the PR-merged tree.
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr) || '' }}
           # Don't leave the job's (pull-requests: write) token in .git/config
           # while Gradle runs PR-controlled build code; the one step that posts
           # to the PR gets the token via its own env instead.
@@ -61,9 +121,11 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2  # v5
         with:
-          # A malicious PR commit can poison its own branch's cache; lock PRs to
-          # read-only so only main pushes write the shared cache.
-          cache-read-only: ${{ github.event_name == 'pull_request' }}
+          # A malicious PR commit can poison its own branch's cache, and a
+          # dispatched run executes the same PR-controlled code — so the write
+          # grant is an allowlist, not a denylist: only pushes to main write
+          # the shared cache.
+          cache-read-only: ${{ github.event_name != 'push' }}
 
       - name: Check the core module stays free of Android
         # :core is a plain Kotlin JVM module on purpose (SPEC.md §11) — the state
@@ -93,7 +155,10 @@ jobs:
         if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # `inputs.pr` so a dispatched run's test failure still posts the
+          # failing-tests comment — its absence is documented as meaning "the
+          # failure happened before tests", which would misdirect diagnosis.
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
           JOB_NAME: ${{ github.job }}
         run: |
           shopt -s nullglob globstar
@@ -149,6 +214,8 @@ jobs:
   screenshot-tests:
     name: Screenshot tests
     runs-on: ubuntu-latest
+    needs: classify
+    if: needs.classify.outputs.docs_only != 'true'
     timeout-minutes: 30
     permissions:
       # Write so "Commit refreshed screenshots" can push regenerated PNGs back
@@ -156,6 +223,14 @@ jobs:
       # comment.
       contents: write
       pull-requests: write
+      # So the refresh step can dispatch this workflow onto the head it just
+      # pushed — a GITHUB_TOKEN push starts no run by itself, and without one
+      # the required `gate` check never reports on the refreshed commit. This
+      # job runs PR-controlled Gradle code, but the refresh path only runs on
+      # same-repo PRs, whose author already has push access and could dispatch
+      # anything themselves — so this grant widens nothing for that attacker,
+      # and fork PRs never reach the step.
+      actions: write
     steps:
       - name: Check out repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
@@ -178,7 +253,8 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2  # v5
         with:
-          cache-read-only: ${{ github.event_name == 'pull_request' }}
+          # Same allowlist as the build job: only pushes to main write.
+          cache-read-only: ${{ github.event_name != 'push' }}
 
       - name: Clear committed snapshots before recording
         # Recording only overwrites files the suites still produce, so starting
@@ -286,6 +362,18 @@ jobs:
             # Dependabot's `GITHUB_TOKEN` is read-only, and a dependency bump is
             # the likeliest cause of a rendering change in the first place.
             echo "::error::Recorded screenshots drifted and the refresh could not be pushed (branch gone or moved, or a read-only token). Re-record and commit them; the images are in the roborazzi-screenshots artifact."
+            exit 1
+          fi
+          # The push above starts no workflow run — GITHUB_TOKEN pushes never
+          # do — so without this dispatch the refreshed head carries no checks
+          # and the required `gate` blocks the PR forever, silently. Dispatch
+          # is the documented exception to that rule. Fail loudly if it
+          # doesn't take: "CI never started" and "CI passed quietly" look
+          # identical from the PR, and a red run here is the only signal left.
+          # The token is scoped to this one command, same as the push URL
+          # above — never exported to the step.
+          if ! GH_TOKEN="${{ github.token }}" gh workflow run android-ci.yml --ref "$GITHUB_HEAD_REF" -f pr="${{ github.event.pull_request.number }}"; then
+            echo "::error::Pushed a refresh commit but could not start CI on it (is workflow_dispatch on android-ci.yml present on main yet?). The refreshed head has no checks — dispatch this workflow on the branch by hand from the Actions tab."
             exit 1
           fi
 
@@ -418,3 +506,32 @@ jobs:
             app/build/test-results/
           if-no-files-found: ignore
           retention-days: 1
+
+  # The one check the main ruleset requires. Always runs, always reports —
+  # green only when every heavy job succeeded, or when they were skipped and
+  # the skip is INDEPENDENTLY verified as justified: the diff re-derived as
+  # housekeeping-only and every commit subject carrying a housekeeping
+  # prefix. Any other combination — a failure anywhere, a skip on a code
+  # diff, classify itself failing — is an explicit red, never a silent pass.
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [classify, build, screenshot-tests]
+    if: always()
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          persist-credentials: false
+      - name: Verdict
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number || inputs.pr }}
+          CLASSIFY: ${{ needs.classify.result }}
+          BUILD: ${{ needs.build.result }}
+          SCREENSHOTS: ${{ needs.screenshot-tests.result }}
+        run: scripts/docs-lane.sh gate
