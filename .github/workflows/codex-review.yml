@@ -8,7 +8,10 @@
 # - The triggers: pushes and comments start a run within seconds (both take
 #   the workflow definition from the default branch, so a PR cannot bring its
 #   own sweep); `closed` clears a shared-head failure the moment a duplicate
-#   PR goes away; `edited` hears a nudge edited into an existing comment. The
+#   PR goes away; `edited` hears a nudge edited into an existing comment;
+#   `pull_request_review` hears findings submitted as a review with no
+#   inline comments — the one delivery form that emits neither a comment
+#   event nor a reaction. The
 #   HOURLY schedule is only the backstop for the fail-closed states nothing
 #   emits an event for (a dropped webhook, a reaction after the loop parked) —
 #   any comment on the PR clears those on demand too, and on a private repo
@@ -35,6 +38,8 @@ on:
     types: [created, edited]
   pull_request_review_comment:
     types: [created, edited]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
 
 permissions:
   contents: read
