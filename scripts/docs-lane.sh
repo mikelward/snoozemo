@@ -16,21 +16,56 @@
 # cross-check against what actually ran. scripts/docs-lane.test.sh exercises
 # every branch below against a stubbed `gh`, and the classify job runs it
 # before classifying — a broken rule fails closed, never green.
+#
+# This file is shared across the sibling repos (it first landed here and was
+# hardened by their review rounds since). Everything below the config
+# section is the ENGINE and stays identical everywhere; when you change it,
+# change it in every repo that carries it.
 set -euo pipefail
 
-# Housekeeping = markdown anywhere, or top-level dotfiles/dotdirs — the same
-# set the old paths: filter skipped — with two carve-outs that count as code:
-# workflow edits (CI must validate itself) and docs/PRIVACY.md (user-facing:
-# it backs the hosted privacy policy and ships as a release-notes bullet, so
-# its commits are legitimately bare-subject and belong on the code lane).
+# --- Repo policy: the only section that differs between repos. -------------
+
+# The lane's test is "can this change what CI validates?". Markdown is docs
+# wherever it lives OUTSIDE the module trees — prose cannot change a build —
+# with named exceptions: docs/PRIVACY.md backs the hosted privacy policy and
+# ships as a release-notes bullet, so its commits are legitimately
+# bare-subject and belong on the code lane; and anything under a module tree
+# (app/, core/, dnd/, presence/, tile/) is a build input whatever its
+# extension (a packaged asset or resource can be markdown). Everything else
+# is code — including .gitignore, because the screenshot job's refresh step
+# stages recordings with an unforced `git add`, which cannot stage a newly
+# ignored file, and an ignore rule over the snapshot tree would silence
+# exactly the job the lane skips.
 is_housekeeping() {
   case "$1" in
-    .github/workflows/*) return 1 ;;
     docs/PRIVACY.md) return 1 ;;
+    app/*|core/*|dnd/*|presence/*|tile/*) return 1 ;;
     *.md) return 0 ;;
-    .*) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# The subject prefixes this repo's commit conventions give housekeeping
+# commits (see AGENTS.md "Commit messages"). On the docs lane every commit
+# must carry one, so nothing on this lane ever ships as a release-notes
+# bullet.
+LANE_PREFIXES="ci docs internal refactor test tests"
+
+# This repo's workflow_dispatch has one caller — the screenshot-refresh
+# dispatch, which always names its PR (the input is required) — so a PR-less
+# dispatch is never legitimate, on any ref.
+dispatch_without_pr_ok() {
+  return 1
+}
+
+# --- Engine: identical across repos below this line. -----------------------
+
+has_lane_prefix() {
+  local subject=$1 p
+  for p in $LANE_PREFIXES; do
+    case "$subject" in "$p: "*) return 0 ;; esac
+  done
+  return 1
 }
 
 # The complete file list, or a hard failure — never a silent prefix of it.
@@ -48,9 +83,9 @@ pr_files() {
   }
   # Both sides of every entry: a rename carries its new path in `filename`
   # and its old one in `previous_filename`, and classifying only the new
-  # side would let `app/src/A.kt` -> `docs/A.md` ride the docs lane while
-  # deleting source code. One TSV line per entry keeps the count
-  # reconcilable against changed_files.
+  # side would let a source file renamed into docs ride the docs lane while
+  # deleting code. One TSV line per entry keeps the count reconcilable
+  # against changed_files.
   files=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}/files" --paginate \
             --jq '.[] | [.filename, .previous_filename // ""] | @tsv') || {
     echo "::error::Could not list the pull request's files." >&2
@@ -64,16 +99,40 @@ pr_files() {
   printf '%s\n' "$files"
 }
 
+# Every open pull request the given commit currently heads, one number per
+# line — or a hard failure when the listing cannot be completed, because a
+# per-commit check must not be minted on an association nobody verified.
+open_prs_heading() {
+  HEAD_Q="$1" gh api "repos/${GITHUB_REPOSITORY}/commits/$1/pulls" --paginate \
+    --jq '.[] | select(.state == "open" and .head.sha == env.HEAD_Q) | .number'
+}
+
 # 0 = every changed file is housekeeping; 1 = code, or an empty diff;
 # 2 = the file list could not be trusted (API failure or truncation).
 docs_only() {
   case "${GITHUB_EVENT_NAME:-}" in
-    pull_request) ;;
-    # A dispatched run may stand in for a PR run — the screenshot-refresh
-    # dispatch does, and its `pr` input is required — but only by naming the
-    # PR, so classification still judges the PR's real diff rather than
-    # waving the branch through. A dispatch that somehow arrives without one
-    # is code, the safe direction.
+    pull_request)
+      # A commit can head more than one open PR (stacked PRs: same branch,
+      # different bases), and a check run is per-commit — a gate minted for
+      # this PR's justified skip would satisfy the other PR's required
+      # check too, even where that PR's diff is code. So a shared head
+      # never rides the docs lane: classified as code, the heavy jobs run,
+      # and the gate on this SHA is backed by real validation whichever PR
+      # reads it. (On pull_request events GITHUB_SHA is the merge commit,
+      # not the head, so the PR's own head is looked up first.)
+      test -n "${PR:-}" || return 1
+      local prhead prs
+      prhead=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq '.head.sha') || return 2
+      prs=$(open_prs_heading "$prhead") || return 2
+      # The sole open PR must be THIS one, not merely a count of one: the
+      # originating PR can close while its run is in flight, leaving a
+      # stacked twin as the single open PR the gate would then vouch for.
+      if [ "$(printf '%s' "$prs" | grep -c .)" -ne 1 ] || [ "$(printf '%s' "$prs" | head -n1)" != "$PR" ]; then return 1; fi
+      ;;
+    # A dispatched run may stand in for a PR run, but only by naming the PR,
+    # so classification still judges the PR's real diff rather than waving
+    # the branch through. verify_dispatch_binding (below) has already bound
+    # the named PR to the checked-out commit before this runs.
     workflow_dispatch) test -n "${PR:-}" || return 1 ;;
     *) return 1 ;;
   esac
@@ -90,10 +149,9 @@ docs_only() {
   test "$any" = true
 }
 
-# On the docs lane every commit subject must carry a housekeeping prefix, so
-# nothing on this lane can ever read like a release-notes bullet. A commits
-# listing that cannot be completed fails the lint — an unverified prefix is
-# not a verified one.
+# On the docs lane every commit subject must carry a housekeeping prefix. A
+# commits listing that cannot be completed fails the lint — an unverified
+# prefix is not a verified one.
 lint_prefixes() {
   local declared subjects listed bad=0 subject
   # Same reconciliation as pr_files, for the same reason: the commits
@@ -127,15 +185,11 @@ lint_prefixes() {
     # on main — and a merge commit is one with more than one parent, not one
     # whose subject happens to start with the word.
     if [ "${parents:-1}" -gt 1 ]; then continue; fi
-    case "$subject" in
-      ci:\ *|docs:\ *|internal:\ *|refactor:\ *|test:\ *|tests:\ *) continue ;;
-      *)
-        echo "::error::Docs-lane commit subject lacks a housekeeping prefix:" \
-             "'${subject}' — prefix it (ci:/docs:/internal:/refactor:/test:)" \
-             "so it never reads like a release-notes bullet."
-        bad=1
-        ;;
-    esac
+    if has_lane_prefix "$subject"; then continue; fi
+    echo "::error::Docs-lane commit subject lacks a housekeeping prefix:" \
+         "'${subject}' — prefix it ($(printf '%s:/' $LANE_PREFIXES | sed 's,/$,,'))" \
+         "so it never reads like a behavior-change subject."
+    bad=1
   done <<< "$subjects"
   return "$bad"
 }
@@ -146,12 +200,17 @@ lint_prefixes() {
 # and landing B's clean verdict on A's head SHA. Verified in BOTH modes —
 # classify failing already cascades to a red gate, and gate re-checks so the
 # required check never reports for a commit the named PR does not head.
+# (Kept in the shared engine even where a repo's workflow declares no
+# dispatch trigger: engines stay identical, and a trigger added later is
+# born guarded.)
 verify_dispatch_binding() {
   test "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" || return 0
-  # The workflow marks the input required, but required-ness is the UI's
-  # promise, not this script's: an unnamed PR cannot be verified, so it is
-  # refused here rather than classified around.
+  # An unnamed PR cannot be verified, so it is refused — unless the repo's
+  # config says a PR-less dispatch is legitimate here (deploy-force on the
+  # default branch), in which case docs_only classifies it as code and the
+  # full lane runs.
   if [ -z "${PR:-}" ]; then
+    if dispatch_without_pr_ok; then return 0; fi
     echo "::error::A dispatched run must name the pull request it reports for (the pr input) — refusing without one."
     return 1
   fi
@@ -170,8 +229,7 @@ verify_dispatch_binding() {
   # too. Require the named PR to be the ONLY open PR this commit heads;
   # ambiguity is refused rather than resolved, the fail-closed direction.
   local heads
-  heads=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" --paginate \
-            --jq '.[] | select(.state == "open" and .head.sha == env.GITHUB_SHA) | .number') || {
+  heads=$(open_prs_heading "${GITHUB_SHA}") || {
     echo "::error::Could not list the pull requests this commit heads — refusing to report for it."
     return 1
   }
@@ -191,15 +249,26 @@ case "${1:?usage: docs-lane.sh classify|gate}" in
     ;;
   gate)
     verify_dispatch_binding || exit 1
-    # Results arrive via env: CLASSIFY, BUILD, SCREENSHOTS (needs.*.result).
+    # Results arrive via env: CLASSIFY (needs.classify.result) and RESULTS —
+    # space-separated `job=result` pairs for every heavy job, supplied by the
+    # workflow so the engine needs no per-repo job names.
     if [ "${CLASSIFY:?}" != "success" ]; then
       echo "::error::classify did not succeed (result: ${CLASSIFY}) — nothing vouches for this diff."
       exit 1
     fi
-    if [ "${BUILD:?}" = "success" ] && [ "${SCREENSHOTS:?}" = "success" ]; then
+    all_success=true
+    all_skipped=true
+    for pair in ${RESULTS:?}; do
+      case "${pair#*=}" in
+        success) all_skipped=false ;;
+        skipped) all_success=false ;;
+        *) all_success=false; all_skipped=false ;;
+      esac
+    done
+    if [ "$all_success" = true ]; then
       exit 0
     fi
-    if [ "$BUILD" = "skipped" ] && [ "$SCREENSHOTS" = "skipped" ]; then
+    if [ "$all_skipped" = true ]; then
       # The skip is only as good as the reason for it: re-derive the
       # classification here, independently of the output that caused it.
       # docs_only's failure modes (code file, truncated or unlistable file
@@ -211,7 +280,7 @@ case "${1:?usage: docs-lane.sh classify|gate}" in
       lint_prefixes
       exit 0
     fi
-    echo "::error::Build='${BUILD}' Screenshots='${SCREENSHOTS}' — not all green, and not a justified skip."
+    echo "::error::Heavy job results '${RESULTS}' — not all green, and not a justified skip."
     exit 1
     ;;
   *)

@@ -43,11 +43,19 @@ on:
   push:
     branches:
       - main
+    # Mirrors the lane's housekeeping rule (scripts/docs-lane.sh): skip the
+    # main run only when every changed file is markdown outside the module
+    # trees. The later patterns re-include module paths, so a markdown build
+    # input (a packaged asset can be .md) still builds; dotfiles are no
+    # longer excluded — .gitignore and workflow edits are code.
     paths:
       - '**'
       - '!**/*.md'
-      - '!.*'
-      - '!.*/**'
+      - 'app/**'
+      - 'core/**'
+      - 'dnd/**'
+      - 'presence/**'
+      - 'tile/**'
       - '.github/workflows/**'
 
 jobs:
@@ -532,6 +540,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number || inputs.pr }}
           CLASSIFY: ${{ needs.classify.result }}
-          BUILD: ${{ needs.build.result }}
-          SCREENSHOTS: ${{ needs.screenshot-tests.result }}
+          RESULTS: >-
+            build=${{ needs.build.result }}
+            screenshots=${{ needs.screenshot-tests.result }}
         run: scripts/docs-lane.sh gate
