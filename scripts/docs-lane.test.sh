@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for scripts/docs-lane.sh, run by the classify job before it
 # classifies anything — so a broken lane rule fails the workflow closed
-# instead of skipping the build on a diff nobody actually checked.
+# instead of skipping the heavy jobs on a diff nobody actually checked.
 #
 # The harness stubs `gh` on PATH: fixtures arrive as environment variables
 # (FILES, SUBJECTS, CHANGED to override the changed_files count, *_FAIL to
@@ -54,13 +54,16 @@ case "$*" in
 esac
 EOF
 chmod +x "$stub/gh"
-export PATH="$stub:$PATH" GITHUB_REPOSITORY=example/repo PR=1 GITHUB_EVENT_NAME=pull_request GITHUB_SHA=headsha
+export PATH="$stub:$PATH" GITHUB_REPOSITORY=example/repo PR=1 GITHUB_EVENT_NAME=pull_request GITHUB_SHA=headsha GITHUB_REF_NAME=claude/topic
 
 fails=0
 check() {
   local desc=$1 want_exit=$2 want_out=$3 got got_exit
   shift 3
-  got=$(env "$@" bash "$here/docs-lane.sh" "${MODE:-classify}" 2>&1)
+  # Invoked exactly as CI invokes it — directly, not via `bash` — so a
+  # missing executable bit fails here, before a push, instead of as a
+  # Permission denied in the classify job.
+  got=$(env "$@" "$here/docs-lane.sh" "${MODE:-classify}" 2>&1)
   got_exit=$?
   if [ "$got_exit" -ne "$want_exit" ]; then
     echo "FAIL: $desc — exit $got_exit, wanted $want_exit"; echo "$got" | sed 's/^/    /'
@@ -74,17 +77,26 @@ check() {
 }
 
 # --- classify: the rule itself, both directions per shape
-check "markdown-only diff is docs"        0 "docs_only=true"  FILES="README.md docs/SPEC.md"
-check "code file makes it code"           0 "docs_only=false" FILES="README.md app/src/A.kt"
-check "root dotfiles are docs"            0 "docs_only=true"  FILES=".gitignore .claude/x.sh"
-check "workflow edits are code"           0 "docs_only=false" FILES=".github/workflows/ci.yml"
-check "PRIVACY.md is code"                0 "docs_only=false" FILES="docs/PRIVACY.md"
+check "markdown-only diff is docs"        0 "docs_only=true"  FILES="README.md SPEC.md"
+check "code file makes it code"           0 "docs_only=false" FILES="README.md app/src/main/A.kt"
+check "docs/PRIVACY.md is code by name"   0 "docs_only=false" FILES="docs/PRIVACY.md"
+check ".gitignore is code (refresh git add)" 0 "docs_only=false" FILES=".gitignore README.md"
+check "markdown under app/ is a build input" 0 "docs_only=false" FILES="app/src/main/assets/help.md"
+check "markdown under any module tree is a build input" 0 "docs_only=false" FILES="presence/README.md"
+check "a shared head never rides the docs lane" 0 "docs_only=false" FILES="README.md" SHARED_PRS="1 2"
+check "a lone foreign head PR never rides the lane" 0 "docs_only=false" FILES="README.md" SHARED_PRS="2"
+check "unlistable head PRs are code on a PR event" 0 "docs_only=false" FILES="README.md" PULLS_FAIL=1
+check "an unnamed dotfile is code"         0 "docs_only=false" FILES=".editorconfig"
+check ".claude contents are code"          0 "docs_only=false" FILES=".claude/hooks/session-start.sh"
+check "markdown is docs even under a dot-directory" 0 "docs_only=true" FILES=".claude/NOTES.md"
+check "workflow edits are code"           0 "docs_only=false" FILES=".github/workflows/android-ci.yml"
 check "empty diff is not docs"            0 "docs_only=false" FILES="" CHANGED=0
 check "non-PR events are code"            0 "docs_only=false" FILES="README.md" GITHUB_EVENT_NAME=push
 
 # --- classify: a dispatched run judges the PR its input names, or nothing
 check "dispatch naming a PR classifies it" 0 "docs_only=true"  FILES="README.md" GITHUB_EVENT_NAME=workflow_dispatch
-check "dispatch without a PR is refused"   1 "must name the pull request" FILES="README.md" GITHUB_EVENT_NAME=workflow_dispatch PR=
+check "PR-less dispatch is refused"        1 "must name the pull request" FILES="README.md" GITHUB_EVENT_NAME=workflow_dispatch PR=
+check "PR-less dispatch is refused even on main" 1 "must name the pull request" FILES="README.md" GITHUB_EVENT_NAME=workflow_dispatch PR= GITHUB_REF_NAME=main
 check "shared head is refused"             1 "cannot vouch for exactly one" FILES="README.md" GITHUB_EVENT_NAME=workflow_dispatch SHARED_PRS="1 2"
 check "unlistable head PRs are refused"    1 "refusing to report" FILES="README.md" GITHUB_EVENT_NAME=workflow_dispatch PULLS_FAIL=1
 check "dispatch for another PR's commit refused" 1 "must not label" FILES="README.md" GITHUB_EVENT_NAME=workflow_dispatch HEAD_SHA=otherhead
@@ -92,30 +104,37 @@ check "unreadable head refuses the dispatch" 1 "refusing to report" FILES="READM
 
 # --- classify: renames are judged on both sides
 check "md-to-md rename stays docs"        0 "docs_only=true"  FILES="docs/NEW.md:docs/OLD.md"
-check "code renamed into docs is code"    0 "docs_only=false" FILES="docs/A.md:app/src/A.kt"
+check "code renamed into docs is code"    0 "docs_only=false" FILES="docs/A.md:app/src/main/A.kt"
 
 # --- classify: an untrustworthy file list must never classify as docs
 check "truncated file list is not docs"   0 "docs_only=false" FILES="README.md" CHANGED=3000
 check "files API failure is not docs"     0 "docs_only=false" FILES="README.md" FILES_FAIL=1
 
-# --- gate: every verdict combination
+# --- gate: every verdict combination (RESULTS carries the heavy jobs)
 export MODE=gate
-check "all heavy jobs green passes"       0 "" FILES="a.kt" CLASSIFY=success BUILD=success SCREENSHOTS=success
-check "justified skip with prefixes"      0 "" FILES="README.md" SUBJECTS="docs: Fix a typo" CLASSIFY=success BUILD=skipped SCREENSHOTS=skipped
-check "merge commits are exempt"          0 "" FILES="README.md" SUBJECTS="2:Merge branch 'main' into x" CLASSIFY=success BUILD=skipped SCREENSHOTS=skipped
-check "a fake merge subject is not exempt" 1 "lacks a housekeeping prefix" FILES="README.md" SUBJECTS="Merge installation sections" CLASSIFY=success BUILD=skipped SCREENSHOTS=skipped
-check "bare subject fails the lane"       1 "lacks a housekeeping prefix" FILES="README.md" SUBJECTS="Fix a typo" CLASSIFY=success BUILD=skipped SCREENSHOTS=skipped
-check "a dispatched skip still lints"     1 "lacks a housekeeping prefix" FILES="README.md" SUBJECTS="Fix a typo" CLASSIFY=success BUILD=skipped SCREENSHOTS=skipped GITHUB_EVENT_NAME=workflow_dispatch
-check "gate refuses a mis-bound dispatch"  1 "must not label" FILES="README.md" SUBJECTS="docs: x" CLASSIFY=success BUILD=skipped SCREENSHOTS=skipped GITHUB_EVENT_NAME=workflow_dispatch HEAD_SHA=otherhead
-check "gate refuses a shared head"         1 "cannot vouch for exactly one" FILES="README.md" SUBJECTS="docs: x" CLASSIFY=success BUILD=skipped SCREENSHOTS=skipped GITHUB_EVENT_NAME=workflow_dispatch SHARED_PRS="1 2"
-check "skip on a code diff is refused"    1 "refusing the skip" FILES="app/A.kt" SUBJECTS="docs: x" CLASSIFY=success BUILD=skipped SCREENSHOTS=skipped
-check "skip on a truncated list refused"  1 "refusing the skip" FILES="README.md" CHANGED=3000 SUBJECTS="docs: x" CLASSIFY=success BUILD=skipped SCREENSHOTS=skipped
-check "commits API failure fails lint"    1 "cannot be verified" FILES="README.md" COMMITS_FAIL=1 CLASSIFY=success BUILD=skipped SCREENSHOTS=skipped
-check "truncated commit list fails lint"  1 "Commit list incomplete" FILES="README.md" SUBJECTS="docs: x" NCOMMITS=300 CLASSIFY=success BUILD=skipped SCREENSHOTS=skipped
-check "red build fails the gate"          1 "not all green" FILES="a.kt" CLASSIFY=success BUILD=failure SCREENSHOTS=success
-check "half-skipped is not justified"     1 "not all green" FILES="a.kt" CLASSIFY=success BUILD=skipped SCREENSHOTS=success
-check "cancelled build fails the gate"    1 "not all green" FILES="a.kt" CLASSIFY=success BUILD=cancelled SCREENSHOTS=cancelled
-check "failed classify fails the gate"    1 "nothing vouches" FILES="a.kt" CLASSIFY=failure BUILD=skipped SCREENSHOTS=skipped
+ALLOK="build=success screenshots=success"
+ALLSKIP="build=skipped screenshots=skipped"
+check "all heavy jobs green passes"       0 "" FILES="a.kt" CLASSIFY=success RESULTS="$ALLOK"
+check "justified skip with prefixes"      0 "" FILES="README.md" SUBJECTS="docs: Fix a typo" CLASSIFY=success RESULTS="$ALLSKIP"
+check "internal prefix rides the lane"    0 "" FILES="README.md" SUBJECTS="internal: Document the release flow" CLASSIFY=success RESULTS="$ALLSKIP"
+check "merge commits are exempt"          0 "" FILES="README.md" SUBJECTS="2:Merge branch 'main' into x" CLASSIFY=success RESULTS="$ALLSKIP"
+check "a fake merge subject is not exempt" 1 "lacks a housekeeping prefix" FILES="README.md" SUBJECTS="Merge installation sections" CLASSIFY=success RESULTS="$ALLSKIP"
+check "bare subject fails the lane"       1 "lacks a housekeeping prefix" FILES="README.md" SUBJECTS="Fix a typo" CLASSIFY=success RESULTS="$ALLSKIP"
+check "a prefix outside the table fails"  1 "lacks a housekeeping prefix" FILES="README.md" SUBJECTS="design: tidy" CLASSIFY=success RESULTS="$ALLSKIP"
+check "refactor rides the lane here"      0 "" FILES="README.md" SUBJECTS="refactor: Tidy the controller" CLASSIFY=success RESULTS="$ALLSKIP"
+check "a dispatched skip still lints"     1 "lacks a housekeeping prefix" FILES="README.md" SUBJECTS="Fix a typo" CLASSIFY=success RESULTS="$ALLSKIP" GITHUB_EVENT_NAME=workflow_dispatch
+check "gate refuses a mis-bound dispatch"  1 "must not label" FILES="README.md" SUBJECTS="docs: x" CLASSIFY=success RESULTS="$ALLSKIP" GITHUB_EVENT_NAME=workflow_dispatch HEAD_SHA=otherhead
+check "gate refuses a shared head"         1 "cannot vouch for exactly one" FILES="README.md" SUBJECTS="docs: x" CLASSIFY=success RESULTS="$ALLSKIP" GITHUB_EVENT_NAME=workflow_dispatch SHARED_PRS="1 2"
+check "skip on a code diff is refused"    1 "refusing the skip" FILES="app/a.kt" SUBJECTS="docs: x" CLASSIFY=success RESULTS="$ALLSKIP"
+check "skip on a shared head is refused"  1 "refusing the skip" FILES="README.md" SUBJECTS="docs: x" CLASSIFY=success RESULTS="$ALLSKIP" SHARED_PRS="1 2"
+check "skip vouched by a foreign PR is refused" 1 "refusing the skip" FILES="README.md" SUBJECTS="docs: x" CLASSIFY=success RESULTS="$ALLSKIP" SHARED_PRS="2"
+check "skip on a truncated list refused"  1 "refusing the skip" FILES="README.md" CHANGED=3000 SUBJECTS="docs: x" CLASSIFY=success RESULTS="$ALLSKIP"
+check "commits API failure fails lint"    1 "cannot be verified" FILES="README.md" COMMITS_FAIL=1 CLASSIFY=success RESULTS="$ALLSKIP"
+check "truncated commit list fails lint"  1 "Commit list incomplete" FILES="README.md" SUBJECTS="docs: x" NCOMMITS=300 CLASSIFY=success RESULTS="$ALLSKIP"
+check "red job fails the gate"            1 "not all green" FILES="a.kt" CLASSIFY=success RESULTS="build=failure screenshots=success"
+check "half-skipped is not justified"     1 "not all green" FILES="a.kt" CLASSIFY=success RESULTS="build=skipped screenshots=success"
+check "cancelled job fails the gate"      1 "not all green" FILES="a.kt" CLASSIFY=success RESULTS="build=cancelled screenshots=cancelled"
+check "failed classify fails the gate"    1 "nothing vouches" FILES="a.kt" CLASSIFY=failure RESULTS="$ALLSKIP"
 
 rm -rf "$stub"
 if [ "$fails" -ne 0 ]; then echo "docs-lane tests FAILED"; exit 1; fi
