@@ -17,7 +17,7 @@ fi
 
 ANDROID_SDK_ROOT="${ANDROID_HOME:-/opt/android-sdk}"
 CMDLINE_TOOLS_BUILD="${CMDLINE_TOOLS_BUILD:-13114758}"
-PLATFORM="platforms;android-36"
+PLATFORM="platforms;android-37.0"
 
 export ANDROID_HOME="$ANDROID_SDK_ROOT"
 export ANDROID_SDK_ROOT

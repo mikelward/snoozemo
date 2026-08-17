@@ -17,7 +17,7 @@ plugins {
 
 android {
     namespace = "app.snoozemo.presence"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 34
