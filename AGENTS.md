@@ -556,7 +556,7 @@ apostrophes (`\'`) in any locale's string resources.
 
 - **JDK 21** is pre-installed. **Android SDK** lives at `/opt/android-sdk` (`ANDROID_HOME`).
   On Claude Code on the web the SDK is *not* pre-installed; the `SessionStart` hook at
-  `.claude/hooks/session-start.sh` provisions it (cmdline-tools, `platforms;android-36`,
+  `.claude/hooks/session-start.sh` provisions it (cmdline-tools, `platforms;android-37.0`,
   platform-tools, licenses) at session start. If `/opt/android-sdk` is empty mid-session,
   run `CLAUDE_CODE_REMOTE=true .claude/hooks/session-start.sh` rather than hand-installing.
 - The Gradle wrapper auto-downloads Gradle on first run; AGP auto-installs the compileSdk

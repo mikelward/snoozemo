@@ -80,7 +80,7 @@ android {
     // The platform the remote-session provisioning hook seeds
     // (.claude/hooks/session-start.sh); AGP installs the compileSdk minor
     // platform itself on the first build.
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "app.snoozemo"
