@@ -812,6 +812,11 @@ that can only be settled on a real device, ordered by risk.
 10. [ ] Does Sleeping Apps interfere with geofence delivery, or with a `location`-typed
         foreground service in the `direct` flavor?
 
+## Dependency updates
+
+- [ ] **Adopt `mikelward/gradle-update`** — the weekly Gradle catalog updater.
+      Consumers get wired up one repo at a time; this batch was done by hand.
+
 ## Deferred
 
 Nothing here is scheduled; each is a sequel that follows from something already built
