@@ -815,7 +815,7 @@ that can only be settled on a real device, ordered by risk.
 ## Dependency updates
 
 - [x] **Adopt `mikelward/gradle-update`** — the weekly Gradle catalog updater.
-      Wired via the caller workflow in `.github/workflows/dependency-update.yml`.
+      Wired via the caller workflow in `.github/workflows/gradle-update.yml`.
 
 ## Deferred
 
