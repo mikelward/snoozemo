@@ -562,6 +562,9 @@ apostrophes (`\'`) in any locale's string resources.
   minor platform on the first build.
 - Key commands: `./gradlew assembleDebug` (build), `./gradlew test` (unit tests),
   `./gradlew lint` (lint), `./gradlew clean`.
+- **`:core` also has a sandbox-friendly inner build**: `cd core && ../gradlew test` runs it
+  through `core/settings.gradle.kts`, which needs no `google()` — an offramp for when the
+  outer build's AGP plugin markers can't resolve (ported from clothescast).
 - **No emulator practicality**: KVM is unavailable in the remote environments. Beyond
   speed, an emulator cannot answer this app's real questions anyway — whether
   `setAutomaticZenRuleState` actually silences the device, what a geofence's exit latency
