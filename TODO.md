@@ -814,8 +814,8 @@ that can only be settled on a real device, ordered by risk.
 
 ## Dependency updates
 
-- [ ] **Adopt `mikelward/gradle-update`** — the weekly Gradle catalog updater.
-      Consumers get wired up one repo at a time; this batch was done by hand.
+- [x] **Adopt `mikelward/gradle-update`** — the weekly Gradle catalog updater.
+      Wired via the caller workflow in `.github/workflows/dependency-update.yml`.
 
 ## Deferred
 
