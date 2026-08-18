@@ -1539,3 +1539,15 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
   exactly what this app is for. Recorded in `SPEC.md` §6.2 with the platform constraints
   that bound it, and `docs/PRIVACY.md` now says the field is captured-and-unacted-on rather
   than under review. The feature itself is the item below.
+
+## Review and merge gates
+
+- [ ] Add the shared consumer check (`codex-review-check.yml` from
+      mikelward/codex-review) if it applies to this repository's
+      codex-review setup — see its `docs/CONSUMER.md`. `codex-review.yml`
+      already publishes the `codex` status here, and it must remain the
+      only workflow holding `statuses: write`.
+- [ ] Verify the settings half of the fleet's bar: a ruleset on the
+      default branch requiring `android-ci.yml`'s always-reporting `gate`
+      job and the `codex` status, plus conversation resolution and
+      up-to-date branches, with the auto-merge setting enabled.
