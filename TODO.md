@@ -1542,7 +1542,7 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
 
 ## Review and merge gates
 
-- [ ] Add the shared consumer check (`codex-review-check.yml` from
+- [x] Add the shared consumer check (`codex-review-check.yml` from
       mikelward/codex-review) if it applies to this repository's
       codex-review setup — see its `docs/CONSUMER.md`. `codex-review.yml`
       already publishes the `codex` status here, and it must remain the
