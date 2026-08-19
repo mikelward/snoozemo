@@ -31,3 +31,9 @@ jobs:
       contents: write
       pull-requests: write
       actions: write
+    secrets:
+      # See docs/GITHUB_APP.md in mikelward/gradle-update: opens the PR as a
+      # real collaborator, so CI starts on it normally — no first-time-
+      # contributor approval to click through.
+      app-id: ${{ secrets.GRADLE_UPDATE_APP_ID }}
+      app-private-key: ${{ secrets.GRADLE_UPDATE_APP_PRIVATE_KEY }}
