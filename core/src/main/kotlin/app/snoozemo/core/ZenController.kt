@@ -37,6 +37,34 @@ interface ZenController {
      * it, not what is convenient.
      */
     fun setSnoozed(snoozed: Boolean, trigger: ZenTrigger, placeName: String): ZenOutcome
+
+    /**
+     * What Snoozemo's rule is currently doing (SPEC.md §5.7).
+     *
+     * The broadcast in §5.7 is the timely answer to "did the user turn Do Not
+     * Disturb off"; this is the reliable one. A receiver can fail to register,
+     * and the process only lives between wake-ups, so a snooze can outlive the
+     * only thing watching for it — this re-asks on every wake-up instead, which
+     * turns that failure into *late* rather than *never*.
+     *
+     * The four-value answer matters: [ZenRuleActivation.UNKNOWN] must never end
+     * a snooze, and [ZenRuleActivation.MISSING] is a lost capability rather than
+     * the user's choice.
+     */
+    fun ruleActivation(): ZenRuleActivation
+
+    /**
+     * Whether [ruleId] is Snoozemo's own rule (SPEC.md §5.7).
+     *
+     * The gate on every status broadcast, because the platform reports changes
+     * to *all* rules: §5.6's "only its own rule" has to hold for reading as well
+     * as writing, or another app's mode ending would end our snooze.
+     *
+     * Answers **false when it cannot tell** — an unreadable id means we have no
+     * evidence this rule is ours, and the safe reading of that is to leave a
+     * running snooze alone rather than end it on a guess.
+     */
+    fun ownsRule(ruleId: String?): Boolean
 }
 
 /** Whether the app may change zen state at all. */

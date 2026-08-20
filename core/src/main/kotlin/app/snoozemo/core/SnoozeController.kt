@@ -39,6 +39,27 @@ class SnoozeController(
         fun onStateChanged(state: SnoozeState, snooze: ActiveSnooze?, reason: EndReason?)
 
         /**
+         * A release is about to be attempted, and this is why (Codex, PR #36).
+         *
+         * Called **before** the zen write, because the point is to survive a
+         * process death between that write and the record being cleared: the
+         * next wake-up would otherwise find a live record over an already-off
+         * rule and, having no other explanation, blame the user for an ending
+         * the app itself decided on — losing the reason §4.5 promises.
+         *
+         * Deliberately *not* the same thing as marking the record released.
+         * That marker makes [ActiveSnoozeStore.load] refuse the record, and
+         * writing it before a zen write that can still fail would strand a live
+         * snooze with no record and Do Not Disturb stuck on — nothing left to
+         * turn the phone back on, which is principle 1's failure. This one only
+         * records attribution, so a stale marker is harmless.
+         *
+         * Best-effort by contract: an implementation must never let a failure
+         * here stop the release.
+         */
+        fun onReleasing(reason: EndReason)
+
+        /**
          * How well tracking is working has changed, with no transition to carry
          * the news — [snooze] holds the new mode and [degradation] the reason,
          * or null now that there isn't one.
@@ -126,7 +147,18 @@ class SnoozeController(
         listener.onStateChanged(state, snooze, null)
 
         return when (val outcome = zen.setSnoozed(true, ZenTrigger.USER_ACTION, placeName)) {
-            is ZenOutcome.Applied -> true
+            is ZenOutcome.Applied -> {
+                // The moment the rule is on, not when the anchor arrives
+                // (Codex, PR #36). Anchor capture can be up to the 10 s ceiling
+                // away, and for that whole window the record would claim the arm
+                // never completed — so a process death in it, followed by the
+                // user turning Do Not Disturb off, would have the next wake-up
+                // "finish" an arm that was already finished and silence the
+                // phone again. No write of its own: the caller saves the record
+                // as soon as the rule is on, and now carries this with it.
+                active = snooze.copy(armed = true)
+                true
+            }
             is ZenOutcome.NotApplied -> {
                 active = null
                 state = SnoozeState.IDLE
@@ -190,10 +222,42 @@ class SnoozeController(
      */
     fun end(reason: EndReason) {
         val ending = active
-        val trigger = if (reason == EndReason.MANUAL) ZenTrigger.USER_ACTION else ZenTrigger.CONTEXT
+        // Before the zen write, so the reason outlives a crash in the window
+        // between turning the rule off and clearing the record.
+        //
+        // **Only for the endings the phone decided on**, which is not a
+        // compromise for speed — it is that the marker buys nothing otherwise
+        // (Codex, PR #36). If a `MANUAL` ending is lost to a crash, the
+        // fallback inference is `DND_TURNED_OFF`, which is *also* silent and
+        // *also* attributed to the user: same notification, same source, same
+        // everything the user can see. So the one path where somebody is
+        // waiting — a tile tap, phone in hand, asking for sound back — does no
+        // disk work at all.
+        // Exhaustive on purpose (Codex, PR #36). §5.4's source argument is what
+        // the Modes UI shows the user to tell "I did this" from "my phone did
+        // this", so every reason has to state which it was — and a default
+        // branch would keep answering for reasons added later, which is exactly
+        // how `DND_TURNED_OFF` was reported as automation on its first outing.
+        val trigger = when (reason) {
+            // Both are the user, reaching the same switch from different
+            // directions: our tile or notification, or the platform's own Do
+            // Not Disturb toggle.
+            EndReason.MANUAL, EndReason.DND_TURNED_OFF -> ZenTrigger.USER_ACTION
+            EndReason.DEPARTURE,
+            EndReason.DURATION_CAP,
+            EndReason.LOST_CAPABILITY,
+            -> ZenTrigger.CONTEXT
+        }
+
+        if (ending != null && trigger == ZenTrigger.CONTEXT) listener.onReleasing(reason)
 
         val outcome = zen.setSnoozed(false, trigger, ending?.placeName ?: ActiveSnooze.DEFAULT_PLACE_NAME)
         if (outcome is ZenOutcome.NotApplied) {
+            // Reports the failure *and* retires the marker above: the release
+            // did not happen, so the reason it recorded is now a lie waiting
+            // for a crash to be believed (Codex, PR #36). A snooze that later
+            // ends because the user switched Do Not Disturb off would otherwise
+            // be explained by a departure that never completed.
             listener.onZenFailure(outcome.reason, whileArming = false)
             // Keeps `active` and the current state so a retry is still possible.
             // Not a stuck state machine: onCapCheck, the tile, and the

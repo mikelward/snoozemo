@@ -742,6 +742,92 @@ merges most-restrictive-wins, this is safe and idempotent. On release, Snoozemo 
 own rule* — whatever else was making the phone quiet stays. This is the concrete benefit of D1 over
 `setInterruptionFilter(INTERRUPTION_FILTER_ALL)`, which would have stomped the other rule.
 
+### 5.7 The user turning Do Not Disturb off
+
+**Turning DND off from the shade ends the snooze**, as if the user had tapped the tile.
+
+**Two mechanisms, because one of them can fail quietly.** The *timely* answer is a broadcast:
+`ACTION_AUTOMATIC_ZEN_RULE_STATUS_CHANGED` carries `AUTOMATIC_RULE_STATUS_DEACTIVATED` for a rule
+the user switched off, so this needs no polling and no inference from the interruption filter. The
+*reliable* answer is reading `getAutomaticZenRuleState` back on every wake-up: a receiver can be
+refused registration, and this process only lives between wake-ups, so a snooze can outlive the only
+thing watching it. Re-asking turns that failure into **late rather than never** — the same bargain
+§5.2's policy-access reconcile already strikes. Neither adds a wake-up of its own.
+
+**The two paths must agree.** The broadcast and the read-back describe the same platform states, one
+promptly and one late, so they resolve to the same reasons — a rule that is **disabled** or
+**removed** is a lost capability either way. That needs saying because the platform makes it easy to
+get wrong: a disabled rule reports the same `STATE_FALSE` as one the user just switched off, so the
+condition alone would tell the user they turned Do Not Disturb off when in fact Snoozemo can no
+longer enforce anything. Which explanation they get must not depend on whether our process happened
+to be alive.
+
+**"Cannot tell" is never "off", and "deleted" is not "turned off".** The read answers four ways, not
+two, because collapsing them loses a distinction the user can see. Only an explicit *inactive* ends a
+snooze as the user's own doing; a rule that has been **deleted** ends it as a lost capability, which
+says why (§4.5) rather than ending in the silence appropriate to something the user just did. And
+*unreadable* ends nothing at all — a failed binder call reading as "the user turned it off" would
+turn the phone back on in the middle of a meeting, which is the failure the whole app is arranged
+against.
+
+**An off rule with a live record has two explanations, and the platform reports only one of them.**
+`STATE_FALSE` says the rule is off, not *who* turned it off — so a process that died between turning
+the rule off itself and clearing its record would come back, find exactly that, and blame the user
+for an ending it decided on. Because the user's own ending is the one deliberately kept silent
+(§4.5), the real reason would disappear along with the notification explaining it. Snoozemo
+therefore records **why** a release is being attempted before attempting it, and prefers that
+recorded reason over the inference — but only for the endings *it* decided on. A manual ending needs
+no marker: losing one to a crash falls back to "the user turned Do Not Disturb off", which is
+equally silent and equally the user's, so nothing observable changes. That is what keeps the tile-tap
+path free of disk work, and it is a consequence of the design rather than a concession to it. A
+marker whose release then fails is discarded, since an attempt that never completed must not go on
+to explain some later ending. It is not the same as marking the record released: that marker
+suppresses the record, and writing it before a zen write that can still fail would strand a live
+snooze with Do Not Disturb on and nothing left to turn it back off.
+
+**Only where it can act, and never over an unfinished arm.** The read-back runs on the wake-ups that
+restore, not on the explicit endings — those are already on their way to turning the rule off, so
+reading its state first buys nothing and puts policy IPC between the user's tap and their phone
+making noise again. And because the record is written *before* the rule (§4.1), a record over an off
+rule is ambiguous in a second way: the arm may simply never have completed. Snoozemo records that
+the rule went on **the moment it goes on** — not when the anchor later arrives, which can be the
+full 10 s ceiling away — and **on the record itself**, so the two can be told apart — an interrupted arm is
+**finished** rather than read as a deactivation and silently discarded. On the record and not beside
+it, because a marker stored separately is wiped by the next ordinary update of the record it
+describes, and a running snooze that reads back as an unfinished arm gets its rule re-asserted over a
+Do Not Disturb the user switched off.
+
+**The read has to happen before the restore.** A process that died before the user turned Do Not
+Disturb off never heard the broadcast, so the next wake-up's state read is the only thing that can
+notice — and restoring a persisted snooze re-asserts the rule, which overwrites exactly that
+evidence. Reading first is what stops Snoozemo re-silencing a phone its user deliberately
+un-silenced; a snooze whose rule is already off is picked back up only to be ended, never to be
+re-asserted.
+
+Both are API 35, so on 34 **this drift is not observable at all** and a snooze runs to its cap
+believing it is still enforcing. That is a real gap and it is stated here rather than discovered:
+the cap still bounds it, so the phone is never silent indefinitely.
+
+Ending is not merely tidier than letting the snooze run on; **it is what makes the next snooze
+work**. A deactivated rule stays deactivated until its owner sets it back to `STATE_FALSE`, so a
+snooze left running here would leave the *following* tap turning on a rule the platform ignores —
+the tile reading `Snoozing` over a phone that still rings, which is principle 1's failure reached by
+doing nothing. Ending the snooze issues exactly that `STATE_FALSE`.
+
+It gets its own `EndReason` so §4.5's "every ending has a reason" holds, but **no notification**: the
+user turned DND off because they wanted the phone back, and a card telling them the phone is back is
+worse than silence. Two related statuses fail open (D7) instead, because a rule that is `REMOVED` or
+`DISABLED` can no longer enforce anything: a running snooze ends as `LOST_CAPABILITY`, and a removed
+rule is recreated only when nothing is running. A **disabled** one is never re-enabled behind the
+user — they did that deliberately.
+
+Every one of these is gated on the rule being *ours*. §5.6's "only its own rule" governs reading as
+well as writing: another app's mode ending, or a user schedule's, must never end a Snoozemo snooze.
+
+Two neighboring cases are deliberately out of scope: the user turning DND *on* while we are idle
+(at worst the tile reads `not snoozing` beside a quiet phone), and another app's rule ending while
+ours is on (nothing to do).
+
 ---
 
 ## 6. Presence: deciding when you have left

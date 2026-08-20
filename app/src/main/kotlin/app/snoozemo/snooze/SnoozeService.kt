@@ -29,7 +29,12 @@ import app.snoozemo.core.SnoozeState
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
 import app.snoozemo.core.ZenController
+import app.snoozemo.core.ZenRuleActivation
+import app.snoozemo.core.ZenRuleStatus
+import app.snoozemo.core.ZenRuleStatusAction
+import app.snoozemo.core.ZenRuleStatusChange
 import app.snoozemo.core.ZenTrigger
+import app.snoozemo.core.endReason
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.dnd.PrefsZenRuleIdStore
 import app.snoozemo.ui.MainActivity
@@ -276,6 +281,93 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         }
     }
 
+    /**
+     * The user turning Do Not Disturb off, and the two ways our rule can stop
+     * being usable (SPEC.md §5.7).
+     *
+     * A separate receiver from [accessReceiver] because they answer different
+     * questions and one carries extras the other doesn't — but registered
+     * beside it, on the same process lifetime (§8.4), and adding no wake-up of
+     * its own.
+     */
+    private val ruleStatusReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent == null) return
+            reconcileRuleStatus(
+                ruleId = intent.getStringExtra(NotificationManager.EXTRA_AUTOMATIC_RULE_ID),
+                status = intent.getIntExtra(
+                    NotificationManager.EXTRA_AUTOMATIC_ZEN_RULE_STATUS,
+                    NotificationManager.AUTOMATIC_RULE_STATUS_UNKNOWN,
+                ),
+            )
+        }
+    }
+
+    private var ruleStatusReceiverRegistered: Boolean = false
+
+    /**
+     * Acts on a status change for a zen rule — ours or anyone's.
+     *
+     * Contained for the same reason [reconcilePolicyAccess] is: this runs on a
+     * broadcast that can arrive during any wake-up, and an escaping exception
+     * would take the service down with the snooze's other business unfinished.
+     */
+    private fun reconcileRuleStatus(ruleId: String?, status: Int) {
+        val ours = runCatching { zen.ownsRule(ruleId) }.getOrElse {
+            Log.e(TAG, "Checking rule ownership failed; leaving the snooze as it is.", it)
+            return
+        }
+        val action = ZenRuleStatusChange.resolve(
+            status = status.toZenRuleStatus(),
+            ours = ours,
+            snoozing = controller.active != null,
+        )
+        when (action) {
+            is ZenRuleStatusAction.EndSnooze -> controller.end(action.reason)
+            ZenRuleStatusAction.RecreateRule -> zen.ensureRule()
+            ZenRuleStatusAction.None -> Unit
+        }
+    }
+
+    /**
+     * Re-asks whether our rule is still on, rather than trusting that the
+     * broadcast reached us (Codex, PR #36).
+     *
+     * [ruleStatusReceiver] is the timely answer and this is the reliable one.
+     * Registration can be refused, and the process only lives between wake-ups,
+     * so a snooze can outlive the only thing watching it — without this, that
+     * failure means the drift of §5.7 is never noticed at all rather than
+     * noticed at the next wake-up. Which is the same bargain
+     * [reconcilePolicyAccess] already strikes, for the same reason.
+     */
+    override fun onReleasing(reason: EndReason) {
+        // Best-effort, and never in the way: a marker that fails to write costs
+        // the attribution of a crash that probably will not happen, while a
+        // throw here would stop a release the user is waiting on.
+        runCatching { store.markReleasing(reason) }
+            .onFailure { Log.w(TAG, "Recording the release reason failed; continuing.", it) }
+    }
+
+    private fun reconcileRuleActive(observed: ZenRuleActivation) {
+        if (controller.active == null) return
+        // The reason comes from the activation, so "turned off" and "deleted"
+        // stay apart — one is the user's doing and says nothing, the other is a
+        // lost capability and explains itself. "Cannot tell" ends nothing.
+        val inferred = observed.endReason() ?: return
+        // A rule already off with a live record has two explanations, and
+        // `STATE_FALSE` cannot tell them apart (Codex, PR #36): the user turned
+        // Do Not Disturb off, or we did and died before clearing up. Our own
+        // marker is the only thing that knows, and it only overrides the
+        // *user* inference — a missing rule is a lost capability whoever was
+        // releasing it.
+        val reason = when (inferred) {
+            EndReason.DND_TURNED_OFF -> runCatching { store.releasingReason() }.getOrNull() ?: inferred
+            else -> inferred
+        }
+        Log.i(TAG, "The zen rule is no longer enforcing; ending the snooze ($reason).")
+        controller.end(reason)
+    }
+
     private val zen by lazy { createZenController() }
 
     /**
@@ -325,6 +417,23 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             )
         }.onFailure {
             Log.e(TAG, "Registering the policy-access receiver failed; wake-ups still reconcile.", it)
+        }.isSuccess
+
+        // Losing this one degrades differently from losing the policy-access
+        // receiver, and worse: there is no wake-up that re-asks the question,
+        // because nothing else reports a rule the user switched off. The snooze
+        // then runs to its cap believing it is enforcing a rule the platform has
+        // stopped honoring. Still not fatal — the cap is what bounds it — but it
+        // is the failure this receiver exists to prevent, so it is logged as the
+        // real degradation it is.
+        ruleStatusReceiverRegistered = runCatching {
+            registerReceiver(
+                ruleStatusReceiver,
+                IntentFilter(NotificationManager.ACTION_AUTOMATIC_ZEN_RULE_STATUS_CHANGED),
+                RECEIVER_NOT_EXPORTED,
+            )
+        }.onFailure {
+            Log.e(TAG, "Registering the rule-status receiver failed; DND turned off will go unnoticed.", it)
         }.isSuccess
 
         // Restoring is deliberately NOT here. onCreate cannot see which action
@@ -447,15 +556,57 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // process with a live record behind a stale card, restoring first would
         // silence the phone and then try to un-silence it, and a refusal in
         // between leaves the user's own exit having caused the silence.
+        // **Read before anything can reassert the rule** (Codex, PR #36).
+        // `restoreIfNeeded` drives the rule back to `STATE_TRUE`, which
+        // overwrites the very thing this is looking for: if the user turned Do
+        // Not Disturb off while no process of ours was alive to hear the
+        // broadcast, reading afterwards sees the state we just re-asserted and
+        // calls it `ACTIVE`. The snooze would then run on to its cap, having
+        // silently re-silenced a phone the user deliberately un-silenced —
+        // principle 1's failure, caused by the app overriding an explicit
+        // instruction it never noticed.
+        // Only on the wake-ups that restore. The explicit endings below are
+        // already on their way to turning the rule off, so reading its state
+        // first buys nothing and costs the user a policy IPC between their tap
+        // and their phone making noise again (Codex, PR #36).
+        val restoring = when (intent?.action) {
+            ACTION_ARM, ACTION_ERASE_RETRY -> false
+            ACTION_END, ACTION_CAP_LOST, ACTION_RELEASE_STUCK -> false
+            else -> true
+        }
+        val observedActivation = if (restoring) zen.ruleActivation() else null
+
+        // An arm that never finished is not the user turning Do Not Disturb off
+        // (Codex, PR #36). The record is written before the rule by design, so
+        // a crash in that window leaves exactly the shape this inference reads
+        // as a deactivation — and acting on it would silently delete a snooze
+        // the user asked for and was never told they didn't get. Restoring
+        // finishes the arm instead, which is what the pre-read-back code did
+        // and what the user actually wanted.
+        val armUnfinished = observedActivation != null &&
+            runCatching { !store.wasArmed() }.getOrDefault(false)
+
         when (intent?.action) {
             ACTION_ARM, ACTION_ERASE_RETRY -> Unit
             ACTION_END, ACTION_CAP_LOST, ACTION_RELEASE_STUCK -> adoptIfNeeded()
-            else -> restoreIfNeeded()
+            // Adopt rather than restore when the rule is already off. Both pick
+            // the record back up; only `restore` re-asserts. Turning Do Not
+            // Disturb back on here — for the milliseconds until the reconcile
+            // below turns it off again — would be a visible flicker and two
+            // spurious transitions in the Modes UI, in service of a snooze
+            // that is about to end anyway.
+            else ->
+                if (!armUnfinished && observedActivation?.endReason() != null) {
+                    adoptIfNeeded()
+                } else {
+                    restoreIfNeeded()
+                }
         }
 
         // Then reconcile with the platform, on every wake-up except the arm.
-        // After the restore, not before: this reads whether a snooze is running,
-        // and before the record is picked back up the answer is always "no".
+        // After the restore, because this acts on a snooze and before the record
+        // is picked back up there is none — but on a reading taken *before* it,
+        // for the reason above.
         //
         // The access receiver is registered dynamically because this broadcast
         // is not on the manifest-receiver exemption list, so it only exists
@@ -465,6 +616,9 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // snooze the platform has already dropped. Every later wake-up is a
         // chance to notice, and they are all off the arm path.
         if (intent?.action != ACTION_ARM) reconcilePolicyAccess()
+        if (observedActivation != null && !armUnfinished) {
+            reconcileRuleActive(observedActivation)
+        }
 
         // An obligation that outlived its process gets discharged by whatever
         // starts us next, whatever that start was for. The flag is the only
@@ -1606,6 +1760,23 @@ open class SnoozeService : Service(), SnoozeController.Listener {
 
     override fun onZenFailure(failure: ZenFailure, whileArming: Boolean) {
         notifications.showFailure(failure, whileArming)
+        // A release that didn't land leaves a marker describing something that
+        // never happened, and the next ending would be explained by it
+        // (Codex, PR #36). Cleared here rather than at the call site because
+        // this is the one place that knows the attempt failed.
+        if (!whileArming) {
+            // `commit` reports a refusal by returning false rather than
+            // throwing, so `runCatching` alone would call that success (Codex,
+            // PR #36). Said out loud, because what survives is a marker that
+            // will explain the *next* ending with a reason belonging to this
+            // failed one.
+            val cleared = runCatching { store.clearReleasing() }
+                .onFailure { Log.w(TAG, "Clearing the stale release reason failed.", it) }
+                .getOrDefault(false)
+            if (!cleared) {
+                Log.w(TAG, "The stale release reason is still on disk; a later ending may cite it.")
+            }
+        }
         // Kept in case the system dropped it: on a tile-first install
         // POST_NOTIFICATIONS is still denied at the first tap, so the message
         // explaining a failed arm goes nowhere and the user is left with a tap
@@ -1625,16 +1796,26 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // re-reads the record and picks the work back up if it is still there.
         eraseRetryHandler.removeCallbacksAndMessages(null)
         releaseRetryHandler.removeCallbacksAndMessages(null)
-        // Only if it registered. A registration the platform refused is a state
-        // this class now knows about, so unregistering it is not something to
-        // attempt and then explain away.
-        if (!accessReceiverRegistered) return
-        accessReceiverRegistered = false
-        runCatching { unregisterReceiver(accessReceiver) }.onFailure {
-            // Registered but not unregisterable — a lifecycle defect, not an
-            // expected state. Harmless at teardown (the process is releasing it
-            // anyway), so logged rather than escalated, but not swallowed.
-            Log.w(TAG, "Unregistering the policy-access receiver failed.", it)
+        // Each gated on its **own** flag, and neither on the other's (Codex, PR
+        // #36). A registration the platform refused is a state this class knows
+        // about, so unregistering it is not something to attempt and then
+        // explain away — but one refusal must not skip the other's cleanup, or
+        // the receiver that did register is left attached and Android reports it
+        // as leaked.
+        if (accessReceiverRegistered) {
+            accessReceiverRegistered = false
+            runCatching { unregisterReceiver(accessReceiver) }.onFailure {
+                // Registered but not unregisterable — a lifecycle defect, not an
+                // expected state. Harmless at teardown (the process is releasing
+                // it anyway), so logged rather than escalated, but not swallowed.
+                Log.w(TAG, "Unregistering the policy-access receiver failed.", it)
+            }
+        }
+        if (ruleStatusReceiverRegistered) {
+            ruleStatusReceiverRegistered = false
+            runCatching { unregisterReceiver(ruleStatusReceiver) }.onFailure {
+                Log.w(TAG, "Unregistering the rule-status receiver failed.", it)
+            }
         }
     }
 
@@ -1823,4 +2004,19 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 false
             }
     }
+}
+
+/**
+ * The platform's status int as the domain's [ZenRuleStatus] (SPEC.md §5.7).
+ *
+ * `DEACTIVATED` and `ACTIVATED` are API 35 and simply never arrive on 34, which
+ * needs no version guard: an unknown int already maps to [ZenRuleStatus.UNKNOWN]
+ * and changes nothing. Anything the platform adds later lands there too.
+ */
+internal fun Int.toZenRuleStatus(): ZenRuleStatus = when (this) {
+    NotificationManager.AUTOMATIC_RULE_STATUS_ACTIVATED -> ZenRuleStatus.ACTIVATED
+    NotificationManager.AUTOMATIC_RULE_STATUS_DEACTIVATED -> ZenRuleStatus.DEACTIVATED
+    NotificationManager.AUTOMATIC_RULE_STATUS_DISABLED -> ZenRuleStatus.DISABLED
+    NotificationManager.AUTOMATIC_RULE_STATUS_REMOVED -> ZenRuleStatus.REMOVED
+    else -> ZenRuleStatus.UNKNOWN
 }

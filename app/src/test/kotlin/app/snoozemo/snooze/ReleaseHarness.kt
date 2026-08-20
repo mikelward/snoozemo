@@ -11,6 +11,7 @@ import app.snoozemo.core.ClockReading
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenController
+import app.snoozemo.core.ZenRuleActivation
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
 import app.snoozemo.core.ZenRuleState
@@ -52,6 +53,11 @@ internal class RefusingZen : ZenController {
 
     override fun policyAccess(): PolicyAccess = PolicyAccess.GRANTED
 
+    /** What the platform will say the rule is doing. */
+    var activation: ZenRuleActivation = ZenRuleActivation.ACTIVE
+
+    override fun ruleActivation() = activation
+    override fun ownsRule(ruleId: String?): Boolean = true
     override fun ensureRule(): ZenRuleState = ZenRuleState.READY
 
     override fun setSnoozed(
@@ -60,6 +66,13 @@ internal class RefusingZen : ZenController {
         placeName: String,
     ): ZenOutcome {
         calls += snoozed to trigger
+        // The platform remembers, so the fake does too. Without this a test
+        // could not see the failure mode where a *reassertion* is what makes
+        // the later state read answer `ACTIVE` (Codex, PR #36) — the fake would
+        // keep reporting whatever the test set, and the bug would pass.
+        if (outcome is ZenOutcome.Applied) {
+            activation = if (snoozed) ZenRuleActivation.ACTIVE else ZenRuleActivation.INACTIVE
+        }
         return outcome
     }
 }

@@ -45,6 +45,19 @@ enum class EndReason {
     MANUAL,
 
     /**
+     * The user turned Do Not Disturb off themselves — the shade toggle, or the
+     * Modes UI — deactivating Snoozemo's rule underneath a running snooze
+     * (SPEC.md §5.7).
+     *
+     * Separate from [MANUAL] because it did not come through Snoozemo at all,
+     * and separate from [LOST_CAPABILITY] because nothing is broken: the user
+     * asked for the phone to ring, and got it. Both distinctions are for the
+     * debug log's benefit — the user needs no explanation for something they
+     * just did.
+     */
+    DND_TURNED_OFF,
+
+    /**
      * Snoozemo could no longer do its job — policy access revoked, location
      * permission downgraded — so it ended the snooze rather than staying armed
      * on state it cannot verify (SPEC.md D7, §8.2).
