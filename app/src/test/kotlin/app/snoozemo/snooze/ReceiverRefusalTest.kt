@@ -112,6 +112,39 @@ class ReceiverRefusalTest {
     }
 
     @Test
+    fun `a manual end without the service is credited to the user`() {
+        // The trigger reaches the platform's Modes UI, which uses it to tell
+        // "I did this" from "my phone did this" (SPEC.md §5.4). This path is
+        // where the trampoline sends the user's own `End now` when the service
+        // refuses to start, and a hard-coded CONTEXT credited that tap to the
+        // app deciding by itself.
+        ActiveSnoozeStore(context).save(aSnooze())
+        val zen = RefusingZen().apply { outcome = ZenOutcome.Applied }
+
+        releaseDirectly(context, EndReason.MANUAL, zen)
+
+        assertEquals(
+            listOf(false to app.snoozemo.core.ZenTrigger.USER_ACTION),
+            zen.calls,
+        )
+    }
+
+    @Test
+    fun `an automatic end without the service is not credited to the user`() {
+        // The other direction of the same distinction: a cap expiry reported
+        // as USER_ACTION would tell the user they ended a snooze they didn't.
+        ActiveSnoozeStore(context).save(aSnooze())
+        val zen = RefusingZen().apply { outcome = ZenOutcome.Applied }
+
+        releaseDirectly(context, EndReason.DURATION_CAP, zen)
+
+        assertEquals(
+            listOf(false to app.snoozemo.core.ZenTrigger.CONTEXT),
+            zen.calls,
+        )
+    }
+
+    @Test
     fun `a refusal with nothing left to release also clears the record`() {
         // Access revoked deletes the app's rules, so every retry would fail the
         // same way forever. Keeping the record would strand the app showing
