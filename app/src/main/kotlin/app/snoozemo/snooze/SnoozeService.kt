@@ -473,22 +473,13 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // until something happened to route through one of the two branches
         // that read it, and the rule could stay on meanwhile.
         //
-        // Guarded on there being no record and no snooze, because that is what
-        // the flag means: *our* rule may be on with nothing behind it. If a
-        // snooze exists, it owns the rule and this is not ours to touch.
-        //
         // Off the arm path deliberately. `ACTION_ARM` is excluded because a
         // preferences read and a possible zen write between the tap and
         // `STATE_TRUE` is exactly what §4.1 forbids — and an arm that succeeds
-        // clears the flag anyway, since the rule becomes legitimately ours.
-        if (intent?.action != ACTION_ARM &&
-            pendingFailure.ruleMayBeStuck() &&
-            controller.active == null &&
-            store.load() == null
-        ) {
-            Log.w(TAG, "A start found a possibly-stuck rule outstanding; driving it off.")
-            releaseRecordlessRule()
-        }
+        // clears the flag anyway, since the rule becomes legitimately ours. An
+        // arm that *fails* without taking ownership of the rule runs the same
+        // discharge from its failure branch instead (see [arm]).
+        if (intent?.action != ACTION_ARM) dischargeStuckRuleIfOrphaned()
 
         when (intent?.action) {
             // A sticky recreation: the system killed us and brought us back with
@@ -792,6 +783,14 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // the message above goes nowhere and a later grant is the only
             // chance to tell the user why their tap didn't snooze the phone.
             pendingFailure.remember(ArmFailure.BelowZen)
+            // The discharge every non-arm start runs, which this start skipped
+            // on the way in to keep the tap-to-`STATE_TRUE` stretch clean. That
+            // was justified by "a successful arm clears the flag anyway" — true
+            // of a successful arm, not of this one, which failed before
+            // reaching zen. Without it the service stops with nothing scheduled
+            // while an older rule may still be silencing the phone (flagged by
+            // Codex on PR #8). The arm is over, so the reads are affordable now.
+            dischargeStuckRuleIfOrphaned()
             return
         }
 
@@ -851,6 +850,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // got a snooze from is principle 1's failure with a schedule.
             if (lastArmFailure?.nothingLeftToRelease != false) {
                 CapAlarm.cancel(applicationContext)
+                // Same discharge as the below-zen failure above, and here it
+                // can settle the obligation for good: the refusal means
+                // nothing is silencing the phone, so the recordless release
+                // this runs comes back `nothingLeftToRelease` and retires the
+                // flag and its card rather than chasing a rule that is off.
+                dischargeStuckRuleIfOrphaned()
                 return
             }
             Log.w(TAG, "The arm was refused with the rule's state unknown; scheduling a release.")
@@ -1192,6 +1197,23 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // racing a cap-driven end is the case that matters — must not be
         // thrown away by the stop.
         if (controller.active == null && recordErased) stopSelf(latestStartId)
+    }
+
+    /**
+     * Drives off a possibly-stuck rule that nothing else will revisit.
+     *
+     * Guarded on there being no record and no snooze, because that is what the
+     * stored flag means: *our* rule may be on with nothing behind it. If a
+     * snooze exists, it owns the rule and this is not ours to touch.
+     */
+    private fun dischargeStuckRuleIfOrphaned() {
+        if (pendingFailure.ruleMayBeStuck() &&
+            controller.active == null &&
+            store.load() == null
+        ) {
+            Log.w(TAG, "A start found a possibly-stuck rule outstanding; driving it off.")
+            releaseRecordlessRule()
+        }
     }
 
     /**
