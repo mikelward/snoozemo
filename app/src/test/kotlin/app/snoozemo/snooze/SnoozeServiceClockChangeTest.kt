@@ -39,6 +39,8 @@ class SnoozeServiceClockChangeTest {
         // the escalation's tests, and here it would end every snooze before the
         // clock could be changed under it.
         TestSnoozeService.zen.outcome = ZenOutcome.Applied
+        // Static, so a refusing test must not leak its refusal forward.
+        TogglableAlarmManager.refuse = false
     }
 
     /**
@@ -126,6 +128,154 @@ class SnoozeServiceClockChangeTest {
         )
     }
 
+    /**
+     * The pending delay of the armed cap-check alarm, measured against the
+     * shadow's own elapsed clock — the frame `armCheckIn` schedules in.
+     */
+    private fun armedCapDelay(): Duration {
+        val alarmManager = appContext.getSystemService(android.app.AlarmManager::class.java)
+        val alarm = org.robolectric.Shadows.shadowOf(alarmManager).scheduledAlarms.last { scheduled ->
+            org.robolectric.Shadows.shadowOf(scheduled.operation).savedIntent.action ==
+                SnoozeService.ACTION_CHECK_CAP
+        }
+        return Duration.ofMillis(alarm.triggerAtMs - android.os.SystemClock.elapsedRealtime())
+    }
+
+    @Test
+    fun `a forward clock change pulls the armed alarm in to match the countdown`() {
+        // The precision §7 used to give up: the alarm counts in elapsed
+        // realtime, so a forward jump left it at the original delay while the
+        // record and countdown read the shortened wall answer — zero on
+        // screen, silence until the alarm. The restate makes the record's
+        // frame provably fresh, which is what licenses the re-arm.
+        val service = startService(SnoozeService.ACTION_RESTORE, snoozeFixture(now, capIn = cap))
+        assertEquals("armed at the original four hours", Duration.ofHours(4), armedCapDelay())
+
+        // The clock jumps two hours forward; no real time passes.
+        TestSnoozeService.testReading = ClockReading(
+            wallMillis = now.plus(Duration.ofHours(2)).toEpochMilli(),
+            uptimeMillis = TestSnoozeService.FIXTURE_UPTIME_MILLIS,
+        )
+        service.send(SnoozeService.ACTION_CLOCK_CHANGED, startId = 2)
+
+        assertEquals(
+            "the alarm must now name the same moment the countdown does",
+            Duration.ofHours(2),
+            armedCapDelay(),
+        )
+    }
+
+    @Test
+    fun `a backward clock change re-arms at the uptime truth`() {
+        // The direction the never-re-arm rule was written for, safe here
+        // because the re-arm happens only behind the restate that just wrote
+        // the frame it reads: the recomputed delay is uptime's answer — two
+        // real hours left — not the five the moved wall clock claims.
+        val service = startService(SnoozeService.ACTION_RESTORE, snoozeFixture(now, capIn = cap))
+
+        TestSnoozeService.testReading = woundBack()
+        service.send(SnoozeService.ACTION_CLOCK_CHANGED, startId = 2)
+
+        assertEquals(
+            "a backwards change must never push the alarm out",
+            Duration.ofHours(2),
+            armedCapDelay(),
+        )
+    }
+
+    @Test
+    @org.robolectric.annotation.Config(shadows = [TogglableAlarmManager::class])
+    fun `a restate whose re-arm is refused ends the snooze`() {
+        // The record has just been rewritten to a deadline the refused alarm
+        // will not honor — after a forward jump, a countdown at zero over a
+        // silent phone for the size of the shift, with only a log saying why
+        // (flagged by Codex on PR #63). Same answer as a restate that cannot
+        // be written: end, and say so through the ended notification.
+        val service = startService(SnoozeService.ACTION_RESTORE, snoozeFixture(now, capIn = cap))
+
+        TogglableAlarmManager.refuse = true
+        TestSnoozeService.testReading = woundBack()
+        service.send(SnoozeService.ACTION_CLOCK_CHANGED, startId = 2)
+
+        assertNull(
+            "a cap that cannot be scheduled where it is promised ends the snooze",
+            ActiveSnoozeStore(appContext).load(),
+        )
+        assertTrue(
+            "the rule must be driven off, not just forgotten",
+            TestSnoozeService.zen.calls.contains(false to ZenTrigger.CONTEXT),
+        )
+    }
+
+    @Test
+    fun `the no-service fallback restates the record and re-arms the cap`() {
+        // The receiver's own performer, reached only when the service refuses
+        // to start — the path no device takes on purpose, which is exactly why
+        // it needs its own test (Codex, PR #63). Driven through the real
+        // receiver with a context whose startService throws, so the fallback
+        // is what does the work; the record is built against the shadow
+        // clocks, since this path reads SnoozeClock rather than the harness.
+        val wallNow = System.currentTimeMillis()
+        val elapsedNow = android.os.SystemClock.elapsedRealtime()
+        // A stale offset claiming the boot began two hours later than it did:
+        // the uptime frame reads four hours left, the wall frame two — the
+        // forward-jump disagreement the restate exists to settle.
+        val record = snoozeFixture(now, capIn = cap).copy(
+            capExpiresAt = Instant.ofEpochMilli(wallNow + Duration.ofHours(2).toMillis()),
+            bootReference = (wallNow - elapsedNow) - Duration.ofHours(2).toMillis(),
+        )
+        ActiveSnoozeStore(appContext).save(record)
+        val refusing = object : android.content.ContextWrapper(appContext) {
+            override fun startService(service: Intent?): android.content.ComponentName? =
+                throw IllegalStateException("the platform refuses the start")
+        }
+
+        TimeChangedReceiver().onReceive(refusing, Intent(Intent.ACTION_TIME_CHANGED))
+
+        val stored = requireNotNull(ActiveSnoozeStore(appContext).load())
+        // Within a second rather than exact: this path reads the real shadow
+        // clocks, which tick a few milliseconds between the fixture's reading
+        // and the receiver's. The stale offset differs by two hours, so the
+        // tolerance cannot blur what is being asserted.
+        val offsetDrift = Math.abs(requireNotNull(stored.bootReference) - (wallNow - elapsedNow))
+        assertTrue("the restated offset must describe this boot (drift ${offsetDrift}ms)", offsetDrift < 1_000)
+        val delayDrift = Duration.ofHours(2).minus(armedCapDelay()).abs()
+        assertTrue(
+            "the fallback must pull the alarm in to the restated remaining (drift ${delayDrift.toMillis()}ms)",
+            delayDrift < Duration.ofSeconds(1),
+        )
+    }
+
+    @Test
+    @org.robolectric.annotation.Config(shadows = [TogglableAlarmManager::class])
+    fun `the no-service fallback also ends when its re-arm is refused`() {
+        // The receiver twin of the refused-re-arm test: service start refused,
+        // then the alarm refused too. What is left is the direct release —
+        // driven here through the real zen controller, whose missing policy
+        // access reads as nothing-left-to-release, which completes the end and
+        // clears the record exactly as a live refusal's escalation would
+        // eventually have to.
+        val wallNow = System.currentTimeMillis()
+        val elapsedNow = android.os.SystemClock.elapsedRealtime()
+        val record = snoozeFixture(now, capIn = cap).copy(
+            capExpiresAt = Instant.ofEpochMilli(wallNow + Duration.ofHours(2).toMillis()),
+            bootReference = (wallNow - elapsedNow) - Duration.ofHours(2).toMillis(),
+        )
+        ActiveSnoozeStore(appContext).save(record)
+        TogglableAlarmManager.refuse = true
+        val refusing = object : android.content.ContextWrapper(appContext) {
+            override fun startService(service: Intent?): android.content.ComponentName? =
+                throw IllegalStateException("the platform refuses the start")
+        }
+
+        TimeChangedReceiver().onReceive(refusing, Intent(Intent.ACTION_TIME_CHANGED))
+
+        assertNull(
+            "a cap that cannot be scheduled where it is promised ends the snooze here too",
+            ActiveSnoozeStore(appContext).load(),
+        )
+    }
+
     @Test
     fun `an offsetless record does not survive a clock change`() {
         // A record written before the offset existed has only the wall clock to
@@ -158,5 +308,29 @@ class SnoozeServiceClockChangeTest {
 
         assertNull(ActiveSnoozeStore(appContext).load())
         assertTrue(TestSnoozeService.zen.calls.contains(false to ZenTrigger.CONTEXT))
+    }
+}
+
+/**
+ * An `AlarmManager` whose refusal a test can switch on mid-flight, unlike
+ * `RefusingAlarmManager`, which refuses from the first call — the refused
+ * re-arm test needs a snooze to arm normally first and only then meet a
+ * platform that says no.
+ */
+@org.robolectric.annotation.Implements(android.app.AlarmManager::class)
+class TogglableAlarmManager : org.robolectric.shadows.ShadowAlarmManager() {
+    @org.robolectric.annotation.Implementation
+    override fun setAndAllowWhileIdle(
+        type: Int,
+        triggerAtMillis: Long,
+        operation: android.app.PendingIntent,
+    ) {
+        if (refuse) throw SecurityException("The test platform refuses this alarm.")
+        super.setAndAllowWhileIdle(type, triggerAtMillis, operation)
+    }
+
+    companion object {
+        /** Reset in `setUp`; static, so a refusal must not leak between tests. */
+        var refuse: Boolean = false
     }
 }

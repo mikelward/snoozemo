@@ -51,11 +51,17 @@ sealed interface ClockChangeAction {
 
     /**
      * Write [snooze] back to the record — the same snooze with both clock
-     * frames restated onto the clock the user just set.
+     * frames restated onto the clock the user just set — and, **once that
+     * write has landed**, re-arm the cap alarm from it.
      *
-     * The armed alarm is deliberately **not** part of this: it counts in
-     * elapsed realtime, nothing since has moved it, and replacing it is the
-     * failure SPEC.md §7 keeps the receiver away from.
+     * The ordering carries the safety argument (SPEC.md §7): recomputing the
+     * alarm's delay is only sound against a frame known to describe this
+     * boot, and the restate that just reached disk is exactly that. Re-armed
+     * from the record as *found*, a stale offset plus a backwards change
+     * would replace a correct alarm with an overlong one — which is why the
+     * performers re-arm only behind a successful save, and a save that fails
+     * ends the snooze instead. The re-arm is what pulls the alarm in after a
+     * forward jump, so the countdown and the cap name the same moment again.
      */
     data class Restate(val snooze: ActiveSnooze) : ClockChangeAction
 
