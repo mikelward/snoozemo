@@ -610,9 +610,11 @@ the point is that every other line of the app is worthless if it isn't true.
       a `TIME_SET` change folds the remaining time back into the wall deadline (uptime's
       answer would otherwise die with the next boot) and
       re-checks the cap and ends the snooze only if it is already due. That receiver
-      deliberately **never re-arms** — against a stale offset a backwards change would
-      compute a longer delay than the one already armed and replace a correct alarm with an
-      overlong one, which is the overrun this item exists to remove. The change is performed
+      deliberately **never re-arms from the record as found** — against a stale offset a
+      backwards change would compute a longer delay than the one already armed and replace a
+      correct alarm with an overlong one, which is the overrun this item exists to remove;
+      the one sanctioned re-arm is the post-restate one the closed sub-item below describes,
+      when the frame being read was written that instant. The change is performed
       through the running service wherever one will start, since the record and the
       controller are two copies of the same snooze and repairing only the first leaves
       `+30 min` to write the pre-change deadline back over it; a record carrying **no**
@@ -620,14 +622,17 @@ the point is that every other line of the app is worthless if it isn't true.
       measured in. An earlier attempt
       using a process-wide anchored clock is recorded in §7 as the trap it turned out to
       be: it overran the cap whenever the record crossed a process boundary.
-      - Still open: a forward change that does **not** clear the deadline leaves the record
+      - ~~Still open: a forward change that does **not** clear the deadline leaves the record
         reading the shortened wall answer while the armed alarm still counts the original
-        elapsed delay, so the countdown reaches zero and the phone stays quiet until the
-        alarm fires. Harmless in the sense that the snooze never outlives its real duration,
-        and stated in §7 as the precision given up — but the record's frame is provably
-        fresh immediately after a reconciliation, so re-arming *there* would close it
-        without reintroducing the stale-offset overrun the never-re-arm rule exists for.
-        Worth doing as its own change, with its own test, rather than inside a fix.
+        elapsed delay~~ — **closed** (2026-08-21), exactly as this entry proposed: both
+        performers re-arm the cap immediately after a restate reaches disk, when the frame is
+        provably fresh; the never-re-arm rule still governs every other path, and §7 carries
+        the amendment with the safety argument (an armed alarm implies a this-boot offset, and
+        where the offset really is stale no alarm survived the reboot to be replaced). A
+        refused re-arm ends the snooze like a refused restate write does — the record would
+        otherwise promise a deadline no scheduled alarm honors, with only a log saying why
+        (Codex, PR #63). Pinned by the forward, backward, refused-re-arm, and no-service
+        fallback tests in `SnoozeServiceClockChangeTest`.
       - Still open, and shared with the locked-boot item above: a clock moved **while the
         phone is off**, or a reboot that stays locked so the boot receiver never restates
         the offset. Wall time is already wrong by the time anything runs, with no second

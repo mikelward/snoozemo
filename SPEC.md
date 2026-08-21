@@ -1344,14 +1344,29 @@ implausible, and a three-hour one sails past it. So the snooze ends instead (D7)
 answer the boot receiver gives when it cannot restate its offset. Only records written before the
 offset existed can reach this, and only at the moment the clock is set.
 
-It deliberately does **not** re-arm. Recomputing the delay is only trustworthy while the record's
-offset describes the current boot, and the two cases above are exactly when it does not — so against
-a stale offset a backwards change would produce a *longer* delay than the one already armed, and
-re-arming would replace a correct alarm with an overlong one, reintroducing the overrun. Leaving the
-existing alarm alone cannot do that: it was armed in elapsed realtime and nothing since has moved it.
-What that gives up is precision in the harmless direction — a forward jump that does not clear the
-deadline leaves the countdown reading short of what the alarm will honor, which resolves itself when
-the cap fires.
+It deliberately does **not** re-arm from the record as found. Recomputing the delay is only
+trustworthy while the record's offset describes the current boot, and the two cases above are
+exactly when it does not — so against a stale offset a backwards change would produce a *longer*
+delay than the one already armed, and re-arming would replace a correct alarm with an overlong one,
+reintroducing the overrun. Leaving the existing alarm alone cannot do that: it was armed in elapsed
+realtime and nothing since has moved it.
+
+**Amended 2026-08-21: the cap is re-armed immediately after a successful restate — that is the one
+moment the rule above does not apply, and it closes the precision this section previously gave up.**
+A forward jump that did not clear the deadline used to leave the countdown reading short of what
+the alarm would honor: the record and notification showed the shortened wall answer while the alarm
+still counted the original elapsed delay, so the countdown hit zero over a phone that stayed silent
+until the alarm fired. Once the restated record has reached disk its frame is provably fresh — the
+write is this instant's — so a delay recomputed from it is the true remaining, and re-arming pulls
+the alarm in to the moment the countdown now names. The stale-offset trap cannot reach this: an
+armed alarm implies an offset restated for this boot (every armer writes the frame it uses, and a
+boot that cannot restate ends the snooze), and where the offset really is stale no alarm survived
+the reboot at all, so even an overlong re-arm adds a bound where none existed. A restate that fails
+to write still ends the snooze, and so does a re-arm the platform refuses, for the same reason: the
+record would then promise a deadline the scheduled alarm will not honor, and after a forward jump
+the countdown would sit at zero over a silent phone for the size of the shift. A cap that cannot be
+scheduled where it is promised ends the snooze, and the ended notification is the account the user
+gets of it.
 
 A process-wide anchored clock — wall time sampled once at process start and advanced by uptime —
 reads as the obvious fix and is a trap worth recording, because it was tried. The record outlives

@@ -1042,7 +1042,38 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             ensureCapAfterRefusedEnd(EndReason.LOST_CAPABILITY)
             return
         }
+        // The controller adopts the restated snooze the moment it is durable,
+        // *before* anything below can fail. The record and the controller are
+        // two copies of the same snooze, and every fallback under this line —
+        // the refused-end ladder included — reads the controller's copy; left
+        // stale, a refused release would keep the snooze running with `+30
+        // min` deriving from pre-change frames and writing them back over the
+        // repair (flagged by Codex on PR #63).
         controller.reconciledTo(restated)
+
+        // Re-arm the cap from the restated record — the one place the
+        // never-re-arm rule (SPEC.md §7) does not apply, because the record's
+        // frame is provably fresh: the restate above just wrote it. This is
+        // what closes the forward-change gap where the countdown reads the
+        // shortened wall answer while the armed alarm still counts the
+        // original elapsed delay, leaving the phone quiet past a countdown
+        // that has already hit zero. On a backwards change the recomputed
+        // delay equals the one already armed, so the re-arm changes nothing.
+        //
+        // A refusal gets the same answer as the refused save above, and for
+        // the same reason: the record now promises a deadline the scheduled
+        // alarm will not honor, and after a forward jump the gap is the whole
+        // shift — a countdown at zero over a phone still silent, with only a
+        // log saying why (flagged by Codex on PR #63). A cap that cannot be
+        // scheduled where it is promised ends the snooze (SPEC.md §7), and
+        // the ended notification is the user-visible account of it.
+        if (!CapAlarm.arm(applicationContext, restated, readClock())) {
+            Log.e(TAG, "Re-arming the cap after the clock change was refused; ending rather than letting the countdown lie.")
+            SnoozeDebugLog.warning("clock-change re-arm refused; ending the snooze")
+            controller.end(EndReason.LOST_CAPABILITY)
+            ensureCapAfterRefusedEnd(EndReason.LOST_CAPABILITY)
+            return
+        }
 
         // The countdown, which the clock change has just falsified: the platform
         // ticks the chronometer against the *wall* clock from the instant it was

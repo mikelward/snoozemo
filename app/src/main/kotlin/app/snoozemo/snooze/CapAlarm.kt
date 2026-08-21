@@ -835,21 +835,22 @@ private const val RELEASE_RETRY_MS = 5 * 60 * 1000L
  * clock, so it costs nothing on an undisturbed phone and adds no polling to
  * SPEC.md §9's battery budget.
  *
- * **This never re-arms, only ends**, and that restraint is the point. Re-arming
- * recomputes the delay from the record, which is only trustworthy while the
- * record's stored offset describes this boot — and it may not: the boot receiver
- * can fail to write it, and a phone rebooted and left locked never runs the boot
- * receiver at all (`TODO.md`). Against a stale offset a *backwards* change makes
- * the recomputed delay longer than the one already armed, so re-arming here
- * would replace a correct alarm with an overlong one and hand the user back the
- * exact overrun this change exists to remove. Leaving the existing alarm alone
- * cannot do that: it was armed in elapsed realtime and nothing since has moved
- * it.
+ * **This receiver re-arms only after a successful restate, and never from the
+ * record as found.** Re-arming recomputes the delay from the record, which is
+ * only trustworthy while the record's stored offset describes this boot — and
+ * as found it may not: the boot receiver can fail to write it, and a phone
+ * rebooted and left locked never runs the boot receiver at all (`TODO.md`).
+ * Against a stale offset a *backwards* change makes the recomputed delay longer
+ * than the one already armed, so a re-arm there would replace a correct alarm
+ * with an overlong one and hand the user back the exact overrun this change
+ * exists to remove.
  *
- * What is given up is only precision, and only in the safe direction. A forward
- * jump that does *not* clear the deadline leaves the countdown reading shorter
- * than the alarm will honor — a cosmetic disagreement that resolves itself when
- * the cap fires, rather than a snooze that outlives its bound.
+ * Immediately after a restate has reached disk the trap cannot apply: the
+ * frame was written this instant, so the recomputed delay is the true
+ * remaining, and re-arming is what pulls the alarm in after a *forward* jump —
+ * closing the window where the countdown read zero over a phone still silent
+ * until the original elapsed delay ran out (SPEC.md §7). The end-only rule
+ * still governs every other path through here.
  *
  * What it decides is in [ClockChange], and deliberately not here: the running
  * service performs the same decision when it can be started, and this performs
@@ -941,6 +942,24 @@ private fun restateDirectly(
 ) {
     if (!store.save(restated)) {
         Log.e(RELEASE_TAG, "The clock change could not be recorded; ending rather than trusting the old deadline.")
+        releaseDirectly(context, EndReason.LOST_CAPABILITY)
+        return
+    }
+
+    // The service performer's twin: re-arm from the record whose frame the
+    // write above just made fresh, so a forward change pulls the alarm in to
+    // where the countdown now points (SPEC.md §7). The stale-offset trap the
+    // receiver's never-re-arm rule guards against cannot reach this line — an
+    // armed alarm implies an offset restated for this boot (every armer wrote
+    // the frame it used, and a boot that cannot restate ends the snooze), and
+    // where the offset really is stale no alarm survived the reboot at all,
+    // so even an overlong re-arm adds a bound where none exists. A refusal
+    // ends the snooze, the same answer as the refused save above: the record
+    // now promises a deadline no scheduled alarm honors, and after a forward
+    // jump the countdown would sit at zero over a silent phone with only a
+    // log saying why (flagged by Codex on PR #63).
+    if (!CapAlarm.arm(context, restated)) {
+        Log.e(RELEASE_TAG, "Re-arming the cap after the clock change was refused; ending rather than letting the countdown lie.")
         releaseDirectly(context, EndReason.LOST_CAPABILITY)
         return
     }
