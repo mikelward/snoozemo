@@ -1293,11 +1293,12 @@ with real onboarding and settings, so they may be fixed by deletion.
   stale rule-status message — `lastOutcome` is shared with the arm/end paths, so blanket-clearing it
   would wipe messages that are still true. (`MainActivity`; may be moot after Phase 4.)
 
-- [ ] **A manual release through the no-service fallback is attributed to automation.**
+- [x] **A manual release through the no-service fallback is attributed to automation.**
   `releaseDirectly` hard-codes `ZenTrigger.CONTEXT`, so on API 35+ the platform Modes UI credits the
   user's own `End now` to the app deciding by itself, contrary to `SPEC.md` §5.4 — which is explicit
   that the source lets the user tell "I did this" from "my phone did this". Fix: pass the trigger
-  through, `USER_ACTION` for `EndReason.MANUAL`, as the controller path already does.
+  through, `USER_ACTION` for `EndReason.MANUAL`, as the controller path already does. **Fixed as
+  recorded**, with both directions pinned in `ReceiverRefusalTest`.
 
 - [ ] **An access read can survive `onStop` and act after the next `onStart`.** The lifecycle guard
   and the generation counter together still leave a window: the same activity instance can become

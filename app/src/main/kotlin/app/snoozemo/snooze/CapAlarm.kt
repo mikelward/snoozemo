@@ -467,7 +467,12 @@ internal fun releaseDirectly(
 
     val outcome = zen.setSnoozed(
         snoozed = false,
-        trigger = ZenTrigger.CONTEXT,
+        // The same mapping `SnoozeController.end` applies. This path is the
+        // no-service stand-in for it, and the trampoline routes the user's own
+        // `End now` here whenever the service refuses to start — so a
+        // hard-coded `CONTEXT` credited that tap to the app deciding by
+        // itself in the platform's Modes UI, contrary to SPEC.md §5.4.
+        trigger = if (reason == EndReason.MANUAL) ZenTrigger.USER_ACTION else ZenTrigger.CONTEXT,
         placeName = snooze?.placeName ?: ActiveSnooze.DEFAULT_PLACE_NAME,
     )
     val released = outcome is ZenOutcome.Applied ||
