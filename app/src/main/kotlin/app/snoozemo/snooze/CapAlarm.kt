@@ -16,6 +16,7 @@ import app.snoozemo.core.ClockReading
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.RecordOrigin
 import app.snoozemo.core.ReleaseEscalation
+import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.ReleaseProgress
 import app.snoozemo.core.ReleaseStep
 import app.snoozemo.core.ZenController
@@ -211,11 +212,17 @@ object CapAlarm {
                 triggerAtMillis,
                 pendingIntent(context, action, recordStartedAtMillis, reason),
             )
+            // That the cap was armed is one of §4.6's records — the alarm is
+            // the exit that holds when everything else has failed, so "was one
+            // ever scheduled" is the first question a stuck snooze raises.
+            // Cheap enough for the arm path: an in-memory append, no IPC.
+            SnoozeDebugLog.event("alarm armed: $action")
             true
         }.getOrElse {
             // Never silent, and never assumed away: the caller aborts the arm on
             // this, and the user's phone is the thing at risk if it doesn't.
             Log.e(TAG, "Arming the $action alarm failed; refusing to snooze without it.", it)
+            SnoozeDebugLog.warning("alarm refused: $action", it)
             false
         }
     }
@@ -333,6 +340,9 @@ object CapAlarm {
  */
 class CapAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
+        // Which wake-up fired, and when — the alarm half of "did the cap fire,
+        // and did the alarm or the in-service check get there first" (§4.6).
+        SnoozeDebugLog.event("alarm fired: ${intent?.action}")
         if (intent?.action == SnoozeService.ACTION_ERASE_RETRY) {
             // Not a cap. Nothing to release here — the release already
             // succeeded; only the record is left over. The service holds the
@@ -477,6 +487,9 @@ internal fun releaseDirectly(
     )
     val released = outcome is ZenOutcome.Applied ||
         (outcome is ZenOutcome.NotApplied && outcome.reason.nothingLeftToRelease)
+    // The no-service exits are exactly the ones that leave no other trace — the
+    // service never ran, so no transition was recorded (§4.6).
+    SnoozeDebugLog.event("no-service release ($reason): released=$released")
     if (released) {
         // The marker first — before the notification, the tile, and the erase.
         // Everything after this line is IPC that can throw or be killed, and
@@ -1056,6 +1069,7 @@ internal fun discardForeignRecord(
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action !in HANDLED_ACTIONS) return
+        SnoozeDebugLog.event("boot/update wake-up: ${intent?.action}")
         val store = ActiveSnoozeStore(context)
 
         // Before anything else, because these are the two moments it matters:

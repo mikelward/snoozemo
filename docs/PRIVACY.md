@@ -1,6 +1,6 @@
 # Snoozemo privacy policy
 
-**Last updated: 2026-08-13. Covers Snoozemo v1 for Android.**
+**Last updated: 2026-08-21. Covers Snoozemo v1 for Android.**
 
 ## The short version
 
@@ -45,6 +45,7 @@ All of this lives in Snoozemo's private app storage, which other apps cannot rea
 | Whether you have turned down the notification permission | So the app asks once and then stops asking | Erased as soon as you allow notifications, or when you uninstall |
 | Why a snooze failed to start, when it failed while you were not looking | So a tap that quietly did nothing tells you what went wrong, rather than leaving you to guess | Erased when your next snooze starts and makes it moot. It is kept even after the message is shown, in case the message never arrived — if it was waiting on notification permission, showing it is what clears it |
 | A note that Do Not Disturb may still be on after Snoozemo lost track of it | So Snoozemo keeps trying to turn its own rule back off, instead of leaving your phone quiet with nothing watching | Erased when the rule is confirmed off, or when a new snooze takes the rule over — seeing the warning is not enough |
+| A short technical log of what the snooze machinery did, and when — see **The debug log** below | So a snooze that ended early, or never ended, can be explained after the fact | The current run of the app and the one before it; deleted immediately if you turn the log off |
 
 There is no history: Snoozemo does not keep a record of past snoozes, past places, or past
 Wi-Fi networks. When a snooze ends, the record of it — including the location it was
@@ -126,6 +127,40 @@ your notifications.
 The notification permission is used to show you what a snooze is doing: that it is running,
 when it will end, when it has ended, and when something has gone wrong. Nothing is sent
 anywhere.
+
+## The debug log
+
+Snoozemo's whole job happens while you are not looking, so a snooze that ends in your
+pocket — or never ends — leaves nothing you could report. To make those failures
+explainable, Snoozemo keeps a short technical log of what its machinery did.
+
+**What it records**: each step a snooze moves through and why, the reason a snooze ended,
+that the time-limit alarm was set and that it fired, when Do Not Disturb access got in the
+way, how far from the anchor a location fix said you were **in meters** and how accurate
+that fix claimed to be, whether the anchor's Wi-Fi was still connected as a yes or no, and
+the app, Android version, and device model. Entries carry real times, because *when*
+something fired is usually the question.
+
+**What it never records**, as a hard rule with its own automated test: your coordinates,
+the name or identifier of any Wi-Fi network, and any place name you typed. The distance
+number says whether the departure test worked; where you were is not in the log at all.
+
+**Where it lives and how long**: in Snoozemo's private cache on your phone, which other
+apps cannot read, Android's backup does not copy, and Android may clear on its own under
+storage pressure. Two runs of the app are kept — the current one and the one before it —
+except that a run that ended in a crash is kept in place of the previous run until it is
+dealt with, so the evidence of a crash is not overwritten by a restart.
+
+**It is on by default**, because the failures worth diagnosing happen once and without
+warning — a log that starts off guarantees the first one is the one nobody captured.
+**Turning it off deletes everything the log kept, immediately**, including an unshared
+crash record: off means off, not "stop writing but keep the old files".
+
+**None of it leaves your phone.** The app cannot open a network connection, and there is
+currently no sharing feature: the log exists so that a future *Share debug logs* action —
+always an explicit act, through Android's share sheet, with you choosing the destination —
+can make a bug reportable. Per the rule under **Changes to this policy**, that feature will
+be described here before it ships.
 
 ## Backup
 

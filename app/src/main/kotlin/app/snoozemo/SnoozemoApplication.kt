@@ -3,6 +3,7 @@ package app.snoozemo
 import android.app.Application
 import app.snoozemo.dnd.PrefsZenRuleIdStore
 import app.snoozemo.snooze.ActiveSnoozeStore
+import app.snoozemo.snooze.DebugLogging
 import app.snoozemo.snooze.SnoozeNotifications
 
 /**
@@ -28,5 +29,10 @@ class SnoozemoApplication : Application() {
         // binder calls that the service would otherwise make in its onCreate,
         // which on a cold tap sits between the tap and the rule going on.
         SnoozeNotifications.warm(this)
+        // The debug log's rotation and file sink (SPEC.md §4.6). Spawns its
+        // own thread, so the cold tap above never waits on it; entries
+        // recorded before the sink registers still reach the file, since the
+        // sink writes the whole buffer on the next entry after.
+        DebugLogging.install(this)
     }
 }
