@@ -1314,7 +1314,7 @@ five are staleness, attribution or missing-status bugs — nothing here leaves t
 quiet, and nothing here loses an exit. Two of them are in `MainActivity`, which Phase 4 replaces
 with real onboarding and settings, so they may be fixed by deletion.
 
-- [ ] **The tile warms the zen rule *id*, but not the rule itself.** `onStartListening` calls
+- [x] **The tile warms the zen rule *id*, but not the rule itself.** `onStartListening` calls
   `ruleId()`, which fills the cache from disk — it does not check that the rule still exists.
   Where the id is absent or stale (rule deleted in Settings, or the process died while the
   user was granting access), the next tap reaches `setSnoozed`'s slow path and does a
@@ -1332,6 +1332,14 @@ with real onboarding and settings, so they may be fixed by deletion.
   - It must also stay **off the main thread** — `ensureRule` can create a rule, which is a
     heavier binder call than the id read, and `onStartListening` runs while the shade is
     opening.
+  - **Landed** (2026-08-21), via the second of the two seams this entry sketched: `:dnd`
+    resolves the configuration activity itself. `AndroidZenController.CONFIGURATION_ACTIVITY_CLASS`
+    names `MainActivity` by string — the same shape as the tile's explicit trampoline intent,
+    pinned to the real class by a test in `:app` — and `AndroidZenController.default(context)`
+    is now the one construction every production caller shares (the service, the receivers,
+    the screen, and the tile's new warm). `onStartListening` verifies-and-recreates the rule
+    on a daemon thread beside the existing id read; a tap that outraces it is no worse off
+    than before.
 
 - [x] **A stale `Couldn't end the snooze` survives the retry that succeeds.** `showEnded` drops
   `ID_ONGOING` only, so a failure posted under `ID_FAILURE` by an earlier refusal stays in the shade

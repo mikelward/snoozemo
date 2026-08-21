@@ -2,10 +2,12 @@ package app.snoozemo.tile
 
 import android.app.PendingIntent
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.graphics.drawable.Icon
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
+import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.dnd.PrefsZenRuleIdStore
 
 /**
@@ -81,6 +83,21 @@ class SnoozeTileService : TileService() {
         // preferences file for the same reason.
         PrefsZenRuleIdStore(applicationContext).ruleId()
 
+        // And the rule itself, not only its id (`TODO.md`, deferred from
+        // Codex's PR #8 review): the id can be stale — the rule deleted in
+        // Settings, or the process dead through a grant — and a tap then takes
+        // `setSnoozed`'s slow path, doing a policy-access check, a rule
+        // lookup, possibly a creation, and a persist before `STATE_TRUE`, on
+        // the one path SPEC.md §4.1 says must not wait. Verifying (and if
+        // need be recreating) the rule now moves all of that to the moment
+        // the shade opens, where there is budget.
+        //
+        // On its own thread, unlike the id read above: `ensureRule` can
+        // *create* a rule, a heavier binder call than a file read, and this
+        // method runs while the shade is opening. A tap that outraces the
+        // thread is no worse off than today — the slow path still arms.
+        warmZenRule(applicationContext)
+
         val snapshot = TileSnapshot.read(applicationContext).also { listening = it }
         qsTile?.apply {
             state = if (snapshot.snoozing) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
@@ -152,13 +169,38 @@ class SnoozeTileService : TileService() {
     private fun intentTo(className: String): Intent =
         Intent().setComponent(ComponentName(applicationContext.packageName, className))
 
-    private companion object {
-        const val ACTION_ARM = "app.snoozemo.action.ARM"
-        const val ACTION_END = "app.snoozemo.action.END"
+    companion object {
+        private const val ACTION_ARM = "app.snoozemo.action.ARM"
+        private const val ACTION_END = "app.snoozemo.action.END"
 
-        const val REQUEST_ARM = 1
-        const val REQUEST_END = 2
+        private const val REQUEST_ARM = 1
+        private const val REQUEST_END = 2
 
-        const val TRAMPOLINE_CLASS = "app.snoozemo.snooze.TileTrampolineActivity"
+        private const val TRAMPOLINE_CLASS = "app.snoozemo.snooze.TileTrampolineActivity"
+
+        /**
+         * Verifies the zen rule exists — recreating it if the user deleted it
+         * in Settings — on a background thread. Contained whole: the warm-up
+         * is optional, so nothing it does may reach the shade.
+         *
+         * The synchronous body is separate and internal so a test can run it
+         * to completion; the thread is what production pays.
+         */
+        private fun warmZenRule(context: Context) {
+            Thread {
+                runCatching { warmZenRuleNow(context) }
+            }.apply {
+                isDaemon = true
+                name = "snoozemo-tile-warm"
+            }.start()
+        }
+
+        /**
+         * Public rather than internal only because the tests live in `:app`,
+         * which is a different module; nothing in production calls it directly.
+         */
+        fun warmZenRuleNow(context: Context) {
+            AndroidZenController.default(context).ensureRule()
+        }
     }
 }

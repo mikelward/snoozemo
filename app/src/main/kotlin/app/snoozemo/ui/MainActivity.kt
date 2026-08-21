@@ -55,7 +55,6 @@ import app.snoozemo.core.PolicyAccessChange
 import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenRuleState
 import app.snoozemo.dnd.AndroidZenController
-import app.snoozemo.dnd.PrefsZenRuleIdStore
 import app.snoozemo.snooze.ActiveSnoozeStore
 import app.snoozemo.snooze.NotificationPromptStore
 import app.snoozemo.snooze.SnoozeNotifications
@@ -227,11 +226,7 @@ class MainActivity : ComponentActivity() {
         store = ActiveSnoozeStore(applicationContext)
         promptStore = NotificationPromptStore(applicationContext)
         tileStore = TilePresenceStore(applicationContext)
-        zen = AndroidZenController(
-            context = applicationContext,
-            store = PrefsZenRuleIdStore(applicationContext),
-            configurationActivity = ComponentName(this, MainActivity::class.java),
-        )
+        zen = AndroidZenController.default(applicationContext)
         setContent {
             SnoozemoTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {

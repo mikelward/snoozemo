@@ -3,7 +3,6 @@ package app.snoozemo.snooze
 import android.app.NotificationManager
 import android.app.Service
 import android.content.BroadcastReceiver
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -33,8 +32,6 @@ import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenTrigger
 import app.snoozemo.core.logSummary
 import app.snoozemo.dnd.AndroidZenController
-import app.snoozemo.dnd.PrefsZenRuleIdStore
-import app.snoozemo.ui.MainActivity
 import java.time.Duration
 import java.time.Instant
 
@@ -300,11 +297,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * Production overrides nothing; this is the only implementation that ships.
      */
     internal open fun createZenController(): ZenController =
-        AndroidZenController(
-            context = applicationContext,
-            store = PrefsZenRuleIdStore(applicationContext),
-            configurationActivity = ComponentName(this, MainActivity::class.java),
-        )
+        AndroidZenController.default(applicationContext)
 
     override fun onCreate() {
         super.onCreate()
