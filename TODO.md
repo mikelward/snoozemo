@@ -1331,7 +1331,7 @@ with real onboarding and settings, so they may be fixed by deletion.
   Fix: arm the identified short release retry as well as restoring the cap, so the retry happens in
   minutes rather than at the deadline. Costs one extra wake-up, and only on a refused end.
 
-- [ ] **A failed arm doesn't discharge an outstanding stuck-rule obligation.** `ACTION_ARM` is
+- [x] **A failed arm doesn't discharge an outstanding stuck-rule obligation.** `ACTION_ARM` is
   excluded from the reconcile on purpose — a preferences read and a possible zen write between the
   tap and `STATE_TRUE` is what `SPEC.md` §4.1 forbids — and that was justified by "a successful arm
   clears the flag anyway". True of a *successful* arm; not of one that fails **before** reaching zen,
@@ -1347,6 +1347,11 @@ with real onboarding and settings, so they may be fixed by deletion.
     every other start already has.
   - Bounded meanwhile: the snooze that left the rule on still has its own cap, and any later
     non-arm start still discharges the obligation.
+  - **Fixed as recorded**: the discharge is one shared helper, run by every non-arm start on the
+    way in and by the two arm branches that fail without touching or taking over the rule — the
+    refused cap alarm, and a zen refusal that means nothing is silencing the phone. The
+    `PLATFORM_REFUSED` arm branch already hands the obligation to the ladder, and the failed-save
+    unwind owns the rule it is releasing, so neither needed it.
 
 - [ ] **A refused `notify` leaves the ongoing notification missing for the whole snooze.**
   `showOngoing` discards `post`'s result, so a transient throw with `POST_NOTIFICATIONS` *granted*

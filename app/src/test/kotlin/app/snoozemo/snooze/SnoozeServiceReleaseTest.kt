@@ -157,6 +157,49 @@ class SnoozeServiceReleaseTest {
     }
 
     @Test
+    fun `a failed arm still discharges an outstanding stuck-rule obligation`() {
+        // ACTION_ARM skips the discharge on the way in to keep the arm path
+        // clean, justified by "a successful arm clears the flag anyway" — true
+        // of a successful arm, not of one refused before or at the zen write,
+        // which used to stop with nothing scheduled while an older rule may
+        // still have been silencing the phone (flagged by Codex on PR #8).
+        PendingFailureStore(appContext).rememberRuleMayBeStuck()
+        TestSnoozeService.zen.outcome =
+            ZenOutcome.NotApplied(app.snoozemo.core.ZenFailure.NO_POLICY_ACCESS)
+
+        startService(SnoozeService.ACTION_ARM)
+
+        assertFalse(
+            "an arm refused with nothing silencing the phone settles the obligation",
+            PendingFailureStore(appContext).ruleMayBeStuck(),
+        )
+    }
+
+    @Test
+    @org.robolectric.annotation.Config(shadows = [RefusingAlarmManager::class])
+    fun `an arm stopped by a refused cap alarm also discharges the obligation`() {
+        // The other failed-arm branch: this one dies *before* the zen write, at
+        // the cap alarm the arm refuses to proceed without (SPEC.md §7), so the
+        // zen-refusal test above cannot reach it — its shadow platform grants
+        // every alarm. This shadow refuses them, which is the only way to make
+        // `CapAlarm.armCheckIn` fail on a JVM (flagged by Codex on PR #61).
+        PendingFailureStore(appContext).rememberRuleMayBeStuck()
+        TestSnoozeService.zen.outcome = ZenOutcome.Applied
+
+        startService(SnoozeService.ACTION_ARM)
+
+        assertEquals(
+            "the discharge must have driven the leftover rule off — and never on",
+            listOf(false to app.snoozemo.core.ZenTrigger.CONTEXT),
+            TestSnoozeService.zen.calls,
+        )
+        assertFalse(
+            "a confirmed-off rule settles the obligation",
+            PendingFailureStore(appContext).ruleMayBeStuck(),
+        )
+    }
+
+    @Test
     fun `a refused release is asked for as the reason it started with`() {
         // The trigger reaches the platform's Modes UI, so a cap expiry reported
         // as USER_ACTION tells the user they ended a snooze they didn't.
@@ -172,5 +215,25 @@ class SnoozeServiceReleaseTest {
             "a cap expiry is not the user acting",
             releases.none { it.second == app.snoozemo.core.ZenTrigger.USER_ACTION },
         )
+    }
+}
+
+/**
+ * An `AlarmManager` that refuses every schedule, which no real shadow does.
+ *
+ * The default shadow grants them all, so the arm branch that fails *at the cap
+ * alarm* — before any zen call — was unreachable by a test until this. Only
+ * `setAndAllowWhileIdle` throws: the app schedules everything through it, and
+ * the rest of the shadow keeps behaving so cancels stay harmless.
+ */
+@org.robolectric.annotation.Implements(android.app.AlarmManager::class)
+class RefusingAlarmManager : org.robolectric.shadows.ShadowAlarmManager() {
+    @org.robolectric.annotation.Implementation
+    override fun setAndAllowWhileIdle(
+        type: Int,
+        triggerAtMillis: Long,
+        operation: android.app.PendingIntent,
+    ) {
+        throw SecurityException("The test platform refuses every alarm.")
     }
 }
