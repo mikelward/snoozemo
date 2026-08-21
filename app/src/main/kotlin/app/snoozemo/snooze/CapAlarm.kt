@@ -515,8 +515,10 @@ internal fun releaseDirectly(
         // retrying a release that has nothing left to do.
         //
         // Unconditional, because what makes them false is the rule being off,
-        // not which path turned it off.
+        // not which path turned it off. The `trying again` card comes down with
+        // them — this release is the retry it promised.
         notifications.cancelStuckRule()
+        notifications.cancelEndFailure()
         PendingFailureStore(context).run { if (ruleMayBeStuck()) clearRuleStuck() }
 
         val erased = store.clear()
@@ -1038,6 +1040,7 @@ internal fun discardForeignRecord(
         notifications.cancelOngoing()
     }
     notifications.cancelStuckRule()
+    notifications.cancelEndFailure()
     PendingFailureStore(context).run { if (ruleMayBeStuck()) clearRuleStuck() }
 
     CapAlarm.cancelAll(context)

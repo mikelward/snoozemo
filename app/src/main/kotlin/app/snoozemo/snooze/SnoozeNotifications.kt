@@ -231,7 +231,21 @@ class SnoozeNotifications(private val context: Context) {
                 // Nothing owed, deliberately — so "delivered" is the honest
                 // answer, not a failure a caller should keep retrying.
                 failure.nothingLeftToRelease -> return true
-                else -> R.string.failure_could_not_end
+                // Its own id, like the stuck-rule card and for the same class
+                // of reason: this is the one one-shot a later event *retires*
+                // rather than replaces. A release that eventually works cancels
+                // it by id — and on the shared id that cancel would also take
+                // down whichever unrelated explanation happened to be posted
+                // last, such as the access-revocation message an ending posts
+                // moments before completing.
+                else -> return post(
+                    ID_END_FAILURE,
+                    android.app.Notification.Builder(context, CHANNEL_ENDED)
+                        .setSmallIcon(TileR.drawable.ic_tile_snooze)
+                        .setContentTitle(context.getString(R.string.failure_could_not_end))
+                        .setAutoCancel(true)
+                        .build(),
+                )
             }
         }
         return showOneShot(text)
@@ -353,6 +367,20 @@ class SnoozeNotifications(private val context: Context) {
         drop(ID_STUCK)
     }
 
+    /**
+     * Takes down a `Couldn't end the snooze — trying again` that a confirmed
+     * release has made false.
+     *
+     * `setAutoCancel(true)` only dismisses on a tap, so once the promised retry
+     * *does* end the snooze, the card would otherwise sit in the shade beside
+     * `Snooze ended` claiming the opposite (flagged by Codex on PR #8). Called
+     * wherever the rule is confirmed off — the same set of places the
+     * stuck-rule card comes down, because both are claims that it might not be.
+     */
+    fun cancelEndFailure() {
+        drop(ID_END_FAILURE)
+    }
+
     /** `+30 min` couldn't move the cap alarm, so the cap stands where it was. */
     fun showCouldNotExtend() = showOneShot(R.string.failure_could_not_extend)
 
@@ -472,6 +500,7 @@ class SnoozeNotifications(private val context: Context) {
         const val ID_ENDED = 2
         const val ID_FAILURE = 3
         const val ID_STUCK = 4
+        const val ID_END_FAILURE = 5
         const val REQUEST_END = 10
         const val REQUEST_EXTEND = 11
         const val REQUEST_RELEASE_STUCK = 12
