@@ -3,7 +3,6 @@ package app.snoozemo.snooze
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
@@ -24,8 +23,6 @@ import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
 import app.snoozemo.core.ZenTrigger
 import app.snoozemo.dnd.AndroidZenController
-import app.snoozemo.dnd.PrefsZenRuleIdStore
-import app.snoozemo.ui.MainActivity
 import java.time.Instant
 
 /**
@@ -439,11 +436,7 @@ private fun releaseDirectlyIfStillOurs(
  * Defaulted, so no caller passes anything and no production behavior moves;
  * the parameter exists for `RefusingZen` and nothing else.
  */
-private fun androidZen(context: Context): ZenController = AndroidZenController(
-    context = context.applicationContext,
-    store = PrefsZenRuleIdStore(context.applicationContext),
-    configurationActivity = ComponentName(context.applicationContext, MainActivity::class.java),
-)
+private fun androidZen(context: Context): ZenController = AndroidZenController.default(context)
 
 /**
  * The last line of defense: turn the rule off from a receiver, with no service.

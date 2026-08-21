@@ -391,18 +391,43 @@ class AndroidZenController(
         ZenTrigger.CONTEXT -> Condition.SOURCE_CONTEXT
     }
 
-    private companion object {
+    companion object {
         /**
          * Guards [ensureRule]. Shared rather than per-instance because four
          * places construct a controller and they all target the same one rule.
          */
-        val RULE_CREATION = Any()
+        private val RULE_CREATION = Any()
 
         /** Bounds [resetCondition]; small, because it is undoing a call that just worked. */
-        const val CONDITION_RESET_ATTEMPTS = 3
+        private const val CONDITION_RESET_ATTEMPTS = 3
 
-        const val TAG = "ZenController"
-        val CONDITION_URI: Uri = Uri.parse(ZenRule.CONDITION_ID)
-        const val TRIGGER_DESCRIPTION = "While you're at a place you snoozed"
+        private const val TAG = "ZenController"
+        private val CONDITION_URI: Uri = Uri.parse(ZenRule.CONDITION_ID)
+        private const val TRIGGER_DESCRIPTION = "While you're at a place you snoozed"
+
+        /**
+         * The settings screen the rule deep-links to, named by string for the
+         * same reason the tile's trampoline intent is (`SnoozeTileService`):
+         * `:app` depends on this module and not the reverse, so there is
+         * nothing to reference. A fully-qualified class name is stable under
+         * `applicationIdSuffix`, which the package name is not — the package
+         * comes from the context at build time. `:app`'s tests pin this string
+         * to the real class, so a rename cannot silently break the deep link.
+         */
+        const val CONFIGURATION_ACTIVITY_CLASS = "app.snoozemo.ui.MainActivity"
+
+        /**
+         * The controller as every production caller builds it, so modules that
+         * cannot see `:app` — the tile, warming the rule while the shade opens
+         * — construct the same one instead of a divergent copy.
+         */
+        fun default(context: Context): AndroidZenController {
+            val app = context.applicationContext
+            return AndroidZenController(
+                context = app,
+                store = PrefsZenRuleIdStore(app),
+                configurationActivity = ComponentName(app.packageName, CONFIGURATION_ACTIVITY_CLASS),
+            )
+        }
     }
 }
