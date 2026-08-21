@@ -1322,7 +1322,7 @@ with real onboarding and settings, so they may be fixed by deletion.
   `latestAccessRefresh` in `onStop`, invalidating everything from the previous visible session.
   (`MainActivity`; may be moot after Phase 4.)
 
-- [ ] **A refused manual `End now` waits for the original cap instead of retrying soon.**
+- [x] **A refused manual `End now` waits for the original cap instead of retrying soon.**
   When the zen write returns `PLATFORM_REFUSED` and `ensureCapAfterRefusedEnd` manages to re-arm
   the *original* cap, it returns satisfied — but on an early end that deadline can be hours away,
   so the phone stays quiet until then while the notification says Snoozemo is trying again. The
@@ -1330,6 +1330,10 @@ with real onboarding and settings, so they may be fixed by deletion.
   the clock says") over a plain cap check; the service path was never given the same treatment.
   Fix: arm the identified short release retry as well as restoring the cap, so the retry happens in
   minutes rather than at the deadline. Costs one extra wake-up, and only on a refused end.
+  **Already fixed by the §7.1 unification** — `ensureCapAfterRefusedEnd` now escalates through the
+  ladder unless the re-armed cap is already due, which arms exactly that identified retry; pinned
+  by `a refused manual end keeps trying rather than waiting for a distant cap`. Checked off on
+  re-reading rather than re-implemented.
 
 - [x] **A failed arm doesn't discharge an outstanding stuck-rule obligation.** `ACTION_ARM` is
   excluded from the reconcile on purpose — a preferences read and a possible zen write between the
