@@ -25,11 +25,13 @@ import app.snoozemo.core.ReleaseEscalation
 import app.snoozemo.core.ReleaseProgress
 import app.snoozemo.core.ReleaseStep
 import app.snoozemo.core.SnoozeController
+import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.SnoozeState
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
 import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenTrigger
+import app.snoozemo.core.logSummary
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.dnd.PrefsZenRuleIdStore
 import app.snoozemo.ui.MainActivity
@@ -265,12 +267,18 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // again with nothing lost.
         val access = runCatching { zen.policyAccess() }.getOrElse {
             Log.e(TAG, "Reading policy access failed; leaving the snooze as it is.", it)
+            SnoozeDebugLog.warning("policy access unreadable; leaving the snooze as it is", it)
             return
         }
         when (PolicyAccessChange.resolve(access, controller.active != null)) {
             // The promise of SPEC.md §8.2, kept when it happens rather than when
             // someone next opens the app.
-            PolicyAccessAction.EndSnooze -> controller.end(EndReason.LOST_CAPABILITY)
+            PolicyAccessAction.EndSnooze -> {
+                // A denied permission is often the whole answer to "why didn't
+                // it end" — and to "why did it" (SPEC.md §4.6).
+                SnoozeDebugLog.event("policy access revoked mid-snooze; ending")
+                controller.end(EndReason.LOST_CAPABILITY)
+            }
             PolicyAccessAction.EnsureRule -> zen.ensureRule()
             PolicyAccessAction.None -> Unit
         }
@@ -358,6 +366,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // offset plus a backwards clock change would make this re-arm
             // schedule the cap *past* its own deadline instead of at it.
             if (!CapAlarm.arm(applicationContext, record, readClock())) {
+                SnoozeDebugLog.warning("restore could not re-arm the cap; ending instead")
                 // No cap means no guaranteed exit, so don't restore into one.
                 // Released directly rather than through the controller: it has
                 // not been handed the record yet, so `end()` here would run with
@@ -992,6 +1001,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // exactly as `End now` does; the cap alarm is still armed here, so
             // unlike the cap-check path there is no spent alarm to replace.
             ClockChangeAction.EndAtCap -> {
+                SnoozeDebugLog.event("clock changed; the cap is due as of the new reading")
                 controller.onCapCheck()
                 ensureCapAfterRefusedEnd(EndReason.DURATION_CAP)
             }
@@ -1003,11 +1013,15 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // because its bound stopped being legible.
             ClockChangeAction.EndUnframed -> {
                 Log.w(TAG, "The clock moved under a record with no offset; ending rather than guessing.")
+                SnoozeDebugLog.warning("clock changed under an unframed record; ending rather than guessing")
                 controller.end(EndReason.LOST_CAPABILITY)
                 ensureCapAfterRefusedEnd(EndReason.LOST_CAPABILITY)
             }
 
-            is ClockChangeAction.Restate -> restate(action.snooze)
+            is ClockChangeAction.Restate -> {
+                SnoozeDebugLog.event("clock changed; restating the record's frames")
+                restate(action.snooze)
+            }
         }
     }
 
@@ -1102,6 +1116,17 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     }
 
     override fun onStateChanged(state: SnoozeState, snooze: ActiveSnooze?, reason: EndReason?) {
+        // Every transition and its reason (SPEC.md §4.6) — the debug log's
+        // whole point is reconstructing a snooze's life after the fact. Cheap
+        // by construction: a string build and an in-memory append, with the
+        // file write coalesced on its own thread, so even the ARMING delivery
+        // on the arm path pays no disk and no IPC. The record's summary rides
+        // along where one exists; it is the floor-safe rendering (never the
+        // SSID, coordinates, or place name).
+        SnoozeDebugLog.event(
+            "state → $state" + (reason?.let { " ($it)" } ?: "") +
+                (snooze?.let { "; ${it.logSummary()}" } ?: ""),
+        )
         when (state) {
             // The one transition on the arm path, between the tap and the rule
             // going on, so the write is handed to a background thread rather
@@ -1625,6 +1650,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // Logged rather than retried: the retry machinery here exists for the
         // release path, where the cost of losing it is a phone that stays quiet,
         // and this is not that.
+        // A snooze that quietly degraded to duration-only is visible after the
+        // fact (SPEC.md §4.6) — the cause enum, never what was lost.
+        SnoozeDebugLog.event(
+            "tracking → ${snooze.mode}" + (degradation?.let { " ($it)" } ?: " (recovered)"),
+        )
         if (!store.save(snooze)) {
             Log.w(TAG, "Recording the tracking mode failed; a restart would misstate tracking.")
         }
@@ -1638,6 +1668,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     }
 
     override fun onZenFailure(failure: ZenFailure, whileArming: Boolean) {
+        SnoozeDebugLog.warning("zen write refused: $failure (whileArming=$whileArming)")
         notifications.showFailure(failure, whileArming)
         // Kept in case the system dropped it: on a tile-first install
         // POST_NOTIFICATIONS is still denied at the first tap, so the message

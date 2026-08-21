@@ -479,7 +479,7 @@ the point is that every other line of the app is worthless if it isn't true.
         landed as `Presence`; what remains is the three wake-up sources (§6.10) feeding it.
 - [ ] Wi-Fi as suppressor only (D4): associated with the anchor SSID suppresses location
       work entirely; loss escalates to `CHECKING` and never ends a snooze on its own.
-- [ ] **The on-device debug log** (`SPEC.md` §4.6), landing here rather than later because this is
+- [x] **The on-device debug log** (`SPEC.md` §4.6), landing here rather than later because this is
       the phase that needs it: hardware item 2 asks for every geofence callback measured against a
       ground-truth departure over a week of ordinary use, and there is no way to collect that by
       watching a phone. Records state transitions and their reasons, which wake-up source fired, the
@@ -487,6 +487,20 @@ the point is that every other line of the app is worthless if it isn't true.
       firing, and permission state. On by default with a setting to turn it off (maintainer,
       2026-08-11), on-device, current run plus previous, rotated at start, in `cacheDir`. The floor is absolute and needs a test of its own: **no raw coordinates,
       no full SSID/BSSID, no user-typed place name** ever reach it.
+      **Landed as the recording half**: `SnoozeDebugLog` in `:core` (bounded buffer, sinks, real
+      timestamps with zone offset, the floor test) and `DebugFileSink` in `:app` (the §4.6
+      rotation, the crash pin holding the `previous` slot, off-deletes-everything), wired to the
+      state transitions, end reasons, zen refusals, policy-access decisions, cap arming and
+      firing, clock changes, and the no-service releases. `docs/PRIVACY.md` now describes it.
+      Ported from Simmo's `DebugLog`/`DebugFileSink` with §4.6's differences. Three pieces land
+      elsewhere, deliberately:
+      - **The wake-up-source and departure-arithmetic records** go in with the monitors that
+        produce them (the `GeofencePresenceMonitor` item above) — the log API is ready for them.
+      - **The settings row** that turns it off: the mechanism (`DebugLogging.setEnabled`, store,
+        delete-on-disable) is built and tested, but the row needs new user-facing copy, which
+        waits for the propose-in-chat step (see *Decisions needing review*).
+      - **The sharing surface and post-crash banner** are Phase 5's item, unchanged — the crash
+        pin already preserves what the banner will offer.
 - [x] **Maintainer decision: is the debug log off by default?** Answered — **on by default**
       (maintainer, 2026-08-11), with a setting to turn it off. Off would have guaranteed that the
       first occurrence of every unrepeatable failure was the one nobody captured. Recorded in
@@ -1093,6 +1107,28 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 Judgment calls made without an explicit answer from the maintainer. Each is reversible;
 none is load-bearing yet.
 
+- **The debug log renders a throwable as exception types and stack frames, never `getMessage()`**
+  (autopilot, 2026-08-21). A platform exception quotes what it was given, and on the Wi-Fi and
+  location stacks that is exactly what the §4.6 floor bans — and unlike Simmo, whose log scrubs
+  phone numbers out of messages, Snoozemo has no sanctioned scrubber (coordinates in free text are
+  plain decimals; a reliable redactor for them does not exist). The cost is real: "permission
+  denied" texts and file paths are lost, and only the type and frames locate a failure. Reversible
+  by adding a message line with an allowlist of exception types known to carry no user data, if
+  the field shows types-and-frames alone leaves failures undiagnosable.
+- **The debug-log setting exists with no settings row yet** (autopilot, 2026-08-21). §4.6 says "on
+  by default with a setting to turn it off"; the store, the delete-on-disable semantics, and the
+  `DebugLogging.setEnabled` entry point landed tested, but the visible row needs new user-facing
+  copy, and copy goes through propose-in-chat (AGENTS.md, *Translations*). Until the row lands the
+  app behaves as always-on, which is the decided default; a dev build can flip the preference
+  directly. The alternative — landing the row with unapproved copy — is the mistake PR #18 and
+  PR #22 already recorded. Proposed copy for approval: a settings row titled **`Debug log`** with
+  the description **`Keeps a technical record of snoozes on this phone`** and a standard toggle.
+  **The row's PR inherits two Codex findings deferred from PR #62**, both against the toggle path
+  that has no caller until the row exists: (1) a toggle racing the async `DebugLogging.install`
+  can be overwritten by the installer applying the older stored value — serialize them or re-apply
+  the setting when the sink publishes; (2) `DebugLogStore.setEnabled`'s `commit()` result is
+  discarded, so a disable during a storage failure looks applied and silently reverts at the next
+  process start — the row is where a failed commit can be surfaced to the user.
 - **`Couldn't end the snooze — trying again` has its own notification id rather than sharing the
   one-shot failure id** (autopilot, 2026-08-21). The deferred PR #8 finding said "cancel
   `ID_FAILURE` on the successful-release path", but that id is shared by every one-shot — and an
