@@ -118,6 +118,45 @@ class SnoozeServiceReleaseTest {
     }
 
     @Test
+    fun `a stale could-not-end card comes down once the release works`() {
+        // The card promises a retry, so once a retry actually ends the snooze
+        // it is claiming the opposite of the `Snooze ended` beside it — and
+        // `setAutoCancel` only dismisses on a tap, so nothing else removes it
+        // (flagged by Codex on PR #8).
+        val record = snoozeFixture(now)
+        startService(SnoozeService.ACTION_END, record)
+        assertTrue(
+            "the refused end must have told the user it is retrying",
+            shadeShows(stringOf(R.string.failure_could_not_end)),
+        )
+
+        TestSnoozeService.zen.outcome = ZenOutcome.Applied
+        startService(SnoozeService.ACTION_END, record)
+
+        assertFalse(
+            "a release that worked must retire the claim that it couldn't",
+            shadeShows(stringOf(R.string.failure_could_not_end)),
+        )
+    }
+
+    @Test
+    fun `an ending that explains itself keeps the explanation`() {
+        // The guard on the fix above: the could-not-end card is retired by id,
+        // not by blanket-canceling the shared one-shot id — which would also
+        // take down the access-revocation message posted moments before the
+        // same ending completes, the one actionable thing the user is owed.
+        TestSnoozeService.zen.outcome =
+            ZenOutcome.NotApplied(app.snoozemo.core.ZenFailure.NO_POLICY_ACCESS)
+        val record = snoozeFixture(now)
+        startService(SnoozeService.ACTION_END, record)
+
+        assertTrue(
+            "losing access ends the snooze, and the reason must survive the ending",
+            shadeShows(stringOf(R.string.failure_no_access)),
+        )
+    }
+
+    @Test
     fun `a refused release is asked for as the reason it started with`() {
         // The trigger reaches the platform's Modes UI, so a cap expiry reported
         // as USER_ACTION tells the user they ended a snooze they didn't.

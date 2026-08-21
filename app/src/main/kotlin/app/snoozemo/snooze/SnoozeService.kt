@@ -929,6 +929,10 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // that is now legitimately ours.
         pendingFailure.clearRuleStuck()
         notifications.cancelStuckRule()
+        // A leftover `Couldn't end the snooze — trying again` is stale for the
+        // same reason: whatever release it was promising, this arm now owns
+        // the rule, and the retry machinery drops stale releases on its own.
+        notifications.cancelEndFailure()
 
         // And nothing left to erase. A previous release that marked its record
         // but couldn't clear it leaves `recordErased` false — while the marker
@@ -1146,6 +1150,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 // off again — harmless, but a promise outliving its cause.
                 notifications.cancelStuckRule()
                 if (pendingFailure.ruleMayBeStuck()) pendingFailure.clearRuleStuck()
+                // So does `Couldn't end the snooze — trying again`: the retry
+                // it promised is the release that just confirmed, and leaving
+                // it beside `Snooze ended` has the two contradicting each
+                // other (flagged by Codex on PR #8).
+                notifications.cancelEndFailure()
             }
             // Reached when arming was refused, and only then. The record and the
             // ongoing notification went up before the rule was asked for, so
@@ -1202,11 +1211,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // which mean there was nothing silencing the phone in the first
             // place. Either way nothing is owed, so stop carrying it and take
             // down a stuck-rule notification that is now describing a rule that
-            // is off.
+            // is off — and the `trying again` card, whose retry this was.
             if (pendingFailure.ruleMayBeStuck()) {
                 pendingFailure.clearRuleStuck()
                 notifications.cancelStuckRule()
             }
+            notifications.cancelEndFailure()
             return
         }
 
@@ -1313,11 +1323,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         while (true) {
             val progress = releaseProgress ?: return
             when (val step = ReleaseEscalation.next(progress)) {
-                // Confirmed off, so the obligation and the card that say it
+                // Confirmed off, so the obligation and the cards that say it
                 // might not be are now false and come down together.
                 ReleaseStep.Settled -> {
                     if (pendingFailure.ruleMayBeStuck()) pendingFailure.clearRuleStuck()
                     notifications.cancelStuckRule()
+                    notifications.cancelEndFailure()
                     finishRelease()
                     return
                 }

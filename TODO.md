@@ -1093,6 +1093,16 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 Judgment calls made without an explicit answer from the maintainer. Each is reversible;
 none is load-bearing yet.
 
+- **`Couldn't end the snooze — trying again` has its own notification id rather than sharing the
+  one-shot failure id** (autopilot, 2026-08-21). The deferred PR #8 finding said "cancel
+  `ID_FAILURE` on the successful-release path", but that id is shared by every one-shot — and an
+  ending that loses policy access posts its explanation on it moments before completing, so the
+  literal fix would cancel the one actionable message the user is owed. The card is the app's only
+  one-shot that a later event *retires* rather than replaces, which is the same argument that gave
+  the stuck-rule card `ID_STUCK`. Cost: a stale `Couldn't snooze` and a `trying again` card can now
+  coexist in the shade briefly, where the shared id would have replaced one with the other.
+  Reversible — collapse the id back and accept the blanket cancel.
+
 - **A refused end no longer settles for the snooze's own cap when that cap is hours away.**
   `ensureCapAfterRefusedEnd` used to re-arm the cap and stop. That is right on an *expired*
   record — the wake-up is already due, so it retries the release within moments — and wrong
@@ -1282,10 +1292,15 @@ with real onboarding and settings, so they may be fixed by deletion.
     heavier binder call than the id read, and `onStartListening` runs while the shade is
     opening.
 
-- [ ] **A stale `Couldn't end the snooze` survives the retry that succeeds.** `showEnded` drops
+- [x] **A stale `Couldn't end the snooze` survives the retry that succeeds.** `showEnded` drops
   `ID_ONGOING` only, so a failure posted under `ID_FAILURE` by an earlier refusal stays in the shade
   after a later cap or manual retry works. Same class as the successful-arm cleanup, on the other
   path. Fix: cancel `ID_FAILURE` on the successful-release path.
+  **Fixed, but not by the recorded fix** — the card moved to its own id instead (see *Decisions
+  needing review*): canceling the shared `ID_FAILURE` wholesale would also take down whichever
+  unrelated explanation was posted last, such as the access-revocation message an ending posts
+  moments before completing. It now comes down at every point the rule is confirmed off — the same
+  set of places the stuck-rule card does, because both are claims that it might not be.
 
 - [ ] **A stale "rule is switched off in Settings" survives the user re-enabling it.**
   `ensureRuleInBackground` returns early on `READY`/`MISSING_ACCESS` without touching `lastOutcome`,
