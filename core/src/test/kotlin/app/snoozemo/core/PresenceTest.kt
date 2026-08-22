@@ -879,6 +879,33 @@ class PresenceTest {
     }
 
     @Test
+    fun `a no-fix report can never make a same-millisecond wifi loss look stale`() {
+        // The monitor delivers "no usable fix" and constructs the Wi-Fi
+        // watch in the same call frame on a Wi-Fi-only anchor's cold start,
+        // so both can compute the same `SystemClock.elapsedRealtime()`
+        // millisecond (raised as a same-millisecond staleness race by Codex
+        // on PR #77: whichever the engine sees second could be stamped no
+        // later than the first's `latestEvidenceMs` and dropped as old
+        // news). It cannot actually happen here: `useless` — what a no-fix
+        // report reaches — is a declared no-op for an anchor with no usable
+        // fix (SPEC.md §8.4; the anchor this scenario is about, by
+        // definition), so it never touches `latestEvidenceMs` and can never
+        // poison anything that follows it, in either order.
+        val (_, lossFirst) = replay(wifiOnly, signals = arrayOf(wifiLost(0), noFix(0)))
+        assertEquals(
+            Presence.WIFI_GRACE.toMillis(),
+            lossFirst.graceDeadlineMs,
+        )
+
+        val (_, noFixFirst) = replay(wifiOnly, signals = arrayOf(noFix(0), wifiLost(0)))
+        assertEquals(
+            "order must not matter: a no-op report cannot poison the loss that follows it",
+            Presence.WIFI_GRACE.toMillis(),
+            noFixFirst.graceDeadlineMs,
+        )
+    }
+
+    @Test
     fun `an anchor with no wifi never gets a grace period`() {
         // There was no network to lose, so a deadline armed off one would end a
         // snooze for a signal it never depended on.

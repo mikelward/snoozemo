@@ -92,12 +92,11 @@ internal class FakePresenceMonitor : PresenceMonitor {
     }
 
     /** The geofence monitor's rule, so the fixtures read like the real flavor. */
-    override fun supportedModes(anchor: Anchor): Set<TrackingMode> =
-        if (anchor.hasUsableFix) {
-            setOf(TrackingMode.FULL, TrackingMode.DURATION_ONLY)
-        } else {
-            setOf(TrackingMode.DURATION_ONLY)
-        }
+    override fun supportedModes(anchor: Anchor): Set<TrackingMode> = buildSet {
+        if (anchor.hasUsableFix) add(TrackingMode.FULL)
+        if (anchor.ssid != null) add(TrackingMode.WIFI_ONLY)
+        add(TrackingMode.DURATION_ONLY)
+    }
 }
 
 /**

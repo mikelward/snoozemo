@@ -15,6 +15,15 @@ internal sealed interface GeofenceObservation {
     data class Exit(override val atElapsedRealtimeMs: Long) : GeofenceObservation
 
     /**
+     * The §6.6 grace alarm fired: the deadline the engine armed for an
+     * unverifiable snooze has come due. Held if no monitor is attached — the
+     * alarm is spent and will not say this again — and outranked only by an
+     * exit. A replay against a state whose deadline has moved on is a no-op
+     * by the engine's own check, so holding it is free.
+     */
+    data class GraceElapsed(override val atElapsedRealtimeMs: Long) : GeofenceObservation
+
+    /**
      * The platform reported geofencing is not currently available — location
      * switched off system-wide is the ordinary cause. Recoverable in
      * principle, so it degrades rather than ends (SPEC.md §8.4).

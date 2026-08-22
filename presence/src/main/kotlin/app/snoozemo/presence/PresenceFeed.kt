@@ -31,8 +31,18 @@ internal class PresenceFeed(
      * Seeded with the arm moment per `PresenceState.latestEvidenceMs`'s
      * contract: a cached last-known location from before the tile was tapped
      * must not be the first thing the engine believes.
+     *
+     * The suppressor is seeded from what arming saw, per `Presence.advance`'s
+     * contract: an anchor carrying an SSID was captured *while associated*,
+     * and a snooze armed on the anchor's Wi-Fi should not spend a location
+     * fix discovering that. A restore where the association has since ended
+     * is corrected within moments — the Wi-Fi watch's first report is a
+     * transition by definition.
      */
-    private var state = PresenceState(latestEvidenceMs = seedElapsedRealtimeMs)
+    private var state = PresenceState(
+        atAnchorWifi = anchor.ssid != null,
+        latestEvidenceMs = seedElapsedRealtimeMs,
+    )
 
     /** What the engine currently wants from location (SPEC.md §6.7). */
     val duty: LocationDuty
@@ -46,6 +56,15 @@ internal class PresenceFeed(
      */
     val degradation: app.snoozemo.core.DegradationCause?
         get() = state.degradation
+
+    /**
+     * When the §6.6 grace period runs out, or null while none runs. The
+     * monitor arms a real alarm for this and feeds
+     * [PresenceSignal.GraceElapsed] back — the engine cannot wake a sleeping
+     * phone, so an unarmed deadline is a Wi-Fi-only snooze that never ends.
+     */
+    val graceDeadlineMs: Long?
+        get() = state.graceDeadlineMs
 
     /**
      * Feeds one signal through and returns what to report: the event (usually

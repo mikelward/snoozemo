@@ -15,6 +15,61 @@ class GeofenceSignalBridgeTest {
     }
 
     @Test
+    fun `a due grace with no monitor is held until its check settles`() {
+        // The alarm is spent — nothing will say this again — so a dead
+        // process's firing must survive to the restored monitor's attach,
+        // and survive a detach immediately after too: the collector might
+        // not settle the check before the very next teardown, the same
+        // shape as the exit's retention below (Codex, PR #77 — an earlier
+        // version of this test cleared the slot right after one replay,
+        // which is exactly the gap the finding closed).
+        var woken = 0
+        GeofenceSignalBridge.installWakeup { woken++ }
+        GeofenceSignalBridge.deliver(GeofenceObservation.GraceElapsed(atElapsedRealtimeMs = 20_000))
+        assertEquals(1, woken)
+
+        val first = mutableListOf<GeofenceObservation>()
+        GeofenceSignalBridge.attach { first += it }.close()
+        val second = mutableListOf<GeofenceObservation>()
+        GeofenceSignalBridge.attach { second += it }.close()
+
+        assertTrue(first.single() is GeofenceObservation.GraceElapsed)
+        assertTrue("still held until settled", second.single() is GeofenceObservation.GraceElapsed)
+
+        GeofenceSignalBridge.settleExit()
+        val third = mutableListOf<GeofenceObservation>()
+        GeofenceSignalBridge.attach { third += it }.close()
+        assertTrue("settled, so no longer replayed", third.isEmpty())
+    }
+
+    @Test
+    fun `a held exit outranks a due grace`() {
+        // Both end silence; the exit carries the evidence, so it wins the
+        // one slot, and the grace re-arms off the restored engine's state.
+        GeofenceSignalBridge.deliver(GeofenceObservation.Exit(atElapsedRealtimeMs = 21_000))
+        GeofenceSignalBridge.deliver(GeofenceObservation.GraceElapsed(atElapsedRealtimeMs = 22_000))
+
+        val seen = mutableListOf<GeofenceObservation>()
+        GeofenceSignalBridge.attach { seen += it }.close()
+
+        assertEquals(listOf<GeofenceObservation>(GeofenceObservation.Exit(21_000)), seen)
+    }
+
+    @Test
+    fun `a due grace outranks an availability report`() {
+        GeofenceSignalBridge.deliver(GeofenceObservation.GraceElapsed(atElapsedRealtimeMs = 23_000))
+        GeofenceSignalBridge.deliver(GeofenceObservation.Unavailable(atElapsedRealtimeMs = 24_000))
+
+        val seen = mutableListOf<GeofenceObservation>()
+        GeofenceSignalBridge.attach { seen += it }.close()
+
+        assertEquals(
+            listOf<GeofenceObservation>(GeofenceObservation.GraceElapsed(23_000)),
+            seen,
+        )
+    }
+
+    @Test
     fun `delivers to the attached monitor and stops after close`() {
         val seen = mutableListOf<GeofenceObservation>()
         val handle = GeofenceSignalBridge.attach { seen += it }
@@ -113,6 +168,81 @@ class GeofenceSignalBridgeTest {
         val restored = mutableListOf<GeofenceObservation>()
         GeofenceSignalBridge.attach { restored += it }.close()
         assertEquals(listOf<GeofenceObservation>(GeofenceObservation.Exit(9_000)), restored)
+    }
+
+    @Test
+    fun `a live grace expiry never displaces an already-pending exit`() {
+        // The exit carries the evidence a departure needs; a grace firing
+        // that arrives after it — possibly stale, e.g. an alarm that fired
+        // moments before its cancellation reached the platform — must not
+        // unconditionally win the one slot the same way it would if nothing
+        // else were pending (Codex, PR #77: the live path let this happen
+        // even though the coalescing path, below, never did).
+        val live = mutableListOf<GeofenceObservation>()
+        val handle = GeofenceSignalBridge.attach { live += it }
+        GeofenceSignalBridge.deliver(GeofenceObservation.Exit(atElapsedRealtimeMs = 9_600))
+        GeofenceSignalBridge.deliver(GeofenceObservation.GraceElapsed(atElapsedRealtimeMs = 9_700))
+        handle.close()
+
+        val restored = mutableListOf<GeofenceObservation>()
+        GeofenceSignalBridge.attach { restored += it }.close()
+        assertEquals(
+            "the exit must still be the one replayed",
+            listOf<GeofenceObservation>(GeofenceObservation.Exit(9_600)),
+            restored,
+        )
+    }
+
+    @Test
+    fun `a live-delivered grace expiry is retained until its check settles`() {
+        // The same shape as the exit above, and for the same reason: the
+        // grace alarm is one-shot and already spent, so a live-dispatched
+        // expiry that lived only in the dispatch was lost with the collector
+        // (Codex, PR #77).
+        val live = mutableListOf<GeofenceObservation>()
+        GeofenceSignalBridge.attach { live += it }.also {
+            GeofenceSignalBridge.deliver(GeofenceObservation.GraceElapsed(atElapsedRealtimeMs = 9_500))
+            it.close()
+        }
+        assertEquals(
+            listOf<GeofenceObservation>(GeofenceObservation.GraceElapsed(9_500)),
+            live,
+        )
+
+        val restored = mutableListOf<GeofenceObservation>()
+        GeofenceSignalBridge.attach { restored += it }.close()
+        assertEquals(
+            listOf<GeofenceObservation>(GeofenceObservation.GraceElapsed(9_500)),
+            restored,
+        )
+    }
+
+    @Test
+    fun `detaching mid-check wakes a successor for a held grace expiry`() {
+        var woken = 0
+        GeofenceSignalBridge.installWakeup { woken++ }
+        val handle = GeofenceSignalBridge.attach { }
+        GeofenceSignalBridge.deliver(GeofenceObservation.GraceElapsed(atElapsedRealtimeMs = 10_500))
+        assertEquals("a live delivery needs no wake", 0, woken)
+
+        handle.close()
+
+        assertEquals("the detach must arrange the successor", 1, woken)
+    }
+
+    @Test
+    fun `a settled grace expiry detaches quietly and is not replayed`() {
+        var woken = 0
+        GeofenceSignalBridge.installWakeup { woken++ }
+        val handle = GeofenceSignalBridge.attach { }
+        GeofenceSignalBridge.deliver(GeofenceObservation.GraceElapsed(atElapsedRealtimeMs = 11_500))
+        GeofenceSignalBridge.settleExit()
+        handle.close()
+
+        assertEquals(0, woken)
+        val next = mutableListOf<GeofenceObservation>()
+        GeofenceSignalBridge.attach { next += it }.close()
+        assertTrue(next.isEmpty())
     }
 
     @Test

@@ -10,6 +10,15 @@
         <receiver
             android:name="app.snoozemo.presence.geofence.GeofenceTransitionReceiver"
             android:exported="false" />
+
+        <!--
+          The grace alarm's target (SPEC.md 6.6). Not exported for the same
+          reason: only our own alarm PendingIntent may say a grace period ran
+          out, or any app could end a snooze five minutes after asking.
+        -->
+        <receiver
+            android:name="app.snoozemo.presence.geofence.GraceAlarmReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>

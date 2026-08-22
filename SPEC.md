@@ -1230,6 +1230,18 @@ and they fail independently:
    one-shot `getCurrentLocation()` and run the §6.6 departure test directly, without waiting for the
    geofence to notice. This is the single highest-value addition, because it covers the common case
    (leaving a Wi-Fi place) with no reliance on the flaky path at all.
+   **Built**, as D4's watch in the `play` monitor: a `NetworkCallback` on the Wi-Fi transport
+   feeds the association and its loss into the engine — association suppresses location work
+   entirely (including the backstop's resting probe), loss escalates into the same §6.6
+   confirmation as every other source, with the checking burst's one-shots as the fix request.
+   The §6.6 **grace alarm** landed with it, because a Wi-Fi-only mode is dishonest without it:
+   the engine sets the deadline but cannot wake a phone, so the monitor arms a real alarm —
+   inexact (`setAndAllowWhileIdle`), like the cap and for the same reason: exactness costs the
+   `SCHEDULE_EXACT_ALARM` permission, a distribution question, and the deferral concentrates
+   while stationary. A watch that fails to register reports itself as a loss rather than
+   holding a snooze on an unwatched claim — the fail-open direction. `WIFI_ONLY` is therefore
+   a *watched* mode at last: an SSID-only anchor gets a real watch, and a fenced anchor that
+   loses location degrades to Wi-Fi rather than to the bare timer.
 3. **A periodic backstop** — a coarse `WorkManager` check on the order of 15–30 minutes while armed,
    purely to catch a geofence that never fired. Cheap, and it keeps typical staleness to its
    cadence — best-effort, not a hard bound (see below); the duration cap remains the only

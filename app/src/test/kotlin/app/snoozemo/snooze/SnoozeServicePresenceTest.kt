@@ -118,9 +118,10 @@ class SnoozeServicePresenceTest {
 
         emit(PresenceUpdate(event = null, degradation = DegradationCause.NO_LOCATION_FIX))
 
-        // Straight to the timer, not to WIFI_ONLY: the monitor's supported
-        // set has no Wi-Fi watch to fall back on (Codex, PR #73).
-        assertEquals(TrackingMode.DURATION_ONLY, ActiveSnoozeStore(appContext).load()?.mode)
+        // To WIFI_ONLY now, not the timer: the Wi-Fi watch backs the claim
+        // (D4), so a fenced anchor that loses location falls to a mode
+        // something is actually watching.
+        assertEquals(TrackingMode.WIFI_ONLY, ActiveSnoozeStore(appContext).load()?.mode)
     }
 
     @Test
@@ -441,14 +442,15 @@ class SnoozeServicePresenceTest {
     }
 
     @Test
-    fun `an SSID-only anchor arms as a timer, not a Wi-Fi claim`() {
-        // Nothing watches Wi-Fi yet (TODO.md): the monitor says so through
-        // `supports`, and the record must not promise more.
+    fun `an SSID-only anchor arms as a real Wi-Fi watch`() {
+        // The Wi-Fi watch backs the claim now (D4): loss escalates, and the
+        // grace alarm ends an unverifiable snooze — a watch, not a labeled
+        // timer.
         startService(SnoozeService.ACTION_ARM)
         TestSnoozeService.captureRequests.single()
             .invoke(Anchor(capturedAt = now, ssid = "ExampleWifi"))
         shadowOf(getMainLooper()).idle()
 
-        assertEquals(TrackingMode.DURATION_ONLY, ActiveSnoozeStore(appContext).load()?.mode)
+        assertEquals(TrackingMode.WIFI_ONLY, ActiveSnoozeStore(appContext).load()?.mode)
     }
 }
