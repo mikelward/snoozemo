@@ -45,6 +45,16 @@
     <!-- TODO: translate -->
     <string name="setup_tile_added" tools:ignore="MissingTranslation">Added</string>
     <!--
+      The debug log's switch (SPEC.md §4.6): on by default, and turning it off
+      deletes what was kept. Copy is the maintainer's own wording (2026-08-22).
+    -->
+    <!-- TODO: translate -->
+    <string name="setup_debug_log_title" tools:ignore="MissingTranslation">Debug log</string>
+    <!-- TODO: translate -->
+    <string name="setup_debug_log_description" tools:ignore="MissingTranslation">Save snooze details to help fix issues</string>
+    <!-- TODO: translate -->
+    <string name="setup_debug_log_save_failed" tools:ignore="MissingTranslation">Couldn\'t save this setting</string>
+    <!--
       The tile banner. The app screen keeps its own snooze button, but the tile
       is the way in (SPEC.md §4.2) — easier, and where people already go to
       silence a phone — so the screen leads with it rather than listing it as

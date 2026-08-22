@@ -204,12 +204,15 @@ class EdgeToEdgeScreenshotTest {
             snoozing = false,
             lastOutcome = null,
             settingsFailure = null,
+            debugLogEnabled = true,
+            debugLogSaveFailed = false,
             onAccessRow = {},
             onNotificationsRow = {},
             onTileRow = {},
             onDismissTileBanner = {},
             onArm = {},
             onRelease = {},
+            onDebugLog = {},
         )
     }
 

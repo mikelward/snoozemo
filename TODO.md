@@ -496,9 +496,10 @@ the point is that every other line of the app is worthless if it isn't true.
       elsewhere, deliberately:
       - **The wake-up-source and departure-arithmetic records** go in with the monitors that
         produce them (the `GeofencePresenceMonitor` item above) — the log API is ready for them.
-      - **The settings row** that turns it off: the mechanism (`DebugLogging.setEnabled`, store,
-        delete-on-disable) is built and tested, but the row needs new user-facing copy, which
-        waits for the propose-in-chat step (see *Decisions needing review*).
+      - **The settings row** that turns it off — **landed** (2026-08-22) with the maintainer's
+        copy, the toggle/install race serialized onto one worker, only a persisted choice
+        applied (both deferred from Codex's PR #62 review), and a failed save said under the
+        row with the approved `Couldn't save this setting`.
       - **The sharing surface and post-crash banner** are Phase 5's item, unchanged — the crash
         pin already preserves what the banner will offer.
 - [x] **Maintainer decision: is the debug log off by default?** Answered — **on by default**
@@ -1123,20 +1124,19 @@ none is load-bearing yet.
   denied" texts and file paths are lost, and only the type and frames locate a failure. Reversible
   by adding a message line with an allowlist of exception types known to carry no user data, if
   the field shows types-and-frames alone leaves failures undiagnosable.
-- **The debug-log setting exists with no settings row yet** (autopilot, 2026-08-21). §4.6 says "on
-  by default with a setting to turn it off"; the store, the delete-on-disable semantics, and the
-  `DebugLogging.setEnabled` entry point landed tested, but the visible row needs new user-facing
-  copy, and copy goes through propose-in-chat (AGENTS.md, *Translations*). Until the row lands the
-  app behaves as always-on, which is the decided default; a dev build can flip the preference
-  directly. The alternative — landing the row with unapproved copy — is the mistake PR #18 and
-  PR #22 already recorded. Proposed copy for approval: a settings row titled **`Debug log`** with
-  the description **`Keeps a technical record of snoozes on this phone`** and a standard toggle.
-  **The row's PR inherits two Codex findings deferred from PR #62**, both against the toggle path
-  that has no caller until the row exists: (1) a toggle racing the async `DebugLogging.install`
-  can be overwritten by the installer applying the older stored value — serialize them or re-apply
-  the setting when the sink publishes; (2) `DebugLogStore.setEnabled`'s `commit()` result is
-  discarded, so a disable during a storage failure looks applied and silently reverts at the next
-  process start — the row is where a failed commit can be surfaced to the user.
+- **The debug-log settings row landed** (2026-08-22), resolving the 2026-08-21 entry that held it
+  for copy. The description is the maintainer's own wording — **`Save snooze details to help fix
+  issues`** — and the title stayed the proposed **`Debug log`**; the maintainer's message quoted
+  only the one line, read here as replacing the description (autopilot guess: if the quote was
+  meant as the title, it's a two-string swap). Both inherited PR #62 findings are fixed: install
+  and toggle now share one FIFO worker so the setting applies in call order, and only a
+  `commit()` that returned true is applied — a refused write reverts the switch to what is
+  actually stored. The failed-save line under the row landed with the approved
+  **`Couldn't save this setting`** (maintainer, 2026-08-22), completing the row's failure
+  surface. Codex's PR #68 round added two refinements: the store restores its process-local
+  value when `commit()` fails (the map is updated before the disk write it reports on), and
+  the screen follows the store through `DebugLogStore.observe` with reads held off while a
+  tap's write is still on the worker.
 - **`Couldn't end the snooze — trying again` has its own notification id rather than sharing the
   one-shot failure id** (autopilot, 2026-08-21). The deferred PR #8 finding said "cancel
   `ID_FAILURE` on the successful-release path", but that id is shared by every one-shot — and an
