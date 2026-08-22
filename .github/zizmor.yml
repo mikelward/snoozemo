@@ -14,6 +14,12 @@ rules:
         # their merges. Enumerated by name, not `mikelward/*` — owner-wide
         # would also excuse a future workflow pulling any sibling at a
         # mutable ref, and each exemption should be a decision somebody made.
+        # Adding one is one line here.
+        #
+        # The lane-classification engine android-ci.yml's classify/gate/
+        # lanes jobs invoke — same repo-tracked-deliberately reasoning as
+        # the rest of this list.
+        "mikelward/lanes": ref-pin
         "mikelward/codex-review": ref-pin
         # Same repository, but the key is matched whole against the `uses:`
         # value including the workflow path, so the reusable workflow the

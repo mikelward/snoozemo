@@ -11,9 +11,18 @@ on:
   # the `gate` check, and a required check that never reports blocks the PR
   # forever — which is exactly what a path-filtered-out workflow produces.
   # Housekeeping-only PRs skip the heavy jobs via `classify` instead, and
-  # `gate` verifies the skip was justified (scripts/docs-lane.sh has the
-  # full design rationale).
+  # `gate` verifies the skip was justified (the mikelward/lanes engine,
+  # policy in .github/lanes.conf, has the full design rationale).
+  #
+  # `edited` is load-bearing, not tidiness: a retarget changes what the
+  # diff is measured against while the head — and any `gate`/`lanes` check
+  # run already minted on it — stays exactly where it was, so a base
+  # change has to start a fresh run or the old verdict simply stands.
+  # Title and body edits re-run the lane too, deliberately: a skipped job
+  # would be worse than a redundant one, since GitHub counts a SKIPPED
+  # required check as satisfied.
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   # Exists for exactly one caller: the screenshot job's refresh step, whose
   # `ci: refresh recorded screenshots` push is made with `GITHUB_TOKEN` and
   # therefore starts no workflow run on its own (GitHub's loop-prevention
@@ -43,7 +52,7 @@ on:
   push:
     branches:
       - main
-    # Mirrors the lane's housekeeping rule (scripts/docs-lane.sh): skip the
+    # Mirrors the lane's housekeeping rule (.github/lanes.conf): skip the
     # main run only when every changed file is markdown outside the module
     # trees. The later patterns re-include module paths, so a markdown build
     # input (a packaged asset can be .md) still builds; dotfiles are no
@@ -66,11 +75,10 @@ permissions: {}
 
 jobs:
   # Decides whether the heavy jobs may skip: true only when every changed
-  # file in the PR is housekeeping (markdown, root dotfiles — see
-  # scripts/docs-lane.sh for the rule and its carve-outs). Pushes to main are
-  # always classified as code, so they run everything; a dispatched run
-  # classifies the PR its required `pr` input names, exactly as the PR run
-  # would.
+  # file in the PR is housekeeping under .github/lanes.conf (the
+  # mikelward/lanes engine). Pushes to main are always classified as code,
+  # so they run everything; a dispatched run classifies the PR its required
+  # `pr` input names, exactly as the PR run would.
   classify:
     name: Classify the diff
     runs-on: ubuntu-latest
@@ -79,24 +87,21 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      docs_only: ${{ steps.run.outputs.docs_only }}
+      docs_only: ${{ steps.lane.outputs.docs_only }}
+      # Only consumed by `gate`/`lanes`'s dispatch-binding check below — the
+      # heavy jobs' own skip decision comes from `docs_only` above.
+      base_sha: ${{ steps.lane.outputs.base_sha }}
     steps:
       - name: Check out repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
         with:
           persist-credentials: false
-      - name: Self-test the lane rules
-        # Before trusting the classification, prove the rule engine against
-        # its fixture matrix (stubbed gh, both directions per behavior). A
-        # broken rule fails here, the heavy jobs skip on the failed
-        # dependency, and the gate goes red — fail closed, never green.
-        run: bash scripts/docs-lane.test.sh
       - name: Classify
-        id: run
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR: ${{ github.event.pull_request.number || inputs.pr }}
-        run: scripts/docs-lane.sh classify >> "$GITHUB_OUTPUT"
+        id: lane
+        uses: mikelward/lanes@main
+        with:
+          mode: classify
+          pr: ${{ github.event.pull_request.number || inputs.pr }}
 
   build:
     name: Build and unit test
@@ -547,12 +552,20 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
 
-  # The one check the main ruleset requires. Always runs, always reports —
-  # green only when every heavy job succeeded, or when they were skipped and
-  # the skip is INDEPENDENTLY verified as justified: the diff re-derived as
-  # housekeeping-only and every commit subject carrying a housekeeping
-  # prefix. Any other combination — a failure anywhere, a skip on a code
-  # diff, classify itself failing — is an explicit red, never a silent pass.
+  # The one check the main ruleset requires today. Always runs, always
+  # reports — green only when every heavy job succeeded, or when they were
+  # skipped and the skip is INDEPENDENTLY verified as justified: the diff
+  # re-derived as housekeeping-only and every commit subject carrying a
+  # housekeeping prefix. Any other combination — a failure anywhere, a skip
+  # on a code diff, classify itself failing — is an explicit red, never a
+  # silent pass.
+  #
+  # TEMPORARY, alongside `lanes` below: mikelward/lanes renamed its
+  # consumer-facing check from `gate` to `lanes` (mikelward/lanes#9), and
+  # the ruleset here still requires `gate`. Per that PR's staged-rename
+  # procedure (README.md "Renaming an existing consumer's check"), this
+  # duplicate keeps `gate` reporting until the ruleset is flipped to
+  # require `lanes` instead — then this job is deleted.
   gate:
     name: gate
     runs-on: ubuntu-latest
@@ -568,11 +581,44 @@ jobs:
         with:
           persist-credentials: false
       - name: Verdict
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR: ${{ github.event.pull_request.number || inputs.pr }}
-          CLASSIFY: ${{ needs.classify.result }}
-          RESULTS: >-
+        uses: mikelward/lanes@main
+        with:
+          mode: gate
+          pr: ${{ github.event.pull_request.number || inputs.pr }}
+          classify-result: ${{ needs.classify.result }}
+          # Only read on a dispatched run — the base classify recorded
+          # before the heavy jobs ran; a pull_request run takes the same
+          # commit from its own event payload.
+          base-sha: ${{ needs.classify.outputs.base_sha }}
+          results: >-
             build=${{ needs.build.result }}
             screenshots=${{ needs.screenshot-tests.result }}
-        run: scripts/docs-lane.sh gate
+
+  # The renamed check (mikelward/lanes#9) — this is what the ruleset should
+  # require once it has reported at least once on a real pull_request run.
+  # Identical to `gate` above; see that job's comment for why both exist
+  # for now.
+  lanes:
+    name: lanes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [classify, build, screenshot-tests]
+    if: always()
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          persist-credentials: false
+      - name: Verdict
+        uses: mikelward/lanes@main
+        with:
+          mode: gate
+          pr: ${{ github.event.pull_request.number || inputs.pr }}
+          classify-result: ${{ needs.classify.result }}
+          base-sha: ${{ needs.classify.outputs.base_sha }}
+          results: >-
+            build=${{ needs.build.result }}
+            screenshots=${{ needs.screenshot-tests.result }}
