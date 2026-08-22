@@ -608,6 +608,12 @@ the point is that every other line of the app is worthless if it isn't true.
 
 `SPEC.md` §4.4 is explicitly provisional — treat its mockups as a starting point.
 
+- [ ] **Rename `DebugScreen`** (maintainer, 2026-08-22). It stopped being a debug-only screen
+      once the tile arrived in Phase 2 — `MainActivity`'s own KDoc already calls it "onboarding
+      and settings" — but the composable, its file, and every `debug_*` string ID (`debug_arm`,
+      `debug_release`, …) still carry the old name. Low-risk, mechanical, and touches a lot of
+      call sites (every `*ScreenshotTest`), so it's its own PR rather than folded into
+      unrelated work.
 - [ ] The two rows (`until <time>` seeded at now + 1 h rounded to the half hour, and
       `until I leave`), with `−` / `+` in 30-minute steps, floored at 30 min from now and
       ceilinged at the 8 h backstop.
