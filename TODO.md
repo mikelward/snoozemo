@@ -643,6 +643,18 @@ the point is that every other line of the app is worthless if it isn't true.
       until every row is resolved, or a permanently reachable settings screen separate from a
       leaner main view that's just the tile-equivalent Arm/Release control. Not designed yet —
       this is a placeholder for that design work, not a decision.
+- [ ] **Only one of `Snooze` / `End snooze` should show at a time** (maintainer, 2026-08-22):
+      today both buttons render together whenever DND access is granted (`MainActivity.kt`'s
+      `DebugScreen`) — `Snooze` merely disables itself while a snooze is running, but
+      `End snooze` is *always* shown and enabled, even when `snoozing == false`. That's not an
+      oversight: the comment above it cites `SPEC.md` §7 — manual exit is "always available,
+      always instant," and `endSnooze` is idempotent, so a stale or unread `snoozing` value must
+      never be what blocks the one guaranteed way to un-silence the phone. Hiding `End snooze`
+      whenever `snoozing == false` would reintroduce exactly that risk if the reading is ever
+      wrong. Needs a real design answer, not a blind toggle — options include showing `End
+      snooze` only when `snoozing` is `true` **or** still `null` (unknown defaults to showing the
+      safety net, confidently-false hides it), or a single button that relabels itself by state.
+      Whatever's chosen has to preserve the idempotent-and-always-reachable guarantee.
 - [ ] The two rows (`until <time>` seeded at now + 1 h rounded to the half hour, and
       `until I leave`), with `−` / `+` in 30-minute steps, floored at 30 min from now and
       ceilinged at the 8 h backstop.
