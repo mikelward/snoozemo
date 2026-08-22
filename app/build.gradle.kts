@@ -144,6 +144,26 @@ android {
         versionName = "$baseVersionName.$gitCommitCount+$gitShortSha"
     }
 
+    signingConfigs {
+        // CI materializes the Play upload keystore from a secret and points
+        // RELEASE_KEYSTORE_FILE at it for the internal-track upload (Phase 6,
+        // `docs/play-store-internal-track.md`). Play App Signing re-signs the
+        // AAB with its own managed key before delivery, so this upload key
+        // only authenticates to Play — losing it costs an upload-key reset,
+        // never the listing. Local builds without the env var produce an
+        // unsigned release build, so a fresh clone still builds cleanly with
+        // no secrets (mirrors the sibling Simmo repo's release signingConfig).
+        create("release") {
+            val keystorePath = providers.environmentVariable("RELEASE_KEYSTORE_FILE").orNull
+            if (!keystorePath.isNullOrEmpty() && file(keystorePath).exists()) {
+                storeFile = file(keystorePath)
+                storePassword = providers.environmentVariable("RELEASE_KEYSTORE_PASSWORD").orNull
+                keyAlias = providers.environmentVariable("RELEASE_KEY_ALIAS").orNull
+                keyPassword = providers.environmentVariable("RELEASE_KEY_PASSWORD").orNull
+            }
+        }
+    }
+
     // The distribution split of SPEC.md §3.4, and the only place the two
     // channels' constraints diverge. `play` is the shipping build for any Play
     // track and carries ACCESS_BACKGROUND_LOCATION and the Geofencing API;
@@ -170,10 +190,18 @@ android {
             applicationIdSuffix = ".debug"
         }
         release {
-            // R8 and the signing configs land with the release plumbing in
-            // Phase 6; until then a local release build stays unminified and
-            // unsigned so fresh clones build cleanly.
+            // R8 stays off for now — a separate follow-up once there is a
+            // device to verify a shrunk build against (TODO.md, Phase 6). The
+            // signing config below is this slice: a local release build stays
+            // unsigned unless RELEASE_KEYSTORE_FILE is set, so fresh clones
+            // still build cleanly with no secrets.
             isMinifyEnabled = false
+            // Only attach the signingConfig when CI (or a developer) has
+            // actually populated it — an unset storeFile would fail
+            // bundleRelease for anyone without the release secrets.
+            if (!providers.environmentVariable("RELEASE_KEYSTORE_FILE").orNull.isNullOrEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
