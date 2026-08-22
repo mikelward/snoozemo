@@ -1370,12 +1370,14 @@ with real onboarding and settings, so they may be fixed by deletion.
   through, `USER_ACTION` for `EndReason.MANUAL`, as the controller path already does. **Fixed as
   recorded**, with both directions pinned in `ReceiverRefusalTest`.
 
-- [ ] **An access read can survive `onStop` and act after the next `onStart`.** The lifecycle guard
+- [x] **An access read can survive `onStop` and act after the next `onStart`.** The lifecycle guard
   and the generation counter together still leave a window: the same activity instance can become
   `STARTED` again, and a worker holding a stale `DENIED` can land after that but before the deferred
   refresh bumps the generation — ending a snooze armed in between. Fix: increment
   `latestAccessRefresh` in `onStop`, invalidating everything from the previous visible session.
   (`MainActivity`; may be moot after Phase 4.)
+  **Fixed as recorded** (2026-08-22), pinned by `MainActivityLifecycleTest`, which fails without
+  the bump.
 
 - [x] **A refused manual `End now` waits for the original cap instead of retrying soon.**
   When the zen write returns `PLATFORM_REFUSED` and `ensureCapAfterRefusedEnd` manages to re-arm
