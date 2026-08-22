@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.SystemClock
 import app.snoozemo.core.Anchor
 import app.snoozemo.core.DegradationCause
+import app.snoozemo.core.LocationDuty
 import app.snoozemo.core.PresenceEvent
 import app.snoozemo.core.PresenceMonitor
 import app.snoozemo.core.PresenceSignal
@@ -25,14 +26,16 @@ import kotlinx.coroutines.flow.callbackFlow
  * The `play` flavor's [PresenceMonitor] (SPEC.md §3.4, option B): the
  * Geofencing API watches for the departure, and no foreground service exists.
  *
- * This is the first slice of the monitor — registration, the exit callback,
- * and the recoverable/fatal split at the platform boundary. The location
- * request loop driven by [PresenceFeed.duty], the Wi-Fi suppressor callback,
- * significant motion, the grace alarm, and `PresenceState` persistence are
- * their own `TODO.md` items and land behind the same interface. Until they
- * do, an exit escalates the engine but nothing takes the confirming fixes, so
- * this monitor observes and reports rather than ends — which is safe in the
- * fail-open direction: the duration cap still bounds every snooze.
+ * Built in slices. Landed here: registration, the exit callback, the
+ * recoverable/fatal split at the platform boundary, and the confirming fixes
+ * — [CheckingFixes] one-shots started and stopped by the duty the engine
+ * reports, so an exit escalates and the §6.6 test can actually settle it.
+ * Still their own `TODO.md` items behind the same interface: the Wi-Fi
+ * suppressor callback, significant motion, the grace alarm, the periodic
+ * backstop, and `PresenceState` persistence. And nothing collects this flow
+ * until the service wiring slice lands, so every conclusion here is still
+ * unconsumed — safe in the fail-open direction: the duration cap bounds
+ * every snooze.
  *
  * Everything the platform can refuse is classified through
  * [GeofenceRegistrationFailure], because the one distinction this class must
@@ -116,13 +119,45 @@ class GeofencePresenceMonitor(
             trySend(
                 PresenceUpdate(
                     event = update.event,
-                    degradation = update.degradation ?: platformDegradation.get(),
+                    // The platform's level outranks the engine's when both
+                    // are set: the engine *infers* a generic NO_LOCATION_FIX
+                    // by counting misses, while a set platform level names
+                    // the sensor-layer fact behind those misses — services
+                    // off, the fence unavailable — which is the more specific
+                    // truth and the one the debug log should carry (flagged
+                    // by Codex on PR #72). Both lower the mode identically,
+                    // so only the recorded cause differs.
+                    degradation = platformDegradation.get() ?: update.degradation,
                 ),
             )
         }
 
+        // The confirming fixes of SPEC.md §6.10: one-shots while the engine is
+        // checking, started and stopped by the duty the engine itself reports
+        // (§6.7). Declared before `deliver` because delivery is what drives it.
+        var checkingFixes: CheckingFixes? = null
+
+        // The feed is a plain value and its callers arrive from more than one
+        // thread — the bridge and the fixes on main, the setup body on the
+        // collector's — so one lock serializes the accept-and-read-duty step.
+        // Never held across anything slow: `accept` is pure arithmetic.
+        val feedLock = Any()
+
         fun deliver(signal: PresenceSignal) {
-            send(feed.accept(signal))
+            val update: PresenceUpdate
+            val duty: LocationDuty
+            synchronized(feedLock) {
+                update = feed.accept(signal)
+                duty = feed.duty
+            }
+            send(update)
+            // Reconciled on every signal rather than on transitions, because
+            // both calls are idempotent and "did the transition get noticed"
+            // is exactly the kind of question idempotence deletes.
+            // Pause, not close: the duty leaving ACTIVE is a state the engine
+            // can re-enter, and only teardown (awaitClose) may end the burst
+            // for good.
+            if (duty == LocationDuty.ACTIVE) checkingFixes?.start() else checkingFixes?.pause()
         }
 
         // Recoverable refusals set the platform level (and so keep being
@@ -142,6 +177,28 @@ class GeofencePresenceMonitor(
                 )
             }
         }
+        checkingFixes = CheckingFixes(
+            AndroidBurstScheduler(),
+            PlatformFixRequester(appContext),
+            readElapsedRealtimeMs,
+            ::deliver,
+            onPermissionLost = {
+                // The recoverable/fatal split again, at the burst's boundary:
+                // a revoked grant mid-check ends the snooze, classified
+                // through the same tested mapping registration uses (flagged
+                // by Codex on PR #72 when it reported mere degradation).
+                reportRegistration(GeofenceRegistrationFailure.fromSecurityException())
+            },
+            onServicesOff = {
+                // The recoverable side of the same split, said the moment it
+                // is known rather than after three generic unanswered fixes:
+                // the platform level carries it on every later update until
+                // recovery re-registration clears it.
+                reportRegistration(
+                    GeofenceRegistrationFailure.Recoverable(DegradationCause.LOCATION_SERVICES_OFF),
+                )
+            },
+        )
 
         // This flow's claim on the one fence. Registration takes the process-
         // level ownership below; only the owner removes the fence on teardown.
@@ -251,6 +308,7 @@ class GeofencePresenceMonitor(
         // but left the collector suspended past the snooze).
         awaitClose {
             active.compareAndSet(handle, null)
+            checkingFixes?.close()
             bridge?.close()
             // Only while this flow still owns the fence: a replacement monitor
             // registering under the shared id has taken ownership, and the old

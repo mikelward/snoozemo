@@ -1,0 +1,197 @@
+package app.snoozemo.presence.geofence
+
+import app.snoozemo.core.Fix
+import app.snoozemo.core.PresenceSignal
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * The burst's lifecycle over its seams — the part two review rounds found
+ * real bugs in, driven here as plain values: a manual scheduler stands in
+ * for the main thread, a scripted requester for the platform.
+ */
+class CheckingFixesTest {
+
+    /** Runs immediates inline; delayed work waits for [advance]. */
+    private class ManualScheduler : BurstScheduler {
+        val delayed = mutableListOf<Pair<Long, () -> Unit>>()
+
+        override fun post(block: () -> Unit) = block()
+
+        override fun postDelayed(delayMs: Long, block: () -> Unit): AutoCloseable {
+            val entry = delayMs to block
+            delayed += entry
+            return AutoCloseable { delayed.remove(entry) }
+        }
+
+        /** Fires the oldest pending task whose delay matches [delayMs]. */
+        fun fire(delayMs: Long) {
+            val entry = delayed.first { it.first == delayMs }
+            delayed.remove(entry)
+            entry.second()
+        }
+    }
+
+    /** Answers each request from a script; unanswered ones stay in flight. */
+    private class ScriptedRequester : FixRequester {
+        val pending = mutableListOf<(FixOutcome) -> Unit>()
+        var canceled = 0
+
+        override fun request(onOutcome: (FixOutcome) -> Unit): AutoCloseable {
+            pending += onOutcome
+            return AutoCloseable { canceled++ }
+        }
+
+        fun answer(outcome: FixOutcome) {
+            pending.removeAt(0).invoke(outcome)
+        }
+    }
+
+    private val scheduler = ManualScheduler()
+    private val requester = ScriptedRequester()
+    private val signals = mutableListOf<PresenceSignal>()
+    private var permissionLost = 0
+    private var servicesOff = 0
+
+    private var elapsedMs = 100_000L
+
+    private val fixes = CheckingFixes(
+        scheduler,
+        requester,
+        readElapsedRealtimeMs = { elapsedMs },
+        onSignal = { signals += it },
+        onPermissionLost = { permissionLost++ },
+        onServicesOff = { servicesOff++ },
+    )
+
+    private fun fix(atMs: Long) = Fix(lat = 0.0, lon = 0.0, accuracyM = 20f, elapsedRealtimeMs = atMs)
+
+    @Test
+    fun `a delivered fix reaches the engine and the next request is paced at the confirmation gap`() {
+        fixes.start()
+
+        requester.answer(FixOutcome.Delivered(fix(atMs = 101_000)))
+
+        assertEquals(listOf<PresenceSignal>(PresenceSignal.FixArrived(fix(101_000))), signals)
+        assertTrue(scheduler.delayed.any { it.first == CheckingCadence.CONFIRM_SPACING_MS })
+    }
+
+    @Test
+    fun `unanswered requests degrade honestly and back off`() {
+        fixes.start()
+
+        repeat(CheckingCadence.BACKOFF_AFTER) { round ->
+            requester.answer(FixOutcome.NothingRecoverable)
+            if (round < CheckingCadence.BACKOFF_AFTER - 1) {
+                scheduler.fire(CheckingCadence.CONFIRM_SPACING_MS)
+            }
+        }
+
+        // Every miss reached the engine — its counter is what arms the grace
+        // period — and the next request now waits at the backoff rate.
+        assertEquals(
+            CheckingCadence.BACKOFF_AFTER,
+            signals.count { it is PresenceSignal.FixUnavailable },
+        )
+        assertTrue(scheduler.delayed.any { it.first == CheckingCadence.BACKOFF_SPACING_MS })
+    }
+
+    @Test
+    fun `the ceiling settles a request that never answers`() {
+        fixes.start()
+
+        scheduler.fire(CheckingFixes.REQUEST_CEILING_MS)
+
+        assertEquals(1, requester.canceled)
+        assertTrue(signals.single() is PresenceSignal.FixUnavailable)
+    }
+
+    @Test
+    fun `an answer after the ceiling is dropped, not double-counted`() {
+        fixes.start()
+        scheduler.fire(CheckingFixes.REQUEST_CEILING_MS)
+
+        requester.answer(FixOutcome.Delivered(fix(atMs = 101_000)))
+
+        assertTrue(signals.single() is PresenceSignal.FixUnavailable)
+    }
+
+    @Test
+    fun `a lost grant stops the burst for good and reports once`() {
+        fixes.start()
+
+        requester.answer(FixOutcome.PermissionLost)
+        fixes.start()
+
+        assertEquals(1, permissionLost)
+        assertTrue(signals.isEmpty())
+        // Dead means dead: the restart queued nothing.
+        assertTrue(requester.pending.isEmpty())
+        assertTrue(scheduler.delayed.isEmpty())
+    }
+
+    @Test
+    fun `services off is said immediately and the burst keeps asking`() {
+        fixes.start()
+
+        requester.answer(FixOutcome.ServicesOff)
+
+        assertEquals(1, servicesOff)
+        // The engine still hears an unanswered fix — its counter is what
+        // arms the grace period — and the next request stays scheduled.
+        assertTrue(signals.single() is PresenceSignal.FixUnavailable)
+        assertTrue(scheduler.delayed.isNotEmpty())
+    }
+
+    @Test
+    fun `pause cancels pending work and a later start resumes`() {
+        fixes.start()
+        fixes.pause()
+
+        assertEquals(1, requester.canceled)
+        assertTrue(scheduler.delayed.isEmpty())
+
+        fixes.start()
+        // A fresh request with its own ceiling: the pause was a pause.
+        assertEquals(2, requester.pending.size)
+        assertTrue(scheduler.delayed.any { it.first == CheckingFixes.REQUEST_CEILING_MS })
+    }
+
+    @Test
+    fun `close cannot be undone by a start already behind it`() {
+        // The revival race (Codex, PR #72): teardown posts its stop, a racing
+        // callback posts a start behind it. The flag is synchronous, so the
+        // start finds it whatever the queue order was.
+        fixes.start()
+        fixes.close()
+        fixes.start()
+
+        assertEquals(1, requester.canceled)
+        assertTrue(scheduler.delayed.isEmpty())
+        assertTrue(requester.pending.size == 1)
+    }
+
+    @Test
+    fun `a synchronously answered request still settles exactly once`() {
+        // The permission checks answer before any platform call exists; the
+        // token identity is what keeps that from being dropped or doubled.
+        val sync = FixRequester { onOutcome ->
+            onOutcome(FixOutcome.NothingRecoverable)
+            AutoCloseable { }
+        }
+        val burst = CheckingFixes(
+            scheduler,
+            sync,
+            readElapsedRealtimeMs = { elapsedMs },
+            onSignal = { signals += it },
+            onPermissionLost = { permissionLost++ },
+            onServicesOff = { servicesOff++ },
+        )
+
+        burst.start()
+
+        assertTrue(signals.single() is PresenceSignal.FixUnavailable)
+        assertTrue(scheduler.delayed.any { it.first == CheckingCadence.CONFIRM_SPACING_MS })
+    }
+}
