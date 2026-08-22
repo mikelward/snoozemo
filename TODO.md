@@ -746,8 +746,21 @@ the point is that every other line of the app is worthless if it isn't true.
 
 ## Phase 6 (M6) — Internal-track release on Play
 
-- [ ] Release plumbing: signing, Play Console setup, the `deploy` job, and the "What's new"
-      generation from commit subjects described in `AGENTS.md`.
+- [x] Release plumbing: signing, the `deploy` job, and the "What's new" generation from commit
+      subjects described in `AGENTS.md`. **Landed**: `signingConfigs["release"]`
+      (`app/build.gradle.kts`) reads the upload keystore from `RELEASE_KEYSTORE_FILE` and its
+      companion env vars, attaching only when they're present so a fresh clone still builds
+      unsigned; the `deploy` job in `.github/workflows/android-ci.yml` builds
+      `:app:bundlePlayRelease` on every push to `main`, publishes it as a downloadable
+      `app-release-aab` workflow artifact unconditionally (so the first, manually-uploaded AAB
+      Play requires never needs a local build), and uploads to the Play internal track via
+      `r0adkll/upload-google-play` once `PLAY_SERVICE_ACCOUNT_JSON` is set too. The release-notes
+      generator is ported from the sibling Simmo/Type Launcher repos' deploy job, unchanged in
+      shape (`docs/play-store-internal-track.md` has the full setup). R8 stays off — a separate
+      follow-up once there is a device to verify a shrunk build against. **Play Console setup
+      itself (the account, the app listing, the declarations, the service account) is the
+      maintainer's own one-time work**, tracked in `docs/play-store-internal-track.md` rather
+      than here since it's account/console state, not code.
 - [x] Make a release build **fail** when its version can't be derived from git, rather than
       warning (`app/build.gradle.kts`). The fallback exists so a checkout without git still
       builds; once a build can reach a tester or Play, falling back to versionCode 1 is
@@ -757,9 +770,22 @@ the point is that every other line of the app is worthless if it isn't true.
       *(Landed: `checkReleaseVersionDerivation` fails every `pre*ReleaseBuild` when the
       count, hash, or clone depth kept the version from being derived; debug builds, tests,
       and lint on a shallow checkout are untouched.)*
-- [ ] Data Safety declaration: "no data collected, no data shared" (`SPEC.md` §12).
-- [ ] In-app prominent disclosure before the location permission prompt, and the
-      demonstration video the background-location declaration needs.
+- [ ] Data Safety declaration: "no data collected, no data shared" (`SPEC.md` §12). The intended
+      answer and its reasoning are recorded in `docs/play-store-internal-track.md`; filing it in
+      the Play Console questionnaire is the maintainer's own step.
+- [x] In-app prominent disclosure before the location permission prompt (`SPEC.md` §3.2).
+      **Landed**: `LocationDisclosureScreen` (`app/src/main/kotlin/app/snoozemo/ui/`), reached
+      from a new `Location` row on the settings screen (`LocationPermission`, mirroring
+      `NotificationPermission`'s tri-state shape; `LocationPromptStore` tracks foreground and
+      background denial history separately, mirroring `NotificationPromptStore`). `Continue`
+      requests foreground (fine + coarse) and chains straight into the background request on a
+      grant, since the platform won't grant background without foreground already held. Covered
+      by `LocationPermissionTest` (:core), `LocationPromptStoreTest`, and Roborazzi screenshot
+      tests for the row's three states and the disclosure screen itself. **Still owed:** the
+      demonstration video the background-location declaration needs, which needs a working
+      departure to film (this phase's item below) and a real device — the two-step
+      foreground-then-background system dialog behavior this screen leads into is unverified on
+      hardware.
 - [x] **Stop a transferred snooze from silencing a new phone** (Codex, PR #23) — a
       principle 1 bug and a prerequisite for shipping below. If an OEM transfers
       app-private data despite `allowBackup="false"`, an unexpired `active_snooze` lands on
