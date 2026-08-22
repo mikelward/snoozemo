@@ -97,6 +97,13 @@ internal class CheckingFixes(
     private var deadline: AutoCloseable? = null
     private var nextRequest: AutoCloseable? = null
 
+    // The resting probe's own in-flight state, apart from the burst's: a
+    // pause ends the burst but must not cut off a probe already asked, and a
+    // probe must never revive or extend a burst (see [sanityCheck]).
+    private var sanityToken: Any? = null
+    private var sanityInFlight: AutoCloseable? = null
+    private var sanityDeadline: AutoCloseable? = null
+
     /**
      * Identity of the request currently awaiting an answer, or null. A token
      * rather than the request handle, because a requester may answer
@@ -124,6 +131,13 @@ internal class CheckingFixes(
     fun start() {
         scheduler.post {
             if (dead || running) return@post
+            // A resting probe still in flight is superseded, not run beside:
+            // the burst asks immediately anyway, and letting both answer
+            // would count one moment's failure twice against the engine's
+            // three-fix bar and spend a second request (Codex, PR #75). The
+            // probe already defers to a running burst; this is the same rule
+            // the other way around.
+            stopSanity()
             running = true
             SnoozeDebugLog.event("checking: taking confirming fixes")
             requestOnce()
@@ -139,13 +153,89 @@ internal class CheckingFixes(
     }
 
     /**
+     * Takes **one** resting fix outside any burst — the §6.10 backstop's
+     * probe: a geofence that never fired says nothing, so each backstop wake
+     * hands the engine one reading and lets the §6.6 test decide (SPEC.md
+     * §6.10). Skipped while a burst runs (the burst is already asking faster
+     * than this would) and while a probe is already in flight; no cadence and
+     * no follow-up — the next probe is the next backstop wake's.
+     *
+     * Outcomes flow to the same sinks as the burst's, permission loss
+     * included: the probe re-checks the grants on every wake, which is what
+     * makes a mid-snooze revocation detectable at the backstop's cadence
+     * rather than the cap's.
+     */
+    fun sanityCheck() {
+        scheduler.post {
+            if (dead || running || sanityToken != null) return@post
+            SnoozeDebugLog.event("backstop: taking one resting fix")
+            val token = Any()
+            sanityToken = token
+            sanityDeadline = scheduler.postDelayed(REQUEST_CEILING_MS) {
+                if (sanityToken === token) {
+                    SnoozeDebugLog.event("resting fix: no answer within the ceiling")
+                    sanityToken = null
+                    sanityInFlight?.close()
+                    sanityInFlight = null
+                    settleSanity(FixOutcome.NothingRecoverable)
+                }
+            }
+            sanityInFlight = requester.request { outcome ->
+                if (sanityToken !== token) return@request
+                sanityToken = null
+                sanityDeadline?.close()
+                sanityDeadline = null
+                sanityInFlight = null
+                settleSanity(outcome)
+            }
+            // A synchronous answer has already settled the probe.
+            if (sanityToken !== token) {
+                sanityInFlight?.close()
+                sanityInFlight = null
+            }
+        }
+    }
+
+    private fun settleSanity(outcome: FixOutcome) {
+        if (dead) return
+        when (outcome) {
+            is FixOutcome.Delivered -> onSignal(PresenceSignal.FixArrived(outcome.fix))
+            // Delivered, never swallowed, same as the burst's: the engine's
+            // counting is what notices a place where nothing can get a fix.
+            FixOutcome.NothingRecoverable ->
+                onSignal(PresenceSignal.FixUnavailable(readElapsedRealtimeMs()))
+            FixOutcome.ServicesOff -> {
+                onServicesOff()
+                onSignal(PresenceSignal.FixUnavailable(readElapsedRealtimeMs()))
+            }
+            FixOutcome.PermissionLost -> {
+                dead = true
+                stopWork()
+                stopSanity()
+                onPermissionLost()
+            }
+        }
+    }
+
+    private fun stopSanity() {
+        sanityToken = null
+        sanityDeadline?.close()
+        sanityDeadline = null
+        sanityInFlight?.close()
+        sanityInFlight = null
+    }
+
+    /**
      * Ends the burst for good: no queued or future [start] can revive it.
      * The flag is set synchronously — before the marshaled stop — so a start
      * already sitting in the queue behind this call still finds it.
      */
     override fun close() {
         dead = true
-        scheduler.post { stopWork() }
+        scheduler.post {
+            stopWork()
+            stopSanity()
+        }
     }
 
     /** The stop itself; scheduler's thread only. */

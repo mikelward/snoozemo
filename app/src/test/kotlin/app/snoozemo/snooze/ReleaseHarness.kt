@@ -122,7 +122,14 @@ internal class TestSnoozeService : SnoozeService() {
 
     override fun createPresenceMonitor(): PresenceMonitor = presence
 
+    override fun pokeWatchRepair() {
+        repairPokes++
+    }
+
     companion object {
+        /** Fence-repair pokes the service sent through the flavor seam. */
+        var repairPokes: Int = 0
+
         /** Arbitrary but plausible: the fixture device booted 30 h ago. */
         const val FIXTURE_UPTIME_MILLIS: Long = 30L * 60 * 60 * 1000
 
@@ -154,11 +161,18 @@ internal class TestSnoozeService : SnoozeService() {
             zen = RefusingZen()
             captureRequests = mutableListOf()
             captureClosed = 0
+            repairPokes = 0
             presence = FakePresenceMonitor()
             testReading = ClockReading(
                 wallMillis = now.toEpochMilli(),
                 uptimeMillis = FIXTURE_UPTIME_MILLIS,
             )
+            // The backstop schedules through WorkManager on every watch
+            // start, and the production initializer is absent under
+            // Robolectric — without this every startPresence would log a
+            // refused schedule instead of exercising the real enqueue.
+            androidx.work.testing.WorkManagerTestInitHelper
+                .initializeTestWorkManager(appContext)
         }
     }
 }

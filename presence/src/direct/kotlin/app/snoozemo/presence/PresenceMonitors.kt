@@ -21,3 +21,17 @@ fun defaultPresenceMonitor(context: Context): PresenceMonitor =
  * so the caller above the seam stays flavor-blind.
  */
 fun installPresenceWakeup(onWake: () -> Unit) = Unit
+
+/**
+ * The `play` flavor's backstop probe, as a no-op: this flavor watches no
+ * location, so there is nothing for a resting fix to test. The backstop's
+ * restore is still worth its wake here — it re-arms the cap and reconciles
+ * policy access — which is why the caller pokes unconditionally.
+ */
+fun pokePresenceSanity() = Unit
+
+/**
+ * The `play` flavor's fence-repair poke, as a no-op: this flavor registers
+ * no fence, so there is nothing to re-attempt.
+ */
+fun pokePresenceRepair() = Unit

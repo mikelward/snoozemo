@@ -134,6 +134,13 @@ internal object GeofenceSignalBridge {
         synchronized(lock) {
             val current = listener
             if (current == null) {
+                // A poke is a question, not news: with nobody to ask, it is
+                // dropped rather than held or woken for — the backstop that
+                // poked also restored the service, and a restored monitor
+                // takes its own starting probe and registers its own fence
+                // (SPEC.md §6.10).
+                if (observation is GeofenceObservation.SanityPoke) return
+                if (observation is GeofenceObservation.RepairPoke) return
                 // Coalesced by rank, not by recency alone: an Exit starts a
                 // confirmation, an Unavailable only lowers the tracking mode,
                 // and letting a later availability report erase a held exit

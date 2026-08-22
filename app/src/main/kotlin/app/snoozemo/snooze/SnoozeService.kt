@@ -262,6 +262,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // re-registers the fence under the same id, which replaces in place.
         presenceJob?.cancel()
         presenceJob = null
+        // The periodic backstop rides with the watch (SPEC.md §6.10): armed
+        // here because every path that starts a watch — arm and restore
+        // alike — is a path the backstop must outlive, and KEEP makes the
+        // re-arm free.
+        SnoozeBackstop.schedule(applicationContext)
         val startedAt = snooze.startedAt
         val seed = presenceSeedFor(snooze)
         presenceJob = presenceScope.launch {
@@ -300,6 +305,34 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         snooze.armedAtElapsedRealtimeMs() ?: readClock().uptimeMillis
 
     /**
+     * Re-attempts a degraded watch's fence from a warm wake-up (SPEC.md
+     * §6.10).
+     *
+     * A cold wake re-registers the fence on its way through `restoreIfNeeded`
+     * → `startPresence`, but a *warm* service skips the restore — the
+     * controller already holds the snooze — so a fence whose registration
+     * failed transiently would stay dead until the next cold start, with
+     * every backstop wake probing and none repairing (Codex, PR #75). The
+     * repair is a poke, never a restart: a replacement monitor's fresh feed
+     * forgets its accumulated failure history, and its first unanswered
+     * probe would promote a broken snooze back to `FULL` (Codex, PR #75) —
+     * re-registering in place keeps the engine's memory, and a healthy
+     * fence is replaced by itself. The guards keep it cheap: a healthy
+     * fenced watch reads `FULL`, and an anchor with no fix has no fence to
+     * repair.
+     */
+    private fun repairDegradedWatch() {
+        val running = controller.active ?: return
+        if (!running.anchor.hasUsableFix) return
+        if (running.mode == app.snoozemo.core.TrackingMode.FULL) return
+        SnoozeDebugLog.event("watch degraded on a warm wake; re-attempting the fence")
+        pokeWatchRepair()
+    }
+
+    /** The flavor seam's repair poke, overridable for the JVM harness. */
+    protected open fun pokeWatchRepair() = app.snoozemo.presence.pokePresenceRepair()
+
+    /**
      * Stops watching. Idempotent, so every exit path may call it — and
      * deliberately *not* keyed on whether this instance started a collection:
      * a snooze ended from a cold process (an `End now` or cap wake that
@@ -313,6 +346,10 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         presenceJob?.cancel()
         presenceJob = null
         presenceMonitor.stop()
+        // The snooze is over, so its periodic wake goes with it; a cancel
+        // this path never reaches (cold death) costs one empty backstop
+        // wake, which retires itself.
+        SnoozeBackstop.cancel(applicationContext)
     }
 
     /** Restoring is attempted once per service instance, from onStartCommand. */
@@ -669,12 +706,21 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 // The alarm that woke us is spent, so anything still unfinished
                 // needs a new one or it will never be revisited.
                 rescheduleIfUnfinished()
+                repairDegradedWatch()
             }
             ACTION_EXTEND -> extend()
             ACTION_CLOCK_CHANGED -> reconcileClock()
-            // onCreate already restored from the record; starting the service is
-            // the whole of what a reboot needs.
-            ACTION_RESTORE -> Unit
+            // A cold start already did everything through the restore on the
+            // way in. Warm, this action is the retry ladder arriving with the
+            // service alive — the restore itself is a no-op, so the repairs
+            // it would have carried run explicitly: the backstop re-enqueue
+            // (KEEP makes a healthy one free) and the degraded-watch
+            // re-attempt. Without this, a schedule rejection's retry alarm
+            // fired into a live service and retried nothing (Codex, PR #75).
+            ACTION_RESTORE -> controller.active?.let {
+                SnoozeBackstop.schedule(applicationContext)
+                repairDegradedWatch()
+            }
             // Something that suppressed notifications has changed — today, a
             // late POST_NOTIFICATIONS grant on a tile-first install. Whatever
             // the user should be able to see right now gets posted again, and
@@ -1088,6 +1134,15 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         notifications.showOngoing(snooze)
         SnoozeTileBridge.refresh(applicationContext)
 
+        // The backstop, before capture rather than only with the watch it
+        // rides beside: capture takes up to 10 s, and a process death inside
+        // that window used to leave a record and a rule with no fence *and*
+        // no periodic wake — duration-only until the cap, the very stranding
+        // §6.10 exists to catch (Codex, PR #75). Scheduled here, the next
+        // wake restores the service and re-enters this path. Off the arm
+        // path like the notification above, and KEEP makes `startPresence`'s
+        // re-arm free.
+        SnoozeBackstop.schedule(applicationContext)
         beginAnchorCaptureFor(snooze)
     }
 
@@ -1366,9 +1421,13 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 // wake-up nobody wants.
                 anchorCapture?.close()
                 anchorCapture = null
-                stopPresence()
                 snooze?.let { erasing = it.startedAt }
                 forget()
+                // After the record is gone, like the refused-arm transition:
+                // the backstop cancel reconciles against the store once it
+                // settles, and a record still on disk at that moment reads as
+                // a snooze that wants its schedule back (Codex, PR #75).
+                stopPresence()
                 if (unwindingFailedArm) notifications.cancelOngoing() else notifications.showEnded(reason)
                 // The rule is confirmed off, so a stuck-rule card left over from
                 // an earlier refusal is now saying something false and offering
@@ -1990,6 +2049,15 @@ open class SnoozeService : Service(), SnoozeController.Listener {
          * they did themselves.
          */
         const val EXTRA_END_REASON = "app.snoozemo.extra.END_REASON"
+
+        /**
+         * How many times a fired [ACTION_RESTORE] retry may re-arm itself
+         * when the service start is refused again. Carried on the alarm
+         * because the alarm outlives the process that armed it, and a
+         * counter left in memory would reset the bound with every restart
+         * (Codex, PR #75).
+         */
+        const val EXTRA_RETRIES_LEFT = "app.snoozemo.extra.RETRIES_LEFT"
 
         /** The notification's `+30 min` step (SPEC.md §4.3). */
         val EXTENSION: Duration = Duration.ofMinutes(30)

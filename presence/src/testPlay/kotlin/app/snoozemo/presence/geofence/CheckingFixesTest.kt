@@ -173,6 +173,73 @@ class CheckingFixesTest {
     }
 
     @Test
+    fun `a resting probe delivers one fix and chains nothing`() {
+        // The §6.10 backstop's probe: one reading for the engine to test, no
+        // burst started, no follow-up — the next probe is the next wake's.
+        fixes.sanityCheck()
+
+        requester.answer(FixOutcome.Delivered(fix(atMs = 101_000)))
+
+        assertEquals(listOf<PresenceSignal>(PresenceSignal.FixArrived(fix(101_000))), signals)
+        assertTrue(scheduler.delayed.isEmpty())
+    }
+
+    @Test
+    fun `a resting probe is skipped while a burst is asking`() {
+        fixes.start()
+
+        fixes.sanityCheck()
+
+        // Only the burst's own request stands — the burst already asks
+        // faster than the probe would.
+        assertEquals(1, requester.pending.size)
+    }
+
+    @Test
+    fun `a burst starting mid-probe supersedes it rather than running beside it`() {
+        // The reverse of the skip above: an exit arriving inside the probe's
+        // request window must not leave two requests answering for the same
+        // moment — one failure counted twice against the engine's three-fix
+        // bar, and a second request spent (Codex, PR #75).
+        fixes.sanityCheck()
+        assertEquals(1, requester.pending.size)
+
+        fixes.start()
+
+        // The probe's platform request was canceled, its late answer is
+        // dropped, and only the burst's outcome reaches the engine.
+        assertEquals(1, requester.canceled)
+        requester.answer(FixOutcome.NothingRecoverable)
+        requester.answer(FixOutcome.NothingRecoverable)
+        assertEquals(1, signals.count { it is PresenceSignal.FixUnavailable })
+    }
+
+    @Test
+    fun `an unanswered probe still reaches the engine's counter`() {
+        // Delivered, never swallowed, same as the burst's rule: a place where
+        // nothing can get a fix is exactly what the counting notices.
+        fixes.sanityCheck()
+
+        requester.answer(FixOutcome.NothingRecoverable)
+
+        assertTrue(signals.single() is PresenceSignal.FixUnavailable)
+        assertTrue(scheduler.delayed.isEmpty())
+    }
+
+    @Test
+    fun `a lost grant found by the probe is fatal, not a quiet miss`() {
+        // The probe re-checks the grants each wake — this is what makes a
+        // mid-snooze revocation detectable at the backstop's cadence.
+        fixes.sanityCheck()
+
+        requester.answer(FixOutcome.PermissionLost)
+        fixes.start()
+
+        assertEquals(1, permissionLost)
+        assertTrue("dead means dead for the burst too", requester.pending.isEmpty())
+    }
+
+    @Test
     fun `a synchronously answered request still settles exactly once`() {
         // The permission checks answer before any platform call exists; the
         // token identity is what keeps that from being dropped or doubled.

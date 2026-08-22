@@ -26,3 +26,33 @@ fun defaultPresenceMonitor(context: Context): PresenceMonitor =
 fun installPresenceWakeup(onWake: () -> Unit) {
     GeofenceSignalBridge.installWakeup(onWake)
 }
+
+/**
+ * The §6.10 backstop asking a *running* monitor for one resting fix — the
+ * warm half of the periodic probe. A poke with no monitor attached is
+ * dropped, deliberately: the backstop that pokes has also restored the
+ * service, and the monitor that restore creates takes its own starting
+ * probe, so nothing is lost and nothing is woken twice.
+ */
+fun pokePresenceSanity() {
+    GeofenceSignalBridge.deliver(
+        app.snoozemo.presence.geofence.GeofenceObservation.SanityPoke(
+            android.os.SystemClock.elapsedRealtime(),
+        ),
+    )
+}
+
+/**
+ * A warm wake asking the running monitor to re-attempt its fence
+ * registration in place — repair that keeps the engine's failure memory,
+ * where a monitor restart would forget it and let an unanswered probe
+ * promote a broken snooze back to full tracking (Codex, PR #75). Dropped
+ * with no monitor attached: a cold restore registers on its own way through.
+ */
+fun pokePresenceRepair() {
+    GeofenceSignalBridge.deliver(
+        app.snoozemo.presence.geofence.GeofenceObservation.RepairPoke(
+            android.os.SystemClock.elapsedRealtime(),
+        ),
+    )
+}

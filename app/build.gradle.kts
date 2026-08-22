@@ -230,11 +230,15 @@ dependencies {
     // Dispatchers.Main for the service's presence collection — stated
     // explicitly rather than leaned on transitively through Compose.
     implementation(libs.kotlinx.coroutines.android)
+    // The §6.10 periodic backstop: a deferrable, batched wake per half hour
+    // while armed — the cheap kind of periodic (SPEC.md §9).
+    implementation(libs.androidx.work.runtime)
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.androidx.test.core)
+    testImplementation(libs.androidx.work.testing)
     testImplementation(libs.androidx.compose.ui.test.junit4)
     testImplementation(libs.robolectric)
     testImplementation(libs.roborazzi)
