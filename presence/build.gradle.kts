@@ -57,4 +57,10 @@ kotlin {
 dependencies {
     api(project(":core"))
     implementation(libs.kotlinx.coroutines.core)
+    // The Geofencing API, and the whole reason this dependency is flavor-scoped:
+    // the direct flavor ships with no Play Services at all (SPEC.md §3.4).
+    "playImplementation"(libs.play.services.location)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }

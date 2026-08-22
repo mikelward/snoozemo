@@ -387,10 +387,23 @@ the point is that every other line of the app is worthless if it isn't true.
         degraded-tracking report, and the §6.6 grace period. Landed with `PresenceTest` (37),
         written as sequences rather than single calls — a router rebooting, a provider emitting
         junk for ten minutes, an alarm arriving after the reason for it went away.
-      - [ ] `GeofencePresenceMonitor` itself: registration, the exit callback, and the
+      - [x] `GeofencePresenceMonitor` itself: registration, the exit callback, and the
         recoverable/fatal split at the platform boundary — a degraded *level* on the
         `PresenceUpdate` versus a `CapabilityLost` event, which is the one distinction the monitor
         must never get wrong (`SPEC.md` §6.1). Needs a handset to verify.
+        **Landed as the first slice** (2026-08-22): the fence registers with a mutable
+        PendingIntent at a non-exported receiver, exits cross `GeofenceSignalBridge` into the
+        shared `PresenceFeed`, and every refusal classifies through
+        `GeofenceRegistrationFailure` (only `GEOFENCE_NOT_AVAILABLE` degrades; the permission
+        codes and everything unclassified fail open). The `direct` flavor compiles against a
+        `DurationOnlyPresenceMonitor` behind the same `defaultPresenceMonitor` seam. Still to
+        come in later slices: the duty-driven location request loop, restore-from-wake when an
+        exit restarts a dead process (the bridge drops and logs it today), **re-registering the
+        fence when location services come back on** (Codex, PR #70: `GEOFENCE_NOT_AVAILABLE` at
+        registration reports the §8.4 degradation correctly but nothing retries, so the snooze
+        stays degraded until the cap even after the user re-enables location — the mode-changed
+        listener belongs with the same device-state watching the location loop needs), and the
+        on-device verification the whole item is gated on.
       - [ ] **The grace deadline has to survive process death** (Codex, PR #31). `PresenceState`
         is in-memory only; a service killed after arming the five-minute grace alarm comes back
         with no deadline, so the alarm's signal is ignored and the snooze runs to the cap — the
