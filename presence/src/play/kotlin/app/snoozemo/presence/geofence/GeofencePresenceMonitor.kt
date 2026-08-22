@@ -13,6 +13,7 @@ import app.snoozemo.core.PresenceSignal
 import app.snoozemo.core.PresenceUpdate
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.TrackingMode
+import app.snoozemo.presence.PlatformWifiWatch
 import app.snoozemo.presence.PresenceFeed
 import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.location.Geofence
@@ -180,11 +181,18 @@ class GeofencePresenceMonitor(
             }
             val update: PresenceUpdate
             val duty: LocationDuty
+            val graceDeadlineMs: Long?
             synchronized(feedLock) {
                 update = feed.accept(signal)
                 duty = feed.duty
+                graceDeadlineMs = feed.graceDeadlineMs
             }
             send(update)
+            // The engine can set a grace deadline but cannot wake a phone;
+            // the alarm is what makes the §6.6 promise real. Reconciled per
+            // signal like the burst below — armed while a deadline stands,
+            // canceled the moment presence evidence clears it.
+            GraceAlarm.reconcile(appContext, graceDeadlineMs)
             // Reconciled on every signal rather than on transitions, because
             // both calls are idempotent and "did the transition get noticed"
             // is exactly the kind of question idempotence deletes.
@@ -206,6 +214,16 @@ class GeofencePresenceMonitor(
                 // that is acted on settles the slot through stop().
                 if (settlesHeldExit(duty, update.event)) GeofenceSignalBridge.settleExit()
             }
+        }
+
+        // D4's suppressor extends to the backstop's probe: associated with
+        // the anchor's network, presence is already proven for free, and a
+        // resting fix would spend §9's budget re-answering it. `NONE` also
+        // covers the anchor nothing can measure against; `ACTIVE` means a
+        // burst is already asking faster than a probe would.
+        fun sanityProbe() {
+            val duty = synchronized(feedLock) { feed.duty }
+            if (duty == LocationDuty.SANITY) checkingFixes?.sanityCheck()
         }
 
         // Recoverable refusals set the platform level (and so keep being
@@ -256,6 +274,7 @@ class GeofencePresenceMonitor(
         )
 
         var bridge: AutoCloseable? = null
+        var wifiWatch: AutoCloseable? = null
 
         // Registration, callable twice: once from setup, and again as the
         // repair a warm backstop wake asks for through the bridge — a fence
@@ -407,7 +426,7 @@ class GeofencePresenceMonitor(
                         // fix — the warm half of §6.10's probe; the cold half
                         // is the starting probe below, taken by the monitor a
                         // backstop restore creates.
-                        is GeofenceObservation.SanityPoke -> checkingFixes?.sanityCheck()
+                        is GeofenceObservation.SanityPoke -> sanityProbe()
                         // A warm wake asking for the fence to be re-attempted
                         // — repair without replacing the collection, so the
                         // engine's failure memory survives (Codex, PR #75).
@@ -421,6 +440,11 @@ class GeofencePresenceMonitor(
                         // gate.
                         is GeofenceObservation.RepairPoke ->
                             if (registrationDegradation.get() != null) repairFence()
+                        // The grace alarm's firing, as a signal like any
+                        // other: the engine re-checks the deadline against
+                        // its own state, so a stale firing is a no-op.
+                        is GeofenceObservation.GraceElapsed ->
+                            deliver(PresenceSignal.GraceElapsed(observation.atElapsedRealtimeMs))
                     }
                 }
                 if (anchor.hasUsableFix) {
@@ -430,17 +454,37 @@ class GeofencePresenceMonitor(
                     // a departure the geofence never reported gets tested
                     // rather than waited out — and the probe re-checks the
                     // location grants on the way, so a mid-snooze revocation
-                    // fails open here instead of at the cap. At a fresh arm
-                    // the probe is one redundant network fix; a battery cost
-                    // §9 already budgets to the backstop's line.
-                    checkingFixes?.sanityCheck()
+                    // fails open here instead of at the cap — and it defers
+                    // to D4's suppressor: on the anchor's Wi-Fi the answer is
+                    // already free, and registration still re-checks the
+                    // grants on every restore either way.
+                    sanityProbe()
                 } else {
-                    // A Wi-Fi-only anchor has nothing to fence. The Wi-Fi
-                    // callback is its own slice; until it lands this monitor
-                    // reports the truth — no location fix — rather than
-                    // implying a watch it isn't keeping.
+                    // A Wi-Fi-only anchor has nothing to fence: the Wi-Fi
+                    // watch below is its whole coverage, and the engine's
+                    // grace period is what resolves a loss it cannot confirm.
+                    // Order with the watch below is safe either way: `Presence
+                    // .useless` — what this signal reaches — is a declared
+                    // no-op for an anchor with no usable fix (Codex raised a
+                    // same-millisecond staleness race between this and the
+                    // watch's initial report on PR #77; disproved by a
+                    // `PresenceTest` case added for the claim — the guard
+                    // means this can never advance `latestEvidenceMs` and so
+                    // can never make anything else look stale).
                     SnoozeDebugLog.event("no usable fix on the anchor; geofence not registered")
                     deliver(PresenceSignal.FixUnavailable(readElapsedRealtimeMs()))
+                }
+                // D4's suppressor and §6.10's second wake-up source in one
+                // registration: association suppresses location work, loss
+                // escalates into the same confirmation everything else feeds.
+                // Event-driven and free, so it runs for every anchor that has
+                // an SSID, fenced or not.
+                anchor.ssid?.let { ssid ->
+                    wifiWatch = PlatformWifiWatch(
+                        appContext,
+                        ssid,
+                        readElapsedRealtimeMs,
+                    ) { deliver(it) }
                 }
             }
         }
@@ -455,6 +499,12 @@ class GeofencePresenceMonitor(
             active.compareAndSet(handle, null)
             checkingFixes?.close()
             bridge?.close()
+            // In-process like the burst: a restarted service re-registers its
+            // own watch. The grace *alarm* is deliberately not canceled here
+            // — like the fence, its deadline must outlive a routine service
+            // destroy, or a Wi-Fi-only snooze whose grace was running would
+            // never end; a stale firing is a no-op by the engine's check.
+            wifiWatch?.close()
             // Deliberately NOT the fence. The registration is the one durable
             // thing this monitor owns, and durability is its entire point:
             // Android stops an ordinary background service routinely, the
@@ -488,6 +538,11 @@ class GeofencePresenceMonitor(
             // first is what keeps the detach below from waking a service to
             // check a departure that no longer has a snooze to end.
             GeofenceSignalBridge.settleExit()
+            // The grace alarm goes the same way and for the same reason: a
+            // deadline outliving its snooze would fire over whatever the user
+            // arms next. Only here — a routine service destroy must leave it
+            // standing, or a running grace would never come due.
+            GraceAlarm.reconcile(appContext, null)
             active.getAndSet(null)?.close()
             // Contained: removal is cleanup, and the fence dies with the
             // app's registrations anyway if this fails. A leftover fence is
@@ -513,19 +568,19 @@ class GeofencePresenceMonitor(
 
     /**
      * A fenced anchor is fully watched: the geofence detects the departure
-     * and the checking burst confirms it through §6.6. `WIFI_ONLY` is never
-     * in the set — the Wi-Fi watch that would make it honest is its own
-     * `TODO.md` slice — so an SSID-only anchor is a timer however real its
-     * network was, and a fenced anchor that loses location degrades straight
-     * to a timer rather than to a Wi-Fi claim nothing backs (flagged by
-     * Codex on PR #73).
+     * and the checking burst confirms it through §6.6. `WIFI_ONLY` is in the
+     * set exactly when the anchor has an SSID, because the Wi-Fi watch now
+     * backs it (D4): association suppresses location work, loss escalates,
+     * and — when location cannot confirm — the grace alarm is what ends an
+     * unverifiable snooze. A fenced anchor that loses location therefore
+     * degrades to a *watched* Wi-Fi mode rather than to a timer, and an
+     * SSID-only anchor is a real watch at last, not a labeled timer.
      */
-    override fun supportedModes(anchor: Anchor): Set<TrackingMode> =
-        if (anchor.hasUsableFix) {
-            setOf(TrackingMode.FULL, TrackingMode.DURATION_ONLY)
-        } else {
-            setOf(TrackingMode.DURATION_ONLY)
-        }
+    override fun supportedModes(anchor: Anchor): Set<TrackingMode> = buildSet {
+        if (anchor.hasUsableFix) add(TrackingMode.FULL)
+        if (anchor.ssid != null) add(TrackingMode.WIFI_ONLY)
+        add(TrackingMode.DURATION_ONLY)
+    }
 
     companion object {
         /** The one fence this app ever registers (one snooze, one place). */

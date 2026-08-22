@@ -92,13 +92,16 @@ internal object GeofenceSignalBridge {
                 // and the observation landing.
                 onObservation(it)
             }
-            // Only an exit earns retention. An Unavailable is recoverable
-            // news other paths restate — registration re-detects it on every
-            // start — and, unlike a signal, it bypasses the engine's evidence
-            // gate: replayed to every attach, it would mark each later snooze
-            // in this process LOCATION_SERVICES_OFF off a report from before
-            // that snooze existed (flagged by Codex on PR #73).
-            if (pending !is GeofenceObservation.Exit) pending = null
+            // Only a one-shot that starts an unfinished confirmation earns
+            // retention — an exit or a due grace deadline, whose alarm is
+            // spent (Codex, PR #77, the same shape as the exit rule below).
+            // An Unavailable is recoverable news other paths restate —
+            // registration re-detects it on every start — and, unlike a
+            // signal, it bypasses the engine's evidence gate: replayed to
+            // every attach, it would mark each later snooze in this process
+            // LOCATION_SERVICES_OFF off a report from before that snooze
+            // existed (flagged by Codex on PR #73).
+            if (!isRetained(pending)) pending = null
         }
         return AutoCloseable {
             synchronized(lock) {
@@ -106,15 +109,17 @@ internal object GeofenceSignalBridge {
                 // ran must not be evicted by it.
                 if (listener === onObservation) {
                     listener = null
-                    // Detached mid-check: an exit still held here means its
-                    // confirmation never settled — the routine background
-                    // destroy tears the collector down inside the two-fix
-                    // window — and no further broadcast will come, so this is
-                    // the last hand that can arrange a successor (flagged by
-                    // Codex on PR #73). The wake restores the service, whose
-                    // attach re-collects the held exit; a settled check
-                    // cleared the slot and detaches silently.
-                    if (pending is GeofenceObservation.Exit) {
+                    // Detached mid-check: an exit or due grace still held
+                    // here means its confirmation never settled — the
+                    // routine background destroy tears the collector down
+                    // inside the two-fix window — and no further broadcast
+                    // or alarm firing will come, so this is the last hand
+                    // that can arrange a successor (flagged by Codex on PR
+                    // #73, generalized to grace on PR #77). The wake
+                    // restores the service, whose attach re-collects the
+                    // held observation; a settled check cleared the slot and
+                    // detaches silently.
+                    if (isRetained(pending)) {
                         val wake = onPending
                         if (wake == null) {
                             SnoozeDebugLog.warning(
@@ -148,11 +153,7 @@ internal object GeofenceSignalBridge {
                 // the cap (flagged by Codex on PR #73). So an Exit replaces
                 // anything (a newer exit asks the same question with the
                 // fresher timestamp); an Unavailable never displaces one.
-                pending = when {
-                    observation is GeofenceObservation.Exit -> observation
-                    pending is GeofenceObservation.Exit -> pending
-                    else -> observation
-                }
+                pending = rank(observation, pending)
                 val wake = onPending
                 if (wake == null) {
                     SnoozeDebugLog.warning(
@@ -164,30 +165,72 @@ internal object GeofenceSignalBridge {
                 }
                 return
             }
-            // A live exit is retained too, not only an undeliverable one: its
-            // confirmation takes at least the §6.6 two-fix window, Android
-            // routinely destroys the ordinary background service inside it,
-            // and a live-dispatched exit lived nowhere else — the fence never
-            // fires twice for one crossing, so the departure was lost until
-            // the cap (flagged by Codex on PR #73). Held here, the detach
-            // below wakes a successor and its attach re-runs the check;
-            // [settleExit] retires the slot once the check actually settles.
-            if (observation is GeofenceObservation.Exit) pending = observation
+            // A live exit — or a live grace expiry — is retained too, not
+            // only an undeliverable one: its confirmation takes at least the
+            // §6.6 two-fix window, Android routinely destroys the ordinary
+            // background service inside it, and a live-dispatched one lived
+            // nowhere else — the fence never fires twice for one crossing,
+            // and the grace alarm is one-shot and already spent, so the
+            // departure was lost until the cap (flagged by Codex on PR #73
+            // for the exit; generalized to grace on PR #77, where a service
+            // destroyed between this queue and the collector processing it
+            // left neither the alarm nor the bridge able to replay the
+            // expiry). Ranked the same as the coalescing path above — a live
+            // grace must not unconditionally displace an exit still pending
+            // from an earlier delivery, which drifted from the coalescing
+            // rule on the first pass at this and could permanently lose a
+            // real exit behind a stale grace firing (Codex, PR #77). Held
+            // here, the detach below wakes a successor and its attach
+            // re-runs the check; [settleExit] retires the slot once the
+            // check actually settles.
+            if (isRetained(observation)) pending = rank(observation, pending)
             current(observation)
         }
     }
 
     /**
-     * Retires a held exit once its departure check reached a terminal result —
-     * confirmed (the snooze is ending), refuted (still present), or abandoned
-     * (the engine degraded past checking, or dropped the exit as stale). The
-     * monitor calls this whenever the engine's duty is not ACTIVE, so the slot
-     * holds an exit exactly while its confirmation is unfinished: a detach in
-     * that window wakes a successor, a detach after it stays quiet.
+     * Retires a held exit or grace expiry once its departure check reached a
+     * terminal result — confirmed (the snooze is ending), refuted (still
+     * present), or abandoned (the engine degraded past checking, or dropped
+     * the observation as stale). The monitor calls this whenever the
+     * engine's duty is not ACTIVE, so the slot holds a retained observation
+     * exactly while its confirmation is unfinished: a detach in that window
+     * wakes a successor, a detach after it stays quiet. Named for the exit
+     * it originally covered (Codex, PR #73); grace joined it on PR #77.
      */
     fun settleExit() {
         synchronized(lock) {
-            if (pending is GeofenceObservation.Exit) pending = null
+            if (isRetained(pending)) pending = null
         }
     }
+
+    /**
+     * Whether [observation] is a one-shot that starts or continues an
+     * unfinished §6.6 confirmation and so must survive a detach: an exit or a
+     * due grace deadline, neither of which the platform will report again on
+     * its own. Everything else — an availability report, a poke — is
+     * recoverable news some other path restates.
+     */
+    private fun isRetained(observation: GeofenceObservation?): Boolean =
+        observation is GeofenceObservation.Exit || observation is GeofenceObservation.GraceElapsed
+
+    /**
+     * Picks which of [candidate] and [existing] occupies the slot: an exit
+     * outranks everything — it carries the evidence a departure needs — a
+     * due grace deadline outranks an availability report — its alarm is
+     * spent, so nothing else will say this again — and neither is ever
+     * displaced by news that would not itself earn retention. The one rule
+     * for both the coalescing path (no listener) and the live-retention
+     * path, which had drifted apart: a live grace could unconditionally
+     * replace an already-pending exit, permanently losing a real departure
+     * behind a stale firing (Codex, PR #77).
+     */
+    private fun rank(candidate: GeofenceObservation, existing: GeofenceObservation?): GeofenceObservation =
+        when {
+            candidate is GeofenceObservation.Exit -> candidate
+            existing is GeofenceObservation.Exit -> existing
+            candidate is GeofenceObservation.GraceElapsed -> candidate
+            existing is GeofenceObservation.GraceElapsed -> existing
+            else -> candidate
+        }
 }

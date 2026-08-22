@@ -432,17 +432,23 @@ the point is that every other line of the app is worthless if it isn't true.
         fence when location services come back on** (Codex, PR #70: `GEOFENCE_NOT_AVAILABLE` at
         registration reports the §8.4 degradation correctly but nothing retries, so the snooze
         stays degraded until the cap even after the user re-enables location — the mode-changed
-        listener belongs with the same device-state watching the checking burst needs), the
-        grace alarm for `graceDeadlineMs` (set by the engine, armed by nobody), and the
-        on-device verification the whole item is gated on.
-      - [ ] **The grace deadline has to survive process death** (Codex, PR #31). `PresenceState`
-        is in-memory only; a service killed after arming the five-minute grace alarm comes back
-        with no deadline, so the alarm's signal is ignored and the snooze runs to the cap — the
-        silence the grace period exists to bound. The monitor is what owns persistence, so this
-        lands with it, and there are two frames to get right: the deadline is elapsed realtime, so
-        it survives process death but **not** a reboot, where the alarm is gone too and the boot
-        restore has to re-derive it. `ActiveSnooze.bootReference` already exists for exactly this
-        problem on the duration cap.
+        listener belongs with the same device-state watching the checking burst needs) and the
+        on-device verification the whole item is gated on. The grace alarm for
+        `graceDeadlineMs` landed with the Wi-Fi suppressor slice.
+      - [ ] **The grace deadline has to survive process death** (Codex, PR #31, re-flagged and
+        partly mitigated on PR #77). `PresenceState` is in-memory only; a service killed after
+        arming the five-minute grace alarm comes back with no deadline, so the alarm's signal is
+        ignored and the snooze runs to the cap — the silence the grace period exists to bound.
+        PR #77's `PlatformWifiWatch` fix for the "started already disconnected" gap bounds the
+        worst case for a Wi-Fi-only anchor: a cold restore now explicitly re-reads the current
+        association on registration, so a restore that lands still off the anchor's network
+        re-delivers `AnchorWifiLost` and re-arms a *fresh* five-minute grace from the restore
+        moment — one extra grace window of latency, not silence to the cap. A fenced anchor that
+        was already degraded when it died still has the gap open until this lands. The monitor is
+        what owns persistence, so this lands with it, and there are two frames to get right: the
+        deadline is elapsed realtime, so it survives process death but **not** a reboot, where the
+        alarm is gone too and the boot restore has to re-derive it. `ActiveSnooze.bootReference`
+        already exists for exactly this problem on the duration cap.
       - [ ] **The degradation *cause* stops at the controller** (Codex, PR #31). `Presence` now
         tells `FIXES_TOO_VAGUE` from `NO_LOCATION_FIX`, and `SnoozeController` maps both to the
         same `TrackingMode`, which is all `SnoozeService.onTrackingChanged` renders from — so the
@@ -493,7 +499,7 @@ the point is that every other line of the app is worthless if it isn't true.
       here must reject the placeholders rather than accept them as values.
 - [ ] Three independent wake-up sources feeding one confirmation test (`SPEC.md` §6.10):
       geofence exit (landed, PR #73), the `WorkManager` backstop (landed — see below), and
-      Wi-Fi loss via `NetworkCallback` (still open, the Wi-Fi suppressor slice). No source
+      Wi-Fi loss via `NetworkCallback` (landed with the D4 suppressor below). No source
       ends a snooze on its own evidence.
       - **The periodic backstop landed**: a 30-minute `WorkManager` wake while armed that
         restores the service (re-arming the cap, reconciling policy access, re-registering
@@ -558,8 +564,14 @@ the point is that every other line of the app is worthless if it isn't true.
       - Still owed: the platform monitors that *deliver* signals. The decisions around the
         test — escalation, the duty cycle (§6.7), the degraded report, the grace period —
         landed as `Presence`; what remains is the three wake-up sources (§6.10) feeding it.
-- [ ] Wi-Fi as suppressor only (D4): associated with the anchor SSID suppresses location
+- [x] Wi-Fi as suppressor only (D4): associated with the anchor SSID suppresses location
       work entirely; loss escalates to `CHECKING` and never ends a snooze on its own.
+      Landed as `AnchorWifiTracker` (the pure transition machine) + `PlatformWifiWatch`
+      (the `NetworkCallback` registration) feeding the engine's existing signals, with the
+      §6.6 **grace alarm** (`GraceAlarm`, inexact like the cap) armed from the engine's
+      deadline and delivered back through the bridge — the piece without which `WIFI_ONLY`
+      was a labeled timer. The suppressor also gates the backstop's resting probe: on the
+      anchor's Wi-Fi, no location work at all (§6.7).
 - [x] **The on-device debug log** (`SPEC.md` §4.6), landing here rather than later because this is
       the phase that needs it: hardware item 2 asks for every geofence callback measured against a
       ground-truth departure over a week of ordinary use, and there is no way to collect that by
@@ -1149,6 +1161,22 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   disclosure should. Needs a real distinction between "the policy text
   changed" and "what the policy describes changed," which the mechanism
   the sibling repos use can't make on its own.
+- **The grace alarm is inexact** (`setAndAllowWhileIdle`, autopilot 2026-08-22): the exact
+  form costs the `SCHEDULE_EXACT_ALARM` permission — a distribution question (`SPEC.md` §3)
+  — and the cap already accepts the same inexactness. A deferred grace holds the snooze a
+  little longer, in Doze conditions that mean the device is stationary. **The alternative**
+  is asking the maintainer to take the permission. Reversible: one call site.
+- **A Wi-Fi watch that fails to register reports itself as a loss** (autopilot,
+  2026-08-22): the registration failing is extraordinary (`TooManyRequestsException`
+  class), and the alternative — a `WIFI_ONLY` snooze looking watched while nothing
+  watches — is the snooze that never ends. The cost is a snooze that ends ~5 min after a
+  registration hiccup on an SSID-only anchor, the accepted direction (D7). Reversible: the
+  failure branch could report a degradation instead once a cause exists for it.
+- **A redacted SSID reads as not associated** (autopilot, 2026-08-22): redaction means
+  location access is gone, so nothing can vouch for the association, and an unvouched
+  suppressor holding a snooze quiet is what D7 forbids. Escalation settles it like any
+  other. **The alternative** — treating redaction as "still associated" — keeps the quiet
+  through a revocation, principle 1's direction. Reversible: one line in the tracker.
 - **The backstop's period is 30 minutes, the coarse end of §6.10's 15–30 range** (autopilot,
   2026-08-22). 16 deferrable wakes over an 8-hour snooze matches §9's "handful of wakeups"
   budget line, at the cost of a ~30-minute typical staleness bound (best-effort — the period defers in
