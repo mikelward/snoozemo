@@ -38,6 +38,36 @@
     <string name="setup_action_grant" tools:ignore="MissingTranslation">Grant</string>
     <!-- TODO: translate -->
     <string name="setup_action_allow" tools:ignore="MissingTranslation">Allow</string>
+    <!--
+      The location row and its prominent disclosure screen (SPEC.md §3.2). The
+      row reuses `setup_action_allow` rather than a location-specific verb —
+      "Allow" already says what the user gets, and a different verb per
+      permission would be a distinction without a difference (AGENTS.md,
+      *Concise copy*).
+    -->
+    <!-- TODO: translate -->
+    <string name="setup_location_title" tools:ignore="MissingTranslation">Location</string>
+    <!-- TODO: translate -->
+    <string name="setup_location_granted" tools:ignore="MissingTranslation">Tracking your place</string>
+    <!-- TODO: translate -->
+    <string name="setup_location_missing" tools:ignore="MissingTranslation">Snoozemo can\'t tell when you\'ve left</string>
+    <!--
+      The prominent disclosure Play requires before the location runtime
+      dialogs (SPEC.md §3.2) — shown once, on a tap of the row above. Says what
+      location is used for, that it never leaves the phone (SPEC.md §12), and
+      that Android asks for it in two steps, before either system dialog
+      appears.
+    -->
+    <!-- TODO: translate -->
+    <string name="location_disclosure_title" tools:ignore="MissingTranslation">Know when you\'ve left</string>
+    <!-- TODO: translate -->
+    <string name="location_disclosure_body" tools:ignore="MissingTranslation">Location is how Snoozemo tells you\'ve left the place you snoozed at, so Do Not Disturb turns off on its own. It stays on your phone — nothing is collected or shared.</string>
+    <!-- TODO: translate -->
+    <string name="location_disclosure_background_note" tools:ignore="MissingTranslation">Android will also ask to allow location \"All the time,\" so Snoozemo can still notice while the app is closed.</string>
+    <!-- TODO: translate -->
+    <string name="location_disclosure_continue" tools:ignore="MissingTranslation">Continue</string>
+    <!-- TODO: translate -->
+    <string name="location_disclosure_not_now" tools:ignore="MissingTranslation">Not now</string>
     <!-- TODO: translate -->
     <string name="setup_tile_title" tools:ignore="MissingTranslation">Quick Settings tile</string>
     <!-- TODO: translate -->

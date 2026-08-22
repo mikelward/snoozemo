@@ -1,10 +1,9 @@
 name: Android CI
 
-# Adapted from the sibling Simmo and Type Launcher repos, trimmed to what this
-# repo can actually run today: build + unit tests + lint. The screenshot job
-# arrives with the first real UI (TODO.md Phase 2/4) and the deploy job with the
-# release plumbing (Phase 6) — an empty allow-list or a release with no signing
-# config would only be a red check nobody reads.
+# Adapted from the sibling Simmo and Type Launcher repos. The `deploy` job below
+# is Phase 6's release plumbing (TODO.md, `docs/play-store-internal-track.md`) —
+# a signed AAB built on every push to `main` and, once the Play service account
+# secret is added too, uploaded straight to the internal track.
 
 on:
   # No paths filter on pull_request, deliberately: the main ruleset requires
@@ -328,6 +327,9 @@ jobs:
       - name: Run launcher icon screenshot tests
         run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.LauncherIconScreenshotTest" -Proborazzi.test.record=true
 
+      - name: Run location disclosure screenshot tests
+        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.LocationDisclosureScreenScreenshotTest" -Proborazzi.test.record=true
+
       - name: Print failing test details
         if: failure()
         run: |
@@ -622,3 +624,421 @@ jobs:
           results: >-
             build=${{ needs.build.result }}
             screenshots=${{ needs.screenshot-tests.result }}
+
+  deploy:
+    name: Ship to Play Store internal track
+    # Production deployment job (TODO.md Phase 6,
+    # docs/play-store-internal-track.md). Gated three ways:
+    #   1. `if:` — a push to main, never a PR. `workflow_dispatch` on this
+    #      workflow always carries a required `pr` input tied to the
+    #      screenshot-refresh flow (see the trigger comment above), so it is
+    #      not a stand-in for a manual release trigger here.
+    #   2. `environment: production` — the secrets below live in the
+    #      `production` environment (repo Settings -> Environments →
+    #      production), whose deployment branches should be restricted to
+    #      `main` so the boundary is enforced by GitHub, not only by `if:`.
+    #   3. `needs:` — runs only once build and screenshot-tests both pass, so
+    #      a failing test or a screenshot drift on main blocks the release.
+    #
+    # Every secret is optional and every step below gates on the presence
+    # flags in `env:`, so a fresh repo or fork still gets a green run with
+    # nothing published — an empty allow-list or a release with no signing
+    # config would only be a red check nobody reads.
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [build, screenshot-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      # Secret *presence* flags, evaluated at job level — a step's `if:`
+      # cannot read a variable defined in that same step's `env:` block, so
+      # every gate below reads these; the secret values stay scoped to the
+      # steps that actually use them.
+      HAS_RELEASE_KEYSTORE: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' }}
+      HAS_PLAY_SA: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+    permissions:
+      contents: read
+      # Used by "Build release notes" to walk recent main runs of this
+      # workflow and find the last one that actually published.
+      actions: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          fetch-depth: 0
+          # This job never pushes; "Build release notes" reads git history
+          # locally and talks to the GitHub API via its own GH_TOKEN env, not
+          # a persisted credential.
+          persist-credentials: false
+
+      - name: Set up JDK
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654  # v5.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2  # v5
+
+      - name: Materialize release keystore
+        # Decoded whenever the keystore secret is present, independent of the
+        # Play service-account secret. This lets the keystore secrets land
+        # first so the signed AAB can be downloaded from CI artifacts for the
+        # one-time manual seed upload Play Console requires, with
+        # PLAY_SERVICE_ACCOUNT_JSON added later to turn on the automated
+        # upload (docs/play-store-internal-track.md). The decoded file is
+        # validated with keytool so wrong base64 or a wrong password fails
+        # here with a clear error rather than at signing time.
+        if: env.HAS_RELEASE_KEYSTORE == 'true'
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+        run: |
+          missing=""
+          [ -z "$RELEASE_KEYSTORE_PASSWORD" ] && missing="$missing RELEASE_KEYSTORE_PASSWORD"
+          [ -z "$RELEASE_KEY_PASSWORD" ]      && missing="$missing RELEASE_KEY_PASSWORD"
+          [ -z "$RELEASE_KEY_ALIAS" ]         && missing="$missing RELEASE_KEY_ALIAS"
+          if [ -n "$missing" ]; then
+            echo "::error::RELEASE_KEYSTORE_BASE64 is set but these companion secrets are missing or empty:$missing"
+            exit 1
+          fi
+          printf '%s' "${RELEASE_KEYSTORE_BASE64}" | base64 -d > "${RUNNER_TEMP}/release.keystore"
+          if ! keytool -list -keystore "${RUNNER_TEMP}/release.keystore" -storepass "$RELEASE_KEYSTORE_PASSWORD" >/dev/null 2>&1; then
+            echo "::error::Decoded release keystore is not a valid keystore or RELEASE_KEYSTORE_PASSWORD is wrong."
+            exit 1
+          fi
+          echo "RELEASE_KEYSTORE_FILE=${RUNNER_TEMP}/release.keystore" >> "${GITHUB_ENV}"
+
+      - name: Build release AAB
+        # Gated only on the keystore being present — a signed AAB is useful on
+        # its own (a downloadable artifact for the seed upload, before the
+        # Play service account exists). The release signingConfig only
+        # attaches when RELEASE_KEYSTORE_FILE is set (app/build.gradle.kts),
+        # so without it Play would reject the AAB anyway.
+        #
+        # The `play` flavor only: it is the only flavor any Play track ships
+        # (SPEC.md §3.4) — `direct` is the sideload/F-Droid fallback and has
+        # no Play listing to upload to.
+        if: env.RELEASE_KEYSTORE_FILE != ''
+        env:
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+        run: ./gradlew :app:bundlePlayRelease
+
+      - name: Upload signed AAB as workflow artifact
+        # Downloadable from the Actions UI for the one-time manual seed
+        # upload to Play Console, and for re-uploading a release by hand.
+        if: env.RELEASE_KEYSTORE_FILE != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: app-release-aab
+          path: app/build/outputs/bundle/playRelease/app-play-release.aab
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Build release notes
+        # Walks every commit in this push oldest-first and collects the
+        # subject of each one worth shipping as Play's "What's new"
+        # (AGENTS.md, *Commit messages*):
+        #   - skip commits whose subject starts with a non-user-facing prefix
+        #     (`ci:` / `docs:` / `internal:` / `refactor:` / `test:` /
+        #     `tests:`), `docs/PRIVACY.md` included — unlike the sibling Simmo
+        #     repo, this repo does not special-case it (2026-08-22: Play's
+        #     "What's new" is a store-listing field a user installing an
+        #     update never sees at update time, so forcing a wording-only
+        #     policy change into release notes bought nothing);
+        #   - skip commits whose every changed path is repo housekeeping — a
+        #     `.md` file at any depth, or a root dotfile / dotdir.
+        # Qualifying subjects are emitted as a "• "-bulleted list,
+        # oldest-first — always bulleted, even for one commit. If no commit
+        # qualifies, RELEASE_NOTES_SKIP=true makes the steps below skip, so a
+        # housekeeping-only push doesn't ship a redundant "What's new".
+        #
+        # The range base is the head SHA of the most recent main run of this
+        # workflow that actually *published* — queried from the Actions API
+        # (ported from the sibling Simmo / Type Launcher / clothescast repos).
+        # `github.event.before` is only a fallback: if a prior main push
+        # failed before publishing, `before` would be that failed push's tip
+        # and this run's notes would silently omit the unreleased commits
+        # from the failed range. "Published" means the Play upload *step*
+        # concluded success, not merely a green deploy job: with
+        # PLAY_SERVICE_ACCOUNT_JSON missing the upload step always skips and
+        # the job still concludes success, and counting such a run as
+        # released would drop its range's commits from the first real release
+        # after the secret is added.
+        #
+        # Play's per-language cap is 500 Unicode characters for the entered
+        # "What's new" text; the truncation budget measures the full
+        # formatted output — "• " bullets, newline separators, and the "\n…"
+        # truncation marker all count. On overflow, trailing subjects drop
+        # (oldest-first preserved at the head) and "\n…" is appended.
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Walk recent main runs of this workflow (newest first) and take as
+          # the range base the head SHA of the first one whose deploy job
+          # succeeded AND actually published — i.e. its Play upload *step*
+          # concluded success, not just the job. A deploy concludes green
+          # while publishing nothing whenever PLAY_SERVICE_ACCOUNT_JSON is
+          # missing (the upload step skips), and also when
+          # RELEASE_NOTES_SKIP suppressed a housekeeping-only push; treating
+          # such a run as "released" would permanently drop its range's
+          # commits from the next real release's notes. Skipped housekeeping
+          # runs are fine to re-walk: their commits re-enter the range and
+          # the prefix/path filter drops them again. The job and step names
+          # below must match the `name:` values in this workflow verbatim;
+          # rename them together. The current run and re-runs of the same
+          # head SHA are skipped. How many 100-run pages of main history to
+          # search for the last publication before giving up (see the note
+          # after the walk).
+          MAX_RUN_PAGES=5
+
+          # `saw_run` and `oldest_run_head` separate "the query worked but
+          # nothing in the window ever published" from "the query returned
+          # nothing at all" — the two need different bases (see below). The
+          # list is newest-first, so the last head assigned before the walk
+          # ends is the oldest run we examined.
+          prev_sha=""
+          oldest_run_head=""
+          saw_run=false
+          hit_page_cap=false
+          page=1
+          while :; do
+            page_rows=$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/android-ci.yml/runs?branch=main&per_page=100&page=${page}" \
+              --jq '.workflow_runs[]? | [.id, .head_sha] | @tsv' \
+              2>/dev/null || true)
+            if [ -z "$page_rows" ]; then
+              break
+            fi
+            while IFS=$'\t' read -r run_id run_head; do
+              [ -z "$run_id" ] && continue
+              saw_run=true
+              [ "$run_head" = "$AFTER_SHA" ] && continue
+              oldest_run_head="$run_head"
+              published=$(gh api \
+                "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" \
+                --jq '[.jobs[]
+                       | select(.name == "Ship to Play Store internal track")
+                       | select(.conclusion == "success")
+                       | .steps[]
+                       | select(.name == "Upload to Play Store internal track")
+                       | .conclusion]
+                      | any(. == "success")' \
+                2>/dev/null || true)
+              if [ "$published" = "true" ]; then
+                prev_sha="$run_head"
+                break
+              fi
+            done <<< "$page_rows"
+            if [ -n "$prev_sha" ]; then
+              break
+            fi
+            page=$((page + 1))
+            if [ "$page" -gt "$MAX_RUN_PAGES" ]; then
+              hit_page_cap=true
+              break
+            fi
+          done
+          # per_page=100 is the API max, so the common case — the previous
+          # main run published — costs two calls and stops. Paging further
+          # only happens while nothing has published yet, which is also the
+          # only case where the extra calls buy anything, so this is capped
+          # rather than run with --paginate over the workflow's entire
+          # history. If the cap is reached with no publication found, the
+          # base below is the best available (the parent of the oldest run
+          # seen) and commits older than that are not recovered — a real
+          # limit, logged loudly rather than papered over.
+
+          # Fallbacks, in order:
+          #   1. The last run that published.
+          #   2. The parent of the oldest run searched, when the query worked
+          #      but *nothing* it returned published — every one of those
+          #      runs built without releasing, so their commits are all still
+          #      queued. BEFORE_SHA would cover only the newest push here and,
+          #      once this run publishes and becomes the next base, the
+          #      earlier queued subjects would be lost for good. The parent
+          #      (not the run head itself) so the oldest unpublished commit is
+          #      inside the range; a root commit has no parent, so this guard
+          #      falls through.
+          #   3. BEFORE_SHA when the query returned nothing at all (fresh
+          #      repo with no prior main run, API hiccup) — except when it's
+          #      all-zeros or unreachable (first push to a branch, force-reset
+          #      orphaning the old tip).
+          #   4. HEAD alone — walking the entire history would be both slow
+          #      and meaningless.
+          base_sha=""
+          if [ -n "$prev_sha" ] && git cat-file -e "$prev_sha" 2>/dev/null; then
+            base_sha="$prev_sha"
+          elif [ "$saw_run" = true ] && [ -n "$oldest_run_head" ] \
+             && git rev-parse --quiet --verify "${oldest_run_head}~1^{commit}" >/dev/null; then
+            base_sha=$(git rev-parse "${oldest_run_head}~1")
+            echo "No published run found; basing notes on the queued backlog from ${base_sha}."
+            if [ "$hit_page_cap" = true ]; then
+              echo "::warning::Searched ${MAX_RUN_PAGES} pages of main runs without finding a publication. Release notes start at ${base_sha}; anything released-worthy older than that is not included."
+            fi
+          elif [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ] \
+             && git rev-parse --quiet --verify "$BEFORE_SHA^{commit}" >/dev/null; then
+            base_sha="$BEFORE_SHA"
+          fi
+
+          if [ -n "$base_sha" ]; then
+            shas=$(git log --reverse --no-merges --format=%H "$base_sha..$AFTER_SHA")
+          else
+            shas=""
+          fi
+          if [ -z "$shas" ]; then
+            shas=$(git log -1 --format=%H "$AFTER_SHA")
+          fi
+
+          subjects=()
+          while IFS= read -r sha; do
+            [ -z "$sha" ] && continue
+            # Safety net for unusually long ranges, applied AFTER
+            # oldest-first ordering so the head of the list is never dropped;
+            # in practice the 500-char Play cap truncates far sooner.
+            if [ "${#subjects[@]}" -ge 50 ]; then
+              echo "Reached 50 qualifying subjects; ignoring the rest of the range."
+              break
+            fi
+            s=$(git log -1 --format=%s "$sha")
+            case "$s" in
+              ci:*)       continue ;;
+              docs:*)     continue ;;
+              internal:*) continue ;;
+              refactor:*) continue ;;
+              test:*)     continue ;;
+              tests:*)    continue ;;
+            esac
+            relevant=false
+            while IFS= read -r f; do
+              [ -z "$f" ] && continue
+              # `case` matches `*` against `/` too, so `.*` covers any path
+              # whose first component starts with `.` (.github/, .claude/,
+              # .gitignore, …) in one pattern. No docs/PRIVACY.md exception —
+              # see the step comment above.
+              case "$f" in
+                .*)   ;;
+                *.md) ;;
+                *)    relevant=true; break ;;
+              esac
+            done < <(git diff-tree --no-commit-id --name-only -r "$sha")
+            if [ "$relevant" = "false" ]; then
+              continue
+            fi
+            subjects+=("$s")
+          done <<< "$shas"
+
+          if [ "${#subjects[@]}" -eq 0 ]; then
+            echo "No release-worthy commits in this push; skipping the Play upload."
+            echo "RELEASE_NOTES_SKIP=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          MAX=500
+          TRUNC_MARK=$'\n…'
+
+          # `wc -m` counts characters under a UTF-8 locale; pin it so the
+          # bullet ("• ") and the ellipsis are scored as Play sees them, not
+          # as raw bytes.
+          export LC_ALL=C.UTF-8
+
+          format_notes() {
+            local first=1
+            for s in "$@"; do
+              if [ "$first" -eq 1 ]; then
+                printf '%s' "• $s"
+                first=0
+              else
+                printf '\n• %s' "$s"
+              fi
+            done
+          }
+
+          char_len() {
+            printf '%s' "$1" | wc -m
+          }
+
+          # Two-phase: greedy-add subjects until the formatted output would
+          # exceed MAX, then, if anything was dropped, append the "\n…"
+          # marker — dropping further subjects if the marker itself
+          # overflows. A single 499-500-char subject is hard-truncated.
+          kept=()
+          truncated=false
+          for s in "${subjects[@]}"; do
+            candidate=$(format_notes "${kept[@]}" "$s")
+            if [ "$(char_len "$candidate")" -gt "$MAX" ]; then
+              truncated=true
+              break
+            fi
+            kept+=("$s")
+          done
+
+          if [ "${#kept[@]}" -eq 0 ]; then
+            notes=$(printf '%s' "• ${subjects[0]}" | cut -c 1-499)
+            notes="${notes}…"
+          else
+            notes=$(format_notes "${kept[@]}")
+            if [ "$truncated" = true ]; then
+              while [ "$(char_len "${notes}${TRUNC_MARK}")" -gt "$MAX" ] \
+                && [ "${#kept[@]}" -gt 0 ]; do
+                unset 'kept[${#kept[@]}-1]'
+                notes=$(format_notes "${kept[@]}")
+              done
+              if [ "${#kept[@]}" -eq 0 ]; then
+                notes=$(printf '%s' "• ${subjects[0]}" | cut -c 1-498)
+              fi
+              notes="${notes}${TRUNC_MARK}"
+            fi
+          fi
+
+          # Random heredoc terminator so a crafted commit subject can't
+          # include the literal terminator and inject entries into
+          # $GITHUB_ENV.
+          delim="RELEASE_NOTES_EOF_$(openssl rand -hex 16)"
+          {
+            printf 'RELEASE_NOTES<<%s\n' "$delim"
+            printf '%s\n' "$notes"
+            printf '%s\n' "$delim"
+          } >> "$GITHUB_ENV"
+
+      - name: Compose Play Store release notes
+        # The upload action takes a directory of whatsnew-<locale> files; this
+        # writes the list "Build release notes" built in the layout the
+        # action expects.
+        if: |
+          env.RELEASE_KEYSTORE_FILE != '' &&
+          env.HAS_PLAY_SA == 'true' &&
+          env.RELEASE_NOTES_SKIP != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/whatsnew"
+          printf '%s' "${RELEASE_NOTES}" \
+            > "${RUNNER_TEMP}/whatsnew/whatsnew-en-US"
+          echo "PLAY_WHATSNEW_DIR=${RUNNER_TEMP}/whatsnew" >> "${GITHUB_ENV}"
+
+      - name: Upload to Play Store internal track
+        # Runs only with both the upload key and the service account
+        # configured, and skipped when RELEASE_NOTES_SKIP=true — no
+        # Play-worthy "What's new" entry exists, so shipping would be
+        # redundant. See docs/play-store-internal-track.md for the Play
+        # Console setup this depends on.
+        if: |
+          env.RELEASE_KEYSTORE_FILE != '' &&
+          env.HAS_PLAY_SA == 'true' &&
+          env.RELEASE_NOTES_SKIP != 'true'
+        uses: r0adkll/upload-google-play@a80b0bcdcfdfcc2d026f2bc73f726760b2cbc967  # post-v1.1.5: fixes DEP0040/DEP0169 Node.js deprecation warnings
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: app.snoozemo
+          releaseFiles: app/build/outputs/bundle/playRelease/app-play-release.aab
+          tracks: internal
+          status: completed
+          whatsNewDirectory: ${{ env.PLAY_WHATSNEW_DIR }}

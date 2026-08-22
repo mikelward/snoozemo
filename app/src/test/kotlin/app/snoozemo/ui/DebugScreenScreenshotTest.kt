@@ -19,6 +19,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import app.snoozemo.core.LocationPermission
 import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
 import com.github.takahirom.roborazzi.captureRoboImage
@@ -71,6 +72,7 @@ class DebugScreenScreenshotTest {
                 access = null,
                 notifications = null,
                 notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
                 tileAdded = null,
                 tileBannerDismissed = true,
                 snoozing = null,
@@ -80,6 +82,7 @@ class DebugScreenScreenshotTest {
                 debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onLocationRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
@@ -110,6 +113,7 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.DENIED,
                 notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = null,
@@ -119,6 +123,7 @@ class DebugScreenScreenshotTest {
                 debugLogSaveFailed = false,
                 onAccessRow = { opened++ },
                 onNotificationsRow = {},
+                onLocationRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
@@ -153,6 +158,7 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = false,
@@ -162,6 +168,7 @@ class DebugScreenScreenshotTest {
                 debugLogSaveFailed = true,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onLocationRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
@@ -182,6 +189,7 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.DENIED,
                 notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = null,
@@ -191,6 +199,7 @@ class DebugScreenScreenshotTest {
                 debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onLocationRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
@@ -211,6 +220,7 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = false,
@@ -220,6 +230,7 @@ class DebugScreenScreenshotTest {
                 debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = { tapped++ },
+                onLocationRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
@@ -242,6 +253,7 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.BLOCKED,
                 notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = false,
@@ -251,6 +263,7 @@ class DebugScreenScreenshotTest {
                 debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onLocationRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
@@ -276,6 +289,7 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = false,
@@ -285,6 +299,7 @@ class DebugScreenScreenshotTest {
                 debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onLocationRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
@@ -297,12 +312,15 @@ class DebugScreenScreenshotTest {
     }
 
     @Test
-    fun `granted and idle offers to arm`() {
-        capture("debug-screen-idle.png") {
+    fun `location askable opens the disclosure, not a system dialog directly`() {
+        var tapped = 0
+
+        capture("debug-screen-location-askable.png") {
             DebugScreen(
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
+                location = LocationPermission.ASKABLE,
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = false,
@@ -312,6 +330,108 @@ class DebugScreenScreenshotTest {
                 debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onLocationRow = { tapped++ },
+                onTileRow = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onDebugLog = {},
+            )
+        }
+
+        // States a gap in what is tracked, not a broken product — missing this
+        // permission degrades a snooze rather than blocking one (SPEC.md §3.6).
+        composeRule.onNodeWithText("Snoozemo can't tell when you've left").assertExists()
+        composeRule.onNodeWithText("Allow").performClick()
+        assertEquals(1, tapped)
+    }
+
+    @Test
+    fun `location the system will not prompt for points at Settings too`() {
+        capture("debug-screen-location-blocked.png") {
+            DebugScreen(
+                access = PolicyAccess.GRANTED,
+                notifications = NotificationPermission.GRANTED,
+                notificationsReachTheUser = true,
+                location = LocationPermission.BLOCKED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                lastOutcome = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onLocationRow = {},
+                onTileRow = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onDebugLog = {},
+            )
+        }
+
+        // Same verb whichever route the tap takes — what the user wants is the
+        // same, and the row only differs in where it sends them.
+        composeRule.onNodeWithText("Allow").assertExists()
+    }
+
+    @Test
+    fun `location granted has nothing left to tap`() {
+        // Recorded over the idle snapshot deliberately, like the DND failure
+        // test below does: every capability in this fixture is already
+        // granted, so this state is pixel-identical to "granted and idle" —
+        // which is exactly the claim this test makes about the location row.
+        capture("debug-screen-idle.png") {
+            DebugScreen(
+                access = PolicyAccess.GRANTED,
+                notifications = NotificationPermission.GRANTED,
+                notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                lastOutcome = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onLocationRow = {},
+                onTileRow = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onDebugLog = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Tracking your place").assertExists()
+        // Access, notifications and the tile are all granted/added in this
+        // fixture too, so the only way this assertion is meaningful is that no
+        // row anywhere on screen still offers `Allow`.
+        composeRule.onNodeWithText("Allow").assertDoesNotExist()
+    }
+
+    @Test
+    fun `granted and idle offers to arm`() {
+        capture("debug-screen-idle.png") {
+            DebugScreen(
+                access = PolicyAccess.GRANTED,
+                notifications = NotificationPermission.GRANTED,
+                notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                lastOutcome = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onLocationRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
@@ -340,6 +460,7 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = false,
@@ -349,6 +470,7 @@ class DebugScreenScreenshotTest {
                 debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onLocationRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
@@ -367,6 +489,7 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = true,
@@ -376,6 +499,7 @@ class DebugScreenScreenshotTest {
                 debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onLocationRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
@@ -399,6 +523,7 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = null,
@@ -408,6 +533,7 @@ class DebugScreenScreenshotTest {
                 debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onLocationRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
@@ -434,6 +560,7 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = true,
@@ -443,6 +570,7 @@ class DebugScreenScreenshotTest {
                 debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onLocationRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
@@ -461,6 +589,7 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.DENIED,
                 notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = null,
@@ -470,6 +599,7 @@ class DebugScreenScreenshotTest {
                 debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onLocationRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
@@ -510,6 +640,7 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = false,
@@ -519,6 +650,7 @@ class DebugScreenScreenshotTest {
                 debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onLocationRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
@@ -538,6 +670,7 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = false,
+                location = LocationPermission.GRANTED,
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = false,
@@ -547,6 +680,7 @@ class DebugScreenScreenshotTest {
                 debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onLocationRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
@@ -574,6 +708,7 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
                 tileAdded = false,
                 tileBannerDismissed = true,
                 snoozing = false,
@@ -583,6 +718,7 @@ class DebugScreenScreenshotTest {
                 debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onLocationRow = {},
                 onTileRow = { tapped++ },
                 onDismissTileBanner = {},
                 onArm = {},
@@ -605,6 +741,7 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = false,
@@ -614,6 +751,7 @@ class DebugScreenScreenshotTest {
                 debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onLocationRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
@@ -642,6 +780,7 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
                 tileAdded = false,
                 tileBannerDismissed = false,
                 snoozing = false,
@@ -651,6 +790,7 @@ class DebugScreenScreenshotTest {
                 debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onLocationRow = {},
                 onTileRow = { added++ },
                 onDismissTileBanner = { dismissed++ },
                 onArm = {},
@@ -679,6 +819,7 @@ class DebugScreenScreenshotTest {
                 access = PolicyAccess.GRANTED,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = false,
@@ -688,6 +829,7 @@ class DebugScreenScreenshotTest {
                 debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
+                onLocationRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
