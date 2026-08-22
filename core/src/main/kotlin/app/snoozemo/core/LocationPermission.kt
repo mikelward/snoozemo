@@ -41,14 +41,29 @@ enum class LocationPermission {
     companion object {
 
         /**
-         * @param foregroundGranted whether `ACCESS_FINE_LOCATION` or
-         *   `ACCESS_COARSE_LOCATION` is currently held.
-         * @param backgroundGranted whether `ACCESS_BACKGROUND_LOCATION` is held.
+         * @param foregroundGranted whether the foreground grant the presence
+         *   engine can actually use is held — `ACCESS_FINE_LOCATION`
+         *   specifically, not a downgrade to `ACCESS_COARSE_LOCATION` alone
+         *   (`PlatformFixRequester`, `AnchorCaptureRunner` both gate on fine;
+         *   coarse-only is a fatal capability loss to them, not a degraded
+         *   mode — Codex, PR #79). The caller still *requests* fine and coarse
+         *   together, since Android 12+ refuses a fine-only request outright
+         *   rather than offering the approximate downgrade; only the grant
+         *   this reads has to be the one the engine trusts.
+         * @param backgroundGranted whether `ACCESS_BACKGROUND_LOCATION` is
+         *   held. Meaningless when [backgroundRequired] is false and never
+         *   read in that case.
          * @param foregroundEverDenied / [foregroundRationale] and
          *   [backgroundEverDenied] / [backgroundRationale]: the same
          *   history-plus-rationale pair [NotificationPermission.of] takes, kept
          *   once per permission because the two are requested — and can be
          *   blocked — independently of each other.
+         * @param backgroundRequired whether this flavor's tracking needs
+         *   `ACCESS_BACKGROUND_LOCATION` at all. `direct` declares no such
+         *   permission (`SPEC.md` §3.4) — without this, a flavor that will
+         *   never hold the permission, and whose requests the platform
+         *   silently denies with no rationale ever offered, reads as
+         *   permanently `ASKABLE` (Codex, PR #79).
          *
          * Foreground is read first: the platform will not grant background
          * without it, so a missing foreground permission is the actual next
@@ -61,8 +76,9 @@ enum class LocationPermission {
             foregroundRationale: Boolean,
             backgroundEverDenied: Boolean,
             backgroundRationale: Boolean,
+            backgroundRequired: Boolean = true,
         ): LocationPermission = when {
-            foregroundGranted && backgroundGranted -> GRANTED
+            foregroundGranted && (backgroundGranted || !backgroundRequired) -> GRANTED
             !foregroundGranted ->
                 if (foregroundRationale || !foregroundEverDenied) ASKABLE else BLOCKED
             else ->

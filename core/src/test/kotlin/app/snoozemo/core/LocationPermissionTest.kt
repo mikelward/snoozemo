@@ -100,4 +100,45 @@ class LocationPermissionTest {
             ),
         )
     }
+
+    @Test
+    fun `foreground alone is granted when the flavor needs no background permission`() {
+        // The `direct` flavor (SPEC.md §3.4): it declares no
+        // ACCESS_BACKGROUND_LOCATION at all, so a background history that
+        // reads "permanently denied" here must never turn into BLOCKED — that
+        // reading was never a real denial, only a permission the platform was
+        // never asked to grant (Codex, PR #79: without backgroundRequired,
+        // this flavor's row got stuck ASKABLE forever instead).
+        assertEquals(
+            LocationPermission.GRANTED,
+            LocationPermission.of(
+                foregroundGranted = true,
+                backgroundGranted = false,
+                foregroundEverDenied = false,
+                foregroundRationale = false,
+                backgroundEverDenied = true,
+                backgroundRationale = false,
+                backgroundRequired = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `missing foreground still gates the row when background is not required`() {
+        // backgroundRequired only ever changes the answer once foreground is
+        // held — a flavor with no background permission still has to ask for
+        // foreground first, the same as one that does.
+        assertEquals(
+            LocationPermission.ASKABLE,
+            LocationPermission.of(
+                foregroundGranted = false,
+                backgroundGranted = false,
+                foregroundEverDenied = false,
+                foregroundRationale = false,
+                backgroundEverDenied = false,
+                backgroundRationale = false,
+                backgroundRequired = false,
+            ),
+        )
+    }
 }

@@ -272,24 +272,28 @@ class MainActivity : ComponentActivity() {
 
     /**
      * The foreground half of the location grant: `ACCESS_FINE_LOCATION` and
-     * `ACCESS_COARSE_LOCATION` together, requested in one system dialog like the
-     * platform expects for a permission group. Always launched from
-     * [LocationDisclosureScreen]'s `Continue`, never on its own — `SPEC.md` §3.2
-     * requires the prominent disclosure precede the dialog, not merely describe
-     * it after the fact.
+     * `ACCESS_COARSE_LOCATION` requested together in one system dialog, like
+     * the platform expects for a permission group — COARSE rides beside FINE
+     * only so the request isn't refused outright (AndroidManifest.xml's own
+     * comment on this; Android 12+ would otherwise decline to offer the
+     * approximate downgrade). Always launched from [LocationDisclosureScreen]'s
+     * `Continue`, never on its own — `SPEC.md` §3.2 requires the prominent
+     * disclosure precede the dialog, not merely describe it after the fact.
      *
-     * Chains straight into [backgroundLocationPermission] on a grant: the
-     * platform will not grant background access without foreground already
-     * held, and shows its own prompt only when asked for separately, so asking
-     * again here is what turns two platform steps into one user action instead
-     * of sending them back to tap the row a second time.
+     * Chains straight into [backgroundLocationPermission] on a **fine** grant,
+     * and only when [locationTrackingNeedsBackgroundPermission] — the platform
+     * will not grant background access without foreground already held, and
+     * shows its own prompt only when asked for separately, so asking again
+     * here is what turns two platform steps into one user action instead of
+     * sending them back to tap the row a second time. A coarse-only grant
+     * never chains: it isn't a grant [refreshLocation] treats as foreground
+     * held (see its own comment), so nothing downstream is watching yet.
      */
     private val foregroundLocationPermission =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
-            val granted = results[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                results[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+            val fineGranted = results[Manifest.permission.ACCESS_FINE_LOCATION] == true
             refreshLocation()
-            if (granted) {
+            if (fineGranted && locationTrackingNeedsBackgroundPermission) {
                 backgroundLocationPermission.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
             }
         }
@@ -581,21 +585,33 @@ class MainActivity : ComponentActivity() {
      * answered.
      */
     private fun refreshLocation(): LocationPermission {
-        val foregroundGranted =
-            checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PERMISSION_GRANTED ||
-                checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PERMISSION_GRANTED
+        // FINE specifically, not FINE-or-COARSE: the presence engine's
+        // departure test needs a fine fix and treats a downgrade to
+        // coarse-only as a fatal capability loss, not a degraded-but-working
+        // state (PlatformFixRequester, AnchorCaptureRunner both gate on
+        // ACCESS_FINE_LOCATION alone) — so "granted" here has to mean the
+        // grant the engine can actually use, or this row would say `Tracking
+        // your place` over a snooze the engine has already given up watching
+        // (Codex, PR #79). COARSE is still requested alongside FINE
+        // (foregroundLocationPermission) and never checked on its own.
+        val foregroundGranted = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PERMISSION_GRANTED
         val backgroundGranted =
             checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PERMISSION_GRANTED
-        val foregroundRationale =
-            shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION) ||
-                shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_COARSE_LOCATION)
+        val foregroundRationale = shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION)
         val backgroundRationale =
             shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
         // Recorded unconditionally, like the notification history — a reading
         // with nothing new in it (`granted = false, rationale = false`) is
         // already a safe no-op in the store, so there is nothing to gate here.
         locationPromptStore.recordForeground(granted = foregroundGranted, rationale = foregroundRationale)
-        locationPromptStore.recordBackground(granted = backgroundGranted, rationale = backgroundRationale)
+        // The background history is meaningless on a flavor that never
+        // declares the permission — checkSelfPermission and
+        // shouldShowRequestPermissionRationale both read as "never granted,
+        // never denied" forever on `direct`, and recording that would just be
+        // a write with nothing behind it.
+        if (locationTrackingNeedsBackgroundPermission) {
+            locationPromptStore.recordBackground(granted = backgroundGranted, rationale = backgroundRationale)
+        }
         val current = LocationPermission.of(
             foregroundGranted = foregroundGranted,
             backgroundGranted = backgroundGranted,
@@ -603,6 +619,7 @@ class MainActivity : ComponentActivity() {
             foregroundRationale = foregroundRationale,
             backgroundEverDenied = locationPromptStore.backgroundEverDenied(),
             backgroundRationale = backgroundRationale,
+            backgroundRequired = locationTrackingNeedsBackgroundPermission,
         )
         location = current
         if (current == LocationPermission.GRANTED) clearFailure(SetupRowId.LOCATION)
