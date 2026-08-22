@@ -158,8 +158,12 @@ class MainActivity : ComponentActivity() {
      * which is what makes the check safe: the decision and the action it guards
      * run without anything able to bump this in between. The workers never read
      * it, so it needs no synchronization.
+     *
+     * Also bumped by [onStop]: a worker from one visible session must never act
+     * in the next. Internal rather than private only so the lifecycle test can
+     * pin that invalidation; nothing outside this class reads it in production.
      */
-    private var latestAccessRefresh = 0
+    internal var latestAccessRefresh = 0
 
     /** Whether [accessReceiver] is registered, since registering is deferred. */
     private var accessReceiverRegistered = false
@@ -479,6 +483,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        // Invalidate every access reading still in flight. The lifecycle check
+        // in `applyAccess` covers a worker landing while the screen is stopped,
+        // but not one landing after this same instance is STARTED again —
+        // there is a window before the deferred refresh issues a fresh
+        // generation, and a stale `DENIED` read acting inside it would end a
+        // snooze armed in between (deferred from Codex's PR #8 review). A
+        // reading taken in one visible session may never act in the next.
+        latestAccessRefresh++
         // Only what actually registered. The registration is deferred past the
         // first frame now, so a screen stopped before that ran never had a
         // receiver — and unregistering one the framework has no record of
