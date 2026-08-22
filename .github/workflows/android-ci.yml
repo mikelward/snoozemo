@@ -225,6 +225,32 @@ jobs:
       - name: Run lint
         run: ./gradlew lint
 
+      - name: Verify the release version guard
+        # The guard (`checkReleaseVersionDerivation`, app/build.gradle.kts) is
+        # Gradle wiring with no unit-test harness — a TestKit fixture would be a
+        # whole new test infrastructure for one task — so CI proves the three
+        # things a regression could silently undo: the task is still in every
+        # release variant's graph (an AGP rename of the `pre*ReleaseBuild`
+        # anchor would unwire it without failing anything), it passes on this
+        # full-depth checkout, and it refuses a shallow clone for the stated
+        # reason, not incidentally.
+        #
+        # Last in the job on purpose: the step fakes a shallow clone by writing
+        # `.git/shallow`, and the trap puts the tree right even when the
+        # expected failure isn't the one that happens.
+        run: |
+          ./gradlew -q :app:prePlayReleaseBuild :app:preDirectReleaseBuild --dry-run | tee /tmp/release-task-graph.txt
+          grep -q ':app:checkReleaseVersionDerivation' /tmp/release-task-graph.txt
+          ./gradlew :app:checkReleaseVersionDerivation
+          trap 'rm -f .git/shallow' EXIT
+          git rev-parse HEAD > .git/shallow
+          if out=$(./gradlew :app:checkReleaseVersionDerivation 2>&1); then
+            echo "$out"
+            echo "::error::The release guard passed on a shallow clone."
+            exit 1
+          fi
+          echo "$out" | grep -q "Refusing to build a release"
+
   screenshot-tests:
     name: Screenshot tests
     runs-on: ubuntu-latest

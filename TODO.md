@@ -654,12 +654,15 @@ the point is that every other line of the app is worthless if it isn't true.
 
 - [ ] Release plumbing: signing, Play Console setup, the `deploy` job, and the "What's new"
       generation from commit subjects described in `AGENTS.md`.
-- [ ] Make a release build **fail** when its version can't be derived from git, rather than
+- [x] Make a release build **fail** when its version can't be derived from git, rather than
       warning (`app/build.gradle.kts`). The fallback exists so a checkout without git still
       builds; once a build can reach a tester or Play, falling back to versionCode 1 is
       either a rejected upload or a phantom downgrade, and a warning in a CI log is not
       where anyone would find it. Same for the shallow-clone case, which is worse because
       the count *looks* fine — the build already warns; a release build should refuse.
+      *(Landed: `checkReleaseVersionDerivation` fails every `pre*ReleaseBuild` when the
+      count, hash, or clone depth kept the version from being derived; debug builds, tests,
+      and lint on a shallow checkout are untouched.)*
 - [ ] Data Safety declaration: "no data collected, no data shared" (`SPEC.md` §12).
 - [ ] In-app prominent disclosure before the location permission prompt, and the
       demonstration video the background-location declaration needs.
