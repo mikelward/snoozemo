@@ -199,15 +199,16 @@ it in the same commit.
 - Keep non-user-facing commits out of release notes with a subject prefix, used precisely
   (the prefix is a promise the commit has **no user-visible effect**):
   - `ci:` — CI / workflow plumbing.
-  - `docs:` — documentation only (`docs/PRIVACY.md` is the exception — it backs the hosted
-    privacy policy, so it is user-facing).
+  - `docs:` — documentation only. `docs/PRIVACY.md` is ordinary docs like the rest of
+    `docs/` — Play's "What's new" is a store-listing field a user installing an update
+    never sees at update time, so a policy-wording change gains nothing from forcing its
+    way into release notes (`TODO.md`).
   - `internal:` — build config, dependency upgrades, other plumbing.
   - `refactor:` — behavior-preserving code changes.
   - `test:` / `tests:` — test-only changes.
 - **Housekeeping paths are dropped whatever the subject says.** A commit whose every
   changed path is a `.md` file (at any depth) or a root dotfile / dotdir (`.github/`,
-  `.claude/`, `.gitignore`, …) never reaches the notes, prefixed or not — with
-  `docs/PRIVACY.md` the exception, since it backs the hosted privacy policy. Prefix those
+  `.claude/`, `.gitignore`, …) never reaches the notes, prefixed or not. Prefix those
   commits anyway, so the intent is explicit and the subject never reads like a shippable
   bullet.
 - **Surviving subjects ship as a `• `-bulleted list, oldest-first** — always bulleted, even

@@ -1135,32 +1135,20 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     a snooze that ends on a duration cap needs the same controller.
 
 ## Decisions needing review
-- **When Phase 6's deploy job lands, reconcile the docs-lane classifier with
-  the release-notes-skip classifier for `docs/PRIVACY.md`, and reconsider
-  forcing it onto the code lane at all.** `.github/lanes.conf`'s
-  `code docs/PRIVACY.md` rule means a PRIVACY.md-only change always runs
-  the full build/test/lint pipeline, even a pure wording fix that changes
-  nothing about the app — but PRIVACY.md isn't actually code, so that's a
-  heavier CI cost than the change needs; being release-worthy and needing
-  heavy CI are two separate questions the lane rule currently conflates.
-  Separately, the sibling repos' deploy job (the template this one will
-  follow) has two *independent* skip conditions in its release-notes
-  generator — a non-user-facing subject prefix skips a commit regardless
-  of what it touched, and a housekeeping-path check (which
-  `docs/PRIVACY.md` is carved out of) skips a commit whose diff is all
-  `.md`/dotfiles. A commit like `docs: clarify data retention wording`
-  touching only `docs/PRIVACY.md` would still be dropped by the prefix
-  check, even though the lane rule's whole point is that PRIVACY.md is
-  never "just docs." The two classifiers can silently diverge on this one
-  case — worth fixing in the shared shape before Phase 6 copies it here.
-- **Require a `docs/PRIVACY.md` update in the same commit as the practice
-  change it documents** (mirroring how `SPEC.md` stays in sync), and don't
-  let every PRIVACY.md touch become automatically release-worthy once
-  Phase 6's deploy job lands — a pure wording/typo fix with no actual
-  change in practice shouldn't force a release the way a genuine new
-  disclosure should. Needs a real distinction between "the policy text
-  changed" and "what the policy describes changed," which the mechanism
-  the sibling repos use can't make on its own.
+- **Consider an in-app banner (or similar Settings-surfaced cue) for a
+  changed hosted privacy policy.** `docs/PRIVACY.md` now rides the docs lane
+  and is never forced into release notes (2026-08-22 — see AGENTS.md
+  "Commit messages" and `.github/lanes.conf`), on the reasoning that Play's
+  "What's new" is a store-listing field an installed user never sees at
+  update time — so a wording change there bought no real visibility anyway.
+  That leaves installed users with no signal at all when the policy changes
+  under them; a banner or Settings cue that detects "the hosted policy
+  changed since you last saw it" would close that gap. Checked commit
+  frequency across this app and its siblings: bursty during a feature's
+  initial buildout, then roughly monthly or less once the app stabilizes —
+  so a change-detection banner isn't worth building speculatively now.
+  Worth a second look if this app (or a sibling) reaches a stage where
+  policy changes carry real stakes.
 - **The grace alarm is inexact** (`setAndAllowWhileIdle`, autopilot 2026-08-22): the exact
   form costs the `SCHEDULE_EXACT_ALARM` permission — a distribution question (`SPEC.md` §3)
   — and the cap already accepts the same inexactness. A deferred grace holds the snooze a
