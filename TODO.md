@@ -405,10 +405,30 @@ the point is that every other line of the app is worthless if it isn't true.
         belongs to the `direct` flavor's Phase 7 foreground service, and a background app gets
         continuous location throttled to nothing — §6.10's design takes one fix per
         confirmation step instead. `SANITY` duty maps to nothing yet; its resting-coverage role
-        belongs to the §6.10 periodic backstop when that slice lands. Still to come in later
-        slices: **wiring the monitor into `SnoozeService`** (nothing collects the flow yet, so
-        every conclusion is still unconsumed), restore-from-wake when an
-        exit restarts a dead process (the bridge drops and logs it today), **re-registering the
+        belongs to the §6.10 periodic backstop when that slice lands.
+        **Third slice landed** (2026-08-22): the service wiring. `SnoozeService` starts
+        `defaultPresenceMonitor` with the captured anchor once the arm completes (and again on
+        restore — the presence analog of re-asserting the rule), collects every report into
+        `SnoozeController.onPresenceUpdate`, and stops the watch with the snooze. The mode's
+        warrant moved with it: `PresenceMonitor.supports(anchor)` states the most capable mode
+        the running machinery can honestly claim, and the controller clamps every mode to that
+        ceiling (`SPEC.md` §6.1) — so a fenced anchor is genuinely `FULL` now, an SSID-only one
+        stays a timer until the Wi-Fi watch lands, and the `direct` flavor stays duration-only
+        by its own monitor's answer.
+        **Restore-from-wake landed with it** (sharpened by Codex on PR #73: with no foreground
+        service the process dies routinely mid-snooze, so the geofence broadcast restarting a
+        dead process is the field's *common* case, and a dropped exit is a departure never
+        confirmed). The bridge is a one-slot mailbox: an undeliverable observation is held —
+        coalesced by rank, an exit never displaced by an availability report — the
+        app-installed wake-up starts `SnoozeService.restore` (a refused start arms a 60 s
+        check-in alarm as the durable retry), and every attach of a restored monitor delivers
+        the held observation, so a death mid-confirmation re-runs the check rather than losing
+        it. The engine's arm-time evidence seed — now passed through `start` by the caller,
+        derived from the record's stored clock frame — is what retires the slot for every
+        later snooze. The geofence itself is durable by design: `awaitClose` releases only
+        in-process resources, and the fence comes down solely in `stop()`, when the snooze
+        actually ends — a background-limits service destroy leaves it watching. Still to come
+        in later slices: **re-registering the
         fence when location services come back on** (Codex, PR #70: `GEOFENCE_NOT_AVAILABLE` at
         registration reports the §8.4 degradation correctly but nothing retries, so the snooze
         stays degraded until the cap even after the user re-enables location — the mode-changed
@@ -474,6 +494,20 @@ the point is that every other line of the app is worthless if it isn't true.
 - [ ] Three independent wake-up sources feeding one confirmation test (`SPEC.md` §6.10):
       geofence exit, Wi-Fi loss via `NetworkCallback`, and a 15–30 min `WorkManager`
       backstop. No source ends a snooze on its own evidence.
+      - The backstop's wake is also where a **mid-snooze location revocation** gets noticed
+        (Codex, PR #73): revoking a runtime permission kills the process, so no in-process
+        watcher can exist, and until this slice lands the only wakes that re-check the
+        grants — registration re-checks on every restore, and the burst checks per fix —
+        are the ones a snooze happens to pay for, leaving a revoked-while-ARMED snooze
+        `FULL` on paper until the cap. The backstop's periodic restore closes that to
+        15–30 min; its recheck must fail open as `LOST_CAPABILITY`, same as registration's.
+      - Same shape, same slice (Codex, PR #73): **a fence the arm never got to establish**.
+        The record says `FULL` before Play Services confirms the asynchronous registration
+        (the arm path cannot wait on it), so a process reclaimed in that instant — or one
+        that dies before an asynchronous refusal is reported — leaves a full-tracking
+        record with no fence behind it. Every restore re-registers, so any wake heals it;
+        the backstop's periodic restore is what bounds the healing to 15–30 min instead
+        of the cap.
 - [x] The departure test itself (`SPEC.md` §6.6): accuracy gate, 50 m hysteresis, two
       qualifying fixes ≥30 s apart *or* one unambiguous fix beyond radius + 500 m. Covered
       by recorded fix traces including bad-accuracy jumps. Landed in `:core` as `Departure`

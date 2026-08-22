@@ -142,22 +142,22 @@ class SnoozeControllerTest {
     }
 
     @Test
-    fun `the caller's stated mode wins where it claims less than the anchor allows`() {
+    fun `the machinery's supported set wins where it watches less than the anchor allows`() {
         // A mode is a claim about what is watching, not about what was written
-        // down: a caller that has started nothing arms duration-only however
-        // complete the captured anchor is (SPEC.md §8.1).
+        // down: machinery that watches nothing arms duration-only however
+        // complete the captured anchor is (SPEC.md §8.1, §6.1).
         controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
 
-        controller.onAnchorCaptured(anchor, TrackingMode.DURATION_ONLY)
+        controller.onAnchorCaptured(anchor, setOf(TrackingMode.DURATION_ONLY))
 
         assertEquals(SnoozeState.ARMED, controller.state)
         assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
-        // The anchor itself is kept whole — it is what the next slice watches.
+        // The anchor itself is kept whole — it is what the machinery watches.
         assertEquals("ExampleWifi", controller.active?.anchor?.ssid)
         assertEquals(true, controller.active?.anchor?.hasUsableFix)
-        // And the recorded reason is the caller's limit, not a fix the anchor
-        // plainly has — the debug log must not misstate which limit bit
-        // (Codex, PR #71).
+        // And the recorded reason is the machinery's limit, not a fix the
+        // anchor plainly has — the debug log must not misstate which limit
+        // bit (Codex, PR #71).
         assertEquals(
             listOf(TrackingMode.DURATION_ONLY to DegradationCause.NOTHING_WATCHING),
             listener.tracking.toList(),
@@ -165,17 +165,67 @@ class SnoozeControllerTest {
     }
 
     @Test
-    fun `a stated mode cannot claim more than the anchor supports`() {
-        // The same lie in the more dangerous direction: FULL over an anchor
-        // with no coordinates is a departure test nothing can run.
+    fun `a degradation cannot fall back to a mode nothing watches`() {
+        // The geofence monitor has no Wi-Fi watch, so a fenced anchor that
+        // loses location degrades straight to a timer — WIFI_ONLY there would
+        // promise a fallback watch that does not exist (Codex, PR #73).
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.onAnchorCaptured(
+            anchor,
+            setOf(TrackingMode.FULL, TrackingMode.DURATION_ONLY),
+        )
+        assertEquals(TrackingMode.FULL, controller.active?.mode)
+
+        controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX))
+
+        assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
+    }
+
+    @Test
+    fun `an update cannot promote the mode past what the machinery supports`() {
+        // The first harmless-looking report would otherwise undo the arm's
+        // honesty: a null degradation reads as "the anchor's full capability",
+        // which nothing may claim while the machinery watches less.
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.onAnchorCaptured(anchor, setOf(TrackingMode.DURATION_ONLY))
+
+        controller.onPresenceUpdate(update(degradation = null))
+
+        assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
+        // Only the arm's own degradation report — no promotion to announce.
+        assertEquals(1, listener.tracking.size)
+    }
+
+    @Test
+    fun `restore clamps the record's claim to the ceiling it is handed`() {
+        // The record was written under some ceiling, but not provably this
+        // one: an app update can lower what the machinery supports.
+        val running = ActiveSnooze(
+            anchor = anchor,
+            startedAt = start,
+            capExpiresAt = start.plus(Duration.ofHours(8)),
+            mode = TrackingMode.FULL,
+        )
+
+        controller.restore(running, supported = setOf(TrackingMode.DURATION_ONLY))
+        controller.onPresenceUpdate(update(degradation = null))
+
+        assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
+    }
+
+    @Test
+    fun `the anchor's fields cap the mode whatever the machinery offers`() {
+        // The other direction of the same honesty: machinery offering FULL
+        // cannot lend an anchor coordinates it never captured, and with the
+        // Wi-Fi mode unwatched, an SSID-only anchor lands on the timer.
         controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
 
         controller.onAnchorCaptured(
             Anchor(capturedAt = start, ssid = "ExampleWifi"),
-            TrackingMode.FULL,
+            setOf(TrackingMode.FULL, TrackingMode.DURATION_ONLY),
         )
 
-        assertEquals(TrackingMode.WIFI_ONLY, controller.active?.mode)
+        assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
     }
 
     @Test

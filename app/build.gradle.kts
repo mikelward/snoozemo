@@ -227,6 +227,9 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    // Dispatchers.Main for the service's presence collection — stated
+    // explicitly rather than leaned on transitively through Compose.
+    implementation(libs.kotlinx.coroutines.android)
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)

@@ -11,11 +11,22 @@ import app.snoozemo.core.SnoozeDebugLog
  * receiver delivers whatever the platform hands it. One slot, not a list —
  * there is at most one running snooze and therefore one monitor (SPEC.md §7).
  *
- * An observation arriving with no monitor attached is **dropped and said**:
- * the process was restarted by the geofence broadcast itself and nothing has
- * restored the monitor yet. Restoring tracking from exactly that wake-up is
- * its own Phase 3 item; until it lands, the debug-log line is what makes the
- * gap diagnosable rather than silent (SPEC.md §4.6).
+ * An observation arriving with no monitor attached is the **common case in
+ * the field**, not a corner: with no foreground service, Android reclaims the
+ * process during a long snooze, and the geofence broadcast is what restarts
+ * it — into a process where nothing has restored the monitor yet (SPEC.md
+ * §8.1; sharpened by Codex on PR #73, since a dropped exit is a departure
+ * never confirmed and a phone silent until the cap). So an undeliverable
+ * observation is **held, and the service is woken**: it goes into a one-slot
+ * mailbox, the wake-up hook installed by the app runs, and the restored
+ * monitor's own attach flushes the slot into the engine. Re-registering the
+ * fence could not replace this — geofences fire on *crossing*, and the user
+ * already crossed.
+ *
+ * The engine makes the mailbox safe to flush blind: every observation carries
+ * its elapsed-realtime moment, and `Presence` drops anything older than
+ * evidence it has already accepted — including the arm-time seed — so a
+ * leftover exit from a previous snooze cannot end the next one.
  *
  * Closing compares identity so a superseded monitor's late close cannot evict
  * the one that replaced it — the same rule `DebugLogging.watchSaveOutcome`
@@ -35,13 +46,86 @@ internal object GeofenceSignalBridge {
 
     private var listener: ((GeofenceObservation) -> Unit)? = null
 
+    /** The mailbox: the newest undeliverable observation, awaiting a monitor. */
+    private var pending: GeofenceObservation? = null
+
+    /**
+     * Runs — outside the app's control flow, from the receiver's thread —
+     * whenever an observation lands in the mailbox. Installed once at process
+     * start by the app layer (`installPresenceWakeup`), because this module
+     * cannot see the service that needs starting.
+     */
+    private var onPending: (() -> Unit)? = null
+
+    fun installWakeup(onObservationPending: () -> Unit) {
+        synchronized(lock) { onPending = onObservationPending }
+    }
+
+    /**
+     * Empties the mailbox. Tests only: production never needs it, because the
+     * engine's arm-time evidence seed makes a held observation inert for
+     * every snooze that starts after it.
+     */
+    internal fun resetForTest() {
+        synchronized(lock) {
+            pending = null
+            listener = null
+        }
+    }
+
     fun attach(onObservation: (GeofenceObservation) -> Unit): AutoCloseable {
-        synchronized(lock) { listener = onObservation }
+        synchronized(lock) {
+            listener = onObservation
+            // Delivered but deliberately NOT cleared: a confirmation takes at
+            // least the §6.6 two-fix window, and a process death inside it
+            // would otherwise lose the check with nothing left to restart it
+            // — the exit was consumed and a geofence never fires twice for
+            // one crossing (flagged by Codex on PR #73). Held, the next
+            // restore re-escalates and the check re-runs; the engine's
+            // arm-time seed retires the slot for every later snooze, so the
+            // cost is one spurious re-check per restart of the same snooze —
+            // the fail-open direction, and a fix settles it.
+            pending?.let {
+                SnoozeDebugLog.event("geofence observation held across restart; delivering")
+                // Under the lock, like live delivery and for the same reason:
+                // nothing may close or replace this listener between the read
+                // and the observation landing.
+                onObservation(it)
+            }
+            // Only an exit earns retention. An Unavailable is recoverable
+            // news other paths restate — registration re-detects it on every
+            // start — and, unlike a signal, it bypasses the engine's evidence
+            // gate: replayed to every attach, it would mark each later snooze
+            // in this process LOCATION_SERVICES_OFF off a report from before
+            // that snooze existed (flagged by Codex on PR #73).
+            if (pending !is GeofenceObservation.Exit) pending = null
+        }
         return AutoCloseable {
             synchronized(lock) {
                 // Only its own: a replacement that attached before this close
                 // ran must not be evicted by it.
-                if (listener === onObservation) listener = null
+                if (listener === onObservation) {
+                    listener = null
+                    // Detached mid-check: an exit still held here means its
+                    // confirmation never settled — the routine background
+                    // destroy tears the collector down inside the two-fix
+                    // window — and no further broadcast will come, so this is
+                    // the last hand that can arrange a successor (flagged by
+                    // Codex on PR #73). The wake restores the service, whose
+                    // attach re-collects the held exit; a settled check
+                    // cleared the slot and detaches silently.
+                    if (pending is GeofenceObservation.Exit) {
+                        val wake = onPending
+                        if (wake == null) {
+                            SnoozeDebugLog.warning(
+                                "monitor detached mid-check with no wake-up installed; exit held",
+                            )
+                        } else {
+                            SnoozeDebugLog.event("monitor detached mid-check; waking the service")
+                            wake()
+                        }
+                    }
+                }
             }
         }
     }
@@ -50,13 +134,53 @@ internal object GeofenceSignalBridge {
         synchronized(lock) {
             val current = listener
             if (current == null) {
-                SnoozeDebugLog.warning(
-                    "geofence observation arrived with no monitor running; dropped " +
-                        "(restore-from-wake is not built yet)",
-                )
+                // Coalesced by rank, not by recency alone: an Exit starts a
+                // confirmation, an Unavailable only lowers the tracking mode,
+                // and letting a later availability report erase a held exit
+                // would leave the departure unchecked — a phone quiet until
+                // the cap (flagged by Codex on PR #73). So an Exit replaces
+                // anything (a newer exit asks the same question with the
+                // fresher timestamp); an Unavailable never displaces one.
+                pending = when {
+                    observation is GeofenceObservation.Exit -> observation
+                    pending is GeofenceObservation.Exit -> pending
+                    else -> observation
+                }
+                val wake = onPending
+                if (wake == null) {
+                    SnoozeDebugLog.warning(
+                        "geofence observation arrived with no monitor and no wake-up installed; held",
+                    )
+                } else {
+                    SnoozeDebugLog.event("geofence observation arrived with no monitor; waking the service")
+                    wake()
+                }
                 return
             }
+            // A live exit is retained too, not only an undeliverable one: its
+            // confirmation takes at least the §6.6 two-fix window, Android
+            // routinely destroys the ordinary background service inside it,
+            // and a live-dispatched exit lived nowhere else — the fence never
+            // fires twice for one crossing, so the departure was lost until
+            // the cap (flagged by Codex on PR #73). Held here, the detach
+            // below wakes a successor and its attach re-runs the check;
+            // [settleExit] retires the slot once the check actually settles.
+            if (observation is GeofenceObservation.Exit) pending = observation
             current(observation)
+        }
+    }
+
+    /**
+     * Retires a held exit once its departure check reached a terminal result —
+     * confirmed (the snooze is ending), refuted (still present), or abandoned
+     * (the engine degraded past checking, or dropped the exit as stale). The
+     * monitor calls this whenever the engine's duty is not ACTIVE, so the slot
+     * holds an exit exactly while its confirmation is unfinished: a detach in
+     * that window wakes a successor, a detach after it stays quiet.
+     */
+    fun settleExit() {
+        synchronized(lock) {
+            if (pending is GeofenceObservation.Exit) pending = null
         }
     }
 }

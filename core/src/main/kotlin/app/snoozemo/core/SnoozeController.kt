@@ -65,6 +65,31 @@ class SnoozeController(
         private set
 
     /**
+     * The modes the running presence machinery can honestly claim —
+     * [PresenceMonitor.supportedModes] for this snooze's anchor, handed in at
+     * arm and restore. Every mode this class computes passes through
+     * [honest], because every derivation overstates otherwise: at arm,
+     * [TrackingMode.from] would claim Wi-Fi tracking for an SSID nothing
+     * watches; on an update, a null degradation reads as the anchor's full
+     * capability; and a degradation *fallback* claims `WIFI_ONLY` whether or
+     * not anything watches Wi-Fi — a set, not a ceiling, is what can answer
+     * that last one (flagged by Codex on PR #73).
+     */
+    private var supportedModes: Set<TrackingMode> = setOf(TrackingMode.DURATION_ONLY)
+
+    /**
+     * [mode], or the nearest less capable mode the machinery actually runs.
+     * [TrackingMode.DURATION_ONLY] is always honest: the cap needs no sensor.
+     */
+    private fun honest(mode: TrackingMode): TrackingMode {
+        var candidate = mode
+        while (candidate != TrackingMode.DURATION_ONLY && candidate !in supportedModes) {
+            candidate = TrackingMode.entries[candidate.ordinal + 1]
+        }
+        return candidate
+    }
+
+    /**
      * Starts arming: turns the zen rule on **now**, before any anchor exists.
      *
      * This split is the whole point of the `ARMING` state (SPEC.md §4.1). Anchor
@@ -121,6 +146,9 @@ class SnoozeController(
         // Recorded before the rule is turned on, so a process death in between
         // leaves evidence that a snooze may be running. Believing we are snoozed
         // when we aren't is recoverable; the reverse leaves a silent phone.
+        // Nothing is watching yet, so nothing may claim more until the anchor
+        // lands and brings the machinery's real answer with it.
+        supportedModes = setOf(TrackingMode.DURATION_ONLY)
         active = snooze
         state = SnoozeState.ARMING
         listener.onStateChanged(state, snooze, null)
@@ -139,40 +167,43 @@ class SnoozeController(
 
     /**
      * The anchor arrived — complete, partial, or empty, per whatever capture
-     * managed within its ceiling (SPEC.md §4.1). Arms in whatever [mode] the
-     * caller's presence machinery actually runs, clamped to what the anchor
-     * can support, and reports the degradation where that is short of full —
-     * because arming must never feel slow or refuse, and a degraded snooze
-     * must never look healthy.
+     * managed within its ceiling (SPEC.md §4.1). Arms in the most capable
+     * mode both the anchor's fields and the caller's machinery can honestly
+     * back, and reports the degradation where that is short of full — because
+     * arming must never feel slow or refuse, and a degraded snooze must never
+     * look healthy.
      *
-     * [mode] is stated by the caller rather than derived here, because the
-     * anchor alone cannot answer it: [TrackingMode.from] is the *ceiling* the
-     * captured fields allow, and a caller that has not started anything to
-     * watch them must say so rather than let a recorded SSID claim Wi-Fi
-     * tracking nothing is doing. A claim above the anchor's ceiling is clamped
-     * the other way — a mode more capable than the fields support would be the
-     * same lie in the more dangerous direction.
+     * [supported] is stated by the caller rather than derived here, because
+     * the anchor alone cannot answer it: [TrackingMode.from] is what the
+     * captured *fields* allow, and only the machinery knows which of them
+     * anything is actually watching ([PresenceMonitor.supportedModes]). Every
+     * mode this class ever computes — here, and on every later update — is
+     * lowered through the same set, so neither an arm nor a degradation
+     * fallback can claim a watch that does not exist.
      *
      * Ignored if nothing is arming — a late fix for a snooze that has already
      * ended must not resurrect it.
      */
-    fun onAnchorCaptured(anchor: Anchor, mode: TrackingMode = TrackingMode.from(anchor)) {
+    fun onAnchorCaptured(
+        anchor: Anchor,
+        supported: Set<TrackingMode> = TrackingMode.entries.toSet(),
+    ) {
         val snooze = active ?: return
-        val supported = TrackingMode.from(anchor)
-        // The less capable of the two: enum order runs FULL → DURATION_ONLY.
-        val armed = snooze.copy(anchor = anchor, mode = maxOf(mode, supported))
+        supportedModes = supported
+        val fieldsAllow = TrackingMode.from(anchor)
+        val armed = snooze.copy(anchor = anchor, mode = honest(fieldsAllow))
         active = armed
         state = SnoozeState.ARMED
         listener.onStateChanged(state, armed, null)
         // Armed, but say so if it armed degraded: a snooze that is really only a
         // timer must not look like a tracked one (SPEC.md §4.1, §8.1). The
         // cause names which limit bit — the anchor's missing fix, or the
-        // caller arming below what the anchor supports — because the debug log
+        // machinery watching less than the fields allow — because the debug log
         // records it, and a reason that misstates which is which is exactly
         // what it exists to rule out (SPEC.md §4.6; flagged by Codex on
         // PR #71 when this said NO_LOCATION_FIX over a fix just captured).
         if (armed.mode != TrackingMode.FULL) {
-            val cause = if (supported < armed.mode) {
+            val cause = if (armed.mode != fieldsAllow) {
                 DegradationCause.NOTHING_WATCHING
             } else {
                 DegradationCause.NO_LOCATION_FIX
@@ -371,16 +402,28 @@ class SnoozeController(
      * continues from its original start — a reboot does not extend a snooze
      * (§8.3) — so an already-expired one ends immediately rather than being
      * resurrected.
+     *
+     * [supported] is [PresenceMonitor.supportedModes] for this snooze's
+     * anchor, from whoever is restarting the machinery; it defaults to
+     * everything for callers with nothing better to say.
      */
-    fun restore(snooze: ActiveSnooze) {
-        active = snooze
+    fun restore(
+        snooze: ActiveSnooze,
+        supported: Set<TrackingMode> = TrackingMode.entries.toSet(),
+    ) {
+        supportedModes = supported
+        // The record's own claim is lowered too: it was written under some
+        // machinery, but not provably this one — an app update can change
+        // what is watched between the write and this read.
+        val restored = snooze.copy(mode = honest(snooze.mode))
+        active = restored
 
         // The clock first, before the rule. A record whose cap passed while the
         // process was dead is already over, and re-asserting it would silence
         // the phone again — briefly in the good case, and until some later retry
         // succeeded in the bad one. Ending is the same call either way, so the
         // only thing the old order bought was a flap.
-        if (snooze.isExpired(readClock())) {
+        if (restored.isExpired(readClock())) {
             state = SnoozeState.ARMED
             end(EndReason.DURATION_CAP)
             return
@@ -390,7 +433,7 @@ class SnoozeController(
         // record surviving does not mean the rule's condition did — a reboot, an
         // app update, or the platform dropping it would otherwise leave the app
         // showing a snooze over a phone that rings.
-        val outcome = zen.setSnoozed(true, ZenTrigger.CONTEXT, snooze.placeName)
+        val outcome = zen.setSnoozed(true, ZenTrigger.CONTEXT, restored.placeName)
         if (outcome is ZenOutcome.NotApplied) {
             listener.onZenFailure(outcome.reason, whileArming = true)
 
@@ -403,7 +446,7 @@ class SnoozeController(
                 // cap, which are the only two things that could ever turn it
                 // back off. So keep them, stay armed, and let the cap retry.
                 state = SnoozeState.ARMED
-                listener.onStateChanged(state, snooze, null)
+                listener.onStateChanged(state, restored, null)
                 onCapCheck()
                 return
             }
@@ -413,13 +456,13 @@ class SnoozeController(
             // the zen controller again: a second call would fail the same way.
             active = null
             state = SnoozeState.RELEASED
-            listener.onStateChanged(state, snooze, EndReason.LOST_CAPABILITY)
+            listener.onStateChanged(state, restored, EndReason.LOST_CAPABILITY)
             state = SnoozeState.IDLE
             return
         }
 
         state = SnoozeState.ARMED
-        listener.onStateChanged(state, snooze, null)
+        listener.onStateChanged(state, restored, null)
         onCapCheck()
     }
 
@@ -437,12 +480,19 @@ class SnoozeController(
      * so the mode stays `WIFI_ONLY` without anyone having to remember not to
      * claim `FULL`.
      */
-    private fun modeFor(degradation: DegradationCause?, anchor: Anchor): TrackingMode = when {
-        degradation == null -> TrackingMode.from(anchor)
-        // Losing location leaves Wi-Fi *only if there was an SSID*; claiming
-        // `WIFI_ONLY` for an anchor with no network would tell the user tracking
-        // is better than it is.
-        anchor.ssid != null -> TrackingMode.WIFI_ONLY
-        else -> TrackingMode.DURATION_ONLY
+    private fun modeFor(degradation: DegradationCause?, anchor: Anchor): TrackingMode {
+        val computed = when {
+            degradation == null -> TrackingMode.from(anchor)
+            // Losing location leaves Wi-Fi *only if there was an SSID*; claiming
+            // `WIFI_ONLY` for an anchor with no network would tell the user tracking
+            // is better than it is.
+            anchor.ssid != null -> TrackingMode.WIFI_ONLY
+            else -> TrackingMode.DURATION_ONLY
+        }
+        // Lowered to what the machinery actually runs (see [supportedModes]):
+        // the anchor's fields set the best case, and a computed mode — the
+        // healthy claim and the degradation fallback alike — is honest only
+        // if something watches it.
+        return honest(computed)
     }
 }

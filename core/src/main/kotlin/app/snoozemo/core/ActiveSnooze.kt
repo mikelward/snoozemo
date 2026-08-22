@@ -267,6 +267,32 @@ data class ActiveSnooze(
     }
 
     /**
+     * The arm moment in this record's elapsed-realtime frame, or null for a
+     * record with no frame — the presence engine's evidence seed.
+     *
+     * Derived from [capCeilingAt] rather than [startedAt], deliberately: the
+     * ceiling moves with every frame restatement ([reconciledOnto] shifts it,
+     * [rebasedOnto] leaves wall values alone with the reference), while
+     * [startedAt] is the snooze's *identity* and never moves. Subtracting a
+     * restated [bootReference] from an unrestated [startedAt] mixes frames,
+     * and after a backward clock change the mixed answer lands in the future
+     * — rejecting as stale the very observation a restore was woken to
+     * collect (flagged by Codex on PR #73). [capCeilingAt] is
+     * `startedAt + DEFAULT_CAP` by construction and shares every
+     * restatement, so subtracting the constant recovers the arm moment in
+     * whatever frame the record currently speaks. When per-place ceilings
+     * arrive, this derivation must become a stored value — that lands with
+     * the `PresenceState` persistence slice (`TODO.md`).
+     *
+     * Across a reboot the answer degrades exactly as the cap's own arithmetic
+     * does: a clock moved while nothing ran is invisible here too, and the
+     * error is bounded by the same restatements every boot performs.
+     */
+    fun armedAtElapsedRealtimeMs(): Long? = bootReference?.let {
+        (capCeilingAt.toEpochMilli() - DEFAULT_CAP.toMillis()) - it
+    }
+
+    /**
      * Where the cap lands if the notification's `+30 min` is tapped (SPEC.md
      * §4.3), clamped to [capCeilingAt] — repeated taps may not walk a snooze
      * past the backstop.

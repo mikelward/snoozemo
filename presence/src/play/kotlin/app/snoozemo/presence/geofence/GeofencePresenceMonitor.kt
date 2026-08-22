@@ -12,6 +12,7 @@ import app.snoozemo.core.PresenceMonitor
 import app.snoozemo.core.PresenceSignal
 import app.snoozemo.core.PresenceUpdate
 import app.snoozemo.core.SnoozeDebugLog
+import app.snoozemo.core.TrackingMode
 import app.snoozemo.presence.PresenceFeed
 import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.location.Geofence
@@ -27,15 +28,14 @@ import kotlinx.coroutines.flow.callbackFlow
  * Geofencing API watches for the departure, and no foreground service exists.
  *
  * Built in slices. Landed here: registration, the exit callback, the
- * recoverable/fatal split at the platform boundary, and the confirming fixes
- * — [CheckingFixes] one-shots started and stopped by the duty the engine
- * reports, so an exit escalates and the §6.6 test can actually settle it.
- * Still their own `TODO.md` items behind the same interface: the Wi-Fi
- * suppressor callback, significant motion, the grace alarm, the periodic
- * backstop, and `PresenceState` persistence. And nothing collects this flow
- * until the service wiring slice lands, so every conclusion here is still
- * unconsumed — safe in the fail-open direction: the duration cap bounds
- * every snooze.
+ * recoverable/fatal split at the platform boundary, the confirming fixes —
+ * [CheckingFixes] one-shots started and stopped by the duty the engine
+ * reports, so an exit escalates and the §6.6 test can actually settle it —
+ * and the restart mailbox: an exit that lands in a dead process waits in
+ * [GeofenceSignalBridge] while the woken service restores, and this
+ * monitor's own attach collects it. Still their own `TODO.md` items behind
+ * the same interface: the Wi-Fi suppressor callback, significant motion,
+ * the grace alarm, the periodic backstop, and `PresenceState` persistence.
  *
  * Everything the platform can refuse is classified through
  * [GeofenceRegistrationFailure], because the one distinction this class must
@@ -72,7 +72,7 @@ class GeofencePresenceMonitor(
      */
     private val stopGeneration = java.util.concurrent.atomic.AtomicLong(0)
 
-    override fun start(anchor: Anchor): Flow<PresenceUpdate> {
+    override fun start(anchor: Anchor, sinceElapsedRealtimeMs: Long): Flow<PresenceUpdate> {
         // Captured synchronously at the call, not inside the producer: the
         // whole point is telling a stop that happened after start() from one
         // that happened before the producer got to run.
@@ -99,7 +99,12 @@ class GeofencePresenceMonitor(
             }
         }
 
-        val feed = PresenceFeed(anchor, seedElapsedRealtimeMs = readElapsedRealtimeMs())
+        // The caller's arm-moment seed, never this monitor's own "now": a
+        // restored monitor's now post-dates the held exit the restart was
+        // woken to deliver, and seeding with it dropped that exit as stale —
+        // the confirmation never ran and the phone stayed quiet until the
+        // cap (flagged by Codex on PR #73).
+        val feed = PresenceFeed(anchor, seedElapsedRealtimeMs = sinceElapsedRealtimeMs)
 
         // The platform-health level, held beside the feed because it is not
         // the engine's to know: the engine reasons about evidence, and "the
@@ -157,7 +162,21 @@ class GeofencePresenceMonitor(
             // Pause, not close: the duty leaving ACTIVE is a state the engine
             // can re-enter, and only teardown (awaitClose) may end the burst
             // for good.
-            if (duty == LocationDuty.ACTIVE) checkingFixes?.start() else checkingFixes?.pause()
+            if (duty == LocationDuty.ACTIVE) {
+                checkingFixes?.start()
+            } else {
+                checkingFixes?.pause()
+                // Not checking means any held exit reached its terminal
+                // answer — refuted, degraded past, or dropped as stale — so
+                // the bridge's slot is retired here, which is what keeps a
+                // detach after the answer from waking a service with nothing
+                // left to check (Codex, PR #73). Except an *ending* answer:
+                // `send` above only queued it, and a teardown before the
+                // collector consumes it would find the slot already settled —
+                // a departure confirmed and then lost (Codex, PR #73). An end
+                // that is acted on settles the slot through stop().
+                if (settlesHeldExit(duty, update.event)) GeofenceSignalBridge.settleExit()
+            }
         }
 
         // Recoverable refusals set the platform level (and so keep being
@@ -200,11 +219,7 @@ class GeofencePresenceMonitor(
             },
         )
 
-        // This flow's claim on the one fence. Registration takes the process-
-        // level ownership below; only the owner removes the fence on teardown.
-        val ownership = Any()
         var bridge: AutoCloseable? = null
-        var registered = false
 
         // The whole setup — bridge attachment included — runs as one section
         // under the registration lock, guarded by whether this flow has
@@ -255,13 +270,8 @@ class GeofencePresenceMonitor(
                         .setInitialTrigger(0)
                         .build()
                     try {
-                        // The claim sits before the call, not on its success
-                        // callback: an in-flight registration is already this
-                        // flow's to clean up. Both under the section's lock,
-                        // so the last claimant is also the last registrant
-                        // (flagged by Codex on PR #70). `addGeofences` only
-                        // enqueues — the lock never waits on Play Services.
-                        fenceOwner.set(ownership)
+                        // `addGeofences` only enqueues — the lock never waits
+                        // on Play Services.
                         client.addGeofences(request, transitionIntent(appContext))
                             .addOnSuccessListener {
                                 SnoozeDebugLog.event("geofence registered; radius=${anchor.radiusM}m")
@@ -281,7 +291,6 @@ class GeofencePresenceMonitor(
                                 )
                                 reportRegistration(failure)
                             }
-                        registered = true
                     } catch (e: SecurityException) {
                         // The grant went between the permission check and the
                         // call — fail open with the reason rather than watch
@@ -310,51 +319,96 @@ class GeofencePresenceMonitor(
             active.compareAndSet(handle, null)
             checkingFixes?.close()
             bridge?.close()
-            // Only while this flow still owns the fence: a replacement monitor
-            // registering under the shared id has taken ownership, and the old
-            // teardown removing it would strip the new snooze's tracking with
-            // no degradation to say so (flagged by Codex on PR #70) — the
-            // identity rule the bridge already follows, applied to the fence.
-            // Under the same lock as registration, so a removal can never
-            // slot between a replacement's claim and its register call.
-            synchronized(registrationLock) {
-                if (registered && fenceOwner.compareAndSet(ownership, null)) {
-                    // Contained: removal is cleanup, and the fence dies with
-                    // the app's registrations anyway if this fails.
-                    runCatching {
-                        LocationServices.getGeofencingClient(appContext)
-                            .removeGeofences(listOf(GEOFENCE_ID))
-                    }.onFailure {
-                        SnoozeDebugLog.warning("geofence removal failed; it is inert without a snooze", it)
-                    }
-                }
-            }
+            // Deliberately NOT the fence. The registration is the one durable
+            // thing this monitor owns, and durability is its entire point:
+            // Android stops an ordinary background service routinely, the
+            // collector dies with it, and a fence removed here would mean no
+            // departure could ever wake the app again — DND until the cap,
+            // silently (flagged by Codex on PR #73). The fence outlives the
+            // process by design (SPEC.md §3, §6.10); only [stop] — the snooze
+            // actually ending — takes it down. A restarted service re-collects
+            // and re-registers under the same id, which replaces in place.
         }
         }
     }
 
     override fun stop() {
         // Idempotent by construction: closing an already-completed channel is
-        // a no-op, and the release itself runs once, inside awaitClose. The
-        // generation bump and the close share the lifecycle lock so a cold
-        // producer cannot observe the old generation after this stop has
-        // decided (see [stopGeneration]).
+        // a no-op. The generation bump and the close share the lifecycle lock
+        // so a cold producer cannot observe the old generation after this
+        // stop has decided (see [stopGeneration]).
+        //
+        // The fence comes down here, and only here: stop() means the snooze
+        // is over, and a fence outliving its snooze is a wake-up nobody
+        // wants. Unconditional — no in-process ownership gate — because the
+        // registration outlives the process while any token would not: a
+        // snooze ended from a cold process must still take down the fence a
+        // dead process registered (flagged by Codex on PR #73), and removing
+        // an id with no registration behind it is a no-op.
         synchronized(registrationLock) {
             stopGeneration.incrementAndGet()
+            // Retired before the close: the snooze is over, so whatever exit
+            // the bridge still holds is settled by definition, and clearing it
+            // first is what keeps the detach below from waking a service to
+            // check a departure that no longer has a snooze to end.
+            GeofenceSignalBridge.settleExit()
             active.getAndSet(null)?.close()
+            // Contained: removal is cleanup, and the fence dies with the
+            // app's registrations anyway if this fails. A leftover fence is
+            // inert either way — a stale crossing wakes a restore that finds
+            // no record — so the response to a failure is the diagnostic,
+            // not a retry chain.
+            runCatching {
+                LocationServices.getGeofencingClient(appContext)
+                    .removeGeofences(listOf(GEOFENCE_ID))
+                    // The call only enqueues; a rejection arrives on the task,
+                    // which the catch below never sees (Codex, PR #73).
+                    .addOnFailureListener {
+                        SnoozeDebugLog.warning(
+                            "geofence removal rejected; it is inert without a snooze",
+                            it,
+                        )
+                    }
+            }.onFailure {
+                SnoozeDebugLog.warning("geofence removal failed; it is inert without a snooze", it)
+            }
         }
     }
+
+    /**
+     * A fenced anchor is fully watched: the geofence detects the departure
+     * and the checking burst confirms it through §6.6. `WIFI_ONLY` is never
+     * in the set — the Wi-Fi watch that would make it honest is its own
+     * `TODO.md` slice — so an SSID-only anchor is a timer however real its
+     * network was, and a fenced anchor that loses location degrades straight
+     * to a timer rather than to a Wi-Fi claim nothing backs (flagged by
+     * Codex on PR #73).
+     */
+    override fun supportedModes(anchor: Anchor): Set<TrackingMode> =
+        if (anchor.hasUsableFix) {
+            setOf(TrackingMode.FULL, TrackingMode.DURATION_ONLY)
+        } else {
+            setOf(TrackingMode.DURATION_ONLY)
+        }
 
     companion object {
         /** The one fence this app ever registers (one snooze, one place). */
         internal const val GEOFENCE_ID = "snoozemo-anchor"
 
         /**
-         * Which flow currently owns the fence. Process-level because the fence
-         * is: registrations under the shared id replace each other in Play
-         * Services, so removal is only the owner's to do.
+         * Whether an update leaving the checking duty may retire the bridge's
+         * held exit. A terminal *ending* event may not: the update is only
+         * queued toward the collector at this point, so settling here would
+         * leave a teardown racing the collector with no held exit to wake a
+         * successor for — a departure confirmed and then lost (Codex, PR
+         * #73). The end that is actually acted on settles the slot through
+         * [stop]; a refusal keeps it held, and the next attach re-runs the
+         * check.
          */
-        private val fenceOwner = java.util.concurrent.atomic.AtomicReference<Any?>(null)
+        internal fun settlesHeldExit(duty: LocationDuty, event: PresenceEvent?): Boolean =
+            duty != LocationDuty.ACTIVE &&
+                event != PresenceEvent.Departed &&
+                event !is PresenceEvent.CapabilityLost
 
         /** Serializes claim-and-register with owner-checked removal. */
         private val registrationLock = Any()
