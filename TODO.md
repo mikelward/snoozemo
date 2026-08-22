@@ -374,6 +374,12 @@ the point is that every other line of the app is worthless if it isn't true.
 
 ## Phase 3 (M3) — Presence: the `play` flavor
 
+- [x] **Declare the location permissions** (approved by the maintainer, 2026-08-22, for
+      sideload testing): fine + coarse and `ACCESS_WIFI_STATE` in the shared manifest,
+      `ACCESS_BACKGROUND_LOCATION` in the `play` flavor's alone, pinned in both directions —
+      and `INTERNET`'s absence with them — by `DeclaredPermissionsTest`, which runs per
+      flavor variant. The `direct` flavor's foreground-service declarations wait for Phase 7's
+      service; the in-app prompt and prominent disclosure are Phase 6's items and need copy.
 - [ ] `PresenceMonitor` interface and `GeofencePresenceMonitor`, with everything above the
       interface flavor-agnostic (`SPEC.md` §6.1).
       - [x] **The engine above the interface**: `Presence`, a pure state machine in `:core` over

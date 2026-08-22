@@ -6,10 +6,27 @@
       nothing can leave the device at all, which is what makes the Play Data
       Safety answer "no data collected, no data shared" trivially auditable.
       Adding it is a product decision, not an implementation detail.
-
-      The location and notification permissions arrive with the phases that use
-      them: Phase 2 for POST_NOTIFICATIONS, Phase 3 for the location family.
     -->
+
+    <!--
+      The location family both flavors share (SPEC.md §3.4; declared with the
+      maintainer's approval, 2026-08-22): the departure test needs a fine fix —
+      §6.6's accuracy gate cannot pass on coarse — and COARSE is declared
+      beside it because Android 12+ lets the user downgrade the grant, so a
+      request for FINE alone would be refused outright instead of downgraded.
+      ACCESS_BACKGROUND_LOCATION is the `play` flavor's alone (its manifest);
+      the `direct` flavor holds no restricted permission (§3.4), pinned by
+      DeclaredPermissionsTest.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!--
+      The Wi-Fi suppressor (SPEC.md §6.4, D4): association with the anchor's
+      network is what lets the duty cycle do no location work while the user
+      is demonstrably still there. State only — Snoozemo never changes Wi-Fi.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
     <!--
       Manifest-declared, but granted through a settings screen rather than a
