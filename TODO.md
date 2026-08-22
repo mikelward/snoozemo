@@ -746,8 +746,24 @@ the point is that every other line of the app is worthless if it isn't true.
 
 ## Phase 6 (M6) — Internal-track release on Play
 
-- [ ] Release plumbing: signing, Play Console setup, the `deploy` job, and the "What's new"
-      generation from commit subjects described in `AGENTS.md`.
+- [x] Release signing and a `deploy` job that builds a downloadable AAB. **Landed**:
+      `signingConfigs["release"]` (`app/build.gradle.kts`) reads the upload keystore from
+      `RELEASE_KEYSTORE_FILE` and its companion env vars, attaching only when they're present so
+      a fresh clone still builds unsigned; the `deploy` job in
+      `.github/workflows/android-ci.yml` builds `:app:bundlePlayRelease` on every push to `main`
+      and publishes it as a downloadable `app-release-aab` workflow artifact, for the manual seed
+      upload Play requires (`docs/play-store-internal-track.md`). R8 stays off — a separate
+      follow-up once there is a device to verify a shrunk build against.
+- [ ] **Automatic upload to the Play internal track.** Deliberately not this PR's scope
+      (maintainer, 2026-08-22): a `r0adkll/upload-google-play` step plus the "What's new"
+      generation from commit subjects described in `AGENTS.md`, and their own doc/secrets-table
+      additions, were built and then pulled back out so that PR could stay focused on the
+      manual-build path. Follow-up work: the release-notes generator (ported from the sibling
+      Simmo/Type Launcher repos' deploy job, unchanged in shape), the Play service account and
+      its Google Cloud/Console setup, and the `PLAY_SERVICE_ACCOUNT_JSON` secret. **Play Console
+      setup itself (the account, the app listing, the declarations)** is the maintainer's own
+      one-time work either way, tracked in `docs/play-store-internal-track.md` rather than here
+      since it's account/console state, not code.
 - [x] Make a release build **fail** when its version can't be derived from git, rather than
       warning (`app/build.gradle.kts`). The fallback exists so a checkout without git still
       builds; once a build can reach a tester or Play, falling back to versionCode 1 is
