@@ -107,6 +107,7 @@ class ActiveSnoozeStore(context: Context) {
                 fixAccuracyM = prefs.getFloatOrNull(KEY_ACCURACY),
                 capturedAt = Instant.ofEpochMilli(prefs.getLong(KEY_CAPTURED_AT, startedAt)),
                 ssid = prefs.getString(KEY_SSID, null),
+                bssid = prefs.getString(KEY_BSSID, null),
                 radiusM = prefs.getInt(KEY_RADIUS, Anchor.DEFAULT_RADIUS_M),
             ),
             startedAt = Instant.ofEpochMilli(startedAt),
@@ -288,6 +289,9 @@ class ActiveSnoozeStore(context: Context) {
         .putString(KEY_MODE, snooze.mode.name)
         .putString(KEY_PLACE, snooze.placeName)
         .putString(KEY_SSID, snooze.anchor.ssid)
+        // Recorded alongside the SSID and acted on by nothing (SPEC.md §6.2);
+        // persisted so the record a restore reads matches the one that armed.
+        .putString(KEY_BSSID, snooze.anchor.bssid)
         .putInt(KEY_RADIUS, snooze.anchor.radiusM)
         .also { editor ->
             snooze.anchor.lat?.let { editor.putLong(KEY_LAT, it.toRawBits()) }
@@ -364,6 +368,7 @@ class ActiveSnoozeStore(context: Context) {
         const val KEY_MODE = "mode"
         const val KEY_PLACE = "place"
         const val KEY_SSID = "ssid"
+        const val KEY_BSSID = "bssid"
         const val KEY_RADIUS = "radius"
         const val KEY_LAT = "lat"
         const val KEY_LON = "lon"

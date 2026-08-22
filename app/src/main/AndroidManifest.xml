@@ -25,6 +25,9 @@
       The Wi-Fi suppressor (SPEC.md §6.4, D4): association with the anchor's
       network is what lets the duty cycle do no location work while the user
       is demonstrably still there. State only — Snoozemo never changes Wi-Fi.
+
+      ACCESS_NETWORK_STATE rides in beside it from the `:presence` manifest,
+      which declares it for the network callback the SSID read goes through.
     -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 

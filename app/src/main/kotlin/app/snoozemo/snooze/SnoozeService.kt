@@ -11,6 +11,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import app.snoozemo.core.ActiveSnooze
+import app.snoozemo.core.Anchor
 import app.snoozemo.core.Attempt
 import app.snoozemo.core.ClockChange
 import app.snoozemo.core.ClockChangeAction
@@ -26,12 +27,14 @@ import app.snoozemo.core.ReleaseStep
 import app.snoozemo.core.SnoozeController
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.SnoozeState
+import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
 import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenTrigger
 import app.snoozemo.core.logSummary
 import app.snoozemo.dnd.AndroidZenController
+import app.snoozemo.presence.AnchorCaptureRunner
 import java.time.Duration
 import java.time.Instant
 
@@ -195,6 +198,16 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * the failure the retry exists to prevent, aimed at the wrong snooze.
      */
     private val eraseRetryHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * The running anchor capture, or null when none is.
+     *
+     * Held so an exit can take it back: a capture's ceiling outlives an `End
+     * now` tapped inside it, and its callbacks and location request must not.
+     * Closed on every transition that ends the snooze, and by a new arm before
+     * it starts its own.
+     */
+    private var anchorCapture: AutoCloseable? = null
 
     /** Restoring is attempted once per service instance, from onStartCommand. */
     private var restored: Boolean = false
@@ -958,11 +971,55 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // check and drops itself, and canceling alarms is the one thing that
         // has repeatedly turned out to remove an exit something still needed.
 
-        // Phase 3 replaces this with real anchor capture behind PresenceMonitor.
-        // Until then every snooze is honestly duration-only rather than pretending
-        // to track a place it never captured.
-        controller.onAnchorUnavailable(ssid = null)
+        // Say `Snoozing` now rather than when the anchor lands: capture takes
+        // up to 10 s (SPEC.md §4.1), and ARMED — which posts this — no longer
+        // follows within milliseconds. Off the arm path: `STATE_TRUE` landed
+        // above, so these binder calls delay nothing the user is waiting on.
+        notifications.showOngoing(snooze)
+        SnoozeTileBridge.refresh(applicationContext)
+
+        beginAnchorCaptureFor(snooze)
     }
+
+    /**
+     * Starts anchor capture for [snooze], replacing any capture still running —
+     * there is at most one snooze, so at most one capture (SPEC.md §7).
+     *
+     * The delivery is guarded by identity, not just liveness: the runner's
+     * ceiling means a capture can outlive its snooze, and an `End now` plus a
+     * fresh tap inside ten seconds would otherwise land the *old* place on the
+     * *new* snooze. The controller's own null-check cannot see that case.
+     */
+    private fun beginAnchorCaptureFor(snooze: ActiveSnooze) {
+        anchorCapture?.close()
+        val startedAt = snooze.startedAt
+        anchorCapture = beginAnchorCapture(snooze.anchor.capturedAt) { anchor ->
+            anchorCapture = null
+            val running = controller.active
+            if (running == null || running.startedAt != startedAt) {
+                SnoozeDebugLog.event("anchor arrived for an ended snooze; dropped")
+                return@beginAnchorCapture
+            }
+            // Duration-only whatever was captured, deliberately: the anchor is
+            // recorded, but nothing consumes it yet — the monitor wiring is the
+            // next Phase 3 slice — and a mode is a claim about what is
+            // *watching*, not about what was written down (SPEC.md §8.1).
+            // `TrackingMode.from(anchor)` takes over when something is.
+            controller.onAnchorCaptured(anchor, TrackingMode.DURATION_ONLY)
+        }
+    }
+
+    /**
+     * The capture seam, like [createZenController] and for the same reason:
+     * the platform half needs real callbacks a JVM test cannot drive, so tests
+     * substitute the delivery and the decision logic stays covered — the
+     * assembly rules in `AnchorCapture`'s own tests, the wiring here through
+     * this seam.
+     */
+    internal open fun beginAnchorCapture(
+        capturedAt: Instant,
+        onCaptured: (Anchor) -> Unit,
+    ): AutoCloseable = AnchorCaptureRunner(applicationContext).begin(capturedAt, onCaptured)
 
     /**
      * The user set the clock, and this service is the one holding the snooze
@@ -1167,8 +1224,10 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 // a system-server round trip sitting between the tile tap and
                 // the phone going quiet — the one thing the arm path may not
                 // have (`AGENTS.md`, the arm path). Nothing needs it this
-                // early: `ARMED` follows within milliseconds and posts it, and
-                // an arm that *fails* never flashes `Snoozing` at all now.
+                // early: `armWithCap` posts it the moment the rule is on —
+                // capture can hold `ARMED` off for ten seconds, so it no
+                // longer waits for that — and an arm that *fails* never
+                // flashes `Snoozing` at all.
                 //
                 // The record is different and stays: it is what turns the rule
                 // back off after process death, so it has to exist before the
@@ -1186,6 +1245,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 notifications.showOngoing(it)
             }
             SnoozeState.RELEASED -> {
+                // A capture still running is for a snooze that no longer
+                // exists; the identity guard would drop its anchor anyway, but
+                // its callbacks and location request are resources to release
+                // now, not at the ceiling.
+                anchorCapture?.close()
+                anchorCapture = null
                 snooze?.let { erasing = it.startedAt }
                 forget()
                 if (unwindingFailedArm) notifications.cancelOngoing() else notifications.showEnded(reason)
@@ -1221,9 +1286,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         }
         // Every transition except `ARMING`, which is the one that sits between
         // the tile tap and the rule going on. Nothing is lost by skipping it:
-        // arming is followed within milliseconds by `ARMED` or `IDLE`, and both
-        // refresh. What is gained is one fewer binder call on the path whose
-        // whole purpose is to be immediate.
+        // a refused arm reaches `IDLE`, which refreshes here, and a successful
+        // one refreshes from `armWithCap` the moment the rule is on — capture
+        // can hold `ARMED` off for ten seconds now, so that refresh no longer
+        // waits for it. What is gained is one fewer binder call on the path
+        // whose whole purpose is to be immediate.
         if (state != SnoozeState.ARMING) SnoozeTileBridge.refresh(applicationContext)
         // Nothing running, nothing to own. Keyed on the record rather than on
         // the state: a successful release reports RELEASED and settles into
@@ -1713,6 +1780,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // re-reads the record and picks the work back up if it is still there.
         eraseRetryHandler.removeCallbacksAndMessages(null)
         releaseRetryHandler.removeCallbacksAndMessages(null)
+        // The capture dies with the controller it feeds. The snooze survives —
+        // its record is on disk with whatever mode ARMING wrote — and a
+        // capture lost this way is the arm ceiling's degraded path arriving
+        // early, not a new failure mode.
+        anchorCapture?.close()
+        anchorCapture = null
         // Only if it registered. A registration the platform refused is a state
         // this class now knows about, so unregistering it is not something to
         // attempt and then explain away.

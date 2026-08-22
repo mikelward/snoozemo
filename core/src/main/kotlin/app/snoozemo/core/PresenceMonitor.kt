@@ -124,6 +124,17 @@ enum class DegradationCause {
      * (SPEC.md §8.1, §8.3). Recovers when the user taps `Resume tracking`.
      */
     NO_LOCATION_IN_BACKGROUND,
+
+    /**
+     * The anchor was captured but nothing is running to watch it, so the
+     * caller armed below what the anchor supports — today every arm, until
+     * the monitor wiring consumes the anchor; durably, the `direct` flavor
+     * until Phase 7's foreground monitor. Distinct from [NO_LOCATION_FIX]
+     * because the debug log records the cause, and "no fix" over a fix just
+     * persisted is the kind of false reason §4.6's log exists to rule out
+     * (flagged by Codex on PR #71).
+     */
+    NOTHING_WATCHING,
 }
 
 /** Why tracking became impossible. Each of these ends the snooze. */

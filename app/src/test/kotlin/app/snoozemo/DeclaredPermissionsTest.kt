@@ -41,6 +41,9 @@ class DeclaredPermissionsTest {
         // a request for FINE alone would be refused, not downgraded.
         assertTrue(Manifest.permission.ACCESS_COARSE_LOCATION in declared)
         assertTrue(Manifest.permission.ACCESS_WIFI_STATE in declared)
+        // Merged in from `:presence`, which needs it to register the network
+        // callback the SSID read goes through (SPEC.md §6.4).
+        assertTrue(Manifest.permission.ACCESS_NETWORK_STATE in declared)
     }
 
     @Test

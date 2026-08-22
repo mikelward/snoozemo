@@ -76,11 +76,29 @@ internal class TestSnoozeService : SnoozeService() {
 
     override val readClock: () -> ClockReading get() = { testReading }
 
+    override fun beginAnchorCapture(
+        capturedAt: Instant,
+        onCaptured: (Anchor) -> Unit,
+    ): AutoCloseable {
+        captureRequests += onCaptured
+        return AutoCloseable { captureClosed++ }
+    }
+
     companion object {
         /** Arbitrary but plausible: the fixture device booted 30 h ago. */
         const val FIXTURE_UPTIME_MILLIS: Long = 30L * 60 * 60 * 1000
 
         var zen: RefusingZen = RefusingZen()
+
+        /**
+         * Every capture the service started, as the callback each would hand
+         * its anchor to — a test *is* the runner behind the seam, so it
+         * delivers (or withholds) the anchor at the moment under test.
+         */
+        var captureRequests = mutableListOf<(Anchor) -> Unit>()
+
+        /** How many captures were closed — by an exit, or by a replacement. */
+        var captureClosed: Int = 0
 
         /**
          * Both clocks, frozen. The uptime is arbitrary but plausible and moves
@@ -94,6 +112,8 @@ internal class TestSnoozeService : SnoozeService() {
 
         fun reset(now: Instant) {
             zen = RefusingZen()
+            captureRequests = mutableListOf()
+            captureClosed = 0
             testReading = ClockReading(
                 wallMillis = now.toEpochMilli(),
                 uptimeMillis = FIXTURE_UPTIME_MILLIS,
