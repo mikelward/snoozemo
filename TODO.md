@@ -397,13 +397,23 @@ the point is that every other line of the app is worthless if it isn't true.
         shared `PresenceFeed`, and every refusal classifies through
         `GeofenceRegistrationFailure` (only `GEOFENCE_NOT_AVAILABLE` degrades; the permission
         codes and everything unclassified fail open). The `direct` flavor compiles against a
-        `DurationOnlyPresenceMonitor` behind the same `defaultPresenceMonitor` seam. Still to
-        come in later slices: the duty-driven location request loop, restore-from-wake when an
+        `DurationOnlyPresenceMonitor` behind the same `defaultPresenceMonitor` seam.
+        **Second slice landed** (2026-08-22): the confirming fixes — `CheckingFixes` one-shot
+        `getCurrentLocation` requests, started and stopped by the engine's own duty, paced by
+        `CheckingCadence` (30 s per §6.6's gap, backing off to 5 min after three unanswered
+        requests). One-shots rather than §6.5's continuous request, deliberately: that request
+        belongs to the `direct` flavor's Phase 7 foreground service, and a background app gets
+        continuous location throttled to nothing — §6.10's design takes one fix per
+        confirmation step instead. `SANITY` duty maps to nothing yet; its resting-coverage role
+        belongs to the §6.10 periodic backstop when that slice lands. Still to come in later
+        slices: **wiring the monitor into `SnoozeService`** (nothing collects the flow yet, so
+        every conclusion is still unconsumed), restore-from-wake when an
         exit restarts a dead process (the bridge drops and logs it today), **re-registering the
         fence when location services come back on** (Codex, PR #70: `GEOFENCE_NOT_AVAILABLE` at
         registration reports the §8.4 degradation correctly but nothing retries, so the snooze
         stays degraded until the cap even after the user re-enables location — the mode-changed
-        listener belongs with the same device-state watching the location loop needs), and the
+        listener belongs with the same device-state watching the checking burst needs), the
+        grace alarm for `graceDeadlineMs` (set by the engine, armed by nobody), and the
         on-device verification the whole item is gated on.
       - [ ] **The grace deadline has to survive process death** (Codex, PR #31). `PresenceState`
         is in-memory only; a service killed after arming the five-minute grace alarm comes back
