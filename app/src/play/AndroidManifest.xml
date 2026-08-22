@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The play flavor's half of SPEC.md §3.4's split: the Geofencing API needs the
+  background grant to deliver an exit while the app holds no foreground
+  service, and this flavor deliberately has none — the declaration below is
+  the whole of what the flavor adds. It stays out of the main manifest so the
+  direct flavor ships with no restricted permission at all, which is that
+  flavor's reason to exist; DeclaredPermissionsTest pins the split in both
+  directions. Declared with the maintainer's approval (2026-08-22); the Play
+  Console declaration it commits us to is SPEC.md §3.5's risk.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+
+</manifest>
