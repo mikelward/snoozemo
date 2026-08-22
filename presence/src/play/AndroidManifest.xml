@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!--
+          The geofence transition target. Not exported: the sender is our own
+          mutable PendingIntent, and an exported receiver would let any app on
+          the phone fake a departure and end someone's snooze.
+        -->
+        <receiver
+            android:name="app.snoozemo.presence.geofence.GeofenceTransitionReceiver"
+            android:exported="false" />
+    </application>
+
+</manifest>
