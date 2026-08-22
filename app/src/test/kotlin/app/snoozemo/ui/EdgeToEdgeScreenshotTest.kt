@@ -24,6 +24,7 @@ import androidx.core.graphics.Insets
 import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ApplicationProvider
 import app.snoozemo.R
+import app.snoozemo.core.LocationPermission
 import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
 import com.github.takahirom.roborazzi.captureRoboImage
@@ -199,6 +200,7 @@ class EdgeToEdgeScreenshotTest {
             access = PolicyAccess.GRANTED,
             notifications = NotificationPermission.GRANTED,
             notificationsReachTheUser = true,
+            location = LocationPermission.GRANTED,
             tileAdded = true,
             tileBannerDismissed = true,
             snoozing = false,
@@ -208,6 +210,7 @@ class EdgeToEdgeScreenshotTest {
             debugLogSaveFailed = false,
             onAccessRow = {},
             onNotificationsRow = {},
+            onLocationRow = {},
             onTileRow = {},
             onDismissTileBanner = {},
             onArm = {},

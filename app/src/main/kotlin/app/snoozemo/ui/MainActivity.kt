@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager.PERMISSION_GRANTED
 import android.graphics.drawable.Icon
+import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
@@ -29,6 +30,7 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -51,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import app.snoozemo.R
 import app.snoozemo.core.EndReason
+import app.snoozemo.core.LocationPermission
 import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.PolicyAccessAction
@@ -62,6 +65,7 @@ import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.snooze.ActiveSnoozeStore
 import app.snoozemo.snooze.DebugLogStore
 import app.snoozemo.snooze.DebugLogging
+import app.snoozemo.snooze.LocationPromptStore
 import app.snoozemo.snooze.NotificationPromptStore
 import app.snoozemo.snooze.SnoozeNotifications
 import app.snoozemo.snooze.SnoozeService
@@ -83,6 +87,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var zen: ZenController
     private lateinit var store: ActiveSnoozeStore
     private lateinit var promptStore: NotificationPromptStore
+    private lateinit var locationPromptStore: LocationPromptStore
     private lateinit var tileStore: TilePresenceStore
     private var recordWatch: AutoCloseable? = null
     private var tileWatch: AutoCloseable? = null
@@ -125,6 +130,33 @@ class MainActivity : ComponentActivity() {
      * anyway.
      */
     private var notificationsReachTheUser by mutableStateOf(true)
+
+    /**
+     * Null until the platform has been asked, for the same reason [notifications]
+     * is: two `checkSelfPermission` calls plus a persisted denial history, none
+     * of which belongs in front of the first frame, and neither default is safe
+     * to render in the meantime.
+     *
+     * Missing this permission never blocks a snooze — the presence engine
+     * degrades to Wi-Fi-only or duration-only and says so (`SPEC.md` §3.6) — so
+     * this is purely the settings row's own repair surface, the same shape
+     * [notifications] uses for the same reason.
+     */
+    private var location by mutableStateOf<LocationPermission?>(null)
+
+    /**
+     * Whether the background-location rationale dialog is on screen. Only the
+     * background half needs one: `SPEC.md` §12 requires disclosure before
+     * *that* prompt specifically (it's the Play-restricted permission), and
+     * unlike the foreground request, background is asked for as a follow-up
+     * step the user did not just tap a button for — the dialog is what
+     * explains why a second system prompt is coming.
+     *
+     * Composable-local `remember` would lose this on rotation, same as any
+     * other dismissable confirmation dialog; that is an acceptable trade here
+     * since dismissing just means re-tapping the row.
+     */
+    internal var showBackgroundLocationRationale by mutableStateOf(false)
 
     /**
      * Whether the tile is known to be in Quick Settings.
@@ -242,6 +274,57 @@ class MainActivity : ComponentActivity() {
             if (granted) SnoozeService.refresh(this)
         }
 
+    /**
+     * The foreground half of the location grant: `ACCESS_FINE_LOCATION` and
+     * `ACCESS_COARSE_LOCATION` requested together in one system dialog, like
+     * the platform expects for a permission group — COARSE rides beside FINE
+     * only so the request isn't refused outright (AndroidManifest.xml's own
+     * comment on this; Android 12+ would otherwise decline to offer the
+     * approximate downgrade). Launched directly from the settings row, the
+     * same as every other row's runtime prompt — no disclosure precedes it;
+     * `SPEC.md` §12's requirement is specific to the background half below.
+     *
+     * On a **fine** grant, and only when
+     * [locationTrackingNeedsBackgroundPermission], opens the background
+     * rationale dialog rather than launching the background request directly
+     * — that dialog, not this one, is what Play's declaration requires
+     * precede the *background* prompt. A coarse-only grant never opens it: it
+     * isn't a grant [refreshLocation] treats as foreground held (see its own
+     * comment), so nothing downstream is watching yet.
+     */
+    private val foregroundLocationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+            onForegroundLocationResult(results[Manifest.permission.ACCESS_FINE_LOCATION] == true)
+        }
+
+    /**
+     * The foreground result-handling logic, pulled out of
+     * [foregroundLocationPermission]'s callback so a test can drive the
+     * foreground-grant → background-dialog ordering directly, without the
+     * real `ActivityResultLauncher` machinery in the way — the same
+     * testability seam [latestAccessRefresh] uses. Internal rather than
+     * private only for that; nothing outside this class calls it in
+     * production.
+     */
+    internal fun onForegroundLocationResult(fineGranted: Boolean) {
+        refreshLocation()
+        if (fineGranted && locationTrackingNeedsBackgroundPermission) {
+            showBackgroundLocationRationale = true
+        }
+    }
+
+    /**
+     * The background half, launched only from the rationale dialog's
+     * Continue — see [showBackgroundLocationRationale]. Whatever the answer,
+     * the settings row is what states it — a snooze still works without
+     * this, degraded (`SPEC.md` §3.6), so a denial here is never treated as a
+     * failure to recover from.
+     */
+    private val backgroundLocationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            refreshLocation()
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // The window is drawn edge to edge whether or not we ask for it —
@@ -264,6 +347,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         store = ActiveSnoozeStore(applicationContext)
         promptStore = NotificationPromptStore(applicationContext)
+        locationPromptStore = LocationPromptStore(applicationContext)
         tileStore = TilePresenceStore(applicationContext)
         zen = AndroidZenController.default(applicationContext)
         setContent {
@@ -272,6 +356,7 @@ class MainActivity : ComponentActivity() {
                     DebugScreen(
                         access = access,
                         notifications = notifications,
+                        location = location,
                         snoozing = snoozing,
                         lastOutcome = lastOutcome,
                         notificationsReachTheUser = notificationsReachTheUser,
@@ -282,12 +367,37 @@ class MainActivity : ComponentActivity() {
                         debugLogSaveFailed = debugLogSaveFailed,
                         onAccessRow = ::openPolicyAccessSettings,
                         onNotificationsRow = ::fixNotifications,
+                        onLocationRow = ::fixLocation,
                         onTileRow = ::addTile,
                         onDismissTileBanner = { tileStore.dismissBanner() },
                         onArm = ::armFromScreen,
                         onRelease = ::endFromScreen,
                         onDebugLog = ::setDebugLog,
                     )
+                    // The one disclosure this app shows: SPEC.md §12 requires it
+                    // precede the background-location prompt specifically (Play's
+                    // restricted-permission declaration), so it appears as a
+                    // small dialog over the settings screen rather than a
+                    // dedicated screen of its own — same shape as the sibling
+                    // ClothesCast repo's background-location rationale, which
+                    // has already cleared Play review with this pattern.
+                    if (showBackgroundLocationRationale) {
+                        AlertDialog(
+                            onDismissRequest = { showBackgroundLocationRationale = false },
+                            title = { Text(stringResource(R.string.location_background_rationale_title)) },
+                            text = { Text(stringResource(R.string.location_background_rationale_body)) },
+                            confirmButton = {
+                                TextButton(onClick = ::beginBackgroundLocationRequest) {
+                                    Text(stringResource(R.string.location_background_rationale_continue))
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showBackgroundLocationRationale = false }) {
+                                    Text(stringResource(R.string.location_background_rationale_dismiss))
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -392,6 +502,7 @@ class MainActivity : ComponentActivity() {
         Choreographer.getInstance().postFrameCallback {
                 window.decorView.post {
                 refreshNotifications()
+                refreshLocation()
                 // Read here rather than in `onStart` for the same reason as the
                 // rest: it is a preferences file, and no disk read belongs in
                 // front of the first frame.
@@ -493,6 +604,100 @@ class MainActivity : ComponentActivity() {
      */
     private fun askForNotifications() {
         notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    /**
+     * Re-reads both location permissions onto the screen, and returns what it
+     * read so a caller can act on the same answer — the same shape as
+     * [refreshNotifications], for the same reasons: on the main thread because
+     * `checkSelfPermission` and `shouldShowRequestPermissionRationale` are local
+     * package-manager cache hits, not binder round trips, and every caller is
+     * either already past the first frame or reacting to a dialog the user just
+     * answered.
+     */
+    private fun refreshLocation(): LocationPermission {
+        // FINE specifically, not FINE-or-COARSE: the presence engine's
+        // departure test needs a fine fix and treats a downgrade to
+        // coarse-only as a fatal capability loss, not a degraded-but-working
+        // state (PlatformFixRequester, AnchorCaptureRunner both gate on
+        // ACCESS_FINE_LOCATION alone) — so "granted" here has to mean the
+        // grant the engine can actually use, or this row would say `Tracking
+        // your place` over a snooze the engine has already given up watching
+        // (Codex, PR #79). COARSE is still requested alongside FINE
+        // (foregroundLocationPermission) and never checked on its own.
+        val foregroundGranted = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PERMISSION_GRANTED
+        val backgroundGranted =
+            checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PERMISSION_GRANTED
+        val foregroundRationale = shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION)
+        val backgroundRationale =
+            shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        // Recorded unconditionally, like the notification history — a reading
+        // with nothing new in it (`granted = false, rationale = false`) is
+        // already a safe no-op in the store, so there is nothing to gate here.
+        locationPromptStore.recordForeground(granted = foregroundGranted, rationale = foregroundRationale)
+        // The background history is meaningless on a flavor that never
+        // declares the permission — checkSelfPermission and
+        // shouldShowRequestPermissionRationale both read as "never granted,
+        // never denied" forever on `direct`, and recording that would just be
+        // a write with nothing behind it.
+        if (locationTrackingNeedsBackgroundPermission) {
+            locationPromptStore.recordBackground(granted = backgroundGranted, rationale = backgroundRationale)
+        }
+        val current = LocationPermission.of(
+            foregroundGranted = foregroundGranted,
+            backgroundGranted = backgroundGranted,
+            foregroundEverDenied = locationPromptStore.foregroundEverDenied(),
+            foregroundRationale = foregroundRationale,
+            backgroundEverDenied = locationPromptStore.backgroundEverDenied(),
+            backgroundRationale = backgroundRationale,
+            backgroundRequired = locationTrackingNeedsBackgroundPermission,
+        )
+        location = current
+        if (current == LocationPermission.GRANTED) clearFailure(SetupRowId.LOCATION)
+        return current
+    }
+
+    /**
+     * What tapping the location row does. `ASKABLE` launches the foreground
+     * request directly, the same as every other row's runtime prompt — no
+     * disclosure precedes it (see [foregroundLocationPermission]).
+     */
+    private fun fixLocation() {
+        when (refreshLocation()) {
+            LocationPermission.ASKABLE -> beginLocationRequest()
+            // Granted, or asked for as often as the system allows. Either way
+            // the only route left is the app's own permission settings — there
+            // is no single-permission deep link for location the way
+            // notifications has `ACTION_APP_NOTIFICATION_SETTINGS`.
+            LocationPermission.GRANTED, LocationPermission.BLOCKED ->
+                openSettings(
+                    SetupRowId.LOCATION,
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                        .setData(Uri.fromParts("package", packageName, null)),
+                )
+        }
+    }
+
+    /**
+     * Launches the foreground request, mirroring [askForNotifications]:
+     * launching is not spending, so nothing is recorded here. [refreshLocation]
+     * is what learns whether a denial actually landed.
+     */
+    private fun beginLocationRequest() {
+        foregroundLocationPermission.launch(
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
+        )
+    }
+
+    /**
+     * Launches the background request from the rationale dialog's Continue —
+     * see [showBackgroundLocationRationale]. Internal, like
+     * [onForegroundLocationResult], so a test can drive Continue directly
+     * and confirm it closes the dialog.
+     */
+    internal fun beginBackgroundLocationRequest() {
+        showBackgroundLocationRationale = false
+        backgroundLocationPermission.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
     }
 
     /**
@@ -935,6 +1140,7 @@ fun SnoozemoTheme(content: @Composable () -> Unit) {
 enum class SetupRowId {
     DND,
     NOTIFICATIONS,
+    LOCATION,
     TILE,
 }
 
@@ -943,6 +1149,7 @@ fun DebugScreen(
     access: PolicyAccess?,
     notifications: NotificationPermission?,
     notificationsReachTheUser: Boolean,
+    location: LocationPermission?,
     tileAdded: Boolean?,
     tileBannerDismissed: Boolean,
     snoozing: Boolean?,
@@ -952,6 +1159,7 @@ fun DebugScreen(
     debugLogSaveFailed: Boolean,
     onAccessRow: () -> Unit,
     onNotificationsRow: () -> Unit,
+    onLocationRow: () -> Unit,
     onTileRow: () -> Unit,
     onDismissTileBanner: () -> Unit,
     onArm: () -> Unit,
@@ -1051,6 +1259,22 @@ fun DebugScreen(
                 onAction = onNotificationsRow,
                 failure = stringResource(R.string.failure_could_not_open_settings)
                     .takeIf { settingsFailure == SetupRowId.NOTIFICATIONS },
+            )
+        }
+        // Same null-until-read discipline again. Missing this permission never
+        // blocks a snooze (SPEC.md §3.6's fallback ladder), so the row states a
+        // gap in what is tracked, not a broken product.
+        location?.let { state ->
+            val granted = state == LocationPermission.GRANTED
+            SetupRow(
+                title = stringResource(R.string.setup_location_title),
+                status = stringResource(
+                    if (granted) R.string.setup_location_granted else R.string.setup_location_missing,
+                ),
+                action = stringResource(R.string.setup_action_allow).takeUnless { granted },
+                onAction = onLocationRow,
+                failure = stringResource(R.string.failure_could_not_open_settings)
+                    .takeIf { settingsFailure == SetupRowId.LOCATION },
             )
         }
         // Only while it is missing. The tile is the product (SPEC.md §4.2), so
@@ -1324,6 +1548,7 @@ private fun DebugScreenPreview() {
             access = PolicyAccess.GRANTED,
             notifications = NotificationPermission.GRANTED,
             notificationsReachTheUser = true,
+            location = LocationPermission.GRANTED,
             tileAdded = true,
             tileBannerDismissed = true,
             snoozing = false,
@@ -1333,6 +1558,7 @@ private fun DebugScreenPreview() {
             debugLogSaveFailed = false,
             onAccessRow = {},
             onNotificationsRow = {},
+            onLocationRow = {},
             onTileRow = {},
             onDismissTileBanner = {},
             onArm = {},

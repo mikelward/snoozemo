@@ -45,6 +45,16 @@
         <exclude domain="sharedpref" path="notification_prompt.xml" />
 
         <!--
+          Same reasoning, for the location permissions: whether foreground or
+          background location has already been denied. Permissions do not
+          transfer, so carrying this across can read a fresh, ungranted
+          permission as permanently blocked and send the user straight to
+          Settings instead of showing the prompt the new phone would still
+          offer (Codex, PR #80).
+        -->
+        <exclude domain="sharedpref" path="location_prompt.xml" />
+
+        <!--
           The id of Snoozemo's own zen rule. Rule ids are issued by the platform
           on the device that created them, so a transferred one names nothing
           here — `ensureRule()` already recovers from that by creating a fresh
