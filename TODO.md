@@ -1115,6 +1115,32 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     a snooze that ends on a duration cap needs the same controller.
 
 ## Decisions needing review
+- **When Phase 6's deploy job lands, reconcile the docs-lane classifier with
+  the release-notes-skip classifier for `docs/PRIVACY.md`, and reconsider
+  forcing it onto the code lane at all.** `.github/lanes.conf`'s
+  `code docs/PRIVACY.md` rule means a PRIVACY.md-only change always runs
+  the full build/test/lint pipeline, even a pure wording fix that changes
+  nothing about the app — but PRIVACY.md isn't actually code, so that's a
+  heavier CI cost than the change needs; being release-worthy and needing
+  heavy CI are two separate questions the lane rule currently conflates.
+  Separately, the sibling repos' deploy job (the template this one will
+  follow) has two *independent* skip conditions in its release-notes
+  generator — a non-user-facing subject prefix skips a commit regardless
+  of what it touched, and a housekeeping-path check (which
+  `docs/PRIVACY.md` is carved out of) skips a commit whose diff is all
+  `.md`/dotfiles. A commit like `docs: clarify data retention wording`
+  touching only `docs/PRIVACY.md` would still be dropped by the prefix
+  check, even though the lane rule's whole point is that PRIVACY.md is
+  never "just docs." The two classifiers can silently diverge on this one
+  case — worth fixing in the shared shape before Phase 6 copies it here.
+- **Require a `docs/PRIVACY.md` update in the same commit as the practice
+  change it documents** (mirroring how `SPEC.md` stays in sync), and don't
+  let every PRIVACY.md touch become automatically release-worthy once
+  Phase 6's deploy job lands — a pure wording/typo fix with no actual
+  change in practice shouldn't force a release the way a genuine new
+  disclosure should. Needs a real distinction between "the policy text
+  changed" and "what the policy describes changed," which the mechanism
+  the sibling repos use can't make on its own.
 - **Arm-time capture uses the platform `LocationManager` (fused provider) in both flavors**
   (autopilot, 2026-08-22), not `FusedLocationProviderClient`. On every GMS device this app
   targets the platform fused provider is backed by the same engine, a one-shot capture is not
