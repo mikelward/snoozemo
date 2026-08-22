@@ -7,11 +7,10 @@ plugins {
 // building, but it must never be silent: falling back means versionCode 1, and a
 // build that quietly claims version 1 is either rejected by Play or looks like a
 // downgrade to a tester's device. So every path that misses the real value says
-// so at warn level, naming what failed.
-//
-// Phase 6 should harden this further: once there is a release job, a release
-// build whose version can't be derived should fail outright rather than warn
-// (TODO.md).
+// so at warn level, naming what failed — and a **release** build refuses
+// outright (`checkReleaseVersionDerivation` below): a warning in a CI log is
+// not where anyone would find it, and a published fallback is either a
+// rejected upload or a phantom downgrade (TODO.md, Phase 6).
 fun gitOutput(vararg args: String, fallback: String): String {
     val command = "git ${args.joinToString(" ")}"
     return try {
@@ -51,14 +50,32 @@ fun gitOutput(vararg args: String, fallback: String): String {
 // rejected upload, or a newer tester build that looks older than one already
 // installed. AGENTS.md warns about the same trap when reporting versionCodes by
 // hand. So detect it explicitly rather than trusting the count.
-val isShallowClone: Boolean =
-    gitOutput("rev-parse", "--is-shallow-repository", fallback = "unknown") == "true"
+// Why this build's version is not publishable, or empty when it is. Debug
+// builds warn and carry on; the release guard below turns any entry here into
+// a refusal, because each one means the versionCode is a fallback or a
+// truncation rather than the count Play's monotonicity depends on.
+val versionProblems = mutableListOf<String>()
 
-val gitCommitCount: Int = gitOutput("rev-list", "--count", "HEAD", fallback = "1").let { count ->
+// Anything but a literal "false" is a problem: "unknown" means the depth
+// question went unanswered (git missing, or too old for the flag), and treating
+// an unanswered question as "not shallow" is exactly the bypass the release
+// guard exists to close — the count would pass as complete without anything
+// having established that it is.
+val shallowAnswer: String = gitOutput("rev-parse", "--is-shallow-repository", fallback = "unknown")
+val isShallowClone: Boolean = shallowAnswer == "true"
+if (shallowAnswer != "true" && shallowAnswer != "false") {
+    versionProblems += "whether the clone is shallow could not be determined (git answered " +
+        "\"$shallowAnswer\"), so the commit count cannot be trusted as complete"
+}
+
+val gitCommitCount: Int = gitOutput("rev-list", "--count", "HEAD", fallback = "").let { count ->
     val parsed = count.toIntOrNull()
     when {
         parsed == null -> {
-            logger.warn("Version derivation: commit count \"$count\" is not a number; using 1.")
+            if (count.isNotEmpty()) {
+                logger.warn("Version derivation: commit count \"$count\" is not a number; using 1.")
+            }
+            versionProblems += "the commit count could not be read from git, so versionCode fell back to 1"
             1
         }
         isShallowClone -> {
@@ -67,13 +84,46 @@ val gitCommitCount: Int = gitOutput("rev-list", "--count", "HEAD", fallback = "1
                     "this build's versionCode is NOT monotonic and must not be published. " +
                     "Run `git fetch --unshallow` for a publishable build.",
             )
+            versionProblems += "the clone is shallow, so the commit count ($parsed) is truncated " +
+                "and the versionCode is not monotonic (run `git fetch --unshallow`)"
             parsed
         }
         else -> parsed
     }
 }
-val gitShortSha: String = gitOutput("rev-parse", "--short", "HEAD", fallback = "unknown")
+val gitShortSha: String = gitOutput("rev-parse", "--short", "HEAD", fallback = "unknown").also {
+    if (it == "unknown") {
+        versionProblems += "the commit hash could not be read, so the versionName names no commit"
+    }
+}
 val baseVersionName = "0.1"
+
+// The Phase 6 guard: a release variant refuses to build on an underived
+// version instead of warning. Wired ahead of every `*Release` variant's build
+// via its `pre<Variant>Build` anchor and nowhere else, so debug builds, tests,
+// and lint on a shallow CI checkout keep working exactly as before — the
+// fallback exists for them. Failing at execution time rather than
+// configuration time is what keeps `./gradlew test` runnable from the same
+// broken checkout the guard exists to catch.
+val checkReleaseVersionDerivation = tasks.register("checkReleaseVersionDerivation") {
+    description = "Fails a release build whose version was not derived from real git history."
+    val problems = versionProblems.toList()
+    doLast {
+        if (problems.isNotEmpty()) {
+            throw GradleException(
+                "Refusing to build a release with an underived version: " +
+                    problems.joinToString("; ") +
+                    ". A fallback versionCode is either a rejected Play upload or a phantom " +
+                    "downgrade on a tester's device, and a warning is not where anyone would find it.",
+            )
+        }
+    }
+}
+tasks.configureEach {
+    if (name.startsWith("pre") && name.endsWith("ReleaseBuild")) {
+        dependsOn(checkReleaseVersionDerivation)
+    }
+}
 
 android {
     namespace = "app.snoozemo"
