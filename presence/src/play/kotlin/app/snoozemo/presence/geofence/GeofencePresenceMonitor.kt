@@ -114,11 +114,26 @@ class GeofencePresenceMonitor(
         // restore FULL tracking while no fence is registered, which is the
         // overstating direction the level design exists to prevent (flagged
         // by Codex on PR #70). A level is restated, never delivered (SPEC.md
-        // §6.1); this holds that rule at the monitor boundary too. Cleared
-        // only by actual recovery, which is the re-registration slice's job —
-        // until that lands, an impaired platform stays said.
-        val platformDegradation =
+        // §6.1); this holds that rule at the monitor boundary too.
+        //
+        // **Two slots, by what clears each** (Codex, PR #75). A refused
+        // registration is refuted by a registration that succeeds; but
+        // "location services are off" is not — `addGeofences` can *accept* a
+        // fence the platform still cannot monitor, so a repair's success
+        // clearing that level would promote the snooze on no evidence at
+        // all. Services-off clears only on a delivered platform fix, the
+        // definitive proof the subsystem it indicts is working.
+        val registrationDegradation =
             java.util.concurrent.atomic.AtomicReference<DegradationCause?>(null)
+        val servicesDegradation =
+            java.util.concurrent.atomic.AtomicReference<DegradationCause?>(null)
+
+        fun platformLevel(): DegradationCause? =
+            servicesDegradation.get() ?: registrationDegradation.get()
+
+        // Assigned once `repairFence` exists below; deliver() runs only after
+        // setup, so the placeholder is never the one invoked.
+        var repairOnRecovery: () -> Unit = {}
 
         fun send(update: PresenceUpdate) {
             trySend(
@@ -132,7 +147,7 @@ class GeofencePresenceMonitor(
                     // truth and the one the debug log should carry (flagged
                     // by Codex on PR #72). Both lower the mode identically,
                     // so only the recorded cause differs.
-                    degradation = platformDegradation.get() ?: update.degradation,
+                    degradation = platformLevel() ?: update.degradation,
                 ),
             )
         }
@@ -149,6 +164,20 @@ class GeofencePresenceMonitor(
         val feedLock = Any()
 
         fun deliver(signal: PresenceSignal) {
+            // A delivered platform fix is the recovery proof the services-off
+            // level waits for: the subsystem it indicts just answered. The
+            // fence, though, may not have survived the outage — the platform
+            // can drop registrations while services are off — so recovery
+            // marks the registration suspect and re-attempts it now; success
+            // is what clears that and makes the fence provably fresh (Codex,
+            // PR #75).
+            if (signal is PresenceSignal.FixArrived &&
+                servicesDegradation.getAndSet(null) != null
+            ) {
+                SnoozeDebugLog.event("a fix arrived; services-off level cleared")
+                registrationDegradation.set(DegradationCause.LOCATION_SERVICES_OFF)
+                repairOnRecovery()
+            }
             val update: PresenceUpdate
             val duty: LocationDuty
             synchronized(feedLock) {
@@ -185,7 +214,13 @@ class GeofencePresenceMonitor(
         fun reportRegistration(failure: GeofenceRegistrationFailure) {
             when (failure) {
                 is GeofenceRegistrationFailure.Recoverable -> {
-                    platformDegradation.set(failure.cause)
+                    // The registration slot, whatever the cause names: the
+                    // origin decides what refutes it, and a later successful
+                    // registration refutes a refused one. If services really
+                    // are off, the burst's own callback and the platform's
+                    // Unavailable events keep the services slot said
+                    // independently (Codex, PR #75).
+                    registrationDegradation.set(failure.cause)
                     send(PresenceUpdate(event = null, degradation = null))
                 }
                 is GeofenceRegistrationFailure.Fatal -> trySend(
@@ -210,16 +245,139 @@ class GeofencePresenceMonitor(
             },
             onServicesOff = {
                 // The recoverable side of the same split, said the moment it
-                // is known rather than after three generic unanswered fixes:
-                // the platform level carries it on every later update until
-                // recovery re-registration clears it.
-                reportRegistration(
-                    GeofenceRegistrationFailure.Recoverable(DegradationCause.LOCATION_SERVICES_OFF),
-                )
+                // is known rather than after three generic unanswered fixes.
+                // The *services* slot, not the registration one: what this
+                // asserts is refuted by a delivered fix, never by a
+                // registration the platform accepts while still unable to
+                // monitor it (Codex, PR #75).
+                servicesDegradation.set(DegradationCause.LOCATION_SERVICES_OFF)
+                send(PresenceUpdate(event = null, degradation = null))
             },
         )
 
         var bridge: AutoCloseable? = null
+
+        // Registration, callable twice: once from setup, and again as the
+        // repair a warm backstop wake asks for through the bridge — a fence
+        // whose first registration failed transiently must be re-attempted
+        // without tearing down the running collection, because a replacement
+        // feed forgets its accumulated failure history and its first
+        // unanswered probe would promote a broken snooze back to FULL
+        // (Codex, PR #75). Re-registering under the same id replaces in
+        // place, so a healthy fence is unharmed.
+        //
+        // Attempts are tokened because repairs can overlap: one wake can
+        // queue a repair from the poke and a second from its own probe's
+        // recovery, and the two async registrations then race — a
+        // superseded attempt's late failure would indict the fence a later
+        // attempt just registered, up to a fatal loss over a healthy watch
+        // (Codex, PR #75). Only the latest attempt's outcome speaks; a
+        // superseded one is dropped, its truth restated by the attempt that
+        // replaced it.
+        val registrationAttempt = java.util.concurrent.atomic.AtomicLong(0L)
+
+        fun registerFence() {
+            if (!anchor.hasUsableFix) return
+            val attempt = registrationAttempt.incrementAndGet()
+            val client: GeofencingClient = LocationServices.getGeofencingClient(appContext)
+            val request = GeofencingRequest.Builder()
+                .addGeofence(
+                    Geofence.Builder()
+                        .setRequestId(GEOFENCE_ID)
+                        .setCircularRegion(anchor.lat!!, anchor.lon!!, anchor.radiusM.toFloat())
+                        // The fence outlives nothing: stop() removes
+                        // it, and the duration cap bounds the snooze
+                        // it serves. An expiry here would add a second
+                        // clock that could silently stop watching
+                        // before the snooze ends.
+                        .setExpirationDuration(Geofence.NEVER_EXPIRE)
+                        .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_EXIT)
+                        .build(),
+                )
+                // No initial trigger: the anchor was captured here
+                // moments ago, so an exit at registration would be a
+                // stale platform belief, and no single source may end
+                // a snooze anyway (SPEC.md §6.10).
+                .setInitialTrigger(0)
+                .build()
+            try {
+                // `addGeofences` only enqueues — the lock never waits
+                // on Play Services.
+                client.addGeofences(request, transitionIntent(appContext))
+                    .addOnSuccessListener {
+                        if (registrationAttempt.get() != attempt) return@addOnSuccessListener
+                        SnoozeDebugLog.event("geofence registered; radius=${anchor.radiusM}m")
+                        // Actual recovery is the one thing that clears the
+                        // platform level: a registration that just succeeded
+                        // is the fence provably watching again, and a level
+                        // left standing would hold the mode down over a
+                        // repaired watch. The engine's own inferred
+                        // degradation is untouched — only a usable fix
+                        // clears that, which is exactly the asymmetry that
+                        // keeps a fresh registration from overstating what
+                        // location can do.
+                        // Only the registration slot: `addGeofences` can
+                        // accept a fence the platform still cannot monitor,
+                        // so success here proves nothing about services —
+                        // that slot waits for a delivered fix (Codex, PR
+                        // #75).
+                        if (registrationDegradation.getAndSet(null) != null) {
+                            SnoozeDebugLog.event("geofence re-registered; registration level cleared")
+                            // The restate carries the *feed's* level, not a
+                            // synthesized null: this update arrives outside
+                            // any signal, and a null here would promote a
+                            // snooze whose fixes are still failing (Codex,
+                            // PR #75) — the feed's degradation clears only
+                            // on a usable fix, as ever.
+                            send(
+                                PresenceUpdate(
+                                    event = null,
+                                    degradation = synchronized(feedLock) { feed.degradation },
+                                ),
+                            )
+                        }
+                    }
+                    .addOnFailureListener { e ->
+                        if (registrationAttempt.get() != attempt) return@addOnFailureListener
+                        val code = (e as? ApiException)?.statusCode
+                        val failure = if (code != null) {
+                            GeofenceRegistrationFailure.fromStatusCode(code)
+                        } else {
+                            GeofenceRegistrationFailure.Fatal(
+                                app.snoozemo.core.CapabilityLossCause.MONITORING_UNAVAILABLE,
+                            )
+                        }
+                        SnoozeDebugLog.warning(
+                            "geofence registration refused (status=${code ?: "none"}); " +
+                                "classified ${failure.javaClass.simpleName}",
+                        )
+                        reportRegistration(failure)
+                    }
+            } catch (e: SecurityException) {
+                // The grant went between the permission check and the
+                // call — fail open with the reason rather than watch
+                // nothing quietly.
+                SnoozeDebugLog.warning("geofence registration refused: permission gone")
+                reportRegistration(GeofenceRegistrationFailure.fromSecurityException())
+            }
+        }
+
+        // The repair, marshaled off the bridge's lock before taking the
+        // registration lock — the two are taken in the opposite order on the
+        // stop() path, and holding one while asking for the other is the
+        // deadlock shape. Re-guarded on arrival: a repair queued behind this
+        // flow's own stop must find the generation moved and do nothing.
+        fun repairFence() {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                synchronized(registrationLock) {
+                    if (stopGeneration.get() == startGeneration && !isClosedForSend) {
+                        SnoozeDebugLog.event("backstop repair: re-registering the fence")
+                        registerFence()
+                    }
+                }
+            }
+        }
+        repairOnRecovery = ::repairFence
 
         // The whole setup — bridge attachment included — runs as one section
         // under the registration lock, guarded by whether this flow has
@@ -242,62 +400,40 @@ class GeofencePresenceMonitor(
                         }
                         is GeofenceObservation.Unavailable -> {
                             SnoozeDebugLog.warning("geofencing became unavailable mid-snooze")
-                            platformDegradation.set(DegradationCause.LOCATION_SERVICES_OFF)
+                            servicesDegradation.set(DegradationCause.LOCATION_SERVICES_OFF)
                             send(PresenceUpdate(event = null, degradation = null))
                         }
+                        // The backstop asking a live monitor for one resting
+                        // fix — the warm half of §6.10's probe; the cold half
+                        // is the starting probe below, taken by the monitor a
+                        // backstop restore creates.
+                        is GeofenceObservation.SanityPoke -> checkingFixes?.sanityCheck()
+                        // A warm wake asking for the fence to be re-attempted
+                        // — repair without replacing the collection, so the
+                        // engine's failure memory survives (Codex, PR #75).
+                        // Gated on the *registration* slot alone: that is the
+                        // one set of failures re-registration can refute. A
+                        // services outage repairs nothing until it ends —
+                        // re-registering into it is IPC for nothing and risks
+                        // a mis-mapped refusal ending the snooze mid-outage
+                        // (Codex, PR #75) — and the outage's own recovery
+                        // marks the registration suspect, which re-opens this
+                        // gate.
+                        is GeofenceObservation.RepairPoke ->
+                            if (registrationDegradation.get() != null) repairFence()
                     }
                 }
                 if (anchor.hasUsableFix) {
-                    val client: GeofencingClient = LocationServices.getGeofencingClient(appContext)
-                    val request = GeofencingRequest.Builder()
-                        .addGeofence(
-                            Geofence.Builder()
-                                .setRequestId(GEOFENCE_ID)
-                                .setCircularRegion(anchor.lat!!, anchor.lon!!, anchor.radiusM.toFloat())
-                                // The fence outlives nothing: stop() removes
-                                // it, and the duration cap bounds the snooze
-                                // it serves. An expiry here would add a second
-                                // clock that could silently stop watching
-                                // before the snooze ends.
-                                .setExpirationDuration(Geofence.NEVER_EXPIRE)
-                                .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_EXIT)
-                                .build(),
-                        )
-                        // No initial trigger: the anchor was captured here
-                        // moments ago, so an exit at registration would be a
-                        // stale platform belief, and no single source may end
-                        // a snooze anyway (SPEC.md §6.10).
-                        .setInitialTrigger(0)
-                        .build()
-                    try {
-                        // `addGeofences` only enqueues — the lock never waits
-                        // on Play Services.
-                        client.addGeofences(request, transitionIntent(appContext))
-                            .addOnSuccessListener {
-                                SnoozeDebugLog.event("geofence registered; radius=${anchor.radiusM}m")
-                            }
-                            .addOnFailureListener { e ->
-                                val code = (e as? ApiException)?.statusCode
-                                val failure = if (code != null) {
-                                    GeofenceRegistrationFailure.fromStatusCode(code)
-                                } else {
-                                    GeofenceRegistrationFailure.Fatal(
-                                        app.snoozemo.core.CapabilityLossCause.MONITORING_UNAVAILABLE,
-                                    )
-                                }
-                                SnoozeDebugLog.warning(
-                                    "geofence registration refused (status=${code ?: "none"}); " +
-                                        "classified ${failure.javaClass.simpleName}",
-                                )
-                                reportRegistration(failure)
-                            }
-                    } catch (e: SecurityException) {
-                        // The grant went between the permission check and the
-                        // call — fail open with the reason rather than watch
-                        // nothing quietly.
-                        SnoozeDebugLog.warning("geofence registration refused: permission gone")
-                        reportRegistration(GeofenceRegistrationFailure.fromSecurityException())
-                    }
+                    registerFence()
+                    // One resting probe per start (SPEC.md §6.10): a monitor
+                    // the backstop restores hands the engine one reading, so
+                    // a departure the geofence never reported gets tested
+                    // rather than waited out — and the probe re-checks the
+                    // location grants on the way, so a mid-snooze revocation
+                    // fails open here instead of at the cap. At a fresh arm
+                    // the probe is one redundant network fix; a battery cost
+                    // §9 already budgets to the backstop's line.
+                    checkingFixes?.sanityCheck()
                 } else {
                     // A Wi-Fi-only anchor has nothing to fence. The Wi-Fi
                     // callback is its own slice; until it lands this monitor

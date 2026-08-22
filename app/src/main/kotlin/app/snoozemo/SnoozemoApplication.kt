@@ -22,7 +22,17 @@ import app.snoozemo.snooze.SnoozeService
  * `edit()` waits on the same kind of file load. The settings and the last known
  * SSID join them as later phases add them.
  */
-class SnoozemoApplication : Application() {
+class SnoozemoApplication : Application(), androidx.work.Configuration.Provider {
+
+    /**
+     * On-demand WorkManager, replacing the removed startup initializer
+     * (SPEC.md §4.1; Codex, PR #75): initialization then happens at the
+     * first `getInstance` — the backstop schedule, which runs after the
+     * rule is already on — instead of on the process startup a cold tile
+     * tap is racing through.
+     */
+    override val workManagerConfiguration: androidx.work.Configuration
+        get() = androidx.work.Configuration.Builder().build()
 
     override fun onCreate() {
         super.onCreate()

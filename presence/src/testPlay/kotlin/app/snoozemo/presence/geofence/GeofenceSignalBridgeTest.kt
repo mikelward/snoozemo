@@ -162,6 +162,26 @@ class GeofenceSignalBridgeTest {
     }
 
     @Test
+    fun `a sanity poke reaches a live monitor and is never held`() {
+        // A poke is a question, not news: with no monitor it is dropped
+        // without a wake — the backstop that poked also restored, and the
+        // restored monitor takes its own starting probe (SPEC.md §6.10).
+        var woken = 0
+        GeofenceSignalBridge.installWakeup { woken++ }
+        GeofenceSignalBridge.deliver(GeofenceObservation.SanityPoke(atElapsedRealtimeMs = 13_000))
+        assertEquals(0, woken)
+        val restored = mutableListOf<GeofenceObservation>()
+        GeofenceSignalBridge.attach { restored += it }.close()
+        assertTrue(restored.isEmpty())
+
+        val live = mutableListOf<GeofenceObservation>()
+        val handle = GeofenceSignalBridge.attach { live += it }
+        GeofenceSignalBridge.deliver(GeofenceObservation.SanityPoke(atElapsedRealtimeMs = 14_000))
+        handle.close()
+        assertTrue(live.single() is GeofenceObservation.SanityPoke)
+    }
+
+    @Test
     fun `a newer exit replaces an older one`() {
         GeofenceSignalBridge.deliver(GeofenceObservation.Exit(atElapsedRealtimeMs = 5_000))
         GeofenceSignalBridge.deliver(GeofenceObservation.Exit(atElapsedRealtimeMs = 6_000))

@@ -492,22 +492,30 @@ the point is that every other line of the app is worthless if it isn't true.
       quietly: real objects, plausible strings, an anchor that matches nothing. Any test
       here must reject the placeholders rather than accept them as values.
 - [ ] Three independent wake-up sources feeding one confirmation test (`SPEC.md` §6.10):
-      geofence exit, Wi-Fi loss via `NetworkCallback`, and a 15–30 min `WorkManager`
-      backstop. No source ends a snooze on its own evidence.
+      geofence exit (landed, PR #73), the `WorkManager` backstop (landed — see below), and
+      Wi-Fi loss via `NetworkCallback` (still open, the Wi-Fi suppressor slice). No source
+      ends a snooze on its own evidence.
+      - **The periodic backstop landed**: a 30-minute `WorkManager` wake while armed that
+        restores the service (re-arming the cap, reconciling policy access, re-registering
+        the fence, collecting any held exit) and takes **one resting fix** through the
+        burst's own requester, so a departure the geofence never reported gets tested by
+        §6.6. It retires itself on a wake that finds no record.
       - The backstop's wake is also where a **mid-snooze location revocation** gets noticed
         (Codex, PR #73): revoking a runtime permission kills the process, so no in-process
-        watcher can exist, and until this slice lands the only wakes that re-check the
-        grants — registration re-checks on every restore, and the burst checks per fix —
-        are the ones a snooze happens to pay for, leaving a revoked-while-ARMED snooze
-        `FULL` on paper until the cap. The backstop's periodic restore closes that to
-        15–30 min; its recheck must fail open as `LOST_CAPABILITY`, same as registration's.
-      - Same shape, same slice (Codex, PR #73): **a fence the arm never got to establish**.
+        watcher can exist. The resting probe re-checks the grants each wake and a lost
+        grant fails open as `LOST_CAPABILITY`, same as registration's — closing the
+        revoked-while-ARMED window to roughly the backstop's cadence (best-effort under
+        Doze and battery saver — `SPEC.md` §6.10) instead of the cap.
+      - Same shape, same wake (Codex, PR #73): **a fence the arm never got to establish**.
         The record says `FULL` before Play Services confirms the asynchronous registration
-        (the arm path cannot wait on it), so a process reclaimed in that instant — or one
-        that dies before an asynchronous refusal is reported — leaves a full-tracking
-        record with no fence behind it. Every restore re-registers, so any wake heals it;
-        the backstop's periodic restore is what bounds the healing to 15–30 min instead
-        of the cap.
+        (the arm path cannot wait on it), so a process reclaimed in that instant leaves a
+        full-tracking record with no fence behind it. Every restore re-registers, so the
+        backstop's periodic restore bounds the healing to roughly its cadence (best-effort,
+        `SPEC.md` §6.10) instead of the cap.
+      - The kill-mid-confirmation residual (the in-memory mailbox dying with the process)
+        is likewise bounded to roughly the backstop's cadence now (best-effort, `SPEC.md` §6.10): the backstop's resting probe re-tests presence
+        even though the held exit is gone. Full `PresenceState` persistence remains its
+        own recorded slice.
 - [x] The departure test itself (`SPEC.md` §6.6): accuracy gate, 50 m hysteresis, two
       qualifying fixes ≥30 s apart *or* one unambiguous fix beyond radius + 500 m. Covered
       by recorded fix traces including bad-accuracy jumps. Landed in `:core` as `Departure`
@@ -1141,6 +1149,18 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   disclosure should. Needs a real distinction between "the policy text
   changed" and "what the policy describes changed," which the mechanism
   the sibling repos use can't make on its own.
+- **The backstop's period is 30 minutes, the coarse end of §6.10's 15–30 range** (autopilot,
+  2026-08-22). 16 deferrable wakes over an 8-hour snooze matches §9's "handful of wakeups"
+  budget line, at the cost of a ~30-minute typical staleness bound (best-effort — the period defers in
+  Doze and under battery saver, `SPEC.md` §6.10) where 15 would halve it for double the wakes. **The alternative** was 15 minutes (`WorkManager`'s own floor),
+  which hardware item 2's latency measurements may yet argue for. Reversible: one constant
+  (`SnoozeBackstop.PERIOD_MINUTES`).
+- **The backstop schedules in both flavors, not only `play`** (autopilot, 2026-08-22). The
+  `direct` flavor has no fence for the probe (its poke is a no-op), but the wake's restore
+  still re-arms the cap and reconciles policy access — the ride-along §9's table always
+  wanted. **The alternative** was a play-only schedule, saving `direct` 16 deferrable wakes
+  per 8 h at the cost of a flavor split in the service. Reversible: move the schedule call
+  behind the flavor seam.
 - **Arm-time capture uses the platform `LocationManager` (fused provider) in both flavors**
   (autopilot, 2026-08-22), not `FusedLocationProviderClient`. On every GMS device this app
   targets the platform fused provider is backed by the same engine, a one-shot capture is not
@@ -1432,7 +1452,7 @@ Phase 3's wake-up sources give the rest for free.
 | Option | Cost | Status | Revisit when |
 |---|---|---|---|
 | **Duration cap alarm** (`setAndAllowWhileIdle`) | One alarm per snooze. No permission, no review | **Built.** The floor everything else sits on | Never remove. If a change makes the cap depend on a service, that change is wrong |
-| **`WorkManager` periodic backstop**, 15–30 min while armed | Deferrable and batched — the cheap kind of periodic | **Planned, Phase 3** (`SPEC.md` §6.10). Exists for geofence reliability; the policy-access check rides along free | Phase 3 must confirm it actually reconciles policy access, or the gap below reopens |
+| **`WorkManager` periodic backstop**, 30 min while armed | Deferrable and batched — the cheap kind of periodic | **Built** (`SPEC.md` §6.10). Exists for geofence reliability; the policy-access check rides along free — each wake restores the service, whose reconcile-on-every-wake covers it | Confirmed: the wake's restore runs the service's platform reconcile, so policy access is re-read each wake |
 | **Geofence exit + Wi-Fi loss callbacks** | Event-driven, ~free | **Planned, Phase 3.** The primary and secondary sources | — |
 | **Foreground service** (`specialUse`) | Cheapest at runtime — no wakeups at all — but a Play review | **No, and scoped: not on Play, not for v1.** A permission is not spent on revocation handling. `direct` has one anyway from Phase 7 | Core functionality genuinely requires it. The case to build is in `SPEC.md` §3.3 |
 | **Self-rescheduling `setAndAllowWhileIdle` chain** | The expensive periodic form: punches through Doze, ~32 wakeups per 8 h snooze, puts a floor under §6.7's duty cycle | **No.** Duplicates the `WorkManager` backstop at higher cost | Only if something genuinely needs to beat Doze, which policy-access reconciliation does not |

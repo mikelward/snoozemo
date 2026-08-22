@@ -39,6 +39,15 @@ internal class PresenceFeed(
         get() = Presence.duty(state, anchor)
 
     /**
+     * The engine's own degradation level, for a restate that arrives outside
+     * any signal — a repair clearing the *platform* level must not speak for
+     * the feed's, or a synthesized `null` promotes a snooze whose fixes are
+     * still failing (Codex, PR #75). Only a usable fix clears this one.
+     */
+    val degradation: app.snoozemo.core.DegradationCause?
+        get() = state.degradation
+
+    /**
      * Feeds one signal through and returns what to report: the event (usually
      * null) and the degradation level restated, exactly the two halves
      * [PresenceUpdate] documents.

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!--
       No INTERNET permission, deliberately and permanently (SPEC.md §12):
@@ -62,6 +63,27 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.Snoozemo">
+
+        <!--
+          WorkManager's automatic App Startup initializer is removed, and only
+          its own: initializing on process startup puts database work ahead of
+          a cold tile tap's ACTION_ARM (SPEC.md §4.1; Codex, PR #75), and the
+          first thing that needs WorkManager is the backstop schedule, which
+          runs after the rule is already on. The Application provides the
+          configuration, so WorkManager initializes on first use instead. The
+          provider itself is merged, not removed — other libraries' startup
+          entries keep working.
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
 
         <activity
             android:name=".ui.MainActivity"

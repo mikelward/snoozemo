@@ -1231,12 +1231,34 @@ and they fail independently:
    geofence to notice. This is the single highest-value addition, because it covers the common case
    (leaving a Wi-Fi place) with no reliance on the flaky path at all.
 3. **A periodic backstop** — a coarse `WorkManager` check on the order of 15–30 minutes while armed,
-   purely to catch a geofence that never fired. Cheap, and it bounds worst-case staleness to
-   something well short of the duration cap.
+   purely to catch a geofence that never fired. Cheap, and it keeps typical staleness to its
+   cadence — best-effort, not a hard bound (see below); the duration cap remains the only
+   absolute one.
 
 Confirmation still runs through the one §6.6 test, so no source can end a snooze on its own evidence.
 This layering is why the `play` flavor's departure latency should land near the `direct` flavor's in
 the common case, despite the geofence's own numbers.
+
+**The backstop (3) is built**, and its design is deliberately thin: a `WorkManager` periodic wake
+(30 minutes — the coarse end of the range, matching §9's budget) that repairs nothing itself.
+The period is a cadence, not a guarantee: `WorkManager` defers in Doze and under battery saver,
+so the staleness bound is best-effort rather than hard. The deferral concentrates where it costs
+least — Doze requires a stationary device, so the wake runs late precisely while the user is
+still there, and the motion of actually leaving is what ends Doze and flushes the deferred work.
+Battery saver and OEM throttling can stretch it further; the duration cap remains the only
+absolute bound (D7).
+Each wake restores the service. A cold restore — the process died — runs every repair a wake
+performs: re-arm the cap, re-assert the rule, reconcile policy access, re-register the fence,
+collect any held exit. A warm one re-checks the cap against the clock, re-registers a fence whose
+registration failed, and re-enqueues the backstop itself; it deliberately does not touch the zen
+rule, which a running service already owns. Either way the wake asks
+the presence monitor for **one resting fix**, so a departure the geofence never reported gets
+tested by §6.6 rather than waited out until the cap. The probe re-checks the location grants on
+the way, which is what makes a mid-snooze permission revocation detectable at the backstop's
+cadence: revocation kills the process, so no in-process watcher can exist, and a scheduled wake
+is the only detector Android leaves. The backstop is never load-bearing — the cap alarm is the
+floor and is armed independently — and it retires itself on a wake that finds no snooze, so a
+cancel lost to process death costs one empty wake, not a standing drain.
 
 #### To-do: explicit fallback end conditions
 

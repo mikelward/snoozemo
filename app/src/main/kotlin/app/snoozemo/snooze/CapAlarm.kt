@@ -137,13 +137,23 @@ object CapAlarm {
      *
      * Elapsed realtime for the same reason as [armCheckIn]: the caller knows
      * the delay it wants, and a wall-clock alarm slides with the clock.
+     *
+     * [attemptsLeft] travels on the alarm so a firing whose service start is
+     * *also* refused can re-arm itself, bounded: without it the "durable"
+     * retry was spent in one attempt while its caller's budget still stood
+     * (Codex, PR #75). Exhaustion rests on the cap, as ever.
      */
-    fun armPresenceRetry(context: Context, delayMillis: Long): Boolean =
+    fun armPresenceRetry(
+        context: Context,
+        delayMillis: Long,
+        attemptsLeft: Int = PRESENCE_RETRIES,
+    ): Boolean =
         schedule(
             context,
             SystemClock.elapsedRealtime() + delayMillis.coerceAtLeast(0L),
             AlarmManager.ELAPSED_REALTIME_WAKEUP,
             SnoozeService.ACTION_RESTORE,
+            retriesLeft = attemptsLeft,
         )
 
     /**
@@ -225,13 +235,14 @@ object CapAlarm {
         action: String,
         recordStartedAtMillis: Long? = null,
         reason: EndReason? = null,
+        retriesLeft: Int? = null,
     ): Boolean {
         val alarmManager = context.getSystemService(AlarmManager::class.java)
         return runCatching {
             alarmManager.setAndAllowWhileIdle(
                 type,
                 triggerAtMillis,
-                pendingIntent(context, action, recordStartedAtMillis, reason),
+                pendingIntent(context, action, recordStartedAtMillis, reason, retriesLeft),
             )
             // That the cap was armed is one of §4.6's records — the alarm is
             // the exit that holds when everything else has failed, so "was one
@@ -301,6 +312,7 @@ object CapAlarm {
         action: String,
         recordStartedAtMillis: Long?,
         reason: EndReason?,
+        retriesLeft: Int? = null,
     ): PendingIntent =
         PendingIntent.getBroadcast(
             context,
@@ -310,6 +322,7 @@ object CapAlarm {
                     intent.putExtra(SnoozeService.EXTRA_RECORD_STARTED_AT, it)
                 }
                 reason?.let { intent.putExtra(SnoozeService.EXTRA_END_REASON, it.name) }
+                retriesLeft?.let { intent.putExtra(SnoozeService.EXTRA_RETRIES_LEFT, it) }
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
@@ -348,6 +361,13 @@ object CapAlarm {
     }
 
     private const val TAG = "CapAlarm"
+
+    /** How many times a fired presence retry may re-arm itself when refused. */
+    internal const val PRESENCE_RETRIES = 3
+
+    /** The pause between a refused presence-retry firing and its re-arm. */
+    internal const val PRESENCE_RETRY_MS = 60_000L
+
     private const val REQUEST_CAP = 1
     private const val REQUEST_ERASE_RETRY = 2
     private const val REQUEST_RELEASE_RETRY = 3
@@ -421,13 +441,26 @@ class CapAlarmReceiver : BroadcastReceiver() {
         }
         if (intent?.action == SnoozeService.ACTION_RESTORE) {
             // A presence retry, not a cap: it never displaces the cap alarm,
-            // which is still armed, so a second refusal here leaves the snooze
-            // bounded by it rather than ending hours early under a reason that
-            // never happened (Codex, PR #73). Nothing more is scheduled from
-            // here — this alarm was already the durable successor, and its own
-            // successor is the cap.
+            // which is still armed, so a refusal here must never end anything
+            // early (Codex, PR #73). It re-arms itself instead, bounded by
+            // the attempts the arm gave it — one spent firing burned the
+            // whole "durable" retry while its caller's budget still stood
+            // (Codex, PR #75) — and exhaustion rests on the cap, as ever.
+            val left = intent.getIntExtra(SnoozeService.EXTRA_RETRIES_LEFT, 0)
+            // Adopted *before* the restore: the backstop's enqueue-retry
+            // counter dies with the process, so a restore whose schedule is
+            // rejected again in a fresh process would otherwise spend a
+            // refilled budget every time — a persistently broken WorkManager
+            // plus a death per alarm made the bounded ladder a wake per
+            // minute for the whole snooze (Codex, PR #75).
+            SnoozeBackstop.adoptRetryBudget(left)
             if (!SnoozeService.restore(context)) {
-                SnoozeDebugLog.warning("presence retry refused again; the cap bounds the snooze")
+                if (left > 0) {
+                    SnoozeDebugLog.warning("presence retry refused again; re-arming ($left left)")
+                    rearmPresenceRetry(context, attemptsLeft = left - 1)
+                } else {
+                    SnoozeDebugLog.warning("presence retries exhausted; the cap bounds the snooze")
+                }
             }
             return
         }
@@ -435,6 +468,41 @@ class CapAlarmReceiver : BroadcastReceiver() {
         releaseDirectly(context, EndReason.DURATION_CAP)
     }
 }
+
+/**
+ * Re-arms the presence retry alarm with [attemptsLeft] on it, falling to an
+ * in-process rung when even the alarm is refused — the same ladder the app's
+ * wake path and the backstop's scheduler use, because a dropped refusal here
+ * discarded the remaining budget with no successor (Codex, PR #75). The
+ * in-process attempt retries the restore itself and, refused again, re-enters
+ * this ladder one attempt down, so the same per-arm budget bounds every rung.
+ * A process death before it fires leaves the cap alarm, still armed, as the
+ * floor.
+ */
+private fun rearmPresenceRetry(context: Context, attemptsLeft: Int) {
+    if (CapAlarm.armPresenceRetry(context, CapAlarm.PRESENCE_RETRY_MS, attemptsLeft = attemptsLeft)) {
+        return
+    }
+    SnoozeDebugLog.warning("presence retry alarm refused too; retrying in process")
+    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+        {
+            if (!SnoozeService.restore(context)) {
+                if (attemptsLeft > 0) {
+                    SnoozeDebugLog.warning(
+                        "presence retry refused again; re-arming ($attemptsLeft left)",
+                    )
+                    rearmPresenceRetry(context, attemptsLeft - 1)
+                } else {
+                    SnoozeDebugLog.warning("presence retries exhausted; the cap bounds the snooze")
+                }
+            }
+        },
+        IN_PROCESS_PRESENCE_RETRY_MS,
+    )
+}
+
+/** The in-process rung's pause, mirroring the wake ladder's. */
+private const val IN_PROCESS_PRESENCE_RETRY_MS = 30_000L
 
 /**
  * Ends the snooze the release retry was armed for — and only that one.
