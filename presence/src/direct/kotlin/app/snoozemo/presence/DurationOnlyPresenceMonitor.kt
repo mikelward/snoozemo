@@ -3,6 +3,7 @@ package app.snoozemo.presence
 import app.snoozemo.core.Anchor
 import app.snoozemo.core.PresenceMonitor
 import app.snoozemo.core.PresenceUpdate
+import app.snoozemo.core.TrackingMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 
@@ -18,7 +19,12 @@ import kotlinx.coroutines.flow.emptyFlow
  */
 class DurationOnlyPresenceMonitor : PresenceMonitor {
 
-    override fun start(anchor: Anchor): Flow<PresenceUpdate> = emptyFlow()
+    override fun start(anchor: Anchor, sinceElapsedRealtimeMs: Long): Flow<PresenceUpdate> =
+        emptyFlow()
 
     override fun stop() = Unit
+
+    /** Watching nothing supports nothing: every snooze is honestly a timer. */
+    override fun supportedModes(anchor: Anchor): Set<TrackingMode> =
+        setOf(TrackingMode.DURATION_ONLY)
 }

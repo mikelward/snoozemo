@@ -1,10 +1,16 @@
 package app.snoozemo
 
 import android.app.Application
+import android.os.Handler
+import android.os.Looper
+import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.dnd.PrefsZenRuleIdStore
+import app.snoozemo.presence.installPresenceWakeup
 import app.snoozemo.snooze.ActiveSnoozeStore
+import app.snoozemo.snooze.CapAlarm
 import app.snoozemo.snooze.DebugLogging
 import app.snoozemo.snooze.SnoozeNotifications
+import app.snoozemo.snooze.SnoozeService
 
 /**
  * Application entry point, and where the arm path's warming lives (SPEC.md
@@ -34,5 +40,66 @@ class SnoozemoApplication : Application() {
         // recorded before the sink registers still reach the file, since the
         // sink writes the whole buffer on the next entry after.
         DebugLogging.install(this)
+        // A presence observation arriving into a process the system restarted
+        // — a geofence exit is often the very thing that restarts it — has
+        // nobody to receive it until the service restores the snooze, so this
+        // is what turns that wake-up into a restore (SPEC.md §8.1). The
+        // observation itself waits in the monitor's mailbox and is collected
+        // when the restored watch attaches.
+        //
+        // A refused start gets a durable successor, not just a log line: the
+        // mailbox is in-process and nothing else is guaranteed to come — a
+        // geofence never fires twice for one crossing — so a refusal here
+        // would strand a known departure signal until the cap (flagged by
+        // Codex on PR #73). A short check-in alarm retries from an alarm
+        // receiver's own, better-privileged start window.
+        //
+        // The retry carries its own alarm action, never the cap's: the cap
+        // receiver's no-service fallback is an immediate release — the right
+        // last resort for a spent cap alarm, and an end hours early under the
+        // wrong reason for a retry armed a minute ago (Codex, PR #73). Its
+        // own action also leaves the pending cap alarm in place, so even a
+        // retry refused again on firing stays bounded by it.
+        installPresenceWakeup { presenceWake() }
+    }
+
+    /**
+     * One rung down when even the alarm is refused: this process is alive —
+     * it is running this very callback — so its own handler is a real,
+     * bounded successor, exactly as the service's release ladder uses one
+     * (flagged by Codex on PR #73 when the alarm's refusal went unchecked).
+     * If the process dies before a retry lands, the in-memory mailbox dies
+     * with it and the cap bounds the snooze — the same residual the
+     * `PresenceState`-persistence slice is recorded to close.
+     */
+    private val wakeRetryHandler = Handler(Looper.getMainLooper())
+
+    private var wakeRetries = 0
+
+    private fun presenceWake() {
+        if (SnoozeService.restore(this)) {
+            wakeRetries = 0
+            return
+        }
+        SnoozeDebugLog.warning("presence wake-up refused; arming a check-in to retry")
+        if (CapAlarm.armPresenceRetry(this, PRESENCE_WAKE_RETRY_MS)) {
+            wakeRetries = 0
+            return
+        }
+        if (wakeRetries++ >= MAX_IN_PROCESS_WAKE_RETRIES) {
+            SnoozeDebugLog.warning("presence wake-up retries exhausted; the cap bounds the snooze")
+            return
+        }
+        SnoozeDebugLog.warning("presence wake-up and its alarm both refused; retrying in process")
+        wakeRetryHandler.postDelayed(::presenceWake, IN_PROCESS_WAKE_RETRY_MS)
+    }
+
+    private companion object {
+        /** How soon the alarm retries a refused presence wake-up. */
+        const val PRESENCE_WAKE_RETRY_MS = 60_000L
+
+        /** The in-process rung, bounded like the service's own ladder. */
+        const val IN_PROCESS_WAKE_RETRY_MS = 30_000L
+        const val MAX_IN_PROCESS_WAKE_RETRIES = 10
     }
 }

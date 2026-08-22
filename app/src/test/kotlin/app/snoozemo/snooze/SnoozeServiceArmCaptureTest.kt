@@ -66,7 +66,7 @@ class SnoozeServiceArmCaptureTest {
     }
 
     @Test
-    fun `the captured anchor is recorded, and the mode stays honest`() {
+    fun `the captured anchor is recorded, and the mode is the monitor's claim`() {
         startService(SnoozeService.ACTION_ARM)
 
         TestSnoozeService.captureRequests.single().invoke(captured)
@@ -75,9 +75,9 @@ class SnoozeServiceArmCaptureTest {
         assertEquals("ExampleWifi", record?.anchor?.ssid)
         assertEquals("00:11:22:33:44:55", record?.anchor?.bssid)
         assertEquals(true, record?.anchor?.hasUsableFix)
-        // Duration-only however complete the anchor: nothing consumes it yet,
-        // and a mode is a claim about what is watching (SPEC.md §8.1).
-        assertEquals(TrackingMode.DURATION_ONLY, record?.mode)
+        // The mode is what the monitor says it can watch for these fields
+        // (SPEC.md §6.1, §8.1) — a fenced anchor is fully watched now.
+        assertEquals(TrackingMode.FULL, record?.mode)
     }
 
     @Test

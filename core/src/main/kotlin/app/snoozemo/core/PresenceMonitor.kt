@@ -16,8 +16,21 @@ import kotlinx.coroutines.flow.Flow
  */
 interface PresenceMonitor {
 
-    /** Starts watching [anchor]. The flow runs until [stop] or cancellation. */
-    fun start(anchor: Anchor): Flow<PresenceUpdate>
+    /**
+     * Starts watching [anchor]. The flow runs until [stop] or cancellation.
+     *
+     * [sinceElapsedRealtimeMs] is the snooze's arm moment in elapsed
+     * realtime — the engine's evidence seed, per
+     * `PresenceState.latestEvidenceMs`'s contract. The *caller* supplies it
+     * because only the caller can: on a restore it is derived from the
+     * record's stored clock frame, and the monitor's own "now" is exactly
+     * wrong there — it post-dates the very observation a restart was woken
+     * to deliver, so seeding with it silently discarded every exit that
+     * arrived while the process was dead (flagged by Codex on PR #73).
+     * Anything older than the seed is stale by construction; anything the
+     * snooze should act on is newer.
+     */
+    fun start(anchor: Anchor, sinceElapsedRealtimeMs: Long): Flow<PresenceUpdate>
 
     /**
      * Stops watching and releases everything `start` acquired — network
@@ -25,6 +38,30 @@ interface PresenceMonitor {
      * registrations. Idempotent.
      */
     fun stop()
+
+    /**
+     * The [TrackingMode]s this monitor can honestly run for [anchor] — the
+     * set the controller confines every mode claim to, at arm and on every
+     * update. [TrackingMode.DURATION_ONLY] is always an honest answer and is
+     * treated as present whether or not it is listed.
+     *
+     * The monitor answers rather than [TrackingMode.from], because the anchor
+     * alone cannot: `from` says what the captured *fields* allow, and only
+     * the monitor knows which of them anything is actually watching. The
+     * `direct` flavor's stand-in watches nothing, so a full anchor is still
+     * a timer there; the geofence monitor has no Wi-Fi watch yet, so an
+     * SSID-only anchor is too. A mode is a claim about what is watching
+     * (SPEC.md §6.1, §8.1), and this is where the claim gets its warrant.
+     *
+     * A *set*, not a single ceiling, because degradation moves through modes
+     * the ceiling cannot vouch for (flagged by Codex on PR #73): a fenced
+     * anchor's ceiling is FULL, but when location degrades, the fallback
+     * claim is `WIFI_ONLY` — and whether *that* is honest depends on whether
+     * anything watches Wi-Fi, which the ceiling alone cannot say. The
+     * controller lowers an unsupported claim to the nearest less capable
+     * supported mode.
+     */
+    fun supportedModes(anchor: Anchor): Set<TrackingMode>
 }
 
 /**

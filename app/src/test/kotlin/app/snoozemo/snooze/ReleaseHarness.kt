@@ -9,6 +9,8 @@ import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.Anchor
 import app.snoozemo.core.ClockReading
 import app.snoozemo.core.PolicyAccess
+import app.snoozemo.core.PresenceMonitor
+import app.snoozemo.core.PresenceUpdate
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenFailure
@@ -17,6 +19,8 @@ import app.snoozemo.core.ZenRuleState
 import app.snoozemo.core.ZenTrigger
 import java.time.Duration
 import java.time.Instant
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import org.robolectric.Robolectric
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ServiceController
@@ -65,7 +69,39 @@ internal class RefusingZen : ZenController {
 }
 
 /**
- * [SnoozeService] with its two seams filled in.
+ * A [PresenceMonitor] a test can drive: it records what it was started with
+ * and hands the test the emitting end of the flow the service collects.
+ */
+internal class FakePresenceMonitor : PresenceMonitor {
+
+    val startedWith = mutableListOf<Anchor>()
+    val startedSeeds = mutableListOf<Long>()
+    var stops: Int = 0
+
+    /** Emit into this to stand in for the sensors. */
+    val updates = MutableSharedFlow<PresenceUpdate>(extraBufferCapacity = 16)
+
+    override fun start(anchor: Anchor, sinceElapsedRealtimeMs: Long): Flow<PresenceUpdate> {
+        startedWith += anchor
+        startedSeeds += sinceElapsedRealtimeMs
+        return updates
+    }
+
+    override fun stop() {
+        stops++
+    }
+
+    /** The geofence monitor's rule, so the fixtures read like the real flavor. */
+    override fun supportedModes(anchor: Anchor): Set<TrackingMode> =
+        if (anchor.hasUsableFix) {
+            setOf(TrackingMode.FULL, TrackingMode.DURATION_ONLY)
+        } else {
+            setOf(TrackingMode.DURATION_ONLY)
+        }
+}
+
+/**
+ * [SnoozeService] with its seams filled in.
  *
  * The statics are how a test configures an instance Android would otherwise
  * construct for itself; [reset] clears them so nothing leaks between tests.
@@ -84,11 +120,15 @@ internal class TestSnoozeService : SnoozeService() {
         return AutoCloseable { captureClosed++ }
     }
 
+    override fun createPresenceMonitor(): PresenceMonitor = presence
+
     companion object {
         /** Arbitrary but plausible: the fixture device booted 30 h ago. */
         const val FIXTURE_UPTIME_MILLIS: Long = 30L * 60 * 60 * 1000
 
         var zen: RefusingZen = RefusingZen()
+
+        var presence: FakePresenceMonitor = FakePresenceMonitor()
 
         /**
          * Every capture the service started, as the callback each would hand
@@ -114,6 +154,7 @@ internal class TestSnoozeService : SnoozeService() {
             zen = RefusingZen()
             captureRequests = mutableListOf()
             captureClosed = 0
+            presence = FakePresenceMonitor()
             testReading = ClockReading(
                 wallMillis = now.toEpochMilli(),
                 uptimeMillis = FIXTURE_UPTIME_MILLIS,

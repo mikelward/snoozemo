@@ -14,3 +14,10 @@ import app.snoozemo.core.PresenceMonitor
 @Suppress("UNUSED_PARAMETER")
 fun defaultPresenceMonitor(context: Context): PresenceMonitor =
     DurationOnlyPresenceMonitor()
+
+/**
+ * The `play` flavor's wake-up hook, as a no-op: this flavor registers no
+ * geofence, so no observation can arrive with nobody to receive it. Exists
+ * so the caller above the seam stays flavor-blind.
+ */
+fun installPresenceWakeup(onWake: () -> Unit) = Unit

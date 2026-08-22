@@ -123,6 +123,30 @@ object CapAlarm {
         )
 
     /**
+     * Arms a wake-up that retries **restoring** the snooze for a stranded
+     * presence observation, after a background `startService` was refused.
+     *
+     * A fifth distinct action, and here the distinction has teeth: this retry
+     * briefly borrowed `ACTION_CHECK_CAP`, whose receiver's no-service
+     * fallback is `releaseDirectly(DURATION_CAP)` — the right last resort for
+     * a spent cap alarm, and an end up to the whole cap early, under a reason
+     * that never happened, for a retry armed a minute ago (Codex, PR #73).
+     * Borrowing the cap's pending intent also *displaced* the real cap alarm
+     * until a successful restore re-armed it. Its own action leaves the cap
+     * alarm standing, so even a retry refused again on firing stays bounded.
+     *
+     * Elapsed realtime for the same reason as [armCheckIn]: the caller knows
+     * the delay it wants, and a wall-clock alarm slides with the clock.
+     */
+    fun armPresenceRetry(context: Context, delayMillis: Long): Boolean =
+        schedule(
+            context,
+            SystemClock.elapsedRealtime() + delayMillis.coerceAtLeast(0L),
+            AlarmManager.ELAPSED_REALTIME_WAKEUP,
+            SnoozeService.ACTION_RESTORE,
+        )
+
+    /**
      * Arms a wake-up whose only job is to retry erasing a released record.
      *
      * A **separate** alarm, carrying its own action, because the two mean
@@ -252,6 +276,9 @@ object CapAlarm {
                 // a wake-up scheduled for work that is done is still a wake-up
                 // the user's battery pays for (SPEC.md §9).
                 existing(context, SnoozeService.ACTION_DISCARD_RETRY)?.let(alarmManager::cancel)
+                // The presence retry likewise: a restore with no record to
+                // restore does nothing, so leaving it armed only costs a wake.
+                existing(context, SnoozeService.ACTION_RESTORE)?.let(alarmManager::cancel)
             }
         }.onFailure {
             // An alarm that outlives its snooze is harmless — the service
@@ -316,6 +343,7 @@ object CapAlarm {
     private fun requestCode(action: String): Int = when (action) {
         SnoozeService.ACTION_ERASE_RETRY -> REQUEST_ERASE_RETRY
         SnoozeService.ACTION_CAP_LOST -> REQUEST_RELEASE_RETRY
+        SnoozeService.ACTION_RESTORE -> REQUEST_PRESENCE_RETRY
         else -> REQUEST_CAP
     }
 
@@ -323,6 +351,7 @@ object CapAlarm {
     private const val REQUEST_CAP = 1
     private const val REQUEST_ERASE_RETRY = 2
     private const val REQUEST_RELEASE_RETRY = 3
+    private const val REQUEST_PRESENCE_RETRY = 4
 }
 
 /**
@@ -387,6 +416,18 @@ class CapAlarmReceiver : BroadcastReceiver() {
             val reason = SnoozeService.endReasonFrom(intent, default = EndReason.LOST_CAPABILITY)
             if (!SnoozeService.endWithoutCap(context, endStartedAt, reason)) {
                 releaseDirectlyIfStillOurs(context, endStartedAt, reason)
+            }
+            return
+        }
+        if (intent?.action == SnoozeService.ACTION_RESTORE) {
+            // A presence retry, not a cap: it never displaces the cap alarm,
+            // which is still armed, so a second refusal here leaves the snooze
+            // bounded by it rather than ending hours early under a reason that
+            // never happened (Codex, PR #73). Nothing more is scheduled from
+            // here — this alarm was already the durable successor, and its own
+            // successor is the cap.
+            if (!SnoozeService.restore(context)) {
+                SnoozeDebugLog.warning("presence retry refused again; the cap bounds the snooze")
             }
             return
         }

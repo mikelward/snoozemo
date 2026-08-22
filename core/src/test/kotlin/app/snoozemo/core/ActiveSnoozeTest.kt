@@ -44,6 +44,33 @@ class ActiveSnoozeTest {
     )
 
     @Test
+    fun `the arm moment survives a clock change in the record's own frame`() {
+        // The presence seed reads this, and the trap is frame mixing:
+        // `reconciledOnto` restates the boot reference while `startedAt` —
+        // the identity — deliberately stays, so subtracting one from the
+        // other after a backward change lands in the future and rejects the
+        // very exit a restore was woken to collect (Codex, PR #73).
+        val armed = snooze()
+        val armedElapsed = armed.armedAtElapsedRealtimeMs()
+        assertEquals(uptimeAtStart, armedElapsed)
+
+        // Two hours in, the user winds the wall clock back one hour; uptime
+        // is unmoved.
+        val reading = ClockReading(
+            wallMillis = start.plus(Duration.ofHours(1)).toEpochMilli(),
+            uptimeMillis = uptimeAtStart + Duration.ofHours(2).toMillis(),
+        )
+        val restated = armed.reconciledOnto(reading)!!
+
+        assertEquals(armedElapsed, restated.armedAtElapsedRealtimeMs())
+    }
+
+    @Test
+    fun `a record with no frame has no arm moment to seed from`() {
+        assertNull(snooze().copy(bootReference = null).armedAtElapsedRealtimeMs())
+    }
+
+    @Test
     fun `remaining counts down to the cap`() {
         val snooze = snooze()
 

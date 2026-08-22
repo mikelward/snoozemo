@@ -21,13 +21,14 @@ import app.snoozemo.core.EndReason
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.PolicyAccessAction
 import app.snoozemo.core.PolicyAccessChange
+import app.snoozemo.core.PresenceEvent
+import app.snoozemo.core.PresenceMonitor
 import app.snoozemo.core.ReleaseEscalation
 import app.snoozemo.core.ReleaseProgress
 import app.snoozemo.core.ReleaseStep
 import app.snoozemo.core.SnoozeController
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.SnoozeState
-import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
 import app.snoozemo.core.ZenController
@@ -35,8 +36,15 @@ import app.snoozemo.core.ZenTrigger
 import app.snoozemo.core.logSummary
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.presence.AnchorCaptureRunner
+import app.snoozemo.presence.defaultPresenceMonitor
 import java.time.Duration
 import java.time.Instant
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 private const val TAG = "SnoozeService"
 
@@ -208,6 +216,104 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * it starts its own.
      */
     private var anchorCapture: AutoCloseable? = null
+
+    /**
+     * Collects the presence monitor while a snooze runs; this service's
+     * main thread, because the controller is confined to it.
+     */
+    private val presenceScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /** The running collection, or null. See [startPresence]. */
+    private var presenceJob: Job? = null
+
+    /**
+     * The one monitor this service drives — the flavor seam of SPEC.md §3.4.
+     * Lazy so building the service costs nothing extra; constructing a
+     * monitor does no work until `start`.
+     */
+    private val presenceMonitor: PresenceMonitor by lazy { createPresenceMonitor() }
+
+    /**
+     * The monitor seam, like [createZenController] and for the same reason:
+     * a real monitor registers geofences and takes location requests, which
+     * no JVM test can drive, while which updates do what to the snooze is
+     * exactly what a test must be able to replay.
+     */
+    internal open fun createPresenceMonitor(): PresenceMonitor =
+        defaultPresenceMonitor(applicationContext)
+
+    /**
+     * Starts watching [snooze]'s anchor and feeds every report to the
+     * controller (SPEC.md §6.1) — the step that makes "until you leave" a
+     * watched promise rather than a recorded intention.
+     *
+     * Guarded by identity, like the capture's delivery and for the same
+     * reason: a monitor started for one snooze must not steer a different
+     * one, and liveness alone cannot tell an end-and-re-arm apart.
+     */
+    private fun startPresence(snooze: ActiveSnooze) {
+        // Replaces only the collection — never through [stopPresence], whose
+        // `monitor.stop()` means *the snooze is over*: it settles the bridge's
+        // held exit and takes down the durable fence, and on the restore path
+        // that cleared the very exit the wake was delivering before the new
+        // flow could attach and collect it (Codex, PR #73). Canceling the job
+        // runs the old flow's own in-process teardown; the monitor's start
+        // re-registers the fence under the same id, which replaces in place.
+        presenceJob?.cancel()
+        presenceJob = null
+        val startedAt = snooze.startedAt
+        val seed = presenceSeedFor(snooze)
+        presenceJob = presenceScope.launch {
+            presenceMonitor.start(snooze.anchor, seed).collect { update ->
+                val running = controller.active
+                if (running == null || running.startedAt != startedAt) return@collect
+                controller.onPresenceUpdate(update)
+                // An ending event whose zen write was refused leaves the
+                // snooze active with the engine's question answered — no
+                // further presence event is coming, so this collector is the
+                // only caller left to escalate. Same pairing as `End now` and
+                // the clock-change ends; the helper no-ops when the end
+                // actually landed (Codex, PR #73).
+                when (update.event) {
+                    PresenceEvent.Departed ->
+                        ensureCapAfterRefusedEnd(EndReason.DEPARTURE)
+                    is PresenceEvent.CapabilityLost ->
+                        ensureCapAfterRefusedEnd(EndReason.LOST_CAPABILITY)
+                    else -> Unit
+                }
+            }
+        }
+    }
+
+    /**
+     * The snooze's arm moment in elapsed realtime — the monitor's evidence
+     * seed. Never "now": on a restore, now post-dates the very observation
+     * the restart was woken to collect, and seeding with it would drop that
+     * exit as stale (Codex, PR #73). The frame arithmetic lives on the
+     * record ([ActiveSnooze.armedAtElapsedRealtimeMs]), beside the
+     * restatements that make it survive a clock change. A record with no
+     * frame falls back to now, which errs toward dropping — the direction
+     * the cap bounds.
+     */
+    private fun presenceSeedFor(snooze: ActiveSnooze): Long =
+        snooze.armedAtElapsedRealtimeMs() ?: readClock().uptimeMillis
+
+    /**
+     * Stops watching. Idempotent, so every exit path may call it — and
+     * deliberately *not* keyed on whether this instance started a collection:
+     * a snooze ended from a cold process (an `End now` or cap wake that
+     * adopts the record without restoring) never collected, but the durable
+     * geofence its arm registered is still out there, and this is the only
+     * path that removes it (flagged by Codex on PR #73). Constructing the
+     * lazy monitor just to stop it costs an object, which is cheaper than a
+     * fence waking the app for a snooze that ended.
+     */
+    private fun stopPresence() {
+        presenceJob?.cancel()
+        presenceJob = null
+        presenceMonitor.stop()
+    }
 
     /** Restoring is attempted once per service instance, from onStartCommand. */
     private var restored: Boolean = false
@@ -383,7 +489,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 releaseDirectly(applicationContext, EndReason.LOST_CAPABILITY)
                 return@let
             }
-            controller.restore(record)
+            controller.restore(record, supported = presenceMonitor.supportedModes(record.anchor))
+            // A restore that survived is a snooze to watch again — the
+            // presence analog of re-asserting the rule (SPEC.md §8.1): the
+            // record surviving does not mean the geofence did.
+            controller.active?.let(::startPresence)
         }
     }
 
@@ -1000,12 +1110,15 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 SnoozeDebugLog.event("anchor arrived for an ended snooze; dropped")
                 return@beginAnchorCapture
             }
-            // Duration-only whatever was captured, deliberately: the anchor is
-            // recorded, but nothing consumes it yet — the monitor wiring is the
-            // next Phase 3 slice — and a mode is a claim about what is
-            // *watching*, not about what was written down (SPEC.md §8.1).
-            // `TrackingMode.from(anchor)` takes over when something is.
-            controller.onAnchorCaptured(anchor, TrackingMode.DURATION_ONLY)
+            // The mode is the machinery's claim, not the anchor's:
+            // `supportedModes` says which modes anything actually watches for
+            // these fields (SPEC.md §6.1, §8.1), and the controller lowers
+            // every mode it ever computes — the arm's and every later
+            // report's — through the same set.
+            controller.onAnchorCaptured(anchor, presenceMonitor.supportedModes(anchor))
+            // And now watch it. After the controller, so the first update
+            // finds the armed snooze; identity-guarded either way.
+            controller.active?.let(::startPresence)
         }
     }
 
@@ -1248,9 +1361,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 // A capture still running is for a snooze that no longer
                 // exists; the identity guard would drop its anchor anyway, but
                 // its callbacks and location request are resources to release
-                // now, not at the ceiling.
+                // now, not at the ceiling. The monitor likewise: nothing is
+                // left to watch for, and a geofence outliving its snooze is a
+                // wake-up nobody wants.
                 anchorCapture?.close()
                 anchorCapture = null
+                stopPresence()
                 snooze?.let { erasing = it.startedAt }
                 forget()
                 if (unwindingFailedArm) notifications.cancelOngoing() else notifications.showEnded(reason)
@@ -1282,6 +1398,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             SnoozeState.IDLE -> {
                 forget()
                 notifications.cancelOngoing()
+                stopPresence()
             }
         }
         // Every transition except `ARMING`, which is the one that sits between
@@ -1786,6 +1903,17 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // early, not a new failure mode.
         anchorCapture?.close()
         anchorCapture = null
+        // The *collection* dies with this instance — the next one restores
+        // the record and re-collects — but deliberately not through
+        // [stopPresence]: `stop()` removes the geofence, and Android destroys
+        // an ordinary background service routinely, so stopping here would
+        // take down the one durable thing that can wake the app for a
+        // departure — DND until the cap, silently (flagged by Codex on
+        // PR #73). The fence outlives the process by design (SPEC.md §6.10);
+        // only a snooze actually ending stops the monitor.
+        presenceJob?.cancel()
+        presenceJob = null
+        presenceScope.cancel()
         // Only if it registered. A registration the platform refused is a state
         // this class now knows about, so unregistering it is not something to
         // attempt and then explain away.

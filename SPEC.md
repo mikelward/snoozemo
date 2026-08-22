@@ -750,10 +750,35 @@ own rule* — whatever else was making the phone quiet stays. This is the concre
 
 ```kotlin
 interface PresenceMonitor {
-    fun start(anchor: Anchor): Flow<PresenceUpdate>
+    fun start(anchor: Anchor, sinceElapsedRealtimeMs: Long): Flow<PresenceUpdate>
     fun stop()
+    fun supportedModes(anchor: Anchor): Set<TrackingMode>
 }
 ```
+
+**The evidence seed is the caller's to supply, and it is the arm moment, not "now".** The engine
+refuses observations older than evidence it has already accepted, seeded so that nothing from
+before the snooze can steer it. A monitor seeding with its own start time gets that right at arm —
+they coincide — and exactly wrong at restore: there, "now" post-dates the very exit the restart was
+woken to collect, so the one observation that mattered would be dropped as stale. Only the caller
+holds the record whose stored clock frame can restate the arm moment, so the seed rides in through
+`start`.
+
+**`supportedModes` is the mode's warrant, and it belongs to the monitor** (added while wiring the
+monitor into the service, 2026-08-22). A `TrackingMode` is a claim about what is *watching*, and
+the anchor's fields alone cannot back it: an anchor with an SSID reads as Wi-Fi-trackable, but
+whether anything actually watches that SSID depends on which monitor is running and which of its
+slices exist — the `direct` flavor's stand-in watches nothing at all. So the monitor states the
+modes it can honestly run for a given anchor, and the controller lowers every mode it ever
+computes — at arm, on restore, and on every update — to the nearest supported one. Without that,
+the first presence report's null degradation would silently promote the mode back to the anchor's
+paper capability, undoing the arm's honesty one update later.
+
+A **set**, not a single best-mode ceiling, and the shape was forced in review: degradation moves
+*through* modes a ceiling cannot vouch for. A fenced anchor's best mode is full tracking, but when
+location degrades, the fallback claim is Wi-Fi-only — and whether that is honest depends on
+whether anything watches Wi-Fi, which a ceiling of "full" cannot say. Duration-only is always
+treated as supported: the cap needs no sensor.
 
 Each `PresenceUpdate` carries two things of deliberately different shapes: an **event**, which is
 news and usually absent, and a **tracking health level**, restated every time whether it moved or
