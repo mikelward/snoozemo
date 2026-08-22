@@ -792,6 +792,11 @@ the point is that every other line of the app is worthless if it isn't true.
       departure to film (this phase's item below) and a real device — the two-step
       foreground-then-background system dialog behavior this screen leads into is unverified on
       hardware.
+- [ ] **Copy candidates for `setup_location_granted`** (maintainer, 2026-08-22), in place of
+      "Tracking your place": "Unsnooze when you leave a location", or simply "Allowed" to match
+      the DND and notification rows' granted state. Not applied yet — changing it now would
+      churn the screenshot snapshots for a cosmetic tweak already mid-review; revisit next time
+      this row's copy is touched for another reason, and settle between the two then.
 - [x] **Stop a transferred snooze from silencing a new phone** (Codex, PR #23) — a
       principle 1 bug and a prerequisite for shipping below. If an OEM transfers
       app-private data despite `allowBackup="false"`, an unexpired `active_snooze` lands on
