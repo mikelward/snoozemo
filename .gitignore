@@ -23,6 +23,10 @@ build/
 local.properties
 *.keystore
 *.jks
+# The base64 encoding docs/play-store-internal-track.md has you generate on
+# the way to pasting it into a GitHub secret -- exactly as sensitive as the
+# keystore itself, and not covered by the two patterns above.
+*.keystore.b64
 
 # JVM fatal-error / replay crash dumps from forked test workers
 hs_err_pid*.log
