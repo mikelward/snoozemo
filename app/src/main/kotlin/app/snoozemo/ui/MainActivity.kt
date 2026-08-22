@@ -52,6 +52,7 @@ import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.PolicyAccessAction
 import app.snoozemo.core.PolicyAccessChange
+import app.snoozemo.core.StaleRuleClaim
 import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenRuleState
 import app.snoozemo.dnd.AndroidZenController
@@ -627,7 +628,26 @@ class MainActivity : ComponentActivity() {
                 // so rather than looking ready. Snoozemo does not re-enable it
                 // — that switch is the user's (SPEC.md §5.1).
                 ZenRuleState.DISABLED -> R.string.debug_rule_disabled
-                ZenRuleState.READY, ZenRuleState.MISSING_ACCESS -> return@Thread
+                ZenRuleState.READY, ZenRuleState.MISSING_ACCESS -> {
+                    // READY refutes a rule-status message an earlier check left
+                    // standing — the user re-enabled the rule in Settings, and
+                    // the screen would otherwise keep claiming it is off until
+                    // the activity was recreated. Only that message: the slot is
+                    // shared with arm/end failures a rule check knows nothing
+                    // about, so those stand. MISSING_ACCESS retires nothing —
+                    // see `StaleRuleClaim`.
+                    if (StaleRuleClaim.refutedBy(state)) {
+                        runOnUiThread {
+                            if (refresh != latestAccessRefresh) return@runOnUiThread
+                            if (lastOutcome == getString(R.string.debug_rule_disabled) ||
+                                lastOutcome == getString(R.string.debug_rule_failed)
+                            ) {
+                                lastOutcome = null
+                            }
+                        }
+                    }
+                    return@Thread
+                }
             }
             runOnUiThread {
                 // A rule lookup can take a while, so a refresh that was current

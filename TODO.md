@@ -1354,11 +1354,14 @@ with real onboarding and settings, so they may be fixed by deletion.
   moments before completing. It now comes down at every point the rule is confirmed off — the same
   set of places the stuck-rule card does, because both are claims that it might not be.
 
-- [ ] **A stale "rule is switched off in Settings" survives the user re-enabling it.**
+- [x] **A stale "rule is switched off in Settings" survives the user re-enabling it.**
   `ensureRuleInBackground` returns early on `READY`/`MISSING_ACCESS` without touching `lastOutcome`,
   so the screen keeps claiming the rule is disabled after arming works again. Fix: retire *only* the
   stale rule-status message — `lastOutcome` is shared with the arm/end paths, so blanket-clearing it
   would wipe messages that are still true. (`MainActivity`; may be moot after Phase 4.)
+  **Fixed as recorded** (2026-08-22): a `READY` answer retires the two rule-status messages and
+  nothing else; the decision (`StaleRuleClaim`) lives in `:core` with the rationale for why
+  `MISSING_ACCESS` retires nothing — it observes nothing about the rule.
 
 - [x] **A manual release through the no-service fallback is attributed to automation.**
   `releaseDirectly` hard-codes `ZenTrigger.CONTEXT`, so on API 35+ the platform Modes UI credits the
