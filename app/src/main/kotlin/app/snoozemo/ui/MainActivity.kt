@@ -27,11 +27,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -43,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -57,6 +60,8 @@ import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenRuleState
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.snooze.ActiveSnoozeStore
+import app.snoozemo.snooze.DebugLogStore
+import app.snoozemo.snooze.DebugLogging
 import app.snoozemo.snooze.NotificationPromptStore
 import app.snoozemo.snooze.SnoozeNotifications
 import app.snoozemo.snooze.SnoozeService
@@ -141,6 +146,35 @@ class MainActivity : ComponentActivity() {
      */
     private var tileBannerDismissed by mutableStateOf(true)
     private var lastOutcome by mutableStateOf<String?>(null)
+
+    /**
+     * Whether the debug log is on (SPEC.md §4.6). Null until the store has been
+     * read, so the row appears stating the truth rather than a default
+     * corrected a frame later — the same discipline as every row above.
+     */
+    private var debugLogEnabled by mutableStateOf<Boolean?>(null)
+
+    /**
+     * How many debug-log writes are still on the worker. Main thread only,
+     * like the generation counters: while it is non-zero, the switch shows the
+     * user's tap and every read-back holds off — a start or store change
+     * repainting the *old* stored value over an in-flight tap would show the
+     * opposite of what is about to be true (flagged by Codex on PR #68). Each
+     * write's completion reconciles the switch from the store, which by then
+     * holds the truth on success and failure alike.
+     */
+    private var debugLogWrites = 0
+
+    /** The handle for the debug-log setting watch; see [onStart]. */
+    private var debugLogWatch: AutoCloseable? = null
+
+    /**
+     * Whether the last debug-log save was refused by storage. Cleared by the
+     * next tap: the message describes the previous attempt, and a new attempt
+     * supersedes it whatever it returns — the same rule the Settings-trip
+     * failures follow.
+     */
+    private var debugLogSaveFailed by mutableStateOf(false)
 
     /**
      * Which row's Settings trip was refused, if either was.
@@ -244,12 +278,15 @@ class MainActivity : ComponentActivity() {
                         tileAdded = tileAdded,
                         tileBannerDismissed = tileBannerDismissed,
                         settingsFailure = settingsFailure,
+                        debugLogEnabled = debugLogEnabled,
+                        debugLogSaveFailed = debugLogSaveFailed,
                         onAccessRow = ::openPolicyAccessSettings,
                         onNotificationsRow = ::fixNotifications,
                         onTileRow = ::addTile,
                         onDismissTileBanner = { tileStore.dismissBanner() },
                         onArm = ::armFromScreen,
                         onRelease = ::endFromScreen,
+                        onDebugLog = ::setDebugLog,
                     )
                 }
             }
@@ -273,6 +310,21 @@ class MainActivity : ComponentActivity() {
         tileWatch = tileStore.observe {
             tileAdded = tileStore.isAdded()
             tileBannerDismissed = tileStore.isBannerDismissed()
+        }
+        // Followed for the same reason as the tile store: the writer is
+        // `DebugLogging`'s worker, so a tap made in a previous instance — a
+        // configuration change mid-toggle — completes after this instance has
+        // already done its read, and its callback can only reach the dead
+        // screen. The outcome watch, not a preferences listener, because only
+        // the watch fires after the write's *result* is known — a preference
+        // notification is dispatched before it (see `watchSaveOutcome`).
+        debugLogWatch = DebugLogging.watchSaveOutcome {
+            runOnUiThread {
+                if (debugLogWrites == 0) {
+                    debugLogEnabled = DebugLogStore(this).isEnabled()
+                    debugLogSaveFailed = DebugLogging.lastSaveRefused
+                }
+            }
         }
     }
 
@@ -345,6 +397,14 @@ class MainActivity : ComponentActivity() {
                 // front of the first frame.
                 tileAdded = tileStore.isAdded()
                 tileBannerDismissed = tileStore.isBannerDismissed()
+                // Its own one-key file, warmed by `DebugLogging.install` at
+                // process start, so this is a memory hit like the two above.
+                // Held off while a tap's write is still on the worker: the
+                // store would answer with the value the tap is replacing.
+                if (debugLogWrites == 0) {
+                    debugLogEnabled = DebugLogStore(this).isEnabled()
+                    debugLogSaveFailed = DebugLogging.lastSaveRefused
+                }
             }
         }
     }
@@ -503,6 +563,8 @@ class MainActivity : ComponentActivity() {
         recordWatch = null
         tileWatch?.close()
         tileWatch = null
+        debugLogWatch?.close()
+        debugLogWatch = null
     }
 
     /**
@@ -709,6 +771,49 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * Applies the debug-log switch, and puts the truth back if it didn't take.
+     *
+     * The switch flips at once — the store write and the file work run on the
+     * log's own worker, and a control that waits on disk is a control that
+     * feels broken — but only a *persisted* choice is applied
+     * (`DebugLogging.setEnabled`): a write the storage refused would otherwise
+     * look applied and silently revert at the next process start (deferred
+     * from Codex's PR #62 review).
+     *
+     * Every completion reconciles the switch **from the store**, rather than
+     * reverting to a value captured at the tap: the store is authoritative on
+     * success and failure alike, since a refused write restores it. Only the
+     * last outstanding write repaints ([debugLogWrites]), so a later tap's
+     * value is never clobbered by an earlier tap's completion — the callbacks
+     * arrive in tap order off one FIFO worker.
+     *
+     * A failed save also says so under the row, not only by the snap-back:
+     * a switch that quietly returns to where it was reads as a missed tap,
+     * which is principle 2's failure on the screen built to prevent it.
+     */
+    private fun setDebugLog(enabled: Boolean) {
+        if (debugLogEnabled == null) return
+        debugLogSaveFailed = false
+        debugLogWrites++
+        debugLogEnabled = enabled
+        DebugLogging.setEnabled(this, enabled) { _ ->
+            runOnUiThread {
+                // Only the last outstanding write repaints — the value *and*
+                // the failure line. Surfacing an earlier write's refusal here
+                // would leave `Couldn't save this setting` standing over a
+                // later tap that saved fine (flagged by Codex on PR #68); the
+                // process-level outcome is written per-completion on the FIFO
+                // worker, so once the queue drains it is the latest write's.
+                debugLogWrites--
+                if (debugLogWrites == 0) {
+                    debugLogEnabled = DebugLogStore(this).isEnabled()
+                    debugLogSaveFailed = DebugLogging.lastSaveRefused
+                }
+            }
+        }
+    }
+
+    /**
      * Ends the snooze through the service, or without it if the start is
      * refused.
      *
@@ -843,12 +948,15 @@ fun DebugScreen(
     snoozing: Boolean?,
     lastOutcome: String?,
     settingsFailure: SetupRowId?,
+    debugLogEnabled: Boolean?,
+    debugLogSaveFailed: Boolean,
     onAccessRow: () -> Unit,
     onNotificationsRow: () -> Unit,
     onTileRow: () -> Unit,
     onDismissTileBanner: () -> Unit,
     onArm: () -> Unit,
     onRelease: () -> Unit,
+    onDebugLog: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -997,8 +1105,82 @@ fun DebugScreen(
             }
         }
 
+        // Below the actions, deliberately: the rows above are first-run work
+        // and the buttons are the product, while this is a setting touched
+        // rarely — usually never. Same null-until-read discipline as the rows:
+        // a row that asserted the default and corrected itself a frame later
+        // would flash on the one launch where the user had turned it off.
+        debugLogEnabled?.let {
+            DebugLogRow(enabled = it, saveFailed = debugLogSaveFailed, onChange = onDebugLog)
+        }
+
         lastOutcome?.let {
             Text(text = it, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+/**
+ * The debug log's on/off switch (SPEC.md §4.6): on by default, and turning it
+ * off deletes what was kept.
+ *
+ * Not a [SetupRow]: those state a capability and offer its one repair, while
+ * this is a choice with two valid states, so it carries a switch. The whole
+ * card is the target and the switch is its indicator — one TalkBack target per
+ * row, the same rule the rows above keep — which is why the switch itself
+ * takes no `onCheckedChange` of its own.
+ */
+@Composable
+private fun DebugLogRow(
+    enabled: Boolean,
+    saveFailed: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            // `toggleable` before the padding, so the whole card answers the
+            // tap; the Surface's shape clips the ripple to the card.
+            modifier = Modifier
+                .toggleable(
+                    value = enabled,
+                    role = Role.Switch,
+                    onValueChange = onChange,
+                )
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.setup_debug_log_title),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    text = stringResource(R.string.setup_debug_log_description),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                // Inside the row, like SetupRow's failure line and for the
+                // same reason: the message is about the tap, and the column
+                // scrolls. The switch has already snapped back to the stored
+                // truth by the time this shows; the line is what stops the
+                // snap-back reading as a missed tap.
+                if (saveFailed) {
+                    Text(
+                        text = stringResource(R.string.setup_debug_log_save_failed),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+            Switch(checked = enabled, onCheckedChange = null)
         }
     }
 }
@@ -1147,12 +1329,15 @@ private fun DebugScreenPreview() {
             snoozing = false,
             lastOutcome = null,
             settingsFailure = null,
+            debugLogEnabled = true,
+            debugLogSaveFailed = false,
             onAccessRow = {},
             onNotificationsRow = {},
             onTileRow = {},
             onDismissTileBanner = {},
             onArm = {},
             onRelease = {},
+            onDebugLog = {},
         )
     }
 }

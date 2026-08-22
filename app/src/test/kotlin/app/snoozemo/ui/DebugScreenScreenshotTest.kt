@@ -76,12 +76,15 @@ class DebugScreenScreenshotTest {
                 snoozing = null,
                 lastOutcome = null,
                 settingsFailure = null,
+                debugLogEnabled = null,
+                debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onDebugLog = {},
             )
         }
 
@@ -92,6 +95,7 @@ class DebugScreenScreenshotTest {
         composeRule.onNodeWithText("Do Not Disturb access").assertDoesNotExist()
         composeRule.onNodeWithText("Notifications").assertDoesNotExist()
         composeRule.onNodeWithText("Snooze").assertDoesNotExist()
+        composeRule.onNodeWithText("Debug log").assertDoesNotExist()
     }
 
     @Test
@@ -111,12 +115,15 @@ class DebugScreenScreenshotTest {
                 snoozing = null,
                 lastOutcome = null,
                 settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
                 onAccessRow = { opened++ },
                 onNotificationsRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onDebugLog = {},
             )
         }
 
@@ -131,6 +138,39 @@ class DebugScreenScreenshotTest {
         composeRule.onNodeWithText("Allow").assertExists()
         // Nothing to arm with: the controls only appear once access is granted.
         composeRule.onNodeWithText("Snooze").assertDoesNotExist()
+        // The debug-log switch is a setting, not a capability, so it is there
+        // whatever the rows above still want.
+        composeRule.onNodeWithText("Debug log").assertExists()
+        composeRule.onNodeWithText("Save snooze details to help fix issues").assertExists()
+    }
+
+    @Test
+    fun `a refused debug log save says so under the switch`() {
+        // The switch has already snapped back to the stored truth when this
+        // shows; the line is what stops the snap-back reading as a missed tap.
+        capture("debug-screen-debug-log-save-failed.png") {
+            DebugScreen(
+                access = PolicyAccess.GRANTED,
+                notifications = NotificationPermission.GRANTED,
+                notificationsReachTheUser = true,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                lastOutcome = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = true,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onTileRow = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onDebugLog = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Couldn't save this setting").assertExists()
     }
 
     @Test
@@ -147,12 +187,15 @@ class DebugScreenScreenshotTest {
                 snoozing = null,
                 lastOutcome = null,
                 settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onDebugLog = {},
             )
         }
 
@@ -173,12 +216,15 @@ class DebugScreenScreenshotTest {
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = { tapped++ },
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onDebugLog = {},
             )
         }
 
@@ -201,12 +247,15 @@ class DebugScreenScreenshotTest {
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onDebugLog = {},
             )
         }
 
@@ -232,12 +281,15 @@ class DebugScreenScreenshotTest {
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onDebugLog = {},
             )
         }
 
@@ -256,12 +308,15 @@ class DebugScreenScreenshotTest {
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onDebugLog = {},
             )
         }
 
@@ -290,12 +345,15 @@ class DebugScreenScreenshotTest {
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onDebugLog = {},
             )
         }
 
@@ -314,12 +372,15 @@ class DebugScreenScreenshotTest {
                 snoozing = true,
                 lastOutcome = null,
                 settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onDebugLog = {},
             )
         }
 
@@ -343,12 +404,15 @@ class DebugScreenScreenshotTest {
                 snoozing = null,
                 lastOutcome = null,
                 settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onDebugLog = {},
             )
         }
 
@@ -375,12 +439,15 @@ class DebugScreenScreenshotTest {
                 snoozing = true,
                 lastOutcome = null,
                 settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onDebugLog = {},
             )
         }
 
@@ -399,12 +466,15 @@ class DebugScreenScreenshotTest {
                 snoozing = null,
                 lastOutcome = null,
                 settingsFailure = SetupRowId.DND,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onDebugLog = {},
             )
         }
 
@@ -445,12 +515,15 @@ class DebugScreenScreenshotTest {
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = SetupRowId.DND,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onDebugLog = {},
             )
         }
 
@@ -470,12 +543,15 @@ class DebugScreenScreenshotTest {
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onDebugLog = {},
             )
         }
 
@@ -503,12 +579,15 @@ class DebugScreenScreenshotTest {
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = { tapped++ },
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onDebugLog = {},
             )
         }
 
@@ -531,12 +610,15 @@ class DebugScreenScreenshotTest {
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onDebugLog = {},
             )
         }
 
@@ -565,12 +647,15 @@ class DebugScreenScreenshotTest {
                 snoozing = false,
                 lastOutcome = null,
                 settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = { added++ },
                 onDismissTileBanner = { dismissed++ },
                 onArm = {},
                 onRelease = {},
+                onDebugLog = {},
             )
         }
 
@@ -599,12 +684,15 @@ class DebugScreenScreenshotTest {
                 snoozing = false,
                 lastOutcome = "Couldn't snooze",
                 settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
                 onAccessRow = {},
                 onNotificationsRow = {},
                 onTileRow = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onDebugLog = {},
             )
         }
 

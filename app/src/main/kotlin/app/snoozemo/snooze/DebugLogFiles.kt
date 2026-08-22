@@ -112,7 +112,14 @@ internal class DebugFileSink internal constructor(
         runCatching {
             worker.execute {
                 runCatching {
-                    if (!this.enabled) {
+                    // The captured parameter, not the field: this task decides
+                    // what a *start under the stored setting* does, and a
+                    // re-enable racing in before it runs must not turn a
+                    // pending delete into a rotation that keeps the files the
+                    // previous run's disable promised away (flagged by Codex
+                    // on PR #68). The re-enable's own task runs after this one
+                    // on the FIFO worker and finds a clean directory.
+                    if (!enabled) {
                         // Off means nothing is kept — including whatever a
                         // run under the old setting left behind (SPEC.md §4.6).
                         deleteEverything()
@@ -357,9 +364,25 @@ internal class DebugLogStore(context: Context) {
 
     fun isEnabled(): Boolean = prefs.getBoolean(KEY_ENABLED, true)
 
-    /** Persists the choice, returning whether the write reached disk. */
-    fun setEnabled(enabled: Boolean): Boolean =
-        prefs.edit().putBoolean(KEY_ENABLED, enabled).commit()
+    /**
+     * Persists the choice, returning whether the write reached disk.
+     *
+     * On a refused write the old value is put back first: `commit()` applies
+     * the change to the process-local map *before* the disk write it reports
+     * on, so without the restore every later read would return a value that
+     * was neither applied nor stored — a switch reading `off` over a log
+     * still recording, until a process restart flipped it back (flagged by
+     * Codex on PR #68). The restore's own disk write may fail too; the map is
+     * restored regardless, which is the part every reader sees.
+     */
+    fun setEnabled(enabled: Boolean): Boolean {
+        val before = isEnabled()
+        val persisted = prefs.edit().putBoolean(KEY_ENABLED, enabled).commit()
+        if (!persisted) {
+            prefs.edit().putBoolean(KEY_ENABLED, before).commit()
+        }
+        return persisted
+    }
 
     private companion object {
         const val FILE_NAME = "debug_log"
@@ -373,11 +396,64 @@ internal class DebugLogStore(context: Context) {
  */
 internal object DebugLogging {
 
-    @Volatile
+    /** Confined to [worker]; nothing off that thread reads or writes it. */
     private var sink: DebugFileSink? = null
 
     /**
-     * Call once from `Application.onCreate`. Spawns its own thread, like
+     * Whether the most recently completed toggle write was refused by storage.
+     *
+     * Process-level rather than screen-level, deliberately: the completion
+     * callback closes over the activity that made the tap, and a configuration
+     * change mid-write hands the screen to a replacement that callback cannot
+     * reach — the failure explanation would vanish with the dead instance
+     * (flagged by Codex on PR #68). Any instance reads this instead. Written
+     * only on the FIFO worker, so after the queue drains it is the *latest*
+     * write's outcome — a failure superseded by a later success reads false.
+     */
+    @Volatile
+    var lastSaveRefused: Boolean = false
+        private set
+
+    /**
+     * The current screen's ear for completed writes; see [watchSaveOutcome].
+     * One slot, not a list — there is at most one screen, and during a
+     * recreation the replacement registers before the old instance unregisters.
+     */
+    @Volatile
+    private var onSaveOutcome: (() -> Unit)? = null
+
+    /**
+     * Calls [onChange] on the worker after each write completes — value
+     * applied, [lastSaveRefused] assigned — until the handle is closed.
+     *
+     * This exists because a `SharedPreferences` listener cannot carry the
+     * outcome: `commit()` dispatches its change notification *before* this
+     * object learns whether the disk write succeeded, so a listener woken by
+     * the value change can read the new value paired with the previous
+     * write's outcome (flagged by Codex on PR #68). This callback fires after
+     * both are final, and it is also the only notification needed — nothing
+     * but these writes changes the setting.
+     *
+     * Closing compares identity so an old instance's deferred close cannot
+     * evict the replacement that registered before it (`onStop` runs after
+     * the new activity's `onStart` on a configuration change).
+     */
+    fun watchSaveOutcome(onChange: () -> Unit): AutoCloseable {
+        onSaveOutcome = onChange
+        return AutoCloseable { if (onSaveOutcome === onChange) onSaveOutcome = null }
+    }
+
+    // One FIFO daemon worker for installing and for applying the toggle,
+    // replacing a bare install thread: the setting now applies in the order
+    // the calls were made, so a toggle can never be overwritten by an install
+    // still holding the older stored value it read before the tap (deferred
+    // from Codex's PR #62 review). Same shape as the sink's own worker.
+    private val worker = ThreadPoolExecutor(
+        1, 1, 0L, TimeUnit.MILLISECONDS, LinkedBlockingQueue(),
+    ) { runnable -> Thread(runnable, "snoozemo-debug-log-init").apply { isDaemon = true } }
+
+    /**
+     * Call once from `Application.onCreate`. Runs off the caller's thread, like
      * [SnoozeNotifications.warm] and for the same reason: the store read is a
      * preferences file load and the version read is a `PackageManager` call,
      * and `onCreate` sits ahead of a possible cold tile tap. Entries recorded
@@ -386,10 +462,10 @@ internal object DebugLogging {
      */
     fun install(context: Context) {
         val app = context.applicationContext
-        Thread {
-            runCatching {
-                val opening = synchronized(this) {
-                    if (sink != null) return@runCatching
+        runCatching {
+            worker.execute {
+                runCatching {
+                    if (sink != null) return@execute
                     val enabled = DebugLogStore(app).isEnabled()
                     // The recording gate first, so a disabled install stops
                     // collecting — and drops whatever was buffered before this
@@ -400,35 +476,84 @@ internal object DebugLogging {
                     SnoozeDebugLog.addSink(fileSink)
                     SnoozeDebugLog.addSink { line -> runCatching { Log.d(TAG, line) } }
                     sink = fileSink
-                    // Build, device, and Android version (SPEC.md §4.6) — once
-                    // per run, first, so every later line reads against the
-                    // software it ran on.
-                    "run start; app=${appVersion(app)} android=${Build.VERSION.RELEASE} " +
-                        "(api ${Build.VERSION.SDK_INT}) device=${Build.MANUFACTURER} ${Build.MODEL}"
-                }
-                SnoozeDebugLog.event(opening)
-            }.onFailure { runCatching { Log.w(TAG, "Installing the debug log failed; logcat still records.", it) } }
-        }.apply {
-            isDaemon = true
-            name = "snoozemo-debug-log-init"
-        }.start()
+                    // Build, device, and Android version (SPEC.md §4.6) —
+                    // first, so every later line reads against the software it
+                    // ran on.
+                    logRunContext(app)
+                }.onFailure { runCatching { Log.w(TAG, "Installing the debug log failed; logcat still records.", it) } }
+            }
+        }
     }
 
     /**
-     * The settings toggle's entry point (the row itself lands with the copy
-     * pass): persists the choice and applies it — off deletes what was kept.
+     * The settings switch's entry point: persists the choice, applies what
+     * persisted — off deletes what was kept — and answers [onApplied] with
+     * whether the write reached disk, on the worker's thread.
+     *
+     * Only a *persisted* choice is applied, deliberately: a change the storage
+     * refused would otherwise look applied and silently revert at the next
+     * process start (deferred from Codex's PR #62 review). Refusing to apply
+     * it keeps the row, the recording gate, and the disk telling one story,
+     * and the caller puts the switch back where the truth is.
      */
-    fun setEnabled(context: Context, enabled: Boolean) {
-        DebugLogStore(context).setEnabled(enabled)
-        // Off gates recording itself, not just persistence: the buffer stops
-        // collecting and is emptied, so nothing captured while off can be
-        // written to disk by a later re-enable (Codex, PR #62).
-        SnoozeDebugLog.setRecording(enabled)
-        sink?.setEnabled(enabled)
+    fun setEnabled(context: Context, enabled: Boolean, onApplied: (persisted: Boolean) -> Unit) {
+        val app = context.applicationContext
+        runCatching {
+            worker.execute {
+                // Logged, not just reported as false: the switch reverting
+                // tells the user, but only this line tells the next reader
+                // *why* the save failed. The exception is a preferences write
+                // failure and carries no user data.
+                val persisted = runCatching { DebugLogStore(app).setEnabled(enabled) }
+                    .onFailure { runCatching { Log.w(TAG, "Saving the debug-log setting failed; the switch reverts.", it) } }
+                    .getOrDefault(false)
+                if (persisted) {
+                    // Off gates recording itself, not just persistence: the
+                    // buffer stops collecting and is emptied, so nothing
+                    // captured while off can be written to disk by a later
+                    // re-enable (Codex, PR #62).
+                    SnoozeDebugLog.setRecording(enabled)
+                    sink?.setEnabled(enabled)
+                }
+                // A re-enable's log starts from an emptied buffer — disabling
+                // dropped everything, the run-context line included — so the
+                // context is restated, or nothing after this point says what
+                // software it ran on (SPEC.md §4.6; flagged by Codex on
+                // PR #68).
+                if (persisted && enabled) logRunContext(app)
+                // Assign first, then tell the screen: the watch fires only
+                // once the outcome it will read is this write's.
+                lastSaveRefused = !persisted
+                runCatching { onSaveOutcome?.invoke() }
+                runCatching { onApplied(persisted) }
+            }
+        }.onFailure { runCatching { onApplied(false) } }
+    }
+
+    /** The line every run's log leads with — and a re-enabled one restarts with. */
+    private fun logRunContext(app: Context) {
+        SnoozeDebugLog.event(
+            "run start; app=${appVersion(app)} android=${Build.VERSION.RELEASE} " +
+                "(api ${Build.VERSION.SDK_INT}) device=${Build.MANUFACTURER} ${Build.MODEL}",
+        )
     }
 
     private fun appVersion(context: Context): String = runCatching {
         val info = context.packageManager.getPackageInfo(context.packageName, 0)
         "${info.versionName} (${info.longVersionCode})"
     }.getOrDefault("unknown")
+
+    /** Test-only: blocks until the worker drains, install and toggles included. */
+    internal fun awaitIdleForTest() {
+        worker.submit {}.get()
+    }
+
+    /** Test-only: forgets the installed sink so the next install runs fresh. */
+    internal fun resetForTest() {
+        onSaveOutcome = null
+        worker.submit {
+            sink = null
+            lastSaveRefused = false
+        }.get()
+    }
 }
