@@ -91,6 +91,17 @@ releases on the **Internal, Closed, and Open test tracks**, not only production 
 completed you cannot publish any change at all, including store-listing edits. An internal-only
 track buys **no exemption**. It asks for a written justification that background location is core to
 a user-facing feature, why a while-in-use alternative will not do, and a demonstration video showing
+the in-app disclosure and the permission prompt — a screen, not a dialog: `LocationDisclosureScreen`
+states what location is used for and that it never leaves the phone (§12) before either system
+prompt appears, and its one `Continue` action is the only thing that launches a request. The two
+platform permissions are asked for in the sequence the platform actually honors — foreground
+(fine + coarse) first, then background, chained automatically on a foreground grant rather than
+making the user tap the settings row a second time — because the platform will not grant background
+access without foreground already held. The settings row that leads to it (`SetupRowId.LOCATION`)
+follows the same tri-state shape as the Do Not Disturb and notification rows (§5.2): states the gap,
+offers the fix while the system will still honor it, and points at the app's permission settings once
+it won't. Missing either permission never blocks a snooze — see §3.6's fallback ladder — so the row
+and the disclosure are purely the repair surface, not a gate on arming.
 the in-app disclosure and the permission prompt.
 
 ### 3.3 Why the foreground-service route does not survive Play review
