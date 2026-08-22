@@ -343,8 +343,9 @@ the point is that every other line of the app is worthless if it isn't true.
         answer the permanence question first.
       - "Always have it in settings" is a row on the main screen for now, because there is no
         settings screen yet. When one lands, that row is what moves into it.
-- [ ] Real anchor capture on the arm path. Until Phase 3 lands `PresenceMonitor`, every snooze
-      arms honestly duration-only rather than pretending to track a place it never captured.
+- [x] Real anchor capture on the arm path — landed with the Phase 3 capture item below
+      (2026-08-22). The snooze still *arms* honestly duration-only, by an explicit mode at the
+      one call site, until the monitor consumes what was captured.
 - [x] **minSdk 34** (maintainer, 2026-08-11). The tile's `startActivityAndCollapse` needed the
       deprecated `Intent` overload on API 33; raising the floor deleted the version branch and the
       lint suppression together, so the arm path is a single code path again. Reasoning recorded in
@@ -437,13 +438,22 @@ the point is that every other line of the app is worthless if it isn't true.
         paired callbacks — exists any more. **Do not reintroduce it**: a recovery that has to be
         delivered is a recovery that can be lost, and `SPEC.md` §6.1 records the four invariants
         that survive whatever shape the engine takes.
-- [ ] Anchor capture at arm time — with the ≤10 s ceiling that degrades to Wi-Fi-only or
+- [x] Anchor capture at arm time — with the ≤10 s ceiling that degrades to Wi-Fi-only or
       duration-only rather than blocking the arm. **The SSID is the anchor; the connected
       BSSID is recorded alongside it** (`SPEC.md` §6.2). Those are two different
       statements, and an earlier "SSID not BSSID" here read as an instruction to skip the
       BSSID entirely, which would leave `Anchor.bssid` permanently null and the room
       feature unbuildable without a second capture change (Codex, PR #24). Nothing in v1
       *acts* on the BSSID — it is only captured, and `docs/PRIVACY.md` says so.
+      **Landed 2026-08-22**: the assembly rules (accuracy gate, redaction-placeholder
+      rejection, first-usable-answer-wins, the ceiling) are pure in `:core`'s
+      `AnchorCapture`; the platform half (`AnchorCaptureRunner`, shared by both flavors)
+      starts strictly after `STATE_TRUE`. The captured anchor is recorded but the snooze
+      still arms with an explicit `DURATION_ONLY`, because a mode is a claim about what is
+      *watching* and nothing consumes the anchor until the monitor wiring lands — that
+      slice replaces the explicit mode with `TrackingMode.from(anchor)`. Still owed a
+      handset: that the flag plus our permissions yields a real SSID end to end (the §6.4
+      item below), and what an indoor fix's accuracy actually is.
 - [ ] **Register the Wi-Fi callback with `FLAG_INCLUDE_LOCATION_INFO`** (`SPEC.md` §6.4),
       and assert on a real device that the SSID comes back as an SSID. Without the flag a
       `NetworkCallback` requests no location-sensitive data, so `WifiInfo` arrives redacted
@@ -1061,6 +1071,41 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     a snooze that ends on a duration cap needs the same controller.
 
 ## Decisions needing review
+- **Arm-time capture uses the platform `LocationManager` (fused provider) in both flavors**
+  (autopilot, 2026-08-22), not `FusedLocationProviderClient`. On every GMS device this app
+  targets the platform fused provider is backed by the same engine, a one-shot capture is not
+  where fix quality is won, and one shared class beats a second flavor seam. **The alternative**
+  was a play-flavored capture through Play Services Location, which could matter if handset
+  testing shows the platform provider serving stale or slow fixes at arm time. Reversible: one
+  class behind one seam (`SnoozeService.beginAnchorCapture`).
+- **A captured anchor arms with an explicit `DURATION_ONLY` until something watches it**
+  (autopilot, 2026-08-22). `TrackingMode.from(anchor)` would claim Wi-Fi or full tracking that
+  no running machinery performs — the notification would say `ends when you leave` over a snooze
+  only the cap will end, which is principle 2's failure. **The alternative** was to wire the
+  monitor in the same change; it was split out because the monitor's consumption (the
+  duty-driven location loop) is its own review-sized slice. Reversible: one argument at one call
+  site, deleted by the monitor-wiring slice.
+- ~~**`ACCESS_NETWORK_STATE` is now declared**~~ — **approved by the maintainer** (2026-08-22,
+  "yes to access network state"), asked per the *Play policy questions* rule with the policy
+  context: a normal install-time permission, not on Play's sensitive list, no Data Safety
+  impact. Declared by `:presence`'s manifest because registering the network callback the SSID
+  read goes through requires it — lint caught a real `SecurityException` waiting on the first
+  sideload — and pinned by `DeclaredPermissionsTest`.
+- **Anchor capture seeds from the last known fix, gated to 60 s of age** (autopilot,
+  2026-08-22). A tile-tap arm drops to the background within a frame of the trampoline
+  finishing, and a while-in-use grant then delivers fresh fixes throttled or not at all (Codex,
+  PR #71) — the synchronous cached read inside the tap's start is the one answer that cannot
+  lose that race. Sixty seconds at walking pace is under 100 m, inside the anchor's 150 m
+  radius, and a stale seed errs open (an anchor the user is not at reads as a departure, not a
+  snooze that won't end). **The alternative** was a foreground component holding location
+  access through capture, which in the `play` flavor is the §3 minefield and in `direct` is
+  Phase 7's monitor anyway. Reversible: one constant, one read. What a device would settle:
+  how often the seed is present and fresh in practice, and whether the live request ever
+  beats the ceiling from the background.
+- **The no-Wi-Fi arm waits out the full 10 s ceiling** (autopilot, 2026-08-22). Nothing
+  user-visible waits on it — `Snoozing` is posted the moment the rule is on — so the cost is a
+  late ARMED record, and the alternative (a shorter Wi-Fi sub-deadline) was one more constant
+  and one more race to review. Reversible: one event on the pure machine.
 - ~~**Report tracking *health* on every step instead of recovery *events***~~ — **done** (PR #34).
   Nine Codex rounds on #33, four of them in code written during that PR, all shared one shape: a
   recovery was a one-shot announcement, so every ordering question became "did the announcement

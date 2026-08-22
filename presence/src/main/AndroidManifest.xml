@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Reading which network the phone is on — the anchor SSID comes through a
+      ConnectivityManager network callback (SPEC.md §6.4), and registering one
+      requires this. A normal install-time permission: state only, no prompt,
+      no Data Safety impact, and nothing here can reach the network — the app
+      declares no INTERNET (SPEC.md §12), pinned by DeclaredPermissionsTest.
+      Declared by this module because this module's code is what needs it.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!--
+      The location family this module's capture and monitoring code reads
+      with. The app manifest declares the same pair with the product rationale
+      (SPEC.md §3.4, §6.6) and the manifest merger folds the two into one
+      declaration; stated here as well so this module's own lint checks its
+      code against the permissions it actually uses instead of reporting them
+      missing.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+</manifest>

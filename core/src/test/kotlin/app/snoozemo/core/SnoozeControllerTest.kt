@@ -119,21 +119,63 @@ class SnoozeControllerTest {
         // Arming must never feel slow or refuse (SPEC.md §4.1).
         controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
 
-        controller.onAnchorUnavailable(ssid = "ExampleWifi")
+        controller.onAnchorCaptured(Anchor(capturedAt = start, ssid = "ExampleWifi"))
 
         assertEquals(SnoozeState.ARMED, controller.state)
         assertEquals(TrackingMode.WIFI_ONLY, controller.active?.mode)
-        assertEquals(1, listener.tracking.size)
+        // The anchor is what limits the mode here, so the recorded reason is
+        // the missing fix — not the caller.
+        assertEquals(
+            listOf(TrackingMode.WIFI_ONLY to DegradationCause.NO_LOCATION_FIX),
+            listener.tracking.toList(),
+        )
     }
 
     @Test
     fun `no fix and no Wi-Fi arms as a timer, and says that too`() {
         controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
 
-        controller.onAnchorUnavailable(ssid = null)
+        controller.onAnchorCaptured(Anchor(capturedAt = start))
 
         assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
         assertEquals(1, listener.tracking.size)
+    }
+
+    @Test
+    fun `the caller's stated mode wins where it claims less than the anchor allows`() {
+        // A mode is a claim about what is watching, not about what was written
+        // down: a caller that has started nothing arms duration-only however
+        // complete the captured anchor is (SPEC.md §8.1).
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+
+        controller.onAnchorCaptured(anchor, TrackingMode.DURATION_ONLY)
+
+        assertEquals(SnoozeState.ARMED, controller.state)
+        assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
+        // The anchor itself is kept whole — it is what the next slice watches.
+        assertEquals("ExampleWifi", controller.active?.anchor?.ssid)
+        assertEquals(true, controller.active?.anchor?.hasUsableFix)
+        // And the recorded reason is the caller's limit, not a fix the anchor
+        // plainly has — the debug log must not misstate which limit bit
+        // (Codex, PR #71).
+        assertEquals(
+            listOf(TrackingMode.DURATION_ONLY to DegradationCause.NOTHING_WATCHING),
+            listener.tracking.toList(),
+        )
+    }
+
+    @Test
+    fun `a stated mode cannot claim more than the anchor supports`() {
+        // The same lie in the more dangerous direction: FULL over an anchor
+        // with no coordinates is a departure test nothing can run.
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+
+        controller.onAnchorCaptured(
+            Anchor(capturedAt = start, ssid = "ExampleWifi"),
+            TrackingMode.FULL,
+        )
+
+        assertEquals(TrackingMode.WIFI_ONLY, controller.active?.mode)
     }
 
     @Test

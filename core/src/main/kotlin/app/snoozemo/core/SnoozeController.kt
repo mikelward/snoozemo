@@ -72,7 +72,7 @@ class SnoozeController(
      * from the fix — a controller that required a finished anchor would either
      * leave DND off for those 10 s or arm with an anchor it could never replace.
      * So the rule goes on first and the anchor lands afterward, via
-     * [onAnchorCaptured] or [onAnchorUnavailable].
+     * [onAnchorCaptured].
      *
      * Until then the snooze is honestly [TrackingMode.DURATION_ONLY]: nothing has
      * been captured yet, so nothing can detect a departure yet, and the cap is
@@ -138,32 +138,47 @@ class SnoozeController(
     }
 
     /**
-     * The anchor arrived: the snooze is now fully armed and departure can be
-     * detected. Ignored if nothing is arming — a late fix for a snooze that has
-     * already ended must not resurrect it.
+     * The anchor arrived — complete, partial, or empty, per whatever capture
+     * managed within its ceiling (SPEC.md §4.1). Arms in whatever [mode] the
+     * caller's presence machinery actually runs, clamped to what the anchor
+     * can support, and reports the degradation where that is short of full —
+     * because arming must never feel slow or refuse, and a degraded snooze
+     * must never look healthy.
+     *
+     * [mode] is stated by the caller rather than derived here, because the
+     * anchor alone cannot answer it: [TrackingMode.from] is the *ceiling* the
+     * captured fields allow, and a caller that has not started anything to
+     * watch them must say so rather than let a recorded SSID claim Wi-Fi
+     * tracking nothing is doing. A claim above the anchor's ceiling is clamped
+     * the other way — a mode more capable than the fields support would be the
+     * same lie in the more dangerous direction.
+     *
+     * Ignored if nothing is arming — a late fix for a snooze that has already
+     * ended must not resurrect it.
      */
-    fun onAnchorCaptured(anchor: Anchor) {
+    fun onAnchorCaptured(anchor: Anchor, mode: TrackingMode = TrackingMode.from(anchor)) {
         val snooze = active ?: return
-        val armed = snooze.copy(anchor = anchor, mode = TrackingMode.from(anchor))
+        val supported = TrackingMode.from(anchor)
+        // The less capable of the two: enum order runs FULL → DURATION_ONLY.
+        val armed = snooze.copy(anchor = anchor, mode = maxOf(mode, supported))
         active = armed
         state = SnoozeState.ARMED
         listener.onStateChanged(state, armed, null)
         // Armed, but say so if it armed degraded: a snooze that is really only a
-        // timer must not look like a tracked one (SPEC.md §4.1, §8.1).
+        // timer must not look like a tracked one (SPEC.md §4.1, §8.1). The
+        // cause names which limit bit — the anchor's missing fix, or the
+        // caller arming below what the anchor supports — because the debug log
+        // records it, and a reason that misstates which is which is exactly
+        // what it exists to rule out (SPEC.md §4.6; flagged by Codex on
+        // PR #71 when this said NO_LOCATION_FIX over a fix just captured).
         if (armed.mode != TrackingMode.FULL) {
-            listener.onTrackingChanged(armed, DegradationCause.NO_LOCATION_FIX)
+            val cause = if (supported < armed.mode) {
+                DegradationCause.NOTHING_WATCHING
+            } else {
+                DegradationCause.NO_LOCATION_FIX
+            }
+            listener.onTrackingChanged(armed, cause)
         }
-    }
-
-    /**
-     * The 10 s ceiling passed with no usable fix (SPEC.md §4.1). Arms anyway in
-     * whatever mode [ssid] supports — Wi-Fi-only if we are on a network,
-     * duration-only if not — and reports the degradation, because arming must
-     * never feel slow or refuse, and a degraded snooze must never look healthy.
-     */
-    fun onAnchorUnavailable(ssid: String?) {
-        val snooze = active ?: return
-        onAnchorCaptured(snooze.anchor.copy(ssid = ssid))
     }
 
     /**
