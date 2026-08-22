@@ -1,10 +1,11 @@
 name: Android CI
 
-# Adapted from the sibling Simmo and Type Launcher repos, trimmed to what this
-# repo can actually run today: build + unit tests + lint. The screenshot job
-# arrives with the first real UI (TODO.md Phase 2/4) and the deploy job with the
-# release plumbing (Phase 6) — an empty allow-list or a release with no signing
-# config would only be a red check nobody reads.
+# Adapted from the sibling Simmo and Type Launcher repos. The `deploy` job below
+# is the first slice of Phase 6's release plumbing (TODO.md,
+# `docs/play-store-internal-track.md`): a signed AAB built on every push to
+# `main` and published as a downloadable workflow artifact for the manual seed
+# upload Play requires. Automatically uploading it to the internal track is a
+# follow-up, deliberately not wired in here — see the file above.
 
 on:
   # No paths filter on pull_request, deliberately: the main ruleset requires
@@ -622,3 +623,106 @@ jobs:
           results: >-
             build=${{ needs.build.result }}
             screenshots=${{ needs.screenshot-tests.result }}
+
+  deploy:
+    name: Build the release AAB
+    # Production build job (TODO.md Phase 6, docs/play-store-internal-track.md).
+    # Builds and publishes a signed AAB for the manual seed upload Play
+    # requires; it does not upload anywhere itself — that automation is a
+    # deliberate follow-up, not this PR's scope. Gated three ways:
+    #   1. `if:` — a push to main, never a PR. `workflow_dispatch` on this
+    #      workflow always carries a required `pr` input tied to the
+    #      screenshot-refresh flow (see the trigger comment above), so it is
+    #      not a stand-in for a manual release trigger here.
+    #   2. `environment: production` — the secrets below live in the
+    #      `production` environment (repo Settings -> Environments →
+    #      production), whose deployment branches should be restricted to
+    #      `main` so the boundary is enforced by GitHub, not only by `if:`.
+    #   3. `needs:` — runs only once build and screenshot-tests both pass, so
+    #      a failing test or a screenshot drift on main blocks the release.
+    #
+    # The keystore secret is optional and every step below gates on its
+    # presence, so a fresh repo or fork still gets a green run with nothing
+    # built — an empty allow-list or a release with no signing config would
+    # only be a red check nobody reads.
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [build, screenshot-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      HAS_RELEASE_KEYSTORE: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' }}
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up JDK
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654  # v5.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2  # v5
+
+      - name: Materialize release keystore
+        # Decoded whenever the keystore secret is present, so the signed AAB
+        # can be downloaded from CI artifacts for the one-time manual seed
+        # upload Play Console requires (docs/play-store-internal-track.md).
+        # The decoded file is validated with keytool so wrong base64 or a
+        # wrong password fails here with a clear error rather than at signing
+        # time.
+        if: env.HAS_RELEASE_KEYSTORE == 'true'
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+        run: |
+          missing=""
+          [ -z "$RELEASE_KEYSTORE_PASSWORD" ] && missing="$missing RELEASE_KEYSTORE_PASSWORD"
+          [ -z "$RELEASE_KEY_PASSWORD" ]      && missing="$missing RELEASE_KEY_PASSWORD"
+          [ -z "$RELEASE_KEY_ALIAS" ]         && missing="$missing RELEASE_KEY_ALIAS"
+          if [ -n "$missing" ]; then
+            echo "::error::RELEASE_KEYSTORE_BASE64 is set but these companion secrets are missing or empty:$missing"
+            exit 1
+          fi
+          printf '%s' "${RELEASE_KEYSTORE_BASE64}" | base64 -d > "${RUNNER_TEMP}/release.keystore"
+          if ! keytool -list -keystore "${RUNNER_TEMP}/release.keystore" -storepass "$RELEASE_KEYSTORE_PASSWORD" >/dev/null 2>&1; then
+            echo "::error::Decoded release keystore is not a valid keystore or RELEASE_KEYSTORE_PASSWORD is wrong."
+            exit 1
+          fi
+          echo "RELEASE_KEYSTORE_FILE=${RUNNER_TEMP}/release.keystore" >> "${GITHUB_ENV}"
+
+      - name: Build release AAB
+        # Gated only on the keystore being present — a signed AAB is useful on
+        # its own (a downloadable artifact for the seed upload). The release
+        # signingConfig only attaches when RELEASE_KEYSTORE_FILE is set
+        # (app/build.gradle.kts), so without it Play would reject the AAB
+        # anyway.
+        #
+        # The `play` flavor only: it is the only flavor any Play track ships
+        # (SPEC.md §3.4) — `direct` is the sideload/F-Droid fallback and has
+        # no Play listing to upload to.
+        if: env.RELEASE_KEYSTORE_FILE != ''
+        env:
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+        run: ./gradlew :app:bundlePlayRelease
+
+      - name: Upload signed AAB as workflow artifact
+        # Downloadable from the Actions UI for the one-time manual seed
+        # upload to Play Console, and for re-uploading a release by hand.
+        if: env.RELEASE_KEYSTORE_FILE != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: app-release-aab
+          path: app/build/outputs/bundle/playRelease/app-play-release.aab
+          if-no-files-found: error
+          retention-days: 30
