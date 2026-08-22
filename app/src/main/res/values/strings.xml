@@ -38,6 +38,34 @@
     <string name="setup_action_grant" tools:ignore="MissingTranslation">Grant</string>
     <!-- TODO: translate -->
     <string name="setup_action_allow" tools:ignore="MissingTranslation">Allow</string>
+    <!--
+      The location row (SPEC.md §3.2). Reuses `setup_action_allow` rather than
+      a location-specific verb — "Allow" already says what the user gets, and
+      a different verb per permission would be a distinction without a
+      difference (AGENTS.md, *Concise copy*).
+    -->
+    <!-- TODO: translate -->
+    <string name="setup_location_title" tools:ignore="MissingTranslation">Location</string>
+    <!-- TODO: translate -->
+    <string name="setup_location_granted" tools:ignore="MissingTranslation">Tracking your place</string>
+    <!-- TODO: translate -->
+    <string name="setup_location_missing" tools:ignore="MissingTranslation">Snoozemo can\'t tell when you\'ve left</string>
+    <!--
+      The one disclosure this app shows (SPEC.md §12): a small dialog before
+      the background-location prompt specifically, since that is the
+      Play-restricted permission the declaration requires it precede — the
+      foreground request has no dialog in front of it. Says what location is
+      used for, that it only runs while a snooze is active, and that it never
+      leaves the phone.
+    -->
+    <!-- TODO: translate -->
+    <string name="location_background_rationale_title" tools:ignore="MissingTranslation">Allow all the time</string>
+    <!-- TODO: translate -->
+    <string name="location_background_rationale_body" tools:ignore="MissingTranslation">Snoozemo uses this to notice you\'ve left even while it\'s closed, so Do Not Disturb turns off on its own. It only runs while a snooze is active, and stays on your phone — nothing is collected or shared.</string>
+    <!-- TODO: translate -->
+    <string name="location_background_rationale_continue" tools:ignore="MissingTranslation">Continue</string>
+    <!-- TODO: translate -->
+    <string name="location_background_rationale_dismiss" tools:ignore="MissingTranslation">Not now</string>
     <!-- TODO: translate -->
     <string name="setup_tile_title" tools:ignore="MissingTranslation">Quick Settings tile</string>
     <!-- TODO: translate -->

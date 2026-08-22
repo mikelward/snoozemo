@@ -91,7 +91,17 @@ releases on the **Internal, Closed, and Open test tracks**, not only production 
 completed you cannot publish any change at all, including store-listing edits. An internal-only
 track buys **no exemption**. It asks for a written justification that background location is core to
 a user-facing feature, why a while-in-use alternative will not do, and a demonstration video showing
-the in-app disclosure and the permission prompt.
+the in-app disclosure and the permission prompt. The disclosure is a small dialog shown only before
+the *background* prompt specifically — the foreground request has no dialog in front of it — stating
+what location is used for, that tracking only runs while a snooze is armed, and that it never leaves
+the phone (§12), before that one system prompt appears. The two platform permissions are asked for
+in the sequence the platform actually honors — foreground (fine + coarse) first, then the dialog,
+then background on its Continue — rather than making the user tap the settings row a second time,
+because the platform will not grant background access without foreground already held. The settings
+row that leads to it follows the same tri-state shape as the Do Not Disturb and notification rows
+(§5.2): states the gap, offers the fix while the system will still honor it, and points at the app's
+permission settings once it won't. Missing either permission never blocks a snooze — see §3.6's
+fallback ladder — so the row and the disclosure are purely the repair surface, not a gate on arming.
 
 ### 3.3 Why the foreground-service route does not survive Play review
 
@@ -630,10 +640,12 @@ is granted or revoked. Revocation mid-snooze ⇒ end the snooze and tell the use
 
 #### How the app screen presents this, and `POST_NOTIFICATIONS` beside it
 
-Snoozemo asks for exactly two things, and they are not the same kind of thing. Do Not Disturb access
-is the settings screen above — the user leaves the app, flips a toggle, and comes back, with no
-in-app dialog and no result callback. `POST_NOTIFICATIONS` (§4.3) is a genuine runtime prompt that
-appears in place. They sit next to each other on the same screen, so three rules apply:
+Snoozemo asks for three things on this screen, and they are not all the same kind of thing. Do Not
+Disturb access is the settings screen above — the user leaves the app, flips a toggle, and comes
+back, with no in-app dialog and no result callback. `POST_NOTIFICATIONS` (§4.3) and location (§3.2)
+are both genuine runtime prompts that appear in place — location's own disclosure-then-permission
+sequence is described there rather than repeated here. They sit next to each other on the same
+screen, so the same rules apply to all three:
 
 - **The action is the target, and it is a verb.** Each capability is one row carrying its name, its
   state, and — while something is actually left to do — a button that does it: `Grant`, `Allow`,
@@ -670,8 +682,8 @@ appears in place. They sit next to each other on the same screen, so three rules
   deliberately, not a button that looks like setup on a screen where setup is finished. The cost is
   real and accepted: there is no longer a route from this screen to the Do Not Disturb access
   toggle for a user who wants to revoke it.
-- **The difference between the two is carried by the verb.** `Grant` for the Settings toggle and
-  `Allow` for the runtime prompt, in the same position on both rows. It says less than the old
+- **The difference between the two kinds is carried by the verb.** `Grant` for the Settings toggle
+  and `Allow` for a runtime prompt, in the same position on every row. It says less than the old
   action lines did — the row no longer states that one of them leaves the app — and that is the
   trade: naming the route is what made the offer read as a description. Whether the shorter form
   loses something a first-run user needed is a device question (`TODO.md`).

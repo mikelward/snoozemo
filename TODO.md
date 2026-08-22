@@ -132,10 +132,29 @@ the point is that every other line of the app is worthless if it isn't true.
       `setStateDescription` for TalkBack, arm-on-tap and end-on-tap, long-press to settings
       via `QS_TILE_PREFERENCES` (`SPEC.md` §4.2). Arming works with the device locked — no
       `unlockAndRun()`.
+- [ ] **Tile latency: the shade takes a second or two to show the new active/inactive state**
+      (maintainer, 2026-08-22), rather than updating the instant the tap lands. `AGENTS.md`'s
+      arm-path rule wants the zen rule going `STATE_TRUE` within one frame with no policy IPC in
+      front of it — worth checking whether the tile's own `updateTile()` call is waiting on
+      something in that same path (the service round trip, a store read) rather than painting
+      optimistically from the tap and reconciling after. Not investigated yet; needs a device to
+      actually measure where the delay is before guessing at a fix.
 - [x] `ArmTrampolineActivity` (`SPEC.md` §6.9): transparent theme, starts the service in
       `onCreate` before any UI, launched via `startActivityAndCollapse(PendingIntent)`.
 - [x] Ongoing notification on channel `snooze_active`, `IMPORTANCE_LOW`, with `End now` and
       `+30 min` actions (`SPEC.md` §4.3).
+- [ ] **Let the ongoing notification bypass Do Not Disturb, or guide the user to allow it**
+      (maintainer, 2026-08-22). Once a snooze is armed, DND is on by definition — so the very
+      notification telling the user they're snoozed, and carrying `End now`, can itself be
+      silenced by the zen rule it's reporting on, unless the channel is exempted. Two routes,
+      not yet chosen between: `NotificationChannel.setBypassDnd(true)` on `snooze_active` (a
+      code change, and Android still lets the user override it per-channel in Settings anyway),
+      or leaving the channel as-is and pointing the user at
+      `Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS` → "Override Do Not Disturb" the first time
+      a snooze arms. Needs a decision on which (or both) before implementing, and interacts with
+      `SPEC.md` §5.6's "Snoozemo touches only its own rule" invariant — bypassing DND is a
+      per-channel importance setting, not a zen-rule change, so it shouldn't conflict, but worth
+      confirming on a device rather than assuming.
 - [x] `SnoozeController` state machine (IDLE / ARMING / ARMED / CHECKING / RELEASED) as
       plain Kotlin over an injected clock — the unit-test surface for everything that
       follows. Covers the three invariants directly: the cap fires (and can't be made to
@@ -608,6 +627,22 @@ the point is that every other line of the app is worthless if it isn't true.
 
 `SPEC.md` §4.4 is explicitly provisional — treat its mockups as a starting point.
 
+- [ ] **Rename `DebugScreen`** (maintainer, 2026-08-22). It stopped being a debug-only screen
+      once the tile arrived in Phase 2 — `MainActivity`'s own KDoc already calls it "onboarding
+      and settings" — but the composable, its file, and every `debug_*` string ID (`debug_arm`,
+      `debug_release`, …) still carry the old name. Low-risk, mechanical, and touches a lot of
+      call sites (every `*ScreenshotTest`), so it's its own PR rather than folded into
+      unrelated work.
+- [ ] **Split the permission-setup rows from the Arm/Release view** (maintainer, 2026-08-22):
+      right now the DND, notification, and location setup rows and the `Snooze`/`End snooze`
+      buttons all live on the one screen, so a user who is only part-way through granting
+      permissions still sees the arm control sitting right there — confusing, and arguably
+      inviting a tap into a state that isn't fully set up. Related to the rename above (both are
+      about this screen no longer being the single undifferentiated thing it was in Phase 1):
+      worth deciding together whether setup becomes a real one-time onboarding flow shown only
+      until every row is resolved, or a permanently reachable settings screen separate from a
+      leaner main view that's just the tile-equivalent Arm/Release control. Not designed yet —
+      this is a placeholder for that design work, not a decision.
 - [ ] The two rows (`until <time>` seeded at now + 1 h rounded to the half hour, and
       `until I leave`), with `−` / `+` in 30-minute steps, floored at 30 min from now and
       ceilinged at the 8 h backstop.
@@ -773,9 +808,84 @@ the point is that every other line of the app is worthless if it isn't true.
       *(Landed: `checkReleaseVersionDerivation` fails every `pre*ReleaseBuild` when the
       count, hash, or clone depth kept the version from being derived; debug builds, tests,
       and lint on a shallow checkout are untouched.)*
-- [ ] Data Safety declaration: "no data collected, no data shared" (`SPEC.md` §12).
-- [ ] In-app prominent disclosure before the location permission prompt, and the
-      demonstration video the background-location declaration needs.
+- [ ] Data Safety declaration: "no data collected, no data shared" (`SPEC.md` §12). The intended
+      answer and its reasoning are recorded in `docs/play-store-internal-track.md`; filing it in
+      the Play Console questionnaire is the maintainer's own step.
+- [x] In-app prominent disclosure before the location permission prompt (`SPEC.md` §3.2/§12).
+      **Landed**, rewritten 2026-08-22 to match the sibling ClothesCast repo's shape — which has
+      already cleared Play review with it — after the original full-screen version drew several
+      rounds of Codex findings the maintainer judged as more machinery than Play actually needs:
+      the `Location` row (`LocationPermission`, mirroring `NotificationPermission`'s tri-state
+      shape; `LocationPromptStore` tracks foreground and background denial history separately,
+      mirroring `NotificationPromptStore`) launches the foreground request (fine + coarse)
+      directly, the same as every other row — no disclosure precedes it. Only the *background*
+      request gets one, since that is Play's restricted permission: a small `AlertDialog` shown
+      after foreground is granted, stating what location is for, that tracking only runs while a
+      snooze is armed, and that it never leaves the phone, with Continue launching
+      `ACCESS_BACKGROUND_LOCATION` and Not now dismissing. No dedicated screen, no navigation
+      state, no `BackHandler` — a dismissable dialog needs none of that. Covered by
+      `LocationPermissionTest` (:core), `LocationPromptStoreTest`, and Roborazzi screenshot tests
+      for the row's three states. **Still owed:** the demonstration video (below).
+      - **Specifically flagged by Codex on the original version: whether
+        `backgroundLocationPermission.launch()` can show the "Allow all the time" dialog at
+        all**, versus needing to route the user to the app's location-permission Settings page
+        instead. Softened by evidence, not settled: ClothesCast's own
+        `LocationSettings.kt` calls the identical `launch(ACCESS_BACKGROUND_LOCATION)` and its
+        code comment states this deep-links to the real system picker on its tested devices —
+        but that's a different app's device matrix, not proof for Snoozemo's own minSdk/target,
+        so still verify on a real Pixel before relying on it for the demonstration video. Not
+        changed blind either way: routing to Settings preemptively would be worse UX on whichever
+        OS versions the in-place dialog *does* work on, and a snooze still degrades gracefully
+        either way (`SPEC.md` §3.6) — a UX gap in the settings row, not a principle 1/2 safety
+        issue.
+      - **Plan for filming the demonstration video** (maintainer asked for this 2026-08-22; not
+        yet executed). Order matters — the first step below decides whether the later ones are
+        even possible to film as written:
+        1. **Resolve the background-dialog question first** (the sub-bullet above) — install a
+           debug build on the real Pixel, reset Snoozemo's location permission and the app's
+           storage (Settings → Apps → Snoozemo → clear permission + storage, so
+           `LocationPromptStore`'s denial history is gone too), and tap the `Location` row twice
+           (once for foreground, then Continue on the rationale dialog) to see whether
+           `backgroundLocationPermission.launch()` actually shows "Allow all the time" on this
+           device's OS version. If it does not, a Settings-fallback fix is needed **before**
+           filming — the video has to show a real system prompt, not a request that silently
+           no-ops.
+        2. **Arm a snooze at the current location** (from the tile or `DebugScreen`) so the
+           geofence registers around the phone's real position — the geofence/presence work
+           landed in Phase 3 as of 2026-08-22, so this is now real, not a stub.
+        3. **Enable mock locations**: Developer Options → "Select mock location app", plus either
+           a small mock-GPS app from Play or a one-line `LocationManager.addTestProvider` /
+           `setTestProviderLocation` script. This is what stands in for a real walk, so the phone
+           never has to physically leave.
+        4. **Record in one take** (`adb shell screenrecord` or the device's screen recorder),
+           starting before tapping the `Location` row: the foreground system dialog → grant →
+           the background rationale dialog → Continue → the background system dialog → grant
+           "Allow all the time".
+        5. **Still in the same recording**, use the mock-location app to move the reported
+           position outside the anchor's geofence radius, and show the exit actually firing —
+           the ongoing notification updating and Do Not Disturb turning off — so the video
+           demonstrates the permission driving the feature, not just being requested and left
+           unused.
+        6. Trim and attach the recording to the Permissions Declaration Form alongside the
+           written justification already drafted in `docs/play-store-internal-track.md`.
+        - **Open question, not settled here:** whether Play's reviewers accept a video that
+          shows Android's own "mock location app active" status-bar indicator during the
+          walk-away portion, or expect an unmistakably real walk instead. Worth a quick check of
+          Play's current guidance before relying on mock locations for the actual submission —
+          flagging rather than guessing, since a rejected declaration costs real review-cycle
+          time.
+- [ ] **Copy candidates for `setup_location_granted`**, in place of "Tracking your place":
+      "Unsnooze when you leave a location", or simply "Allowed" to match the DND and notification
+      rows' granted state. Not applied yet — changing it would churn the screenshot snapshots for
+      a cosmetic tweak; revisit next time this row's copy is touched for another reason, and
+      settle between the two then.
+      - **Also flagged by Codex: on `direct`, this string can render while
+        `DurationOnlyPresenceMonitor` (`presence/src/direct/`) is the only monitor wired up** —
+        `direct` supports only `DURATION_ONLY` until Phase 7's foreground-service monitor lands,
+        so "Tracking your place" claims a capability the build cannot currently provide. Settle
+        together with the copy candidates above: "Allowed" reads true regardless of what the
+        permission is *for*, so switching to it would fix both the `direct` accuracy problem and
+        the copy candidates in one change, without a `direct`-specific special case.
 - [x] **Stop a transferred snooze from silencing a new phone** (Codex, PR #23) — a
       principle 1 bug and a prerequisite for shipping below. If an OEM transfers
       app-private data despite `allowBackup="false"`, an unexpired `active_snooze` lands on
