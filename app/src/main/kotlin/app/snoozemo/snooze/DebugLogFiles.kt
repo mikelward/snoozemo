@@ -594,6 +594,27 @@ internal object DebugLogging {
     private var sink: DebugFileSink? = null
 
     /**
+     * The application context [install] was last called with, kept so a read
+     * that finds [sink] still null can retry the installation rather than
+     * only reporting that it couldn't check.
+     *
+     * `install()` failing leaves [sink] null for the process's whole life,
+     * and the crash-pin reads below then report a failed check forever — a
+     * genuinely pinned crash stays invisible with nothing able to heal it
+     * (Codex, PR #89, the fourth finding on this pattern). Since `install()`
+     * is already idempotent (it returns early when [sink] is set), retrying
+     * it from those reads is enough: a transient failure heals on the next
+     * read, and a permanent one still reports honestly.
+     *
+     * Set synchronously by [install] rather than on the worker, so the retry
+     * is available even if the installation task itself never ran. Null only
+     * before [install] has ever been called, which is when there is nothing
+     * to retry.
+     */
+    @Volatile
+    private var appContext: Context? = null
+
+    /**
      * Whether the most recently completed toggle write was refused by storage.
      *
      * Process-level rather than screen-level, deliberately: the completion
@@ -690,49 +711,69 @@ internal object DebugLogging {
      */
     fun install(context: Context) {
         val app = context.applicationContext
+        appContext = app
         runCatching {
-            worker.execute {
-                runCatching {
-                    if (sink != null) return@execute
-                    val enabled = DebugLogStore(app).isEnabled()
-                    // The recording gate first, so a disabled install stops
-                    // collecting — and drops whatever was buffered before this
-                    // read — rather than only not persisting (Codex, PR #62).
-                    SnoozeDebugLog.setRecording(enabled)
-                    val fileSink = DebugFileSink(app)
-                    // Captured for the same reason [setEnabled]'s own
-                    // dispatch does: a manual toggle racing this startup
-                    // retry must be able to supersede it too.
-                    val generation = disableGeneration
-                    fileSink.start(enabled = enabled) { allDeleted ->
-                        // Same assign-then-notify ordering as the toggle path
-                        // below, and the same reason: a reader woken by the
-                        // watch must see this attempt's own outcome. Nothing
-                        // is registered to hear it yet this early at process
-                        // start — MainActivity's own onStart/first-frame reads
-                        // (Codex, PR #89) are what actually pick this up,
-                        // exactly as they already do for a pin left over from
-                        // before this process started. Only the
-                        // cleanup-failure verdict is guarded by the
-                        // generation, same reason as the toggle path below —
-                        // whether crash.log still exists is always this
-                        // callback's own real answer regardless of which
-                        // generation asked for the delete.
-                        if (generation == disableGeneration) {
-                            lastDisableCleanupFailed = !allDeleted
-                        }
-                        runCatching { onCrashPinOutcome?.invoke() }
-                    }
-                    SnoozeDebugLog.addSink(fileSink)
-                    SnoozeDebugLog.addSink { line -> runCatching { Log.d(TAG, line) } }
-                    sink = fileSink
-                    // Build, device, and Android version (SPEC.md §4.6) —
-                    // first, so every later line reads against the software it
-                    // ran on.
-                    logRunContext(app)
-                }.onFailure { runCatching { Log.w(TAG, "Installing the debug log failed; logcat still records.", it) } }
-            }
+            worker.execute { installNow(app) }
         }
+    }
+
+    /**
+     * [install]'s body, on the worker thread. Separate so the crash-pin reads
+     * below can retry it inline when they find [sink] null — they already run
+     * on this same single-threaded worker, so they must call this directly
+     * rather than submitting another task and waiting on it.
+     */
+    private fun installNow(app: Context) {
+        if (sink != null) return
+        runCatching {
+            val enabled = DebugLogStore(app).isEnabled()
+            // The recording gate first, so a disabled install stops
+            // collecting — and drops whatever was buffered before this
+            // read — rather than only not persisting (Codex, PR #62).
+            SnoozeDebugLog.setRecording(enabled)
+            val fileSink = DebugFileSink(app)
+            // Captured for the same reason [setEnabled]'s own
+            // dispatch does: a manual toggle racing this startup
+            // retry must be able to supersede it too.
+            val generation = disableGeneration
+            fileSink.start(enabled = enabled) { allDeleted ->
+                // Same assign-then-notify ordering as the toggle path
+                // below, and the same reason: a reader woken by the
+                // watch must see this attempt's own outcome. Nothing
+                // is registered to hear it yet this early at process
+                // start — MainActivity's own onStart/first-frame reads
+                // (Codex, PR #89) are what actually pick this up,
+                // exactly as they already do for a pin left over from
+                // before this process started. Only the
+                // cleanup-failure verdict is guarded by the
+                // generation, same reason as the toggle path below —
+                // whether crash.log still exists is always this
+                // callback's own real answer regardless of which
+                // generation asked for the delete.
+                if (generation == disableGeneration) {
+                    lastDisableCleanupFailed = !allDeleted
+                }
+                runCatching { onCrashPinOutcome?.invoke() }
+            }
+            SnoozeDebugLog.addSink(fileSink)
+            SnoozeDebugLog.addSink { line -> runCatching { Log.d(TAG, line) } }
+            sink = fileSink
+            // Build, device, and Android version (SPEC.md §4.6) —
+            // first, so every later line reads against the software it
+            // ran on.
+            logRunContext(app)
+        }.onFailure { runCatching { Log.w(TAG, "Installing the debug log failed; logcat still records.", it) } }
+    }
+
+    /**
+     * Retries [installNow] when [sink] is null, so a failed or not-yet-run
+     * installation can heal instead of reporting a failed check forever
+     * (Codex, PR #89). Already on the worker thread; a no-op when [install]
+     * has never been called, which is when there is nothing to retry.
+     */
+    private fun reinstallIfNeeded() {
+        if (sink != null) return
+        appContext?.let { installNow(it) }
     }
 
     /**
@@ -863,6 +904,7 @@ internal object DebugLogging {
     fun hasPinnedCrash(onResult: (pinned: Boolean, checkSucceeded: Boolean) -> Unit) {
         runCatching {
             worker.execute {
+                reinstallIfNeeded()
                 sink?.hasPinnedCrash(onResult) ?: onResult(false, false)
             }
         }.onFailure { onResult(false, false) }
@@ -878,6 +920,7 @@ internal object DebugLogging {
     fun readPreviousOrCrash(onResult: (text: String?, wasCrash: Boolean, readSucceeded: Boolean) -> Unit) {
         runCatching {
             worker.execute {
+                reinstallIfNeeded()
                 sink?.readPreviousOrCrash(onResult) ?: onResult(null, false, false)
             }
         }.onFailure { onResult(null, false, false) }
@@ -990,6 +1033,11 @@ internal object DebugLogging {
         lastDismissFailed = false
         worker.submit {
             sink = null
+            // Cleared alongside the sink: leaving it set would let a read in
+            // the next test retry the installation and quietly succeed,
+            // which is exactly the pre-install state those tests exist to
+            // pin. Together these restore "install() has never been called".
+            appContext = null
             lastSaveRefused = false
             lastDisableCleanupFailed = false
             disableGeneration = 0

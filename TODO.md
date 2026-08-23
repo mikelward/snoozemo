@@ -2580,31 +2580,19 @@ Guessed while making the clock change survive a reboot (autopilot, 2026-08-12):
   `+30 min` to write back — a repair undone by the button beside it. The cost is bounded by
   how rarely a clock is actually set, and the same start already happens on the expired
   path. Reversible by having the receiver write the record and merely notify the service.
-- **A persistent `DebugLogging.install()` failure leaves `crashPending` at its compile-time
-  `false` forever, indistinguishable from a confirmed absence** (flagged, not autopilot —
-  PR #89, 2026-08-23). This is the fourth Codex finding on the same underlying pattern in
-  that PR (39, 41, 42, and this one): a boolean collapsing "the check itself failed" into
-  the same value as "confirmed negative". The first three are fixed — `hasPinnedCrash` and
-  `readPreviousOrCrash` now both report a distinct `checkSucceeded`/`readSucceeded`, and the
-  cold-start read gets one immediate retry, enough for the ordinary case (a momentary
-  `PackageManager`/`NotificationManager` IPC hiccup). This one is different: it's the residual
-  gap finding 42's own fix explicitly named as accepted, not a bug in that fix — *if
-  `install()` itself never succeeds*, both the initial check and its retry return
-  `checkSucceeded = false` forever, `crashPending` never moves off its default, and a
-  genuinely retained crash log is silently unreachable through the UI for that process's
-  whole life. Per AGENTS.md's own guidance ("if a bot's findings stop converging... stop
-  pushing for them and raise it once with what is still flagged"), this is that point —
-  declined the fourth narrow patch and left the review thread open pending a maintainer
-  decision instead. **The two real fixes**, both bigger than a one-line change: (a) have
-  `DebugLogging`'s worker retry `install()` itself (not just the read) so the missing-`sink`
-  state can actually heal instead of only being reported; or (b) give `crashPending` a real
-  third state (unknown/absent/present) with its own UI treatment for "can't tell if there's
-  a crash to share" — distinct from both "sharing available, nothing pinned" and the crash
-  banner itself. (a) is probably cheaper and self-heals silently the way the ordinary retry
-  already does; (b) is more honest about a persistent failure but touches `MainScreen` and
-  `SettingsScreen` both. Neither is done. A genuine, persistent `install()` failure is
-  presumably rare (this needs something like `cacheDir` itself being unusable), so this is
-  low urgency, not blocking the PR.
+- **A persistent `DebugLogging.install()` failure used to leave `crashPending` at its
+  compile-time `false` forever** (PR #89, 2026-08-23) — **resolved, option (a) taken.** It was
+  the fourth finding on the "a failed check collapses into a confirmed negative" pattern
+  (rounds 28, 30 ×2), and was first deferred here as a design question between (a) retrying
+  `install()` itself so the missing-`sink` state can heal and (b) a genuine tri-state
+  `crashPending`. (a) turned out to be small: `install()` was already idempotent (it returns
+  early once `sink` is set), so the only missing piece was a context to retry with. `install()`
+  now caches the application context synchronously, and both crash-pin reads call a
+  `reinstallIfNeeded()` before giving up — a transient installation failure heals on the next
+  read, and a permanent one still reports honestly rather than claiming a confirmed absence.
+  `resetForTest()` clears the cached context alongside the sink, so the pre-install tests still
+  pin the genuine "never installed" state. (b) stays unbuilt and unneeded: with the retry in
+  place there is no longer a state the UI has to render as "can't tell".
 ## Keeping the phone alive: the options ledger
 
 Everything considered for "how does Snoozemo stay able to end a snooze", with why each was or was
