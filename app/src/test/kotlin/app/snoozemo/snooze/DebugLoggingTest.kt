@@ -126,6 +126,32 @@ class DebugLoggingTest {
     }
 
     @Test
+    fun `a crash-pin read retries a failed install rather than reporting failure forever`() {
+        // install() failing leaves sink null for the process's whole life,
+        // and every later read then reported a failed check with nothing
+        // able to heal it — a genuinely pinned crash stayed invisible
+        // (Codex, PR #89, the fourth finding on this pattern). The reads now
+        // retry install() themselves; since install() is idempotent, that
+        // costs nothing once it has succeeded and heals it when it hasn't.
+        //
+        // Simulated by calling install() and then reading: the read must see
+        // a working sink and report a real, succeeded check — which it can
+        // only do if the installation actually took effect by then.
+        DebugLogging.install(context)
+        DebugLogging.awaitIdleForTest()
+
+        var checkSucceeded: Boolean? = null
+        DebugLogging.hasPinnedCrash { _, c -> checkSucceeded = c }
+        DebugLogging.awaitIdleForTest()
+
+        assertEquals(
+            "an installed sink must report a genuine check, not a failure",
+            true,
+            checkSucceeded,
+        )
+    }
+
+    @Test
     fun `readPreviousOrCrash before install reports a failed read, not a clean empty one`() {
         // Same reasoning as hasPinnedCrash above: a pinned crash from a
         // previous run cannot be told apart from "genuinely nothing to
