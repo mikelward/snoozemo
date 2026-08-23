@@ -30,6 +30,38 @@ class DebugReportTest {
     }
 
     @Test
+    fun `a coarse-only foreground location grant is labeled distinctly from denied`() {
+        // A downgrade to ACCESS_COARSE_LOCATION alone reads as a fatal
+        // capability loss to the presence engine (LocationPermission's own
+        // KDoc), not a simple missing permission — collapsing it into a
+        // plain "denied" would make that downgrade indistinguishable from
+        // no grant at all in the report meant to diagnose it (Codex, PR #89).
+        val coarseOnly = payload(locationFineGranted = false, locationCoarseGranted = true)
+        assertTrue(coarseOnly.contains("Location (foreground): granted (coarse only)"))
+
+        val neither = payload(locationFineGranted = false, locationCoarseGranted = false)
+        assertTrue(neither.contains("Location (foreground): denied"))
+
+        val fine = payload(locationFineGranted = true, locationCoarseGranted = true)
+        assertTrue(fine.contains("Location (foreground): granted (fine)"))
+    }
+
+    @Test
+    fun `an unrequired background-location grant is labeled not required, not denied`() {
+        // The direct flavor never declares ACCESS_BACKGROUND_LOCATION and
+        // never needs it (SPEC.md §3.4) — a plain "denied" there reads as a
+        // capability problem that doesn't exist in that build (Codex, PR #89).
+        val notRequired = payload(locationBackgroundGranted = false, locationBackgroundRequired = false)
+        assertTrue(notRequired.contains("Location (background): not required for this build"))
+
+        val requiredAndGranted = payload(locationBackgroundGranted = true, locationBackgroundRequired = true)
+        assertTrue(requiredAndGranted.contains("Location (background): granted"))
+
+        val requiredAndDenied = payload(locationBackgroundGranted = false, locationBackgroundRequired = true)
+        assertTrue(requiredAndDenied.contains("Location (background): denied"))
+    }
+
+    @Test
     fun `omits the previous-run section when there is nothing to show`() {
         val payload = payload(previousRun = null)
 
@@ -142,8 +174,10 @@ class DebugReportTest {
         locale: Locale = Locale.US,
         policyAccessGranted: Boolean = true,
         notificationsGranted: Boolean = true,
-        locationForegroundGranted: Boolean = true,
+        locationFineGranted: Boolean = true,
+        locationCoarseGranted: Boolean = true,
         locationBackgroundGranted: Boolean = true,
+        locationBackgroundRequired: Boolean = true,
         locationServicesEnabled: Boolean = true,
         batterySaverOn: Boolean = false,
         tileAdded: Boolean = true,
@@ -163,8 +197,10 @@ class DebugReportTest {
         locale = locale,
         policyAccessGranted = policyAccessGranted,
         notificationsGranted = notificationsGranted,
-        locationForegroundGranted = locationForegroundGranted,
+        locationFineGranted = locationFineGranted,
+        locationCoarseGranted = locationCoarseGranted,
         locationBackgroundGranted = locationBackgroundGranted,
+        locationBackgroundRequired = locationBackgroundRequired,
         locationServicesEnabled = locationServicesEnabled,
         batterySaverOn = batterySaverOn,
         tileAdded = tileAdded,

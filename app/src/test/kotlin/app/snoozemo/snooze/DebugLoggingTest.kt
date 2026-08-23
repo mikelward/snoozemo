@@ -221,6 +221,41 @@ class DebugLoggingTest {
         assertEquals(1, secondHeard)
     }
 
+    @Test
+    fun `disabling the log fires watchCrashPinOutcome once the deleted pin's fate is known`() {
+        // Turning the switch off deletes any pinned crash along with
+        // everything else (SPEC.md §4.6), but that delete is queued
+        // asynchronously on the sink's own worker — without wiring this
+        // through, a crash banner already on screen kept offering to share
+        // a file that no longer existed (Codex, PR #89).
+        val dir = File(context.cacheDir, "debuglog")
+        dir.mkdirs()
+        File(dir, "current.log").writeText("the run that crashed")
+        File(dir, "current.log.crash").writeText("1")
+        DebugLogging.install(context)
+        DebugLogging.awaitIdleForTest()
+        assertTrue("precondition: rotation pinned the crash", File(dir, "crash.log").exists())
+
+        var pinned: Boolean? = null
+        val watch = DebugLogging.watchCrashPinOutcome {
+            DebugLogging.hasPinnedCrash { pinned = it }
+        }
+
+        try {
+            DebugLogging.setEnabled(context, false) {}
+            DebugLogging.awaitIdleForTest()
+            // The watch's own re-read (`hasPinnedCrash`) is itself queued
+            // asynchronously from inside the delete's own completion — a
+            // second drain is what waits for that nested hop too.
+            DebugLogging.awaitIdleForTest()
+        } finally {
+            watch.close()
+        }
+
+        assertFalse("crash.log is gone", File(dir, "crash.log").exists())
+        assertEquals("the watch's own re-read must see the pin is gone", false, pinned)
+    }
+
     // --- dismissCrashPin / watchDismissOutcome / lastDismissFailed (Codex,
     // PR #89: a refused Dismiss tap must not look like it did nothing) ---
 
