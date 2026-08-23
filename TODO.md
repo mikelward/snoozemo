@@ -154,18 +154,14 @@ the point is that every other line of the app is worthless if it isn't true.
       `onCreate` before any UI, launched via `startActivityAndCollapse(PendingIntent)`.
 - [x] Ongoing notification on channel `snooze_active`, `IMPORTANCE_LOW`, with `End now` and
       `+30 min` actions (`SPEC.md` §4.3).
-- [ ] **Let the ongoing notification bypass Do Not Disturb, or guide the user to allow it**
-      (maintainer, 2026-08-22). Once a snooze is armed, DND is on by definition — so the very
-      notification telling the user they're snoozed, and carrying `End now`, can itself be
-      silenced by the zen rule it's reporting on, unless the channel is exempted. Two routes,
-      not yet chosen between: `NotificationChannel.setBypassDnd(true)` on `snooze_active` (a
-      code change, and Android still lets the user override it per-channel in Settings anyway),
-      or leaving the channel as-is and pointing the user at
-      `Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS` → "Override Do Not Disturb" the first time
-      a snooze arms. Needs a decision on which (or both) before implementing, and interacts with
-      `SPEC.md` §5.6's "Snoozemo touches only its own rule" invariant — bypassing DND is a
-      per-channel importance setting, not a zen-rule change, so it shouldn't conflict, but worth
-      confirming on a device rather than assuming.
+- [x] Let the ongoing and ended notification channels bypass Do Not Disturb (`SPEC.md` §5.7,
+      maintainer, 2026-08-23). `setBypassDnd(true)` on both `snooze_active` and `snooze_ended`
+      at channel creation — pure code, no separate settings prompt, because arming already
+      requires the same `ACCESS_NOTIFICATION_POLICY` access the flag needs to take effect. Both
+      channels, not just the ongoing one: `snooze_ended` carries the failure and stuck-rule
+      cards, which can post while the rule is still on. **Still owed: verify on a real device**
+      that the flag actually keeps the cards audible/visible through the app's own DND — nothing
+      in this sandbox can confirm the platform honors it (hardware item 12 below).
 - [x] `SnoozeController` state machine (IDLE / ARMING / ARMED / CHECKING / RELEASED) as
       plain Kotlin over an injected clock — the unit-test surface for everything that
       follows. Covers the three invariants directly: the cap fires (and can't be made to
@@ -1426,6 +1422,13 @@ that can only be settled on a real device, ordered by risk.
         OEM fork shipping without it. Not a crash either way if one does
         (`openSettings()`'s `runCatching` around `startActivity`), but confirm the row lands on
         the right screen on a real Pixel first, then Samsung at Phase 8.
+12. [ ] **`setBypassDnd(true)` actually keeps `snooze_active` / `snooze_ended` audible and
+        visible through Snoozemo's own zen rule** (`SPEC.md` §5.7). Arm a snooze, confirm the
+        ongoing card and a triggered failure/stuck-rule card still alert as expected rather than
+        being filtered like an ordinary notification. Also confirm the per-channel "Override Do
+        Not Disturb" toggle in Settings reflects the flag and that switching it off there is
+        honored (the user's explicit override, per §5.7). **Test on a fresh install or after
+        clearing app data** — like importance, this is set at channel creation.
 
 ### Samsung, at Phase 8
 

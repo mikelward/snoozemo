@@ -65,10 +65,17 @@ class SnoozeNotifications(private val context: Context) {
             // than that while nothing has shipped. After release, changing the
             // level would need a new channel id.
             manager.createNotificationChannel(
-                NotificationChannel(CHANNEL_ACTIVE, context.getString(R.string.channel_active), NotificationManager.IMPORTANCE_DEFAULT),
+                NotificationChannel(CHANNEL_ACTIVE, context.getString(R.string.channel_active), NotificationManager.IMPORTANCE_DEFAULT)
+                    .apply { setBypassDnd(true) },
             )
             manager.createNotificationChannel(
-                NotificationChannel(CHANNEL_ENDED, context.getString(R.string.channel_ended), NotificationManager.IMPORTANCE_DEFAULT),
+                // Bypasses too: showFailure/showStuckRule post here, and both can
+                // fire while the rule Snoozemo just turned on is still active — the
+                // stuck-rule card is the only way back from a phone that may be
+                // silenced with nothing else able to un-silence it (SPEC.md §5.7),
+                // so it cannot be the one thing our own DND swallows.
+                NotificationChannel(CHANNEL_ENDED, context.getString(R.string.channel_ended), NotificationManager.IMPORTANCE_DEFAULT)
+                    .apply { setBypassDnd(true) },
             )
             channelsCreated = true
         }.onFailure {

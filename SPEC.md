@@ -793,6 +793,24 @@ merges most-restrictive-wins, this is safe and idempotent. On release, Snoozemo 
 own rule* — whatever else was making the phone quiet stays. This is the concrete benefit of D1 over
 `setInterruptionFilter(INTERRUPTION_FILTER_ALL)`, which would have stomped the other rule.
 
+### 5.7 Bypassing our own DND
+
+Both notification channels — `snooze_active` (§4.3) and `snooze_ended` — call
+`NotificationChannel.setBypassDnd(true)` at creation. Without it, arming a snooze puts the phone into
+the very interruption filter that would silence the ongoing "Snoozing" card telling the user it
+worked, and the failure and stuck-rule cards (§4.5) that can post *while the rule is still active* —
+including the one notification that exists to hand back a phone that may be stuck silenced, which
+cannot itself be a casualty of that silence.
+
+This only takes effect with `ACCESS_NOTIFICATION_POLICY` granted, which arming already requires
+(§5.2) — so by the time any of these channels has something to post, the access `setBypassDnd`
+needs is already in place, and this is pure code with no separate prompt.
+
+It is a per-channel importance flag, not a zen-rule change, so it does not touch §5.6's "Snoozemo
+touches only its own rule" invariant. The user can still switch it off per-channel in Settings
+(`ACTION_CHANNEL_NOTIFICATION_SETTINGS` → "Override Do Not Disturb"); that is their explicit choice
+to make, not a default Snoozemo takes on their behalf.
+
 ---
 
 ## 6. Presence: deciding when you have left
