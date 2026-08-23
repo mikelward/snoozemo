@@ -131,7 +131,53 @@ class SnoozeTileService : TileService() {
         // a preceding listen, which should not happen and must not crash if it
         // does — one blocking read is a worse tap, not a broken one.
         val snapshot = listening ?: TileSnapshot.read(applicationContext)
-        val action = if (snapshot.snoozing) ACTION_END else ACTION_ARM
+        val paint = TileOptimisticPaint.forTap(snapshot.snoozing)
+
+        // Painted here rather than left to the service's own round trip
+        // (`SnoozeTileBridge.refresh` → `requestListeningState` →
+        // `onStartListening`): that path is a *request* to rebind, not a
+        // delivery guarantee, and on a real shade it visibly lagged a tap by a
+        // second or two (`TODO.md` Phase 2). This instance is already alive —
+        // the tap just arrived on it — so there is no reason to wait for a
+        // fresh bind to say what the tap itself already decided. `updateTile`
+        // is only valid from a method the platform called on this tile, which
+        // `onClick` is.
+        //
+        // Safe to paint ahead of the real outcome: a refused arm or end is
+        // exactly what `SnoozeTileBridge.refresh` corrects moments later once
+        // the service knows, the same reconciliation this tile already relies
+        // on for every other stale reading (see [listening]'s own comment).
+        // The countdown is left alone rather than guessed — this tap has no
+        // duration or record to compute one from, and a wrong number would be
+        // worse than a moment of no subtitle at all.
+        qsTile?.apply {
+            state = if (paint.active) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+            label = getString(paint.labelRes)
+            contentDescription = label
+            // TalkBack's own line, not just the visual state: left at whatever
+            // `onStartListening` last set, an arm tap would announce "Off"
+            // over a tile that now reads Snoozing, and an end tap the
+            // opposite (Codex, PR #93). Dropped along with the subtitle for
+            // the same reason — no countdown to put in it yet — and the next
+            // refresh's `onStartListening` puts the full description back.
+            stateDescription = label
+            subtitle = null
+            updateTile()
+        }
+
+        // Carried into [listening] as well as painted, so a second tap
+        // arriving before the next `onStartListening` (the trampoline or a
+        // permission dialog can keep the shade's listen alive well past this
+        // return) derives its own action from what this tap just promised,
+        // not from what was true before it (Codex, PR #93). Reading a stale
+        // `listening` here would send the *same* action twice — the service
+        // treats a repeat arm as a no-op re-statement of the running snooze,
+        // never as the end the now-active tile visually promises the next
+        // tap will be — leaving the phone snoozed with no other exit in
+        // reach. Only `snoozing` is updated; the other fields are stale
+        // either way and unread until the next `onStartListening` replaces
+        // this object outright.
+        listening = snapshot.copy(snoozing = paint.active)
 
         // The PendingIntent overload, with no fallback: minSdk is 34 (SPEC.md
         // §11), so the deprecated Intent overload this used to need on API 33 is
@@ -139,12 +185,14 @@ class SnoozeTileService : TileService() {
         //
         // Distinct request codes per action, because PendingIntent equality
         // ignores the action — one code would have let the second tap reuse the
-        // first's intent and send the wrong one.
+        // first's intent and send the wrong one. Both the action and the request
+        // code come from [paint] rather than a second `if (snapshot.snoozing)`
+        // here, so the intent can't disagree with what was just painted.
         startActivityAndCollapse(
             PendingIntent.getActivity(
                 applicationContext,
-                if (snapshot.snoozing) REQUEST_END else REQUEST_ARM,
-                intentTo(TRAMPOLINE_CLASS).setAction(action),
+                paint.requestCode,
+                intentTo(TRAMPOLINE_CLASS).setAction(paint.action),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             ),
         )
@@ -170,12 +218,6 @@ class SnoozeTileService : TileService() {
         Intent().setComponent(ComponentName(applicationContext.packageName, className))
 
     companion object {
-        private const val ACTION_ARM = "app.snoozemo.action.ARM"
-        private const val ACTION_END = "app.snoozemo.action.END"
-
-        private const val REQUEST_ARM = 1
-        private const val REQUEST_END = 2
-
         private const val TRAMPOLINE_CLASS = "app.snoozemo.snooze.TileTrampolineActivity"
 
         /**
