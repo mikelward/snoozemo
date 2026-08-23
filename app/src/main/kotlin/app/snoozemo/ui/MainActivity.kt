@@ -1700,10 +1700,22 @@ class MainActivity : ComponentActivity() {
      * both, from whichever instance is live when the result actually lands,
      * which a configuration change mid-share may make a different one than
      * this (Codex, PR #89).
+     *
+     * The [DebugReport.nextAttempt] ticket is drawn here, before the
+     * background thread starts — a second tap while an earlier attempt is
+     * still running must not let that earlier attempt's slower completion
+     * overwrite the later tap's outcome (Codex, PR #89). Drawn from
+     * `DebugReport` itself rather than an activity-scoped counter: a field
+     * on this activity would reset to zero on a configuration change,
+     * behind the process-level high-water mark `DebugReport` already
+     * compares against, and every share the replacement instance fired
+     * would then read as stale (Codex, PR #89, second round on this same
+     * mechanism).
      */
     private fun shareDebugLog() {
         shareFailed = false
-        Thread { DebugReport.share(applicationContext) }.start()
+        val attempt = DebugReport.nextAttempt()
+        Thread { DebugReport.share(applicationContext, attempt) }.start()
     }
 
     /**
