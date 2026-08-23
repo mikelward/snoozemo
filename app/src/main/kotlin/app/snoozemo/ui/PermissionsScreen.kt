@@ -57,7 +57,7 @@ fun PermissionsScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(
-            text = stringResource(R.string.permissions_screen_title),
+            text = stringResource(R.string.permissions_title),
             style = MaterialTheme.typography.headlineMedium,
         )
         // Nothing at all until access has been read, rather than a guess in

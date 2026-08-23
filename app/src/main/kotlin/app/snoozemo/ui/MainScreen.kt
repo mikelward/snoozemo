@@ -114,7 +114,7 @@ fun MainScreen(
                 enabled = snoozing == false,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(stringResource(R.string.debug_arm))
+                Text(stringResource(R.string.arm))
             }
             // Deliberately always enabled, even when we believe nothing is
             // running. Manual exit is "always available, always instant"
@@ -124,14 +124,14 @@ fun MainScreen(
                 onClick = onRelease,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(stringResource(R.string.debug_release))
+                Text(stringResource(R.string.release))
             }
         }
         TextButton(
             onClick = onOpenSettings,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(stringResource(R.string.settings_screen_title))
+            Text(stringResource(R.string.settings_title))
         }
         lastOutcome?.let {
             Text(text = it, style = MaterialTheme.typography.bodySmall)
@@ -161,7 +161,7 @@ private fun RequiredPermissionBanner(onFix: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                text = stringResource(R.string.main_dnd_banner_title),
+                text = stringResource(R.string.dnd_banner_title),
                 style = MaterialTheme.typography.titleMedium,
             )
             Text(
