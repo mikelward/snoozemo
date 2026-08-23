@@ -1,7 +1,9 @@
 package app.snoozemo.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -12,6 +14,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -46,6 +49,8 @@ internal fun SettingsScreen(
     shareFailed: Boolean,
     /** Whether a share is already running, disabling the share row's button. */
     sharing: Boolean = false,
+    /** `BuildConfig.VERSION_NAME`, shown at the foot of the page. */
+    versionName: String = "",
     /**
      * Whether a crashed run is currently pinned (`SPEC.md` §4.6). Every
      * screen renders the banner while one is, this one included: `onCreate`
@@ -64,6 +69,7 @@ internal fun SettingsScreen(
     onDismissPlayUpdate: () -> Unit = {},
     onShareDebugLog: () -> Unit,
     onDismissCrash: () -> Unit = {},
+    onOpenPrivacyPolicy: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -172,6 +178,25 @@ internal fun SettingsScreen(
             onAction = onShareDebugLog,
             failure = stringResource(R.string.setup_debug_log_share_failed).takeIf { shareFailed },
             actionRunning = sharing,
+        )
+        // Same row shape and position as the sibling Simmo repo's Settings foot.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpenPrivacyPolicy),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.settings_privacy_policy),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        // At the very foot of the page, same format as the sibling Simmo repo.
+        Text(
+            text = stringResource(R.string.settings_version, versionName),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

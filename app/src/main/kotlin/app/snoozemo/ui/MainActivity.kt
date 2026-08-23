@@ -745,6 +745,7 @@ class MainActivity : ComponentActivity() {
                                 sharing = sharing,
                                 crashPending = crashPending,
                                 dismissFailed = dismissFailed,
+                                versionName = BuildConfig.VERSION_NAME,
                                 onOpenPermissions = { openPermissions(Screen.SETTINGS) },
                                 onTileRow = ::addTile,
                                 onFiltersRow = ::openFilters,
@@ -754,6 +755,7 @@ class MainActivity : ComponentActivity() {
                                 onDismissPlayUpdate = ::dismissPlayUpdate,
                                 onShareDebugLog = ::shareDebugLog,
                                 onDismissCrash = ::dismissCrash,
+                                onOpenPrivacyPolicy = ::openPrivacyPolicy,
                             )
                         }
                     }
@@ -1943,6 +1945,19 @@ class MainActivity : ComponentActivity() {
 
     private fun openPolicyAccessSettings() {
         openSettings(SetupRowId.DND, Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+    }
+
+    /**
+     * Opens the hosted privacy policy in a browser (`SettingsScreen`'s foot,
+     * same row as the sibling Simmo repo's own Settings screen). Not routed
+     * through [openSettings]: that reports a failure under a `SetupRowId` row
+     * this link isn't one of, and a missing browser is the same "nothing to
+     * crash Settings over" case Simmo's own equivalent swallows silently.
+     */
+    private fun openPrivacyPolicy() {
+        runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW, getString(R.string.settings_privacy_url).toUri()))
+        }
     }
 
     /**
