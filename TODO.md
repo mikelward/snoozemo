@@ -1257,7 +1257,7 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty-two rounds of
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty-three rounds of
       Codex findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
@@ -1430,7 +1430,18 @@ the point is that every other line of the app is worthless if it isn't true.
       exception there escaped the worker's `Runnable` entirely, so
       `onResult` was never called and every `Share` then waited out its own two-second timeout
       and logged a misleading "timed out" instead of the real storage failure — fixed by
-      wrapping it the same way, returning an explicit failed read instead.
+      wrapping it the same way, returning an explicit failed read instead. One more, round
+      twenty-three, on the very next line: the *second* `file.exists()` check in the same
+      function — deciding whether the picked file (`crash` or `previous`) is actually there —
+      was already wrapped in `runCatching`, but a genuine failure there collapsed to the same
+      `false` as an honestly absent file, unlogged, and `readSucceeded` then computed `true`
+      from that `false` (`!fileExists`) — reporting a failed check as a clean empty read rather
+      than the retry-worthy failure it was. Fixed the same way as the check above it: log the
+      exception and return an explicit failed-read result. That specific throw path has the
+      same test gap as the two exists()-related fixes before it (28, 33) — `File.exists()`
+      doesn't throw from this suite's usual tricks, and this one additionally shares a single
+      lazily-resolved directory with the check above it, so a throwing `dirProvider` can't
+      isolate just this call either; noted rather than silently claimed as covered.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
