@@ -1092,6 +1092,12 @@ class MainActivity : ComponentActivity() {
      */
     private fun ensureRuleInBackground(refresh: Int) {
         Thread {
+            // Same trigger as the rule below: access just arrived, which is
+            // exactly when a channel `warm()` created before onboarding granted
+            // it needs to be re-issued so its DND-bypass actually takes
+            // (SnoozeNotifications.reapplyDndBypass). Fire-and-forget, like the
+            // rule check — a later reconciliation retries on failure.
+            SnoozeNotifications(applicationContext).reapplyDndBypass()
             val state = runCatching { zen.ensureRule() }.getOrElse {
                 Log.e(TAG, "Ensuring the zen rule failed; leaving the screen as it is.", it)
                 return@Thread
