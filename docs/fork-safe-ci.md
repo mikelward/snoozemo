@@ -159,15 +159,25 @@ for the screenshot commit-back, matching typelauncher's `sync-screenshots` +
   }}` (the maintainer's existing typelauncher PAT, reused here — no
   `dispatch-workflow` needed once `push-token` is set, since the
   authenticated push retriggers `pull_request_target` on its own).
-  **Needs its own `permissions: contents: write, actions: write`
-  declared on this caller job** — the workflow-level `permissions: {}`
-  grants nothing by default, and a reusable workflow can only narrow the
-  permissions its caller hands it, never widen them, so without this the
-  called workflow can't push the commit or (in milestone 1, before
-  `push-token` lands) dispatch the rerun. No `pull-requests: write` here:
-  `comment-marker` stays unset, since the PR comment is posted by the next
-  job instead (matching typelauncher's split, not the hub workflow's own
-  built-in one).
+  **Needs its own `permissions: contents: write, pull-requests: write,
+  actions: write` declared on this caller job — all three, not just the
+  two this call actually exercises.** Verified live while landing
+  milestone 1 (PR #90): GitHub's static check at call time requires the
+  caller to grant *at least* every permission the called workflow's own
+  job declares, regardless of whether this particular call path uses it —
+  `commit-artifact.yml`'s `commit` job declares
+  `contents: write, pull-requests: write, actions: write`, so omitting
+  `pull-requests: write` here (reasoned, at the time this doc was first
+  written, as safe since `comment-marker` stays unset — that reasoning
+  covers runtime behavior, not the platform's static permission check)
+  produces an outright `startup_failure`, not a runtime permission error:
+  `.github/workflows/android-ci.yml (Line: N, Col: N): Error calling
+  workflow '…'. The nested job 'commit' is requesting 'pull-requests:
+  write', but is only allowed 'pull-requests: none'.` `pull-requests:
+  write` is genuinely dead weight for what this call does — `comment-marker`
+  stays unset, and the PR comment is still posted by `post-screenshot-diff`
+  instead (matching typelauncher's split, not the hub workflow's own
+  built-in one) — but the platform demands it anyway.
 - **`post-screenshot-diff`** (`needs: [sync-screenshots]`) checks out
   `needs.sync-screenshots.outputs.commit-sha` (the hub workflow's own
   authoritative result — never a locally-made commit that might not have
