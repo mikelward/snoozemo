@@ -341,10 +341,12 @@ class DebugFileSinkTest {
         val sink = startAndAwait()
 
         var pinned: Boolean? = null
-        sink.hasPinnedCrash { pinned = it }
+        var checkSucceeded: Boolean? = null
+        sink.hasPinnedCrash { p, c -> pinned = p; checkSucceeded = c }
         sink.awaitIdleForTest()
 
         assertEquals(false, pinned)
+        assertEquals(true, checkSucceeded)
     }
 
     @Test
@@ -355,10 +357,36 @@ class DebugFileSinkTest {
         val sink = startAndAwait()
 
         var pinned: Boolean? = null
-        sink.hasPinnedCrash { pinned = it }
+        var checkSucceeded: Boolean? = null
+        sink.hasPinnedCrash { p, c -> pinned = p; checkSucceeded = c }
         sink.awaitIdleForTest()
 
         assertEquals(true, pinned)
+        assertEquals(true, checkSucceeded)
+    }
+
+    @Test
+    fun `hasPinnedCrash reports a failed check instead of collapsing it into no crash`() {
+        // Fresh evidence Codex raised after the earlier logging-only fix
+        // (round 28): a genuine metadata-check failure must not read the
+        // same as an honestly-absent pin, or a caller has no way to tell
+        // "nothing pinned" from "couldn't tell" — hiding a crash that is
+        // still genuinely sitting there, unread. A throwing dirProvider
+        // reproduces the same escape point `readPreviousOrCrash`'s own
+        // forced-failure test elsewhere in this file uses.
+        val sink = DebugFileSink { throw java.io.IOException("simulated directory failure") }
+
+        var pinned: Boolean? = null
+        var checkSucceeded: Boolean? = null
+        sink.hasPinnedCrash { p, c -> pinned = p; checkSucceeded = c }
+        sink.awaitIdleForTest()
+
+        assertEquals(false, pinned)
+        assertEquals(
+            "a failed check must be distinguishable from an honestly-absent pin",
+            false,
+            checkSucceeded,
+        )
     }
 
     @Test
@@ -448,6 +476,35 @@ class DebugFileSinkTest {
         // safe to consume a pin whose crash was never actually included
         // anywhere (Codex, PR #89).
         assertEquals(false, readSucceeded)
+    }
+
+    @Test
+    fun `readPreviousOrCrash reports a failed initial pin check instead of never resolving`() {
+        // The bug this guards: the original crash.exists() check that
+        // decides which file to read wasn't wrapped in its own runCatching,
+        // so an exception there escaped the worker's Runnable entirely —
+        // onResult was never called, and every caller waited out its own
+        // timeout and logged a misleading "timed out" instead of the real
+        // storage failure (Codex, PR #89). A throwing dirProvider makes the
+        // very first access to the sink's directory fail, which is what
+        // evaluating `crash` (and therefore `crash.exists()`) does here —
+        // reproducing the same escape point without needing a real
+        // SecurityManager denial.
+        val sink = DebugFileSink { throw java.io.IOException("simulated directory failure") }
+
+        var text: String? = "not yet read"
+        var wasCrash: Boolean? = null
+        var readSucceeded: Boolean? = null
+        sink.readPreviousOrCrash { t, c, s -> text = t; wasCrash = c; readSucceeded = s }
+        sink.awaitIdleForTest()
+
+        assertEquals(null, text)
+        assertEquals(false, wasCrash)
+        assertEquals(
+            "onResult must still be called with a failed read, not left unresolved",
+            false,
+            readSucceeded,
+        )
     }
 
     @Test
