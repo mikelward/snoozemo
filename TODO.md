@@ -1257,7 +1257,7 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Fourteen rounds of
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Fifteen rounds of
       Codex findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
@@ -1324,7 +1324,15 @@ the point is that every other line of the app is worthless if it isn't true.
       `setEnabled` has, wired to the same field and watch; and the privacy-floor test's own
       fixture coordinate, meant to look banned, was an actual real-world address (Google's own
       Mountain View headquarters) rather than a plainly fictional pair as `AGENTS.md` requires —
-      fixed by replacing both occurrences with `0.000000,0.000000`.
+      fixed by replacing both occurrences with `0.000000,0.000000`. Three more, all the same
+      shape: a retry only cleared its own activity-local failure flag, never the process-level
+      outcome a config change or restart mid-retry would reload — `DebugReport.nextAttempt()` now
+      clears `lastShareFailed` the moment a new ticket is issued (safe, since only that ticket's
+      own completion may set it again); `DebugLogging.dismissCrashPin()` now clears
+      `lastDismissFailed` before its own consume even starts; and `DebugLogging.lastDisableCleanupFailed`
+      — which nothing had ever cleared, since only a disable ever wrote it — is now reset on a
+      successful re-enable, so it can no longer resurface at a later restart under a switch that
+      has been back On for a while.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
