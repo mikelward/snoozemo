@@ -236,6 +236,8 @@ class EdgeToEdgeScreenshotTest {
             tileAdded = true,
             tileBannerDismissed = true,
             snoozing = false,
+            trackingMode = null,
+            remaining = null,
             lastOutcome = null,
             onOpenPermissions = {},
             onOpenSettings = {},

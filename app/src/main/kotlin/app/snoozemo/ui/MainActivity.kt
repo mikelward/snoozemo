@@ -12,6 +12,8 @@ import android.content.pm.PackageManager.PERMISSION_GRANTED
 import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.view.Choreographer
@@ -32,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.Lifecycle
 import app.snoozemo.R
+import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.LocationPermission
 import app.snoozemo.core.NotificationPermission
@@ -47,6 +50,7 @@ import app.snoozemo.snooze.DebugLogStore
 import app.snoozemo.snooze.DebugLogging
 import app.snoozemo.snooze.LocationPromptStore
 import app.snoozemo.snooze.NotificationPromptStore
+import app.snoozemo.snooze.SnoozeClock
 import app.snoozemo.snooze.SnoozeNotifications
 import app.snoozemo.snooze.SnoozeService
 import app.snoozemo.snooze.releaseDirectly
@@ -60,6 +64,9 @@ private const val TAG = "MainActivity"
 private const val KEY_SCREEN = "screen"
 private const val KEY_PERMISSIONS_ORIGIN = "permissionsOrigin"
 private const val KEY_ROUTED_TO_PERMISSIONS_ONCE = "routedToPermissionsOnce"
+
+/** How often [MainActivity.now] advances while visible — see its own comment. */
+private const val TICK_INTERVAL_MS = 60_000L
 
 /**
  * The three screens this activity switches between; there is no back stack
@@ -124,6 +131,39 @@ class MainActivity : ComponentActivity() {
      * recreation would re-assert the rule with no user action behind it.
      */
     private var snoozing by mutableStateOf<Boolean?>(null)
+
+    /**
+     * The record itself, read alongside [snoozing] and for the same reason —
+     * `MainScreen`'s status line needs the mode and the cap to report anything
+     * beyond "running", and re-deriving them separately would be a second read
+     * of the same file the [refreshSnoozing] load already did.
+     */
+    private var activeSnooze by mutableStateOf<ActiveSnooze?>(null)
+
+    /**
+     * The clock reading `MainScreen`'s status line computes [activeSnooze]'s
+     * remaining time against.
+     *
+     * Not read fresh at every recomposition: `SnoozeClock.read()` is a plain
+     * function call, not a state read, so a `remaining` computed from it
+     * inline would only ever update when something *else* triggered a
+     * recomposition — the countdown would go stale and stay stale for as
+     * long as the user left the screen open with nothing else changing
+     * (Codex, PR #87). This field is what makes time itself a reason to
+     * repaint: [tickRunnable] advances it once a minute while the activity is
+     * `STARTED`, which is exactly the display's own granularity (`Xh Ym
+     * left`) — no reason to tick faster than the text can show. Still not a
+     * live per-second chronometer: that stays the ongoing notification's job.
+     */
+    internal var now by mutableStateOf(SnoozeClock.read())
+
+    private val tickHandler = Handler(Looper.getMainLooper())
+
+    /** Re-posts itself every [TICK_INTERVAL_MS] while running; see [now]. */
+    private val tickRunnable: Runnable = Runnable {
+        now = SnoozeClock.read()
+        tickHandler.postDelayed(tickRunnable, TICK_INTERVAL_MS)
+    }
     /**
      * Null until the platform has been asked, for the same reason [snoozing] is:
      * reading it costs a binder round trip that must not sit in front of the
@@ -396,6 +436,8 @@ class MainActivity : ComponentActivity() {
                             tileAdded = tileAdded,
                             tileBannerDismissed = tileBannerDismissed,
                             snoozing = snoozing,
+                            trackingMode = activeSnooze?.mode,
+                            remaining = activeSnooze?.remaining(now),
                             lastOutcome = lastOutcome,
                             settingsFailure = settingsFailure,
                             onOpenPermissions = { openPermissions(Screen.MAIN) },
@@ -508,6 +550,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        // Fresh on every start, same as `refreshSnoozing` above — a screen
+        // reopened after sitting in the background for an hour must not show
+        // the reading it had when it was last visible.
+        now = SnoozeClock.read()
+        tickHandler.postDelayed(tickRunnable, TICK_INTERVAL_MS)
     }
 
     /**
@@ -529,11 +576,13 @@ class MainActivity : ComponentActivity() {
         // change. Bumped and checked on the main thread only.
         val refresh = ++latestSnoozingRefresh
         Thread {
-            val running = store.load() != null
+            val loaded = store.load()
             runOnUiThread {
                 if (refresh != latestSnoozingRefresh) return@runOnUiThread
+                val running = loaded != null
                 val changed = snoozing != running
                 snoozing = running
+                activeSnooze = loaded
                 // Reconciling policy access reads whether a snooze is running,
                 // so the pass in onStart ran before this was known. Re-run it
                 // now that it is: access revoked while the service was dead has
@@ -842,6 +891,10 @@ class MainActivity : ComponentActivity() {
         tileWatch = null
         debugLogWatch?.close()
         debugLogWatch = null
+        // The one background wakeup this screen owns on its own — every
+        // minute while visible is negligible, but only while visible. Left
+        // running past `onStop` would tick a screen nobody can see.
+        tickHandler.removeCallbacks(tickRunnable)
     }
 
     /**
