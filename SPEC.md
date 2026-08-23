@@ -796,56 +796,32 @@ own rule* — whatever else was making the phone quiet stays. This is the concre
 ### 5.7 Bypassing our own DND
 
 Two of the app's three notification channels — `snooze_active` (§4.3) and the emergency-only
-`snooze_urgent` — call `NotificationChannel.setBypassDnd(true)` at creation. Without it, arming a
-snooze puts the phone into the very interruption filter that would silence the ongoing "Snoozing"
-card telling the user it worked, and the one alert that exists to hand back a phone that may still
-be stuck silenced by Snoozemo's own rule (`showStuckRule()`, §4.5) — which cannot itself be a
-casualty of that silence.
+`snooze_urgent` — bypass Do Not Disturb. Without that, arming a snooze puts the phone into the very
+interruption filter that would silence the ongoing "Snoozing" card telling the user it worked, and
+the one alert that exists to hand back a phone that may still be stuck silenced by Snoozemo's own
+rule (`showStuckRule()`, §4.5) — which cannot itself be a casualty of that silence.
 
-`snooze_ended` deliberately does **not** bypass (maintainer, 2026-08-23). `setBypassDnd` is a
-channel-wide flag: the platform's DND filtering honors it regardless of which source is currently
-imposing DND, so a bypassing channel would let a routine notice — `showEnded()`'s departure/cap
-card, an interim "couldn't end the snooze, trying again" — sound through an unrelated DND that has
-nothing to do with Snoozemo, such as a Bedtime schedule or another app's rule. That is the user's
-own choice to be quiet, and not this app's to override on their behalf (§5.5's "total silence is
-the user's choice" is the same instinct). Only the genuine emergency exit needs to survive an
-unrelated DND source, so only `snooze_urgent` — carrying `showStuckRule()` alone — claims that
-exemption; everything else that used to share `snooze_ended`'s bypass now respects whatever else is
-silencing the phone, same as any ordinary app's notifications would (Codex, PR #92, raised the
-mechanism; the split itself is the maintainer's call).
+`snooze_ended` deliberately does **not** bypass (maintainer, 2026-08-23). A channel's bypass flag is
+honored by the platform's DND filtering regardless of which source is currently imposing DND, so a
+bypassing channel would let a routine notice — `showEnded()`'s departure/cap card, an interim
+"couldn't end the snooze, trying again" — sound through an unrelated DND that has nothing to do with
+Snoozemo, such as a Bedtime schedule or another app's rule. That is the user's own choice to be
+quiet, and not this app's to override on their behalf (§5.5's "total silence is the user's choice"
+is the same instinct). Only the genuine emergency exit needs to survive an unrelated DND source, so
+only `snooze_urgent` — carrying `showStuckRule()` alone — claims that exemption; everything else
+that used to share `snooze_ended`'s bypass now respects whatever else is silencing the phone, same
+as any ordinary app's notifications would (Codex, PR #92, raised the mechanism; the split itself is
+the maintainer's call).
 
-This only takes effect for a caller that currently holds `ACCESS_NOTIFICATION_POLICY` — which
-arming already requires (§5.2), so by the time a snooze exists to report on, the access
-`setBypassDnd` needs is in place. Channel *creation* is earlier than that, though:
-`SnoozeNotifications.warm()` runs from `Application.onCreate()`, on every process start including
-the very first one, well before onboarding can have granted anything. A channel created without
-that access silently keeps `bypassDnd = false` regardless of what was requested — the platform
-resets it rather than deferring the choice — and creating a channel that already exists is
-otherwise a no-op, so the ordinary once-per-process construction path never asks again (Codex, PR
-#92). `SnoozeNotifications.reapplyDndBypass()` closes that: it re-issues all three channels
-unconditionally (cheap and idempotent for `snooze_ended` too, which never changes), and is called
-wherever the app already reconciles a policy-access change
-(`SnoozeService.reconcilePolicyAccess()`, `MainActivity.ensureRuleInBackground()` —
-`PolicyAccessAction.EnsureRule`, both off the arm path) rather than gated by the once-only flag, so
-access granted after the channels first existed still reaches them.
-
-One gap those two call sites don't reach: access granted *out-of-band* — directly from system
-Settings rather than through this app's own screens — while neither `MainActivity` nor
-`SnoozeService` is alive to notice, followed immediately by an arm in a process that has never
-observed the change. `ACTION_ARM` deliberately skips `reconcilePolicyAccess` (the arm-path rule
-bars policy IPC ahead of the tap), so that reconciliation cannot be what catches this one (Codex,
-PR #92). `SnoozeNotifications.reapplyDndBypassOnce()` closes it — called both from
-`showOngoing()` and, more importantly, from `SnoozeService.armWithCap()` right after
-`beginArming()` returns, whatever it returns. The second call site is the one that actually
-matters for the worst case: a refused arm can still have left `STATE_TRUE` on the rule (§7.1) and
-cascade straight into `beginRelease()` and `showStuckRule()` without `showOngoing()` ever running
-at all (Codex, PR #92) — which would leave the one alert that exists to hand back a possibly-stuck
-phone on a channel that never actually bypasses. Both call sites are safe for the same reason:
-`beginArming` has already made its zen-state IPC by the time it returns, so this is on the far side
-of the arm-path rule, not ahead of it. Attempted once per process, same as channel creation itself,
-and marked done only on success — a refused write here must not skip the retry a later arm or
-reconciliation owes it. After the first successful arm the service's own receiver is registered,
-and a later grant is caught by the regular reconciliation paths above.
+The platform only honors a channel's bypass flag from a caller that currently holds
+`ACCESS_NOTIFICATION_POLICY` (§5.2) — which arming requires, but channel *creation* can happen
+earlier than that, at first app launch, well before onboarding can have granted anything. So the
+bypass is kept correct across every point where access can turn up afterward: the ordinary
+access-granted flow, an out-of-band grant made directly in system Settings while the app was not
+running to notice, and — the case that matters most — an arm that gets refused after the rule has
+already gone `STATE_TRUE` and cascades straight into the stuck-rule alert without ever reaching the
+success path (§7.1). None of this adds policy IPC ahead of the tap; it rides on IPC the arm path
+already pays for once the zen write itself has been attempted (Codex, PR #92).
 
 It is a per-channel importance flag, not a zen-rule change, so it does not touch §5.6's "Snoozemo
 touches only its own rule" invariant. The user can still switch it off per-channel in Settings

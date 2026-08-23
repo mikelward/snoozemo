@@ -606,6 +606,17 @@ class SnoozeNotifications(private val context: Context) {
         @Volatile
         private var bypassReapplyAttempted: Boolean = false
 
+        /**
+         * Test-only: clears both once-per-process guards, the same way
+         * `TestSnoozeService.reset()` clears its own statics — real production
+         * code never sees a second process to leak across, so nothing else
+         * resets these.
+         */
+        internal fun resetForTest() {
+            channelsCreated = false
+            bypassReapplyAttempted = false
+        }
+
         private const val TAG = "SnoozeNotifications"
 
         const val CHANNEL_ACTIVE = "snooze_active"
