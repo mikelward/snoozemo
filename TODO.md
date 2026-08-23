@@ -646,18 +646,105 @@ the point is that every other line of the app is worthless if it isn't true.
         something to invent inside a PR scoped to grace-deadline persistence — flagged in chat and
         left unresolved on the PR thread. **Maintainer decision (2026-08-23): make it durable.**
         Follow-up tracked below.
-      - [ ] **Make every `CapabilityLost` ending in `GeofencePresenceMonitor` durable through both a
+      - [x] **Make every `CapabilityLost` ending in `GeofencePresenceMonitor` durable through both a
         process death and a reboot** (maintainer decision, 2026-08-23, following the ninth-pass flag
-        on PR #91 above). Three sites currently end a snooze via a bare `trySend`/`trySend` chain —
-        `reportRegistration`'s `Fatal` branch, `onPermissionLost`'s mapping, and the grace-deadline
-        write-failure branch — none of them durable through the window between the send and
-        `SnoozeService`'s collector actually consuming it. Chosen approach mirrors the grace mechanism
-        this PR just built rather than folding into `ActiveSnoozeStore` or an alarm-only fix: a small
-        durable store (a "pending capability loss" cause, keyed like `GraceDeadlineStore` to
-        `armedAtEpochMs`) written with `commit()` *before* the send, paired with a near-immediate
-        `AlarmManager` alarm as the actual wake mechanism — a persisted flag alone does nothing if
-        nothing is scheduled to act on it, and only the alarm survives a reboot the way `GraceAlarm`
-        already does. Reconciled from the store on every restore, same shape as `restoredGraceDeadlineMs`.
+        on PR #91 above). Two call sites end a snooze via a bare `trySend` — `reportRegistration`'s
+        `Fatal` branch (which `onPermissionLost` also reaches, by delegating to it) and the grace-
+        deadline write-failure branch — neither durable through the window between the send and
+        `SnoozeService`'s collector actually consuming it.
+        **Landed** (2026-08-23): mirrors the grace mechanism this file already hardens rather than
+        folding into `ActiveSnoozeStore` or an alarm-only fix. New `CapabilityLossStore` persists the
+        decided cause, keyed like `GraceDeadlineStore` to `armedAtEpochMs`, written with `commit()`;
+        new `CapabilityLossAlarm` arms an immediate (`setAndAllowWhileIdle` at "now") platform alarm as
+        the actual wake mechanism — a persisted decision alone does nothing if nothing is scheduled to
+        act on it, and only the alarm (and, past a reboot, the durable record it wakes into) survives
+        the way `GraceAlarm` already does for grace. Both call sites now funnel through one new
+        `failCapability(cause)`: save, arm on a confirmed save, send — gated by the same
+        `persistenceGeneration` this file's grace persistence already uses, so a stale generation's
+        late failure callback cannot write over a fresher snooze's decision. `start()` reads the store
+        directly on every restore and ends immediately if a decision is already recorded, independent
+        of whether the alarm ever fires; the rest of setup still runs and is torn down once `stop()`
+        follows — kept simple rather than restructuring the setup path to skip it, matching this file's
+        established bar for how much engineering effort a rare fail-open path earns. `stop()` clears the
+        record and cancels the alarm, under the same generation-retirement `-1L` sentinel the grace
+        store's clear already uses. `GeofenceObservation` gained a `CapabilityLoss` case (no cause
+        aboard — the monitor re-reads the store keyed to its own `armedAtEpochMs`, so a stale alarm
+        firing from a superseded snooze is a no-op) ranked *below* both `Exit` and `GraceElapsed` in
+        `GeofenceSignalBridge` (corrected in the second Codex pass below — the first version had this
+        backwards). Tests: `GeofenceSignalBridgeTest` (the new observation's ranking and retention).
+        `CapabilityLossStore` itself is untested at the unit level — like `GraceDeadlineStore`'s own
+        `save`/`load`, it needs a real `Context` that `:presence`'s JVM test source set has no harness
+        for; unlike `GraceDeadlineStore` there is no pure arithmetic to extract a dedicated test around,
+        since a cause carries no clock frame to convert.
+        **A first Codex pass on PR #95 found two more, both fixed before merge**: (1) `failCapability`'s
+        generation check and its actual store write were two separate `synchronized` blocks — checking,
+        then writing outside the lock, left a window where `stop()` could retire the generation and
+        clear the store, or a replacement monitor could claim the generation and persist its own loss,
+        between the check and the write; a callback resuming after either would then overwrite the
+        current, correct entry with a decision belonging to a snooze already over. Fixed by holding the
+        lock across the check, the store write, and the alarm arm together, the same shape the grace
+        deadline's own persistence already uses. (2) the new `CapabilityLoss` bridge observation is
+        retained like an exit or a due grace deadline, but unlike either it never reaches `deliver`, so
+        `settlesHeldExit`'s own retirement never runs for it — a stale firing (the record it named
+        already cleared, by a confirmed `stop()` or a superseded generation) just logged and left the
+        slot occupied, which would replay to every later attach and wake every future teardown for a
+        decision that no longer exists. Fixed by retiring the slot explicitly (`GeofenceSignalBridge.settleExit()`)
+        whenever the keyed store load comes back empty.
+        **A second Codex pass found the ranking itself was backwards, fixed before merge**: the first
+        version put `CapabilityLoss` *above* `Exit` in `rank()`, on the reasoning that an ending already
+        decided should win the one mailbox slot — but that reasoning only holds once the store confirms
+        the prompt is real, and `rank()` runs before any monitor ever checks it. A canceled alarm firing
+        late (or one from an already-superseded generation) could win the slot on delivery alone and
+        discard a real, retained `Exit` that had nothing else backing it up — the departure evidence
+        would be gone, unrecoverable, before any monitor ever saw it. `CapabilityLoss` now ranks *below*
+        both `Exit` and `GraceElapsed`: its own payload is separately durable in `CapabilityLossStore`
+        and re-checked unconditionally on every restore, so losing the slot to genuine departure evidence
+        costs it nothing, while the reverse would have cost everything.
+        **A third pass found the first pass's own fix had reintroduced exactly the bug the second pass
+        had just closed, fixed before merge**: the empty-load branch called `GeofenceSignalBridge.settleExit()`
+        to retire a stale capability-loss prompt, but `settleExit()` clears *whatever* is currently
+        retained, not specifically the prompt being handled — with the second pass's ranking fix in
+        place, that occupant can now legitimately be a genuine, still-unconfirmed exit or due grace that
+        `rank()` correctly kept over the stale prompt, and an unconditional settle would discard it
+        anyway, one call later than the ranking bug did. New `GeofenceSignalBridge.settleCapabilityLoss()`
+        clears the slot only when it is still actually occupied by a `CapabilityLoss`, leaving any other
+        retained observation alone; harmless to skip when a fresher `CapabilityLoss` has since taken the
+        slot instead, since (unlike an exit or a grace deadline) its own payload lives in the store, not
+        the observation, so a redundant prompt left behind costs nothing a restore's own unconditional
+        read wouldn't already catch. Test: `GeofenceSignalBridgeTest` (settling a stale capability loss
+        never clears a genuinely retained exit).
+        **A fourth pass found a real gap left over from the original design, fixed before merge**: the
+        live-delivery success branch (a genuine cause found in the store) consumed the one-shot alarm
+        that had just fired and only queued another `trySend` — the exact kind of unacknowledged
+        in-process handoff this whole item exists to close. A process death between that `trySend` and
+        `SnoozeService`'s collector consuming it would leave the record still on disk with nothing left
+        scheduled to prompt another restore. The restore-time replay at the top of `start()` already
+        re-armed in this situation, though (as the fifth pass below caught) with its own order backwards
+        — this pass fixed the live-delivery path by adding the re-arm before its `trySend`.
+        **A fifth pass caught that the restore-time replay's own re-arm was in the wrong order, fixed
+        before merge**: it read `trySend` first and `CapabilityLossAlarm.arm` second — a process death
+        between the two left the same gap the fourth pass had just closed on the live-delivery path,
+        just on this one instead. Swapped so both replay paths now arm before they send.
+        **A sixth pass raised two more; one fixed before merge, one declined with reasoning**: (1)
+        `CapabilityLossStore.load` fell back to `null` — "no decision recorded" — for a persisted
+        cause name this build doesn't recognize (e.g. after a rollback past a build that added a new
+        one), even though the identity check just above it had already matched this exact snooze. That
+        reads as a healthy snooze and leaves DND on until the duration cap — principle 1's exact
+        failure, since the ending decision was genuinely made, only its detail became unreadable.
+        Fixed: an unrecognized name now falls back to `CapabilityLossCause.MONITORING_UNAVAILABLE`
+        rather than to absence. (2) Codex asked for unit/Robolectric coverage of the production
+        save → restore → alarm → clear lifecycle itself, on the grounds that the tests added so far
+        only inject in-memory bridge observations and would stay green even if the real persistence or
+        alarm wiring were removed. Declined on the thread rather than fixed: `:presence`'s `testPlay`
+        source set deliberately carries no Robolectric (SPEC.md's module split, `presence/build.gradle.kts`),
+        and this exact class of coverage was already weighed and accepted as out of reach for the
+        sibling mechanism — `GraceDeadlineStoreTest`'s own KDoc documents the same trade-off, reviewed
+        by Codex on PR #91's second pass without further challenge, and `GraceAlarm` (the grace
+        mechanism's own durable wake-up) has no test coverage anywhere in the repository today.
+        `CapabilityLossStore` has *less* to unit-test than `GraceDeadlineStore`, not more — no clock
+        frame to convert, which is the one piece `GraceDeadlineStoreTest` pins. Adding Robolectric to
+        `:presence` to close this would be a real infrastructure decision, not a same-PR fix, so it
+        stays a call for the maintainer rather than something to invent unilaterally here.
       - [ ] **The degradation *cause* stops at the controller** (Codex, PR #31). `Presence` now
         tells `FIXES_TOO_VAGUE` from `NO_LOCATION_FIX`, and `SnoozeController` maps both to the
         same `TrackingMode`, which is all `SnoozeService.onTrackingChanged` renders from — so the

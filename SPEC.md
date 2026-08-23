@@ -884,6 +884,17 @@ notification saying so (§8.1), while **`CapabilityLost` ends it** with `EndReas
 the phone silent with nothing left to end the snooze — principle 1's failure — so a fatal cause is
 never reported as a recoverable one.
 
+**A `CapabilityLost` ending survives a process death or a reboot in the window before it is
+consumed**, not only handed off in-process (`GeofencePresenceMonitor`, `play` flavor). Reporting the
+event alone is a `Flow` send with nothing behind it — if the process dies between that and
+`SnoozeService`'s collector actually acting on it, the decision is lost, and a restore starts fresh
+believing the snooze is still healthy, which is exactly the failure the grace deadline's own
+persistence (below) exists to close for the other ending path. The cause is written to disk before
+the event is sent, and a near-immediate platform alarm is armed as the wake-up — a persisted decision
+with nothing scheduled to act on it would otherwise wait for whatever *next* restarts the process,
+worst case the duration cap. A restore reads the record directly and ends immediately, independent of
+whether the alarm ever fires.
+
 **Health is a level and not an event, and that is a decision with a history.** It was originally
 reported as a pair of events, one for degrading and one for recovering, and every ordering question
 then became *did the announcement survive?* — through an escalation that outranked it, through a

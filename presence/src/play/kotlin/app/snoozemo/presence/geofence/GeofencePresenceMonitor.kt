@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
 import app.snoozemo.core.Anchor
+import app.snoozemo.core.CapabilityLossCause
 import app.snoozemo.core.ClockReading
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.LocationDuty
@@ -186,6 +187,29 @@ class GeofencePresenceMonitor(
             GraceAlarm.reconcile(appContext, restoredGraceDeadlineMs)
         }
 
+        // A durably-recorded capability loss from before this restart
+        // (TODO.md; maintainer decision following Codex's ninth pass on PR
+        // #91). Unlike the grace deadline, this ending needs no further
+        // presence evidence to confirm — it was already decided — so it is
+        // applied immediately rather than waiting on whatever else this
+        // restore was woken for; the rest of setup below still runs (fence,
+        // Wi-Fi watch), same as any other fail-open ending in this file, and
+        // is torn down once `stop()` follows the queued event.
+        val restoredCapabilityLoss = CapabilityLossStore.load(appContext, armedAtEpochMs)
+        if (restoredCapabilityLoss != null) {
+            SnoozeDebugLog.event("restored a durable capability-loss decision; ending")
+            // Armed *before* the `trySend`, not after (Codex, PR #95, fifth
+            // pass — the live-delivery branch below already had this order
+            // right; this restore-time replay didn't). Whatever alarm
+            // prompted this restore, if any, is already spent by the time
+            // this code runs, so a process death between the old order's
+            // `trySend` and its `arm` left the record on disk with no
+            // wake-up left pending — the same gap the fourth pass closed on
+            // the other replay path.
+            CapabilityLossAlarm.arm(appContext)
+            trySend(PresenceUpdate(event = PresenceEvent.CapabilityLost(restoredCapabilityLoss), degradation = null))
+        }
+
         // The platform-health level, held beside the feed because it is not
         // the engine's to know: the engine reasons about evidence, and "the
         // sensor stopped watching" is a statement about the sensor. Merged
@@ -272,6 +296,43 @@ class GeofencePresenceMonitor(
         // `persistedSequence` and `lastPersistedGraceDeadlineMs` itself now
         // live on the instance, generation-gated — see their own comments.
         val deliverySequence = java.util.concurrent.atomic.AtomicLong(0)
+
+        // The one path every fail-open ending in this class now goes
+        // through (TODO.md; maintainer decision following Codex's ninth
+        // pass on PR #91): a bare `trySend` is only an in-process `Flow`
+        // send, lost if the process dies before `SnoozeService`'s collector
+        // actually consumes it. Durable first, same shape as the grace
+        // deadline this file already hardens: persisted, then a near-
+        // immediate alarm armed as the prompt wake — a persisted decision
+        // with nothing scheduled to act on it just waits for whatever
+        // *next* restarts the process, worst case the multi-hour cap.
+        fun failCapability(cause: CapabilityLossCause) {
+            // The generation check and the write itself share one lock
+            // (Codex, PR #95): checking, then writing outside the lock, left
+            // a window where `stop()` could retire the generation and clear
+            // the store — or a replacement monitor could claim the
+            // generation and persist its own loss — between this call's
+            // check and its write, which would then land after either and
+            // overwrite it with a decision that belongs to a snooze already
+            // over. Held for the store write and the alarm arm both, the
+            // same shape the grace deadline's own persistence already uses.
+            synchronized(persistenceLock) {
+                if (persistenceGeneration == startGeneration) {
+                    if (CapabilityLossStore.save(appContext, cause, armedAtEpochMs)) {
+                        CapabilityLossAlarm.arm(appContext)
+                    } else {
+                        SnoozeDebugLog.warning(
+                            "capability-loss write failed; ending anyway, undurably — the cap still bounds this snooze",
+                        )
+                    }
+                }
+            }
+            // Sent regardless: harmless on a closed channel (a superseded
+            // generation's own flow is already closed by the time it could
+            // reach here), and it is still this call's own best shot at
+            // ending the snooze promptly if the process survives.
+            trySend(PresenceUpdate(event = PresenceEvent.CapabilityLost(cause), degradation = null))
+        }
 
         fun deliver(signal: PresenceSignal) {
             // A delivered platform fix is the recovery proof the services-off
@@ -421,14 +482,7 @@ class GeofencePresenceMonitor(
                             SnoozeDebugLog.warning(
                                 "grace deadline write failed; ending the snooze rather than risk it never ending",
                             )
-                            trySend(
-                                PresenceUpdate(
-                                    event = PresenceEvent.CapabilityLost(
-                                        app.snoozemo.core.CapabilityLossCause.MONITORING_UNAVAILABLE,
-                                    ),
-                                    degradation = null,
-                                ),
-                            )
+                            failCapability(CapabilityLossCause.MONITORING_UNAVAILABLE)
                         } else {
                             // A failed *clearing* write follows good news —
                             // presence evidence already told the engine
@@ -491,12 +545,7 @@ class GeofencePresenceMonitor(
                     registrationDegradation.set(failure.cause)
                     send(PresenceUpdate(event = null, degradation = null))
                 }
-                is GeofenceRegistrationFailure.Fatal -> trySend(
-                    PresenceUpdate(
-                        event = PresenceEvent.CapabilityLost(failure.cause),
-                        degradation = null,
-                    ),
-                )
+                is GeofenceRegistrationFailure.Fatal -> failCapability(failure.cause)
             }
         }
         checkingFixes = CheckingFixes(
@@ -717,6 +766,54 @@ class GeofencePresenceMonitor(
                         // its own state, so a stale firing is a no-op.
                         is GeofenceObservation.GraceElapsed ->
                             deliver(PresenceSignal.GraceElapsed(observation.atElapsedRealtimeMs))
+                        // The alarm's own prompt, not its payload — the
+                        // decision lives in `CapabilityLossStore`, keyed to
+                        // *this* monitor's own `armedAtEpochMs`, so a firing
+                        // left over from an already-superseded snooze finds
+                        // nothing and is a no-op instead of misapplying an
+                        // old ending to a new snooze.
+                        is GeofenceObservation.CapabilityLoss -> {
+                            val cause = CapabilityLossStore.load(appContext, armedAtEpochMs)
+                            if (cause != null) {
+                                SnoozeDebugLog.event("capability-loss alarm delivered; ending per durable record")
+                                // Re-armed, not just replayed (Codex, PR #95,
+                                // fourth pass): the alarm that just fired is
+                                // now spent, and this `trySend` is only an
+                                // in-process send — the exact kind of
+                                // unacknowledged handoff this whole item
+                                // exists to close. A process death before the
+                                // collector consumes it would otherwise leave
+                                // the record still on disk with nothing left
+                                // scheduled to prompt another restore, same as
+                                // the restore-time replay above.
+                                CapabilityLossAlarm.arm(appContext)
+                                trySend(PresenceUpdate(event = PresenceEvent.CapabilityLost(cause), degradation = null))
+                            } else {
+                                // A stale firing — the record it named is
+                                // already gone, whether from a confirmed
+                                // `stop()` or a superseded generation (Codex,
+                                // PR #95) — retired explicitly: this
+                                // observation is retained like an exit or a
+                                // due grace deadline, but unlike either it
+                                // never reaches `deliver`, so `settlesHeldExit`
+                                // never runs for it. Left alone, the slot
+                                // would keep replaying to every later attach
+                                // and waking every future teardown for a
+                                // decision that no longer exists.
+                                //
+                                // `settleCapabilityLoss`, not `settleExit`
+                                // (Codex, PR #95, third pass): `rank()` can
+                                // already have kept a genuine, still-
+                                // unconfirmed exit or due grace in the slot
+                                // over this stale prompt, and `settleExit`
+                                // clears whatever is retained regardless of
+                                // what it is — discarding that real evidence
+                                // for a prompt that turned out to mean
+                                // nothing.
+                                SnoozeDebugLog.event("capability-loss alarm fired with nothing recorded; ignored")
+                                GeofenceSignalBridge.settleCapabilityLoss()
+                            }
+                        }
                     }
                 }
                 if (anchor.hasUsableFix) {
@@ -822,6 +919,15 @@ class GeofencePresenceMonitor(
             // match it.
             if (!GraceDeadlineStore.clear(appContext)) {
                 SnoozeDebugLog.warning("clearing the grace deadline failed; a stale entry may remain on disk")
+            }
+            // The capability-loss record and its alarm go the same way, for
+            // the same reason: a decision or a wake-up outliving the snooze
+            // it belonged to would misfire over whatever the user arms next
+            // — the `persistenceGeneration` retirement above already stops
+            // any further write, this is what erases what already landed.
+            CapabilityLossAlarm.cancel(appContext)
+            if (!CapabilityLossStore.clear(appContext)) {
+                SnoozeDebugLog.warning("clearing the capability-loss record failed; a stale entry may remain on disk")
             }
             active.getAndSet(null)?.close()
             // Contained: removal is cleanup, and the fence dies with the

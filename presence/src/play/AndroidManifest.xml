@@ -19,6 +19,16 @@
         <receiver
             android:name="app.snoozemo.presence.geofence.GraceAlarmReceiver"
             android:exported="false" />
+
+        <!--
+          The capability-loss alarm's target — a fail-open ending already
+          decided and durably recorded (TODO.md). Not exported for the same
+          reason as the receivers above: only our own alarm PendingIntent may
+          prompt this, or any app could end a snooze on demand.
+        -->
+        <receiver
+            android:name="app.snoozemo.presence.geofence.CapabilityLossAlarmReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>

@@ -322,4 +322,75 @@ class GeofenceSignalBridgeTest {
         assertEquals(listOf<GeofenceObservation>(GeofenceObservation.Exit(6_000)), seen)
     }
 
+    @Test
+    fun `a held exit outranks a capability loss`() {
+        // The exit carries evidence that exists nowhere else until a
+        // monitor consumes it; a capability loss's actual payload is
+        // separately durable in `CapabilityLossStore` and re-checked
+        // unconditionally on every restore, so it costs nothing to lose
+        // this slot to genuine departure evidence (Codex, PR #95, second
+        // pass — an earlier version let an unvalidated, possibly-stale
+        // capability-loss prompt discard a real exit here).
+        GeofenceSignalBridge.deliver(GeofenceObservation.Exit(atElapsedRealtimeMs = 30_000))
+        GeofenceSignalBridge.deliver(GeofenceObservation.CapabilityLoss(atElapsedRealtimeMs = 30_100))
+
+        val seen = mutableListOf<GeofenceObservation>()
+        GeofenceSignalBridge.attach { seen += it }.close()
+
+        assertEquals(listOf<GeofenceObservation>(GeofenceObservation.Exit(30_000)), seen)
+    }
+
+    @Test
+    fun `an exit displaces an already-pending capability loss`() {
+        GeofenceSignalBridge.deliver(GeofenceObservation.CapabilityLoss(atElapsedRealtimeMs = 30_200))
+        GeofenceSignalBridge.deliver(GeofenceObservation.Exit(atElapsedRealtimeMs = 30_300))
+
+        val seen = mutableListOf<GeofenceObservation>()
+        GeofenceSignalBridge.attach { seen += it }.close()
+
+        assertEquals(listOf<GeofenceObservation>(GeofenceObservation.Exit(30_300)), seen)
+    }
+
+    @Test
+    fun `a capability loss with no monitor wakes the service and is held until settled`() {
+        // The alarm behind it is one-shot, like the grace alarm — a dead
+        // process's firing must survive to the restored monitor's attach.
+        var woken = 0
+        GeofenceSignalBridge.installWakeup { woken++ }
+        GeofenceSignalBridge.deliver(GeofenceObservation.CapabilityLoss(atElapsedRealtimeMs = 31_000))
+        assertEquals(1, woken)
+
+        val first = mutableListOf<GeofenceObservation>()
+        GeofenceSignalBridge.attach { first += it }.close()
+        assertTrue(first.single() is GeofenceObservation.CapabilityLoss)
+
+        GeofenceSignalBridge.settleCapabilityLoss()
+        val second = mutableListOf<GeofenceObservation>()
+        GeofenceSignalBridge.attach { second += it }.close()
+        assertTrue("settled, so no longer replayed", second.isEmpty())
+    }
+
+    @Test
+    fun `settling a stale capability loss never clears a genuinely retained exit`() {
+        // `rank()` already keeps the exit over a stale capability-loss
+        // prompt delivered afterward; settling the prompt as stale must not
+        // then discard that preserved, still-unconfirmed evidence — the
+        // exact bug a `settleExit()` call here would have reintroduced
+        // (Codex, PR #95, third pass).
+        val live = mutableListOf<GeofenceObservation>()
+        val handle = GeofenceSignalBridge.attach { live += it }
+        GeofenceSignalBridge.deliver(GeofenceObservation.Exit(atElapsedRealtimeMs = 32_000))
+        GeofenceSignalBridge.deliver(GeofenceObservation.CapabilityLoss(atElapsedRealtimeMs = 32_100))
+        GeofenceSignalBridge.settleCapabilityLoss()
+        handle.close()
+
+        val restored = mutableListOf<GeofenceObservation>()
+        GeofenceSignalBridge.attach { restored += it }.close()
+        assertEquals(
+            "the exit must still be there to replay",
+            listOf<GeofenceObservation>(GeofenceObservation.Exit(32_000)),
+            restored,
+        )
+    }
+
 }
