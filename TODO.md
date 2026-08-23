@@ -1688,6 +1688,18 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     a snooze that ends on a duration cap needs the same controller.
 
 ## Decisions needing review
+- **`setBypassDnd(true)` on `snooze_ended` bypasses *any* active DND, not just Snoozemo's own
+  rule** (Codex, PR #92; maintainer, 2026-08-23: debatable, leave as-is for now). The channel
+  carries routine notices — `showEnded()`'s departure/cap cards, the `+30 min`/extend failures
+  — alongside the genuinely emergency `showStuckRule()`. Because the flag is channel-wide, a
+  routine "snooze ended" card can still make sound through an unrelated DND source that's
+  active for its own reason (a Bedtime schedule, another app's rule) even though Snoozemo's own
+  rule already released cleanly — which cuts against the "total silence is the user's choice"
+  spirit of §5.5. The alternative — a second, non-bypassing channel for the routine notices,
+  keeping bypass only on whatever the emergency exit turns out to be — is a real, permanent
+  product surface (another channel in the user's notification settings, and channel importance
+  is fixed at creation once shipped) rather than a small fix, so it's parked here rather than
+  decided in the PR that raised it. Worth a second look before release.
 - **Consider an in-app banner (or similar Settings-surfaced cue) for a
   changed hosted privacy policy.** `docs/PRIVACY.md` now rides the docs lane
   and is never forced into release notes (2026-08-22 — see AGENTS.md

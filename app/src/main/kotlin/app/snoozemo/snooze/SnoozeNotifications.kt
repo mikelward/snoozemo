@@ -113,6 +113,31 @@ class SnoozeNotifications(private val context: Context) {
     }
 
     /**
+     * Closes the one gap [reapplyDndBypass]'s own call sites don't reach: an
+     * out-of-band grant, where the user grants Do Not Disturb access directly
+     * from system Settings while neither `MainActivity` nor `SnoozeService` is
+     * alive to notice, followed by the very first arm of a process that has
+     * never observed the change (Codex, PR #92). `ACTION_ARM` deliberately
+     * skips `SnoozeService.reconcilePolicyAccess` — the arm-path rule bars
+     * policy IPC ahead of the tap — so that reconciliation never runs before
+     * this notification does.
+     *
+     * Safe to call from [showOngoing] precisely because it is not ahead of
+     * anything: every path there runs after `setAutomaticZenRuleState` has
+     * already returned `STATE_TRUE`, so a couple of binder round trips here
+     * cost nothing the tap-to-silence stretch depends on.
+     *
+     * Attempted once per process, like [ensureChannels]: after the first
+     * successful arm the service's own receiver is registered, and every later
+     * grant is caught by [reapplyDndBypass]'s regular call sites instead.
+     */
+    private fun reapplyDndBypassOnce() {
+        if (bypassReapplyAttempted) return
+        bypassReapplyAttempted = true
+        reapplyDndBypass()
+    }
+
+    /**
      * Whether anything this app posts would actually reach the shade.
      *
      * Holding `POST_NOTIFICATIONS` is not the same as being heard: the user can
@@ -147,6 +172,7 @@ class SnoozeNotifications(private val context: Context) {
     }
 
     fun showOngoing(snooze: ActiveSnooze) {
+        reapplyDndBypassOnce()
         val body = when (snooze.mode) {
             TrackingMode.FULL -> context.getString(R.string.ongoing_ends_when_you_leave)
             // Says what it can actually do, not what it wishes it could.
@@ -548,6 +574,10 @@ class SnoozeNotifications(private val context: Context) {
          */
         @Volatile
         private var channelsCreated: Boolean = false
+
+        /** Guards [reapplyDndBypassOnce]; process-wide for the same reason [channelsCreated] is. */
+        @Volatile
+        private var bypassReapplyAttempted: Boolean = false
 
         private const val TAG = "SnoozeNotifications"
 
