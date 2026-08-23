@@ -1160,47 +1160,18 @@ that can only be settled on a real device, ordered by risk.
 Nothing here is scheduled; each is a sequel that follows from something already built
 (`SPEC.md` §14).
 
-- [ ] **Adopt `mikelward/ci-commit-artifact` for the screenshot-refresh commit.** (maintainer,
-      2026-08-23) Today the `screenshot-tests` job in `android-ci.yml` runs the PR's own
-      Gradle/Roborazzi code (untrusted) and then, in that *same* job, commits and pushes
-      the refreshed PNGs and dispatches a re-run — the exact structural risk
-      `ci-commit-artifact`'s README describes (PR-controlled code that ran earlier in a job
-      can plant a hook or rewrite git config before a later step's push, regardless of that
-      step's own care). `ci-commit-artifact` fixes this by moving the commit/push into a
-      separate reusable job (`commit-artifact.yml`) that never executes anything from the
-      PR — it only downloads the already-rendered artifact and pushes it.
-      - It also solves the loop-prevention problem this repo currently works around with
-        `workflow_dispatch` (the `pr`-input dance described atop `android-ci.yml`, lines
-        27–45): passing a `push-token` secret authenticates the push as a real identity
-        instead of `GITHUB_TOKEN`, so the push itself retriggers CI naturally — no
-        `workflow_dispatch` round-trip needed.
-      - **Identity, checked against how the fleet actually does this (2026-08-23):**
-        `typelauncher` already wires this up — `secrets.CI_COMMIT_ARTIFACT_TOKEN`, a
-        fine-grained PAT (Contents: read/write, scoped to that one repository), not a
-        GitHub App. The fleet's App pattern (`LANES_APP_ID`/`LANES_APP_PRIVATE_KEY`,
-        `GRADLE_UPDATE_APP_ID`/`GRADLE_UPDATE_APP_PRIVATE_KEY` in `typelauncher`) is used
-        for other jobs (posting the required `lanes` status, opening dependency-update
-        PRs) — nobody in the fleet points an App at the commit-artifact push specifically.
-        Either a PAT is minted by the maintainer's own account or a dedicated bot
-        collaborator account — both need a human to create it from GitHub's Settings →
-        Developer settings (or to create and install an App, if that route is preferred
-        instead); no agent can self-provision this.
-      - **`push-token` is only load-bearing for a `pull_request_target` caller.**
-        `typelauncher` runs its whole CI under `pull_request_target` (a separate, bigger
-        change made for unrelated reasons — protecting the workflow definition from PR
-        tampering) and needs `push-token` there because `dispatch-workflow` is unsafe
-        under that trigger. Snoozemo's `android-ci.yml` still runs plain `pull_request`,
-        where `ci-commit-artifact`'s own validation logic already treats
-        `dispatch-workflow` as safe — so for snoozemo, `push-token` would be a
-        simplification (drop the two-step dispatch dance and the `pr` input plumbing), not
-        a correctness requirement. Worth deciding whether that simplification is worth a
-        new PAT/secret to maintain, or whether to keep `dispatch-workflow` and adopt only
-        the clean-job security fix.
-      - Not investigated yet: whether `ci-commit-artifact`'s single-artifact-directory
-        model (`artifact-name` → `dest-path`) maps cleanly onto
-        `app/src/test/snapshots/images/`, and what changes downstream (the "Commit
-        refreshed screenshots" and "Post screenshot diffs as a PR comment" steps currently
-        assume the push happens in-job, before the diff-comment step runs in the same job).
+- [ ] **Make CI safe to open to external PRs and forks — plan in
+      `docs/fork-safe-ci.md`.** (maintainer, 2026-08-23) Adopts
+      `mikelward/ci-commit-artifact` for the screenshot-refresh commit (today's
+      `screenshot-tests` job runs the PR's own Gradle/Roborazzi code and commits/pushes in
+      that same job — the structural risk `ci-commit-artifact`'s README exists to close)
+      and migrates `android-ci.yml` to `pull_request_target` like `typelauncher`, so a PR
+      can no longer rewrite the workflow definition to forge a green required check. Six
+      ordered milestones, each its own PR; the doc has the full architecture, the
+      `CI_COMMIT_ARTIFACT_TOKEN` PAT reuse from `typelauncher`, why the trigger switch also
+      requires a new GitHub App for the `lanes` status (an Actions check-run can never
+      satisfy a PR's required check under `pull_request_target` — it attributes to the
+      base branch's tip, not the PR head), and the zizmor policy exceptions needed.
 
 - [ ] **Screenshot job: surface a missing `--tests` class clearly instead of Gradle's raw
       output.** (maintainer, 2026-08-23) When a screenshot job step's `--tests` filter
