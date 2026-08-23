@@ -123,6 +123,31 @@
     <!-- TODO: translate -->
     <string name="setup_debug_log_save_failed" tools:ignore="MissingTranslation">Couldn\'t save this setting</string>
     <!--
+      The Play update banner (SettingsScreen, `play` flavor only — SPEC.md
+      §3.4). Copy mirrors the sibling Simmo and Type Launcher repos' own
+      banner wording, adapted for this app's name.
+    -->
+    <!-- TODO: translate -->
+    <string name="play_update_banner_title" tools:ignore="MissingTranslation">Update available</string>
+    <!-- TODO: translate -->
+    <string name="play_update_banner_body" tools:ignore="MissingTranslation">Get the latest Snoozemo from Google Play</string>
+    <!-- TODO: translate -->
+    <string name="play_update_banner_update_button" tools:ignore="MissingTranslation">Update</string>
+    <!-- TODO: translate -->
+    <string name="play_update_banner_updating_title" tools:ignore="MissingTranslation">Updating…</string>
+    <!-- TODO: translate -->
+    <string name="play_update_banner_updating_body" tools:ignore="MissingTranslation">Downloading from Google Play</string>
+    <!-- TODO: translate -->
+    <string name="play_update_banner_downloaded_title" tools:ignore="MissingTranslation">Update ready</string>
+    <!-- TODO: translate -->
+    <string name="play_update_banner_downloaded_body" tools:ignore="MissingTranslation">Restart Snoozemo to finish installing</string>
+    <!-- TODO: translate -->
+    <string name="play_update_banner_restart_button" tools:ignore="MissingTranslation">Restart</string>
+    <!-- TODO: translate -->
+    <string name="play_update_banner_restart_failed" tools:ignore="MissingTranslation">Couldn\'t restart to install</string>
+    <!-- TODO: translate -->
+    <string name="play_update_banner_dismiss" tools:ignore="MissingTranslation">Dismiss</string>
+    <!--
       The tile banner. The app screen keeps its own snooze button, but the tile
       is the way in (SPEC.md §4.2) — easier, and where people already go to
       silence a phone — so the screen leads with it rather than listing it as

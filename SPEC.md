@@ -329,6 +329,16 @@ always one tap, on the same "fail open" principle the duration cap itself follow
 flow that cannot be left
 without finishing it is a trap, not onboarding.
 
+`SettingsScreen` also carries the **update banner** (landed 2026-08-23, `play` flavor only —
+§3.4's `direct` flavor is never distributed through Play, so it has nothing to check for): when
+Play has a newer Snoozemo waiting, a card offers to fetch it, tracks the download, and then offers
+the **restart** that installs it. Always the *flexible* kind — background download, install on a
+restart the user chooses — never the immediate kind, which would take the screen over mid-snooze.
+Dismiss silences that build and only that build, and only while there is still something to tap:
+once the update has downloaded, Restart is the only way to finish it, so the banner drops Dismiss
+rather than let a tap strand a fetch already paid for. The check asks the installed Play Store app,
+so it sends nothing of the user's anywhere and needs no permission of its own.
+
 The screen leads with a **banner** urging the tile, dismissed **once and forever**, above a tile
 **entry that is permanent** (maintainer, 2026-08-13) — the banner lives on `MainScreen`, the entry
 on `SettingsScreen`, in different screens now that the split above landed, but the relationship is

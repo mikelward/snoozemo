@@ -15,6 +15,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import app.snoozemo.PlayUpdateState
 import app.snoozemo.R
 
 /**
@@ -27,16 +28,27 @@ import app.snoozemo.R
  * kind of always-there-but-rarely-touched item this screen exists to hold.
  */
 @Composable
-fun SettingsScreen(
+internal fun SettingsScreen(
     tileAdded: Boolean?,
     filtersRuleId: String?,
     settingsFailure: SetupRowId?,
     debugLogEnabled: Boolean?,
     debugLogSaveFailed: Boolean,
+    // `PlayUpdateState.NotAvailable` on `direct` (no flavor branch needed
+    // here — that flavor's checker never reports anything else) and while
+    // `MainActivity` hasn't finished its own first resume check yet.
+    playUpdate: PlayUpdateState = PlayUpdateState.NotAvailable,
+    // Whether the last Restart tap failed to hand off to Play. Only ever
+    // meaningful alongside a `Downloaded` [playUpdate] — see that field's
+    // own comment on `MainActivity`.
+    playUpdateRestartFailed: Boolean = false,
     onOpenPermissions: () -> Unit,
     onTileRow: () -> Unit,
     onFiltersRow: () -> Unit,
     onDebugLog: (Boolean) -> Unit,
+    onStartPlayUpdate: () -> Unit = {},
+    onCompletePlayUpdate: () -> Unit = {},
+    onDismissPlayUpdate: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -51,6 +63,19 @@ fun SettingsScreen(
             text = stringResource(R.string.settings_title),
             style = MaterialTheme.typography.headlineMedium,
         )
+        // Above the permanent rows, the same "most urgent thing first" order
+        // the sibling Simmo repo's own banner follows: there is something to
+        // act on here, where the rows below mostly just state what already
+        // holds.
+        (playUpdate as? PlayUpdateState.Available)?.takeIf { it.shouldPrompt }?.let { update ->
+            PlayUpdateBanner(
+                progress = update.progress,
+                restartFailed = playUpdateRestartFailed,
+                onUpdate = onStartPlayUpdate,
+                onRestart = onCompletePlayUpdate,
+                onDismiss = onDismissPlayUpdate,
+            )
+        }
         Button(
             onClick = onOpenPermissions,
             modifier = Modifier.fillMaxWidth(),

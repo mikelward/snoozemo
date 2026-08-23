@@ -11,6 +11,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import app.snoozemo.PlayUpdateState
+import app.snoozemo.UpdateProgress
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -226,6 +228,148 @@ class SettingsScreenScreenshotTest {
         }
 
         composeRule.onNodeWithText("Couldn't save this setting").assertExists()
+    }
+
+    @Test
+    fun `an available update is offered, above the permanent rows`() {
+        var started = 0
+
+        capture("settings-screen-update-available.png") {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                playUpdate = PlayUpdateState.Available(versionCode = 5),
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onStartPlayUpdate = { started++ },
+            )
+        }
+
+        composeRule.onNodeWithText("Update available").assertExists()
+        composeRule.onNodeWithText("Update").performClick()
+        assertEquals(1, started)
+    }
+
+    @Test
+    fun `a dismissed update shows nothing`() {
+        capture {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                playUpdate = PlayUpdateState.Available(versionCode = 5, isDismissed = true),
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Update available").assertDoesNotExist()
+    }
+
+    @Test
+    fun `an in-flight update shows progress, not the offer`() {
+        capture("settings-screen-update-downloading.png") {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                playUpdate = PlayUpdateState.Available(versionCode = 5, progress = UpdateProgress.Downloading),
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Updating…").assertExists()
+        composeRule.onNodeWithText("Update").assertDoesNotExist()
+        composeRule.onNodeWithText("Dismiss").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a downloaded update offers Restart, not Dismiss`() {
+        var restarted = 0
+
+        capture("settings-screen-update-downloaded.png") {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                playUpdate = PlayUpdateState.Available(versionCode = 5, progress = UpdateProgress.Downloaded),
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onCompletePlayUpdate = { restarted++ },
+            )
+        }
+
+        composeRule.onNodeWithText("Update ready").assertExists()
+        // No Dismiss once downloaded: it's the only in-app way to finish an
+        // update already fetched, so nothing may hide it.
+        composeRule.onNodeWithText("Dismiss").assertDoesNotExist()
+        composeRule.onNodeWithText("Restart").performClick()
+        assertEquals(1, restarted)
+    }
+
+    @Test
+    fun `a failed Restart says so under the banner, not just by doing nothing`() {
+        capture("settings-screen-update-restart-failed.png") {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                playUpdate = PlayUpdateState.Available(versionCode = 5, progress = UpdateProgress.Downloaded),
+                playUpdateRestartFailed = true,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Couldn't restart to install").assertExists()
+        // Restart stays reachable — the failure is retryable, not terminal.
+        composeRule.onNodeWithText("Restart").assertExists()
+    }
+
+    @Test
+    fun `dismissing the update banner`() {
+        var dismissed = 0
+
+        capture {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                playUpdate = PlayUpdateState.Available(versionCode = 5),
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onDismissPlayUpdate = { dismissed++ },
+            )
+        }
+
+        composeRule.onNodeWithText("Dismiss").performClick()
+        assertEquals(1, dismissed)
     }
 
     @Test

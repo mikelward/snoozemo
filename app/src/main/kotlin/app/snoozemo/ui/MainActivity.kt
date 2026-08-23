@@ -21,6 +21,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.AlertDialog
@@ -32,8 +33,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
+import app.snoozemo.BuildConfig
+import app.snoozemo.PlayUpdateChecker
+import app.snoozemo.PlayUpdateState
 import app.snoozemo.R
+import app.snoozemo.UpdateProgress
+import app.snoozemo.playUpdateDismissalKey
+import app.snoozemo.progressForInstallStatus
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.LocationPermission
@@ -50,6 +58,7 @@ import app.snoozemo.snooze.DebugLogStore
 import app.snoozemo.snooze.DebugLogging
 import app.snoozemo.snooze.LocationPromptStore
 import app.snoozemo.snooze.NotificationPromptStore
+import app.snoozemo.snooze.PlayUpdateStore
 import app.snoozemo.snooze.SnoozeClock
 import app.snoozemo.snooze.SnoozeNotifications
 import app.snoozemo.snooze.SnoozeService
@@ -119,6 +128,15 @@ class MainActivity : ComponentActivity() {
     private lateinit var tileStore: TilePresenceStore
     private var recordWatch: AutoCloseable? = null
     private var tileWatch: AutoCloseable? = null
+
+    /**
+     * Asks Play about a waiting update for `SettingsScreen`'s banner. Owned by
+     * the activity because starting the update flow needs one; recreated
+     * with it, so [onDestroy] drops its install listener. `direct`'s own
+     * copy of [PlayUpdateChecker] is a no-op — see its own comment.
+     */
+    private lateinit var playUpdateChecker: PlayUpdateChecker
+    private lateinit var playUpdateStore: PlayUpdateStore
 
     /**
      * Read from the persisted record, never kept independently.
@@ -289,6 +307,85 @@ class MainActivity : ComponentActivity() {
     private var lastOutcome by mutableStateOf<String?>(null)
 
     /**
+     * What Play last told us about a waiting update, before [dismissedPlayUpdateVersionCode]
+     * is applied — see [displayedPlayUpdate], which is what `SettingsScreen`'s
+     * banner (`play` flavor only) actually reads. Not persisted: reread on
+     * every resume, the same as the record and the access check.
+     *
+     * Internal rather than private, like [setPlayUpdateAvailable] below, so
+     * a test can read the state the banner's setters actually produced.
+     */
+    internal var playUpdate by mutableStateOf<PlayUpdateState>(PlayUpdateState.NotAvailable)
+
+    /**
+     * Tracked beside [playUpdate] because a recheck's `UNKNOWN` install
+     * status carries no progress of its own: it has to fall back to what the
+     * banner was already showing (see [progressForInstallStatus]).
+     */
+    private var currentPlayUpdateProgress: UpdateProgress = UpdateProgress.Idle
+
+    /**
+     * Bumped by every [checkPlayUpdate]; only the newest check's answer may
+     * paint. `onResume` can fire again — backgrounding and resuming quickly,
+     * or returning from the Play sheet — before an earlier check's Play
+     * Store IPC has actually completed, and Play's replies aren't
+     * guaranteed to land in the order the requests were made. Without this,
+     * a slow, stale "unavailable" landing after a fresh "available" would
+     * wipe the banner the newer check just painted (Codex, PR #99) — the
+     * same class of bug [latestAccessRefresh] guards against for the
+     * access read.
+     */
+    private var latestPlayUpdateRefresh = 0
+
+    /**
+     * The build whose update banner the user dismissed (0 = none), null
+     * until the store has been read — the same "unread is not zero"
+     * discipline every other field on this screen follows ([tileAdded],
+     * [debugLogEnabled], and friends), and for the same reason: `0` and
+     * "haven't checked yet" would otherwise be indistinguishable, and
+     * `checkPlayUpdate()` (from `onResume`) can land before this field's own
+     * post-first-frame read has run. Reading `null` as "not dismissed" would
+     * flash an already-dismissed banner onto the screen for a frame before
+     * the real answer arrived and hid it again (Codex, PR #99) — instead
+     * [displayedPlayUpdate] reads `null` the same direction [tileBannerDismissed]
+     * defaults: toward *not* showing the loud thing until it's confirmed safe to.
+     *
+     * Kept apart from [playUpdate] rather than baked into it, and recombined
+     * only in [displayedPlayUpdate], so the store's answer — whenever it
+     * arrives — is never missed by a dismissal that was computed too early.
+     */
+    private var dismissedPlayUpdateVersionCode by mutableStateOf<Int?>(null)
+
+    /**
+     * What `SettingsScreen`'s banner actually renders: [playUpdate] with
+     * [dismissedPlayUpdateVersionCode] folded in. See that field's own
+     * comment for why this isn't just [playUpdate] with the flag set inline.
+     *
+     * Internal rather than private, like [setPlayUpdateAvailable] above, so
+     * a test can read the state the banner's setters actually produced.
+     */
+    internal val displayedPlayUpdate: PlayUpdateState
+        get() {
+            val available = playUpdate as? PlayUpdateState.Available ?: return playUpdate
+            val dismissed = dismissedPlayUpdateVersionCode
+            return available.copy(
+                isDismissed = dismissed == null ||
+                    dismissed == playUpdateDismissalKey(available.versionCode, BuildConfig.VERSION_CODE),
+            )
+        }
+
+    /**
+     * Whether the last tap on the banner's Restart failed to hand off to
+     * Play (the installer busy, a transient Play error) — the one outcome
+     * where the tap would otherwise visibly do nothing (Codex, PR #99).
+     * Cleared on the way into the next attempt, like [settingsFailure], and
+     * whenever the banner starts tracking something else: a stale failure
+     * from a build that has since finished downloading, or been superseded
+     * by a newer one, describes a tap that is no longer the one on screen.
+     */
+    private var playUpdateRestartFailed by mutableStateOf(false)
+
+    /**
      * Whether the debug log is on (SPEC.md §4.6). Null until the store has been
      * read, so the row appears stating the truth rather than a default
      * corrected a frame later — the same discipline as every row above.
@@ -434,6 +531,20 @@ class MainActivity : ComponentActivity() {
             refreshLocation()
         }
 
+    /**
+     * Play's in-app update confirmation sheet. Backing out of it fires no
+     * install event, and the next resume's check reports the same update
+     * with an `UNKNOWN` status that deliberately preserves `Starting` — so
+     * without this result the banner would keep spinning with neither
+     * Update nor Dismiss reachable.
+     */
+    private val playUpdateLauncher =
+        registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+            if (result.resultCode != RESULT_OK) {
+                setPlayUpdateProgress(UpdateProgress.Idle)
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // The window is drawn edge to edge whether or not we ask for it —
@@ -474,6 +585,15 @@ class MainActivity : ComponentActivity() {
         promptStore = NotificationPromptStore(applicationContext)
         locationPromptStore = LocationPromptStore(applicationContext)
         tileStore = TilePresenceStore(applicationContext)
+        playUpdateChecker = PlayUpdateChecker(application)
+        // Set once, for the activity's whole lifetime: unlike `recordWatch`/
+        // `tileWatch`, this is a plain callback field on the checker, not a
+        // registration with the platform — the platform-side registration
+        // only happens inside `checkForUpdate`/`startUpdate`, and
+        // `onDestroy`'s `unregisterInstallListener()` is what actually tears
+        // that down.
+        playUpdateChecker.setInstallStatusListener(::onPlayUpdateInstallStatus)
+        playUpdateStore = PlayUpdateStore(applicationContext)
         zen = AndroidZenController.default(applicationContext)
         setContent {
             SnoozemoTheme {
@@ -523,10 +643,15 @@ class MainActivity : ComponentActivity() {
                                 settingsFailure = settingsFailure,
                                 debugLogEnabled = debugLogEnabled,
                                 debugLogSaveFailed = debugLogSaveFailed,
+                                playUpdate = displayedPlayUpdate,
+                                playUpdateRestartFailed = playUpdateRestartFailed,
                                 onOpenPermissions = { openPermissions(Screen.SETTINGS) },
                                 onTileRow = ::addTile,
                                 onFiltersRow = ::openFilters,
                                 onDebugLog = ::setDebugLog,
+                                onStartPlayUpdate = ::startPlayUpdate,
+                                onCompletePlayUpdate = ::completePlayUpdate,
+                                onDismissPlayUpdate = ::dismissPlayUpdate,
                             )
                         }
                     }
@@ -605,6 +730,17 @@ class MainActivity : ComponentActivity() {
         // the reading it had when it was last visible.
         now = SnoozeClock.read()
         tickHandler.postDelayed(tickRunnable, TICK_INTERVAL_MS)
+    }
+
+    /**
+     * Checks Play for a waiting update, on the first frame and every later
+     * resume — not `onStart`: Play's confirmation sheet returns here through
+     * `onResume` without necessarily stopping this activity first, and
+     * returning from it is exactly the moment the answer changes.
+     */
+    override fun onResume() {
+        super.onResume()
+        checkPlayUpdate()
     }
 
     /**
@@ -693,6 +829,14 @@ class MainActivity : ComponentActivity() {
                     debugLogEnabled = DebugLogStore(this).isEnabled()
                     debugLogSaveFailed = DebugLogging.lastSaveRefused
                 }
+                // Its own one-key file too. `compareAndSet`-style guard isn't
+                // needed the way a coroutine version would need one: this is
+                // a single main-thread assignment, and a dismissal made
+                // between `onCreate` and this read is only possible from a
+                // tap on a banner that had nothing to dismiss yet (`playUpdate`
+                // starts at `NotAvailable`), so there is nothing in flight to
+                // clobber.
+                dismissedPlayUpdateVersionCode = playUpdateStore.dismissedVersionCode
             }
         }
     }
@@ -951,6 +1095,18 @@ class MainActivity : ComponentActivity() {
         // minute while visible is negligible, but only while visible. Left
         // running past `onStop` would tick a screen nobody can see.
         tickHandler.removeCallbacks(tickRunnable)
+    }
+
+    override fun onDestroy() {
+        // One checker per activity instance, so drop its install listener
+        // here or Play's update manager would retain a dead one — capturing
+        // this activity — on every recreation. Idempotent, and guarded like
+        // the tile row's own `lateinit` checks: `onCreate` sets this early,
+        // but nothing here should assume it always ran first.
+        if (::playUpdateChecker.isInitialized) {
+            playUpdateChecker.unregisterInstallListener()
+        }
+        super.onDestroy()
     }
 
     /**
@@ -1244,6 +1400,193 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /** Asks Play what's waiting and hands the answer to the banner's state. */
+    private fun checkPlayUpdate() {
+        val refresh = ++latestPlayUpdateRefresh
+        playUpdateChecker.checkForUpdate(
+            onAvailable = { versionCode, installStatus ->
+                if (refresh == latestPlayUpdateRefresh) setPlayUpdateAvailable(versionCode, installStatus)
+            },
+            onUnavailable = { if (refresh == latestPlayUpdateRefresh) setPlayUpdateUnavailable() },
+            // No guard needed: setPlayUpdateCheckFailed() is a no-op either way.
+            onCheckFailed = ::setPlayUpdateCheckFailed,
+        )
+    }
+
+    /**
+     * Play reports a flexible update waiting (or one already downloading).
+     *
+     * Internal rather than private, like [setPlayUpdateCheckFailed] and
+     * [setPlayUpdateProgress] below, only so a test can drive the banner's
+     * state machine directly — the real trigger, [PlayUpdateChecker], talks
+     * to Play Services, which has no seam a JVM test can drive
+     * deterministically.
+     */
+    internal fun setPlayUpdateAvailable(availableVersionCode: Int?, installStatus: Int) {
+        val previous = playUpdate as? PlayUpdateState.Available
+        if (previous?.versionCode != availableVersionCode) {
+            // A different build than the banner was tracking: whatever
+            // progress we were showing belonged to the old one, and so does
+            // any Restart failure — it described a tap on a build that has
+            // since finished downloading or been superseded.
+            currentPlayUpdateProgress = UpdateProgress.Idle
+            playUpdateRestartFailed = false
+        }
+        val progress = progressForInstallStatus(installStatus, fallback = currentPlayUpdateProgress)
+        currentPlayUpdateProgress = progress
+        playUpdate = PlayUpdateState.Available(versionCode = availableVersionCode, progress = progress)
+    }
+
+    /** Play checked and there is nothing waiting: no banner. */
+    private fun setPlayUpdateUnavailable() {
+        currentPlayUpdateProgress = UpdateProgress.Idle
+        playUpdateRestartFailed = false
+        playUpdate = PlayUpdateState.NotAvailable
+    }
+
+    /**
+     * The *check* failed (flaky network, Play transiently unavailable) —
+     * which is not the same as "no update". It carries no information, so
+     * the banner is left exactly as it is, in every progress state
+     * including `Starting`.
+     *
+     * An earlier version reset `Starting` back to `Idle` here, reasoning
+     * that a failed recheck can't hand back the update handle the Play
+     * sheet consumed and would otherwise strand the banner on "Updating…".
+     * That raced [PlayUpdateChecker.startUpdate]'s own install listener,
+     * which is registered *before* the sheet opens — so a failed recheck
+     * landing before that listener's first `PENDING`/`DOWNLOADING` callback
+     * would snap a real, in-progress download's banner back to "Update",
+     * exposing a button whose cached handle was already consumed (Codex, PR
+     * #99). Both of the real cases that reset needed are covered more
+     * reliably elsewhere and don't depend on a recheck at all: declining
+     * the sheet is caught directly by [playUpdateLauncher]'s own result
+     * callback (`resultCode != RESULT_OK`), and a genuine download is heard
+     * from directly by that same install listener.
+     */
+    internal fun setPlayUpdateCheckFailed() = Unit
+
+    /**
+     * The banner's Dismiss: hide it for this build. Remembered by version
+     * code, so the next release's banner still shows.
+     *
+     * Called directly on the main thread, deliberately: [PlayUpdateStore]'s
+     * setter is `SharedPreferences.edit().apply()`, which is already
+     * non-blocking — it updates the file's in-memory cache synchronously
+     * and only defers the disk flush — so wrapping it in a background
+     * `Thread` bought nothing and cost correctness. `MainActivity` carries
+     * no state across a configuration change (unlike a `ViewModel`), so a
+     * recreated instance re-reads [dismissedPlayUpdateVersionCode] straight
+     * from the store; a deferred write that hadn't yet run by the time that
+     * read happened would let the dismissal lose a race with its own
+     * rotation, silently reappearing until the next dismiss (Codex, PR
+     * #99). Calling `apply()` here means the in-memory value the next
+     * instance's read sees is never stale.
+     *
+     * Internal rather than private, like [setPlayUpdateAvailable] above, so
+     * a test can drive it directly.
+     */
+    internal fun dismissPlayUpdate() {
+        val update = playUpdate as? PlayUpdateState.Available ?: return
+        val key = playUpdateDismissalKey(update.versionCode, BuildConfig.VERSION_CODE)
+        dismissedPlayUpdateVersionCode = key
+        playUpdateStore.dismissedVersionCode = key
+    }
+
+    /**
+     * Drives the banner's in-flight status: `Starting` when the user taps
+     * Update, back to `Idle` when the Play sheet couldn't be opened (so the
+     * banner returns to its plain offer instead of spinning forever).
+     *
+     * Internal rather than private, like [setPlayUpdateAvailable] above, so
+     * a test can drive it directly.
+     */
+    internal fun setPlayUpdateProgress(progress: UpdateProgress) {
+        currentPlayUpdateProgress = progress
+        val update = playUpdate as? PlayUpdateState.Available ?: return
+        if (update.progress == progress) return
+        playUpdate = update.copy(progress = progress)
+    }
+
+    /**
+     * Bridge for the checker's install-state listener.
+     *
+     * Internal rather than private, like [setPlayUpdateAvailable] above, so
+     * a test can drive it directly.
+     */
+    internal fun onPlayUpdateInstallStatus(installStatus: Int) {
+        val previousProgress = currentPlayUpdateProgress
+        val progress = progressForInstallStatus(installStatus, fallback = previousProgress)
+        setPlayUpdateProgress(progress)
+        // The only way this lands on Idle from something that wasn't
+        // already Idle is a genuine CANCELED/FAILED (UNKNOWN preserves
+        // `previousProgress`, and every other status maps to its own
+        // non-Idle progress) — heard directly, with no onResume in between,
+        // if the user never left this screen while the download was live.
+        // `PlayUpdateChecker.startUpdate()` already cleared its cached
+        // handle the moment the sheet opened, and nothing else refreshes
+        // it, so a repeat Update tap would otherwise find no handle and
+        // fall back to the external Play listing instead of retrying the
+        // in-app flow (Codex, PR #99). Recheck now instead of waiting on a
+        // resume that may not come.
+        if (progress == UpdateProgress.Idle && previousProgress != UpdateProgress.Idle) {
+            checkPlayUpdate()
+        }
+    }
+
+    /**
+     * The banner's Update: open Play's confirmation sheet. When it can't be
+     * opened at all (a consumed update handle, Play refusing the flow), fall
+     * back to the store listing and clear the in-flight state — otherwise
+     * the banner would sit on "Updating…" with no install event coming to
+     * recover it.
+     */
+    private fun startPlayUpdate() {
+        setPlayUpdateProgress(UpdateProgress.Starting)
+        if (!playUpdateChecker.startUpdate(playUpdateLauncher)) {
+            setPlayUpdateProgress(UpdateProgress.Idle)
+            openPlayStoreListing()
+        }
+    }
+
+    /**
+     * The banner's Restart. Cleared on the way in, like every other failure
+     * line on these screens — the next tap supersedes whatever the last one
+     * reported, whichever way this one goes.
+     */
+    private fun completePlayUpdate() {
+        playUpdateRestartFailed = false
+        playUpdateChecker.completeFlexibleUpdate(onFailure = { playUpdateRestartFailed = true })
+    }
+
+    /**
+     * Falls back to Snoozemo's Play listing when the in-app update sheet
+     * itself couldn't be opened — the Play Store app's own deep link first,
+     * then the web listing for a device without it. A missing target
+     * (`ActivityNotFoundException`) or a denied one (`SecurityException`)
+     * never throws: a device with neither leaves the tap doing nothing, and
+     * the banner has already returned to its plain offer either way, so
+     * nothing is left stranded mid-update. Narrowed to `RuntimeException`,
+     * not `Throwable` — a genuinely fatal error (`OutOfMemoryError` and
+     * friends) must not be swallowed and reported as merely "no target
+     * available" (Codex, PR #99).
+     */
+    private fun openPlayStoreListing() {
+        val candidates = listOf(
+            Intent(Intent.ACTION_VIEW, "market://details?id=$packageName".toUri()),
+            Intent(Intent.ACTION_VIEW, "https://play.google.com/store/apps/details?id=$packageName".toUri()),
+        )
+        for (candidate in candidates) {
+            try {
+                startActivity(candidate)
+                return
+            } catch (exception: RuntimeException) {
+                Log.w(TAG, "Play Store listing candidate ${candidate.data} failed to launch.", exception)
+            }
+        }
+        Log.e(TAG, "No Play Store target available to open the listing.")
     }
 
     /**

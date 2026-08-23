@@ -6,8 +6,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -23,6 +25,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import app.snoozemo.R
+import app.snoozemo.UpdateProgress
 
 /**
  * The three screens (`MainScreen`, `PermissionsScreen`, `SettingsScreen`) share
@@ -193,6 +196,104 @@ internal fun TileBanner(
                 }
                 Button(onClick = onAdd) {
                     Text(stringResource(R.string.tile_banner_add))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The Play update banner (`SettingsScreen`, `play` flavor only —
+ * [app.snoozemo.PlayUpdateChecker]): "Update available" with Dismiss /
+ * Update, tracking a flexible update through downloading to "Update ready"
+ * with Restart.
+ *
+ * Dismiss is offered before the download and not after: while it is in
+ * flight there is nothing useful to tap (Update would re-open a sheet for a
+ * download already running), and once it is downloaded, dismissing would
+ * hide the only in-app way to install what has already been fetched.
+ */
+@Composable
+internal fun PlayUpdateBanner(
+    progress: UpdateProgress,
+    // Only ever meaningful alongside `Downloaded` — see the caller's own
+    // comment on why this is carried apart from [progress] rather than a
+    // fifth [UpdateProgress] state.
+    restartFailed: Boolean = false,
+    onUpdate: () -> Unit,
+    onRestart: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val inFlight = progress == UpdateProgress.Starting || progress == UpdateProgress.Downloading
+    val downloaded = progress == UpdateProgress.Downloaded
+    val titleRes = when {
+        inFlight -> R.string.play_update_banner_updating_title
+        downloaded -> R.string.play_update_banner_downloaded_title
+        else -> R.string.play_update_banner_title
+    }
+    val bodyRes = when {
+        inFlight -> R.string.play_update_banner_updating_body
+        downloaded -> R.string.play_update_banner_downloaded_body
+        else -> R.string.play_update_banner_body
+    }
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = stringResource(titleRes),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = stringResource(bodyRes),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            // Inside the card, like every other row's failure line on these
+            // screens (`SetupRow`, `TileBanner`) — the message is about the
+            // tap, and the column scrolls. Only reachable in `Downloaded`:
+            // that is the only state Restart is offered in.
+            if (downloaded && restartFailed) {
+                Text(
+                    text = stringResource(R.string.play_update_banner_restart_failed),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                when {
+                    inFlight -> CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp,
+                    )
+                    // No Dismiss once the update is downloaded: dismissing is
+                    // remembered against that build, and Restart is the only
+                    // in-app way to finish it — so the pair would strand a
+                    // download that has already been fetched, with nothing
+                    // left to offer until Play publishes a *newer* build. The
+                    // banner costs a card at the top of the screen until the
+                    // restart happens, which is the cheaper end of that
+                    // trade.
+                    downloaded -> Button(onClick = onRestart) {
+                        Text(stringResource(R.string.play_update_banner_restart_button))
+                    }
+                    else -> {
+                        TextButton(onClick = onDismiss) {
+                            Text(stringResource(R.string.play_update_banner_dismiss))
+                        }
+                        Button(onClick = onUpdate) {
+                            Text(stringResource(R.string.play_update_banner_update_button))
+                        }
+                    }
                 }
             }
         }
