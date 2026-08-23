@@ -42,6 +42,7 @@ internal fun SettingsScreen(
     // meaningful alongside a `Downloaded` [playUpdate] — see that field's
     // own comment on `MainActivity`.
     playUpdateRestartFailed: Boolean = false,
+    debugLogCleanupFailed: Boolean,
     shareFailed: Boolean,
     onOpenPermissions: () -> Unit,
     onTileRow: () -> Unit,
@@ -128,7 +129,12 @@ internal fun SettingsScreen(
         // asserted the default and corrected itself a frame later would flash
         // on the one launch where the user had turned it off.
         debugLogEnabled?.let {
-            DebugLogRow(enabled = it, saveFailed = debugLogSaveFailed, onChange = onDebugLog)
+            DebugLogRow(
+                enabled = it,
+                saveFailed = debugLogSaveFailed,
+                cleanupFailed = debugLogCleanupFailed,
+                onChange = onDebugLog,
+            )
         }
         // Always offered, unlike the rows above: there is no "done" state to
         // reach — sharing is repeatable, not a capability to fix once — so

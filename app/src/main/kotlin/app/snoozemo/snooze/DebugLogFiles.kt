@@ -106,8 +106,17 @@ internal class DebugFileSink internal constructor(
      * once per process, off the main thread ([DebugLogging.install]); register
      * as a sink afterward, so this run's first writes queue behind the
      * rotation on the FIFO worker and can never clobber the prior run.
+     *
+     * [onDisabled] mirrors [setEnabled]'s own — fired only for a start under
+     * an already-Off setting, with whether the retried delete actually
+     * finished the job. A process restarted under a setting that was already
+     * Off is exactly when a leftover from a previous refused delete gets
+     * retried (the durable retry [deleteEverything] promises), so a refusal
+     * here must reach the same place a refusal from the toggle does, not
+     * read as success just because nothing was tapped this time (Codex,
+     * PR #89).
      */
-    fun start(enabled: Boolean) {
+    fun start(enabled: Boolean, onDisabled: (allDeleted: Boolean) -> Unit = {}) {
         this.enabled = enabled
         runCatching {
             worker.execute {
@@ -122,7 +131,8 @@ internal class DebugFileSink internal constructor(
                     if (!enabled) {
                         // Off means nothing is kept — including whatever a
                         // run under the old setting left behind (SPEC.md §4.6).
-                        deleteEverything()
+                        val allDeleted = deleteEverything()
+                        runCatching { onDisabled(allDeleted) }
                         return@execute
                     }
                     rotate()
@@ -131,6 +141,7 @@ internal class DebugFileSink internal constructor(
                     // where android.util.Log throws — and a logging failure
                     // must never take the worker task with it.
                     runCatching { Log.w(TAG, "Rotating the debug log failed; recording continues.", it) }
+                    if (!enabled) runCatching { onDisabled(false) }
                 }
             }
         }
@@ -255,24 +266,31 @@ internal class DebugFileSink internal constructor(
      *
      * [onDisabled] fires once the delete has actually run — never for an
      * enable, which deletes nothing — so a caller can resync anything that
-     * was reading a now-gone crash pin. The delete itself is queued onto
-     * this sink's own worker asynchronously, so a caller cannot infer
-     * "done" from this call merely returning (Codex, PR #89).
+     * was reading a now-gone crash pin, and so it can learn whether storage
+     * actually let every file go: passing `allDeleted = false` through
+     * lets a caller tell the user their delete request left something
+     * behind, rather than reporting Off as if it had fully succeeded
+     * (Codex, PR #89). The delete itself is queued onto this sink's own
+     * worker asynchronously, so a caller cannot infer "done" from this call
+     * merely returning.
      */
-    fun setEnabled(enabled: Boolean, onDisabled: () -> Unit = {}) {
+    fun setEnabled(enabled: Boolean, onDisabled: (allDeleted: Boolean) -> Unit = {}) {
         this.enabled = enabled
         if (enabled) return
         runCatching {
             worker.execute {
-                runCatching { deleteEverything() }.onFailure {
-                    runCatching { Log.w(TAG, "Deleting the debug log failed; files may remain until eviction.", it) }
-                }
-                runCatching { onDisabled() }
+                val allDeleted = runCatching { deleteEverything() }
+                    .onFailure {
+                        runCatching { Log.w(TAG, "Deleting the debug log failed; files may remain until eviction.", it) }
+                    }
+                    .getOrDefault(false)
+                runCatching { onDisabled(allDeleted) }
             }
-        }.onFailure { runCatching { onDisabled() } }
+        }.onFailure { runCatching { onDisabled(false) } }
     }
 
-    private fun deleteEverything() {
+    /** Whether every file was actually gone afterward — see [setEnabled]'s [onDisabled]. */
+    private fun deleteEverything(): Boolean {
         // `File.delete()` reports refusal by returning false, so an unchecked
         // walk read "off deletes what was kept" as done when it wasn't
         // (Codex, PR #62). Every file is still attempted — one refusal must
@@ -290,6 +308,7 @@ internal class DebugFileSink internal constructor(
                 )
             }
         }
+        return leftovers.isEmpty()
     }
 
     private fun writeSnapshot() {
@@ -508,6 +527,40 @@ internal object DebugLogging {
         private set
 
     /**
+     * Whether the most recent Off toggle left one or more files undeleted.
+     *
+     * Off is supposed to mean "nothing is kept" (SPEC.md §4.6); a refused
+     * delete leaves real files on disk while the switch and every other
+     * signal read as if it fully succeeded, with nothing telling the user
+     * their delete request only partly landed (Codex, PR #89). Read
+     * alongside [watchCrashPinOutcome] — it fires at the same point, once
+     * the delete this reports on has actually finished — never on its own,
+     * since nothing else notifies a change to this field.
+     */
+    @Volatile
+    var lastDisableCleanupFailed: Boolean = false
+        private set
+
+    /**
+     * Guards which sink-disable callback (from [setEnabled]'s own disable
+     * branch, or [install]'s startup retry) may still apply its own outcome
+     * to [lastDisableCleanupFailed].
+     *
+     * [setEnabled]'s Off/On calls are ordered on [worker], but the delete
+     * they trigger runs on the *sink's own separate* worker, asynchronously
+     * — so a quick Off-then-On could have the re-enable clear
+     * [lastDisableCleanupFailed] first, only for the Off call's own
+     * still-in-flight delete to complete afterward and overwrite it with
+     * `true`, showing a cleanup failure under a switch the user has already
+     * turned back on (Codex, PR #89, second round on this field). Every
+     * toggle bumps this before dispatching to the sink; a callback whose
+     * captured generation no longer matches was superseded by a later
+     * toggle and discards its own outcome instead of applying it.
+     */
+    @Volatile
+    private var disableGeneration = 0
+
+    /**
      * The current screen's ear for completed writes; see [watchSaveOutcome].
      * One slot, not a list — there is at most one screen, and during a
      * recreation the replacement registers before the old instance unregisters.
@@ -565,7 +618,29 @@ internal object DebugLogging {
                     // read — rather than only not persisting (Codex, PR #62).
                     SnoozeDebugLog.setRecording(enabled)
                     val fileSink = DebugFileSink(app)
-                    fileSink.start(enabled = enabled)
+                    // Captured for the same reason [setEnabled]'s own
+                    // dispatch does: a manual toggle racing this startup
+                    // retry must be able to supersede it too.
+                    val generation = disableGeneration
+                    fileSink.start(enabled = enabled) { allDeleted ->
+                        // Same assign-then-notify ordering as the toggle path
+                        // below, and the same reason: a reader woken by the
+                        // watch must see this attempt's own outcome. Nothing
+                        // is registered to hear it yet this early at process
+                        // start — MainActivity's own onStart/first-frame reads
+                        // (Codex, PR #89) are what actually pick this up,
+                        // exactly as they already do for a pin left over from
+                        // before this process started. Only the
+                        // cleanup-failure verdict is guarded by the
+                        // generation, same reason as the toggle path below —
+                        // whether crash.log still exists is always this
+                        // callback's own real answer regardless of which
+                        // generation asked for the delete.
+                        if (generation == disableGeneration) {
+                            lastDisableCleanupFailed = !allDeleted
+                        }
+                        runCatching { onCrashPinOutcome?.invoke() }
+                    }
                     SnoozeDebugLog.addSink(fileSink)
                     SnoozeDebugLog.addSink { line -> runCatching { Log.d(TAG, line) } }
                     sink = fileSink
@@ -615,8 +690,51 @@ internal object DebugLogging {
                     // PR #89). The watch's own observer re-reads
                     // hasPinnedCrash, so firing it after every disable is
                     // safe even when nothing was actually pinned.
-                    if (enabled) sink?.setEnabled(true) else sink?.setEnabled(false) {
-                        runCatching { onCrashPinOutcome?.invoke() }
+                    // Every toggle invalidates whatever earlier disable's
+                    // sink-callback might still be in flight on the sink's
+                    // own separate worker — see [disableGeneration]'s own
+                    // comment.
+                    val generation = ++disableGeneration
+                    if (enabled) {
+                        // A leftover from an earlier disable is retried at
+                        // every start and every subsequent disable
+                        // (deleteEverything's own durable-retry contract);
+                        // a re-enable is what actually resolves it going
+                        // forward, so this is the point that must clear it
+                        // — otherwise it never resets, and any later
+                        // restart's unconditional read would show "some
+                        // files couldn't be deleted" under a switch that is
+                        // now On (Codex, PR #89).
+                        lastDisableCleanupFailed = false
+                        sink?.setEnabled(true)
+                    } else {
+                        sink?.setEnabled(false) { allDeleted ->
+                            // A superseded generation means a later toggle
+                            // (of either direction) already ran while this
+                            // delete was still in flight — most often a
+                            // quick re-enable, whose own clear this must not
+                            // overwrite (Codex, PR #89, second round). Only
+                            // the cleanup-failure verdict is guarded by it:
+                            // whether crash.log itself still exists is a
+                            // fact this callback always actually knows,
+                            // independent of which toggle asked for the
+                            // delete, and gating the watch fire on the same
+                            // check too suppressed it whenever a quick
+                            // Off-then-On raced this delete — leaving a
+                            // crash banner offering to share a file this
+                            // delete had already removed, with no later
+                            // check left to notice in the same activity
+                            // (Codex, PR #89, third round on this field).
+                            if (generation == disableGeneration) {
+                                // Assigned before the watch fires, same
+                                // ordering discipline as lastSaveRefused
+                                // just below — a reader woken by the watch
+                                // must see this attempt's own outcome, not
+                                // a stale one from before it.
+                                lastDisableCleanupFailed = !allDeleted
+                            }
+                            runCatching { onCrashPinOutcome?.invoke() }
+                        }
                     }
                 }
                 // A re-enable's log starts from an emptied buffer — disabling
@@ -771,6 +889,8 @@ internal object DebugLogging {
         worker.submit {
             sink = null
             lastSaveRefused = false
+            lastDisableCleanupFailed = false
+            disableGeneration = 0
         }.get()
     }
 }

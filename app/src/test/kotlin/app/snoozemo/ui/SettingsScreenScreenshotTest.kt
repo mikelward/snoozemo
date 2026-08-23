@@ -49,6 +49,7 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
+                debugLogCleanupFailed = false,
                 shareFailed = false,
                 onOpenPermissions = { opened++ },
                 onTileRow = {},
@@ -73,6 +74,7 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
+                debugLogCleanupFailed = false,
                 shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = { tapped++ },
@@ -98,6 +100,7 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
+                debugLogCleanupFailed = false,
                 shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
@@ -124,6 +127,7 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = SetupRowId.TILE,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
+                debugLogCleanupFailed = false,
                 shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
@@ -145,6 +149,7 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
+                debugLogCleanupFailed = false,
                 shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
@@ -170,6 +175,7 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
+                debugLogCleanupFailed = false,
                 shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
@@ -193,6 +199,7 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = SetupRowId.FILTERS,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
+                debugLogCleanupFailed = false,
                 shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
@@ -216,6 +223,7 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
+                debugLogCleanupFailed = false,
                 shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
@@ -238,6 +246,7 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = true,
+                debugLogCleanupFailed = false,
                 shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
@@ -262,11 +271,14 @@ class SettingsScreenScreenshotTest {
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
                 playUpdate = PlayUpdateState.Available(versionCode = 5),
+                debugLogCleanupFailed = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
                 onFiltersRow = {},
                 onDebugLog = {},
                 onStartPlayUpdate = { started++ },
+                onShareDebugLog = {},
             )
         }
 
@@ -285,10 +297,13 @@ class SettingsScreenScreenshotTest {
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
                 playUpdate = PlayUpdateState.Available(versionCode = 5, isDismissed = true),
+                debugLogCleanupFailed = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
                 onFiltersRow = {},
                 onDebugLog = {},
+                onShareDebugLog = {},
             )
         }
 
@@ -305,10 +320,13 @@ class SettingsScreenScreenshotTest {
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
                 playUpdate = PlayUpdateState.Available(versionCode = 5, progress = UpdateProgress.Downloading),
+                debugLogCleanupFailed = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
                 onFiltersRow = {},
                 onDebugLog = {},
+                onShareDebugLog = {},
             )
         }
 
@@ -329,11 +347,14 @@ class SettingsScreenScreenshotTest {
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
                 playUpdate = PlayUpdateState.Available(versionCode = 5, progress = UpdateProgress.Downloaded),
+                debugLogCleanupFailed = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
                 onFiltersRow = {},
                 onDebugLog = {},
                 onCompletePlayUpdate = { restarted++ },
+                onShareDebugLog = {},
             )
         }
 
@@ -356,10 +377,13 @@ class SettingsScreenScreenshotTest {
                 debugLogSaveFailed = false,
                 playUpdate = PlayUpdateState.Available(versionCode = 5, progress = UpdateProgress.Downloaded),
                 playUpdateRestartFailed = true,
+                debugLogCleanupFailed = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
                 onFiltersRow = {},
                 onDebugLog = {},
+                onShareDebugLog = {},
             )
         }
 
@@ -380,16 +404,41 @@ class SettingsScreenScreenshotTest {
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
                 playUpdate = PlayUpdateState.Available(versionCode = 5),
+                debugLogCleanupFailed = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
                 onFiltersRow = {},
                 onDebugLog = {},
                 onDismissPlayUpdate = { dismissed++ },
+                onShareDebugLog = {},
             )
         }
 
         composeRule.onNodeWithText("Dismiss").performClick()
         assertEquals(1, dismissed)
+    }
+
+    @Test
+    fun `a refused cleanup delete says so under the switch, distinct from a save failure`() {
+        capture("settings-screen-debug-log-cleanup-failed.png") {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = false,
+                debugLogSaveFailed = false,
+                debugLogCleanupFailed = true,
+                shareFailed = false,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onShareDebugLog = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Off, but some saved files couldn't be deleted").assertExists()
     }
 
     @Test
@@ -403,6 +452,7 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
+                debugLogCleanupFailed = false,
                 shareFailed = true,
                 onOpenPermissions = {},
                 onTileRow = {},
@@ -429,6 +479,7 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
+                debugLogCleanupFailed = false,
                 shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},

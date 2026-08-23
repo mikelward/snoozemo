@@ -385,6 +385,7 @@ internal fun CrashBanner(
 internal fun DebugLogRow(
     enabled: Boolean,
     saveFailed: Boolean,
+    cleanupFailed: Boolean,
     onChange: (Boolean) -> Unit,
 ) {
     Surface(
@@ -426,6 +427,17 @@ internal fun DebugLogRow(
                 if (saveFailed) {
                     Text(
                         text = stringResource(R.string.setup_debug_log_save_failed),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                // Distinct from saveFailed: the setting itself did save as
+                // Off, but the delete that's supposed to go with it left
+                // something behind — a different failure than the switch
+                // not taking (Codex, PR #89).
+                if (cleanupFailed) {
+                    Text(
+                        text = stringResource(R.string.setup_debug_log_cleanup_failed),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )

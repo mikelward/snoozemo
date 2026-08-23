@@ -185,6 +185,23 @@ class DebugFileSinkTest {
     }
 
     @Test
+    fun `a leftover file reports the delete as incomplete, not as success`() {
+        // Same fixture as the test above, but pinned to the onDisabled
+        // callback's own reported outcome rather than the files directly —
+        // a caller has no other way to learn a "successful" disable actually
+        // left something behind (Codex, PR #89).
+        val sink = startAndAwait()
+        dir.mkdirs()
+        File(file("crash.log"), "occupied").apply { parentFile!!.mkdirs() }.writeText("x")
+
+        var allDeleted: Boolean? = null
+        sink.setEnabled(false) { allDeleted = it }
+        sink.awaitIdleForTest()
+
+        assertEquals(false, allDeleted)
+    }
+
+    @Test
     fun `a leftover temp file never survives a start`() {
         dir.mkdirs()
         file("current.log.tmp").writeText("uncommitted, possibly partial")
@@ -221,6 +238,24 @@ class DebugFileSinkTest {
         assertFalse(file("current.log").exists())
         assertFalse(file("previous.log").exists())
         assertFalse("an unshared crash is lost at that moment, by design", file("crash.log").exists())
+    }
+
+    @Test
+    fun `starting under an already-Off setting reports a retried delete's own outcome`() {
+        // A process restart under a setting that was already Off is exactly
+        // when a leftover from an earlier refused delete gets retried — the
+        // durable retry deleteEverything promises — so this must report its
+        // own outcome, not just the toggle path's (Codex, PR #89).
+        dir.mkdirs()
+        File(file("crash.log"), "occupied").apply { parentFile!!.mkdirs() }.writeText("x")
+
+        var allDeleted: Boolean? = null
+        sink().apply {
+            start(enabled = false) { allDeleted = it }
+            awaitIdleForTest()
+        }
+
+        assertEquals(false, allDeleted)
     }
 
     @Test

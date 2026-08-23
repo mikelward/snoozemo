@@ -122,6 +122,8 @@
     <string name="setup_debug_log_description" tools:ignore="MissingTranslation">Save snooze details to help fix issues</string>
     <!-- TODO: translate -->
     <string name="setup_debug_log_save_failed" tools:ignore="MissingTranslation">Couldn\'t save this setting</string>
+    <!-- TODO: translate -->
+    <string name="setup_debug_log_cleanup_failed" tools:ignore="MissingTranslation">Off, but some saved files couldn\'t be deleted</string>
     <!--
       The Play update banner (SettingsScreen, `play` flavor only — SPEC.md
       §3.4). Copy mirrors the sibling Simmo and Type Launcher repos' own

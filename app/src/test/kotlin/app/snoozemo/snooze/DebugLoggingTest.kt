@@ -256,6 +256,132 @@ class DebugLoggingTest {
         assertEquals("the watch's own re-read must see the pin is gone", false, pinned)
     }
 
+    @Test
+    fun `a leftover retried at an already-Off install also sets lastDisableCleanupFailed`() {
+        // A process restart under a setting that was already Off is exactly
+        // when a leftover from an earlier refused delete gets retried — not
+        // only the interactive toggle path (Codex, PR #89).
+        DebugLogStore(context).setEnabled(false)
+        val dir = File(context.cacheDir, "debuglog")
+        dir.mkdirs()
+        File(File(dir, "crash.log"), "occupied").apply { parentFile!!.mkdirs() }.writeText("x")
+
+        DebugLogging.install(context)
+        DebugLogging.awaitIdleForTest()
+
+        assertTrue(DebugLogging.lastDisableCleanupFailed)
+    }
+
+    @Test
+    fun `a refused delete during disable sets lastDisableCleanupFailed, not silent success`() {
+        // Off is supposed to mean nothing is kept (SPEC.md §4.6); a refused
+        // delete must not read the same as a clean one, or nothing tells
+        // the user their delete request only partly landed (Codex, PR #89).
+        val dir = File(context.cacheDir, "debuglog")
+        dir.mkdirs()
+        // An occupied directory refuses deletion the same way a failing
+        // filesystem does: delete() returns false rather than throwing.
+        File(File(dir, "crash.log"), "occupied").apply { parentFile!!.mkdirs() }.writeText("x")
+        DebugLogging.install(context)
+        DebugLogging.awaitIdleForTest()
+        assertFalse(DebugLogging.lastDisableCleanupFailed)
+
+        DebugLogging.setEnabled(context, false) {}
+        DebugLogging.awaitIdleForTest()
+
+        assertTrue(DebugLogging.lastDisableCleanupFailed)
+    }
+
+    @Test
+    fun `a successful re-enable clears a prior disable's cleanup failure`() {
+        // Without this, lastDisableCleanupFailed never resets once set —
+        // only a disable ever writes it — so it would resurface at any
+        // later restart even though the switch has been back On for a
+        // while and nothing is actually wrong (Codex, PR #89).
+        val dir = File(context.cacheDir, "debuglog")
+        dir.mkdirs()
+        File(File(dir, "crash.log"), "occupied").apply { parentFile!!.mkdirs() }.writeText("x")
+        DebugLogging.install(context)
+        DebugLogging.awaitIdleForTest()
+        DebugLogging.setEnabled(context, false) {}
+        DebugLogging.awaitIdleForTest()
+        assertTrue("precondition: the disable left a real leftover", DebugLogging.lastDisableCleanupFailed)
+
+        DebugLogging.setEnabled(context, true) {}
+        DebugLogging.awaitIdleForTest()
+
+        assertFalse(DebugLogging.lastDisableCleanupFailed)
+    }
+
+    @Test
+    fun `a quick re-enable invalidates a still in-flight disable's own cleanup callback`() {
+        // setEnabled's Off/On calls are ordered on DebugLogging's own
+        // worker, but the delete they trigger runs on the sink's own
+        // *separate* worker, asynchronously — without disableGeneration,
+        // a re-enable's clear could be overwritten later by the disable's
+        // own callback finally completing and reporting its (genuine)
+        // failure, showing a cleanup warning under a switch already back
+        // On (Codex, PR #89, second round on this field). No await
+        // between the two calls: both queue on DebugLogging's worker in
+        // order, so the enable's own generation bump is guaranteed to
+        // land before either callback is checked, regardless of exactly
+        // when the sink's own delete actually finishes.
+        val dir = File(context.cacheDir, "debuglog")
+        dir.mkdirs()
+        File(File(dir, "crash.log"), "occupied").apply { parentFile!!.mkdirs() }.writeText("x")
+        DebugLogging.install(context)
+        DebugLogging.awaitIdleForTest()
+
+        DebugLogging.setEnabled(context, false) {}
+        DebugLogging.setEnabled(context, true) {}
+        DebugLogging.awaitIdleForTest()
+
+        assertFalse(
+            "the disable's own callback must not overwrite the re-enable's clear, " +
+                "even though the delete it reports on genuinely failed",
+            DebugLogging.lastDisableCleanupFailed,
+        )
+    }
+
+    @Test
+    fun `a quick re-enable still notifies the crash-pin watch once the earlier delete completes`() {
+        // The bug this guards: gating onCrashPinOutcome on the same
+        // disableGeneration check that guards lastDisableCleanupFailed
+        // suppressed the pin-state notification too — a crash.log the
+        // disable's own delete genuinely removed would leave crashPending
+        // stuck true on screen, since nothing else re-reads hasPinnedCrash
+        // while the activity stays on the same screen (Codex, PR #89, third
+        // round on this field).
+        val dir = File(context.cacheDir, "debuglog")
+        dir.mkdirs()
+        File(dir, "current.log").writeText("the run that crashed")
+        File(dir, "current.log.crash").writeText("1")
+        DebugLogging.install(context)
+        DebugLogging.awaitIdleForTest()
+        assertTrue("precondition: the crash is pinned", File(dir, "crash.log").exists())
+
+        var fired = 0
+        val watch = DebugLogging.watchCrashPinOutcome { fired++ }
+        try {
+            // Same no-await, no-race-needed shape as the cleanup-failure
+            // test above: both DebugLogging-worker tasks (and the
+            // generation bump) are guaranteed to land before the sink's
+            // own delete actually completes.
+            DebugLogging.setEnabled(context, false) {}
+            DebugLogging.setEnabled(context, true) {}
+            DebugLogging.awaitIdleForTest()
+        } finally {
+            watch.close()
+        }
+
+        assertTrue(
+            "the crash-pin watch must still fire once the superseded delete finishes, " +
+                "even though its own cleanup-failure verdict is discarded",
+            fired > 0,
+        )
+        assertFalse("the crash really was deleted by the disable's own delete", File(dir, "crash.log").exists())
+    }
+
     // --- dismissCrashPin / watchDismissOutcome / lastDismissFailed (Codex,
     // PR #89: a refused Dismiss tap must not look like it did nothing) ---
 
