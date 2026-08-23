@@ -414,6 +414,37 @@ class DebugLoggingTest {
     }
 
     @Test
+    fun `dismissCrashPin's own retry resolves to its own outcome, not a stuck earlier one`() {
+        // dismissCrashPin clears lastDismissFailed synchronously before
+        // dispatching its own consume, so a config change or restart while
+        // a retry is still in flight can no longer reload a *previous*
+        // attempt's stale outcome (Codex, PR #89) — that synchronous
+        // ordering is a language guarantee, not something a threaded test
+        // can pin without racing the same worker it's asserting about, so
+        // this instead pins the deterministic, fully-awaited end state: a
+        // retry that succeeds must land on its own success, never leave
+        // the earlier failure standing.
+        val dir = File(context.cacheDir, "debuglog")
+        dir.mkdirs()
+        File(dir, "current.log").writeText("the run that crashed")
+        File(dir, "current.log.crash").writeText("1")
+        DebugLogging.install(context)
+        DebugLogging.awaitIdleForTest()
+        val blocker = File(dir, "previous.log")
+        File(blocker, "occupied").apply { parentFile!!.mkdirs() }.writeText("x")
+        DebugLogging.dismissCrashPin()
+        DebugLogging.awaitIdleForTest()
+        assertTrue("precondition: the first dismiss genuinely failed", DebugLogging.lastDismissFailed)
+
+        // Fix the fixture so the retry can actually succeed this time.
+        blocker.deleteRecursively()
+        DebugLogging.dismissCrashPin()
+        DebugLogging.awaitIdleForTest()
+
+        assertFalse(DebugLogging.lastDismissFailed)
+    }
+
+    @Test
     fun `watchDismissOutcome fires after dismissCrashPin completes`() {
         var fired = 0
         val watch = DebugLogging.watchDismissOutcome { fired++ }

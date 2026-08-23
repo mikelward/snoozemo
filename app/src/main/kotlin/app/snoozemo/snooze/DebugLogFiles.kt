@@ -861,8 +861,17 @@ internal object DebugLogging {
      * too, from the [consumeCrashPin] call this makes — that resync of
      * [hasPinnedCrash] is unconditional and correct either way, since a
      * refused consume really does leave the crash still pinned.
+     *
+     * Clears [lastDismissFailed] up front, before the consume even starts:
+     * a caller only clears its own local failure flag when it starts a
+     * retry, and a configuration change or restart mid-retry would
+     * otherwise have the replacement instance's `onStart` reload the
+     * *previous* attempt's still-true process-level outcome and show
+     * "Couldn't dismiss" again for a tap that already superseded it (Codex,
+     * PR #89).
      */
     fun dismissCrashPin() {
+        lastDismissFailed = false
         consumeCrashPin { consumed ->
             lastDismissFailed = !consumed
             runCatching { onDismissOutcome?.invoke() }
