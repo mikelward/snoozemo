@@ -2,6 +2,7 @@ package app.snoozemo.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -241,8 +242,16 @@ private fun RequiredPermissionBanner(onFix: () -> Unit) {
                 text = stringResource(R.string.setup_dnd_missing),
                 style = MaterialTheme.typography.bodyMedium,
             )
-            Button(onClick = onFix) {
-                Text(stringResource(R.string.setup_action_grant))
+            // End-aligned, matching TileBanner's and CrashBanner's own action
+            // row — a bare Button left in the Column sits flush left instead,
+            // which is inconsistent with every other banner on this screen.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                Button(onClick = onFix) {
+                    Text(stringResource(R.string.setup_action_grant))
+                }
             }
         }
     }
