@@ -264,30 +264,28 @@ jobs:
     if: needs.classify.outputs.docs_only != 'true'
     timeout-minutes: 30
     permissions:
-      # Write so "Commit refreshed screenshots" can push regenerated PNGs back
-      # to a same-repo PR branch, and so "Post screenshot diffs" can upsert its
-      # comment.
-      contents: write
-      pull-requests: write
-      # So the refresh step can dispatch this workflow onto the head it just
-      # pushed — a GITHUB_TOKEN push starts no run by itself, and without one
-      # the required `gate` check never reports on the refreshed commit. This
-      # job runs PR-controlled Gradle code, but the refresh path only runs on
-      # same-repo PRs, whose author already has push access and could dispatch
-      # anything themselves — so this grant widens nothing for that attacker,
-      # and fork PRs never reach the step.
-      actions: write
+      # Read-only: this job now only renders and uploads an artifact. The
+      # commit-back and dispatch this job used to do (and the write/actions
+      # grants that needed) moved to `sync-screenshots` below, which never
+      # executes anything from the PR — see mikelward/ci-commit-artifact's
+      # README for why that separation is the actual fix, not a hardened
+      # version of doing it here.
+      contents: read
     steps:
       - name: Check out repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
         with:
           fetch-depth: 0
           # Same-repo PRs check out the head *branch* rather than
-          # refs/pull/N/merge, so the refresh step below has somewhere to push;
-          # the build job still runs the assertions against the merge ref.
+          # refs/pull/N/merge, matching what `sync-screenshots` below pushes
+          # to (`branch-ref`) — rendering against the same content that a
+          # refresh commit would land on, not a merge snapshot it never
+          # touches. The build job still runs the assertions against the
+          # merge ref.
           ref: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref || '' }}
-          # Don't leave the write-scoped token in .git/config while Gradle runs
-          # PR-controlled build code; the push step gets it via env instead.
+          # This job holds no write credential to begin with (contents: read
+          # above), but false anyway — nothing here should assume otherwise
+          # just because the checkout step's default happens to agree today.
           persist-credentials: false
 
       - name: Set up JDK
@@ -359,75 +357,116 @@ jobs:
             exit 1
           fi
 
-      - name: Commit refreshed screenshots
-        # Keeps the committed snapshots identical to what this runner renders,
-        # so a font or renderer difference between a laptop and CI never reads
-        # as a UI change. Subject prefixed `ci:` so release notes skip it.
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        run: |
-          # Gradle has already run PR-controlled build code in this job, with
-          # the working tree and `.git` writable. So *every* git call here runs
-          # with config that cannot execute what the build could have planted —
-          # not just the ones that touch the token:
-          #   - `core.hooksPath` at an empty directory kills pre-commit and
-          #     pre-push hooks, and overrides a hooksPath written into
-          #     `.git/config`, which a plain `--no-verify` would not;
-          #   - `core.fsmonitor` takes a *pathname* git executes, and `git
-          #     status` alone is enough to run it;
-          #   - an empty `credential.helper` stops a planted helper being handed
-          #     the credential git asks it to store after a push.
-          # The token is never exported to the step, only interpolated into the
-          # push URL, so nothing else this step runs inherits it.
-          # `persist-credentials: false` on the checkout does not cover any of
-          # this: it keeps the token out of `.git/config`, not out of a child
-          # process's environment. What remains uncovered is `PATH` — the build
-          # can prepend a `git` of its own — which only a separate job closes;
-          # that trade-off is recorded in `TODO.md`.
-          mkdir -p "$RUNNER_TEMP/no-hooks"
-          safe_git=(git -c "core.hooksPath=$RUNNER_TEMP/no-hooks" -c core.fsmonitor=false -c credential.helper=)
-          drift="$("${safe_git[@]}" status --porcelain -- app/src/test/snapshots/images)"
-          if [ -z "$drift" ]; then
-            echo "Recorded screenshots match the committed ones; nothing to do."
-            exit 0
-          fi
-          echo "$drift"
-          # The drift is checked *before* this, deliberately. Skipping on the
-          # subject alone said "a refresh already happened" when the question is
-          # "do the snapshots still differ" — and after a rebase, or on a runner
-          # that renders differently, both can be true at once. That combination
-          # used to exit green with the difference visible only in the artifact.
-          if [ "$("${safe_git[@]}" log -1 --pretty=%s)" = "ci: refresh recorded screenshots" ]; then
-            echo "::error::Screenshots still drift on top of a refresh commit, so re-recording would not converge. Re-record locally and push; the images are in the roborazzi-screenshots artifact."
-            exit 1
-          fi
-          "${safe_git[@]}" config user.name "github-actions[bot]"
-          "${safe_git[@]}" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          "${safe_git[@]}" add app/src/test/snapshots/images
-          "${safe_git[@]}" commit --no-verify -m "ci: refresh recorded screenshots"
-          push_url="https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git"
-          if ! "${safe_git[@]}" push "$push_url" "HEAD:${GITHUB_HEAD_REF}"; then
-            # Fail, don't warn. The drift check above is skipped on same-repo
-            # PRs precisely because this step was going to fix the drift — so
-            # swallowing a failed push here is the one path that ends with a
-            # green job over snapshots that do not match what CI renders. A
-            # same-repo PR whose token cannot push is not hypothetical:
-            # Dependabot's `GITHUB_TOKEN` is read-only, and a dependency bump is
-            # the likeliest cause of a rendering change in the first place.
-            echo "::error::Recorded screenshots drifted and the refresh could not be pushed (branch gone or moved, or a read-only token). Re-record and commit them; the images are in the roborazzi-screenshots artifact."
-            exit 1
-          fi
-          # The push above starts no workflow run — GITHUB_TOKEN pushes never
-          # do — so without this dispatch the refreshed head carries no checks
-          # and the required `gate` blocks the PR forever, silently. Dispatch
-          # is the documented exception to that rule. Fail loudly if it
-          # doesn't take: "CI never started" and "CI passed quietly" look
-          # identical from the PR, and a red run here is the only signal left.
-          # The token is scoped to this one command, same as the push URL
-          # above — never exported to the step.
-          if ! GH_TOKEN="${{ github.token }}" gh workflow run android-ci.yml --ref "$GITHUB_HEAD_REF" -f pr="${{ github.event.pull_request.number }}"; then
-            echo "::error::Pushed a refresh commit but could not start CI on it (is workflow_dispatch on android-ci.yml present on main yet?). The refreshed head has no checks — dispatch this workflow on the branch by hand from the Actions tab."
-            exit 1
-          fi
+      - name: Upload Roborazzi screenshots
+        # Unconditional: a job that died before any test ran still uploads an
+        # empty directory, and that emptiness is itself the diagnosis. This is
+        # also `sync-screenshots`' own input below — the only thing it ever
+        # sees of this job's render, never anything else this job touched.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: roborazzi-screenshots
+          path: app/src/test/snapshots/images/
+          if-no-files-found: ignore
+
+      - name: Upload screenshot test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: screenshot-test-reports
+          path: |
+            app/build/reports/tests/
+            app/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 1
+
+  # Pushes any drift in `screenshot-tests`' regenerated screenshots back to a
+  # same-repo PR branch. Delegated to mikelward/ci-commit-artifact's reusable
+  # workflow, rather than inline in `screenshot-tests` the way this repo used
+  # to do it, specifically so the commit/push never shares a job with the PR's
+  # own Gradle code — see that repo's README for the structural reasoning
+  # (`docs/fork-safe-ci.md` has the full migration this is milestone 1 of).
+  #
+  # dispatch-workflow, not push-token: this repo still runs plain
+  # `pull_request`, where ci-commit-artifact's own validation treats a
+  # GITHUB_TOKEN push + dispatch as safe (the workflow file that runs is
+  # already the PR branch's own copy, so dispatching onto it grants no new
+  # trust). push-token is milestone 2, once CI_COMMIT_ARTIFACT_TOKEN exists.
+  #
+  # The @main reference is deliberate: this account's own repo, gated behind
+  # its own CI and Codex review rather than direct pushes to main, and the
+  # whole point of a shared reusable workflow is that a fix there reaches
+  # every consumer's next run without a per-repo bump PR.
+  sync-screenshots:
+    name: Sync recorded screenshots
+    needs: [classify, screenshot-tests]
+    # Same-repo PRs only — fork branches aren't pushable with this token, and
+    # pushing to main directly from CI is not this job's purpose. No explicit
+    # status-check function needed on the repo/event check: the bare `needs:`
+    # already implies `success()`, so this is also skipped whenever
+    # `screenshot-tests` itself failed or was skipped (docs-only PRs).
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    uses: mikelward/ci-commit-artifact/.github/workflows/commit-artifact.yml@main
+    # All three are required by GitHub's own static check at call time, not
+    # by what this call actually exercises: the called workflow's `commit`
+    # job declares `contents: write, pull-requests: write, actions: write`,
+    # and GitHub refuses to even start a run whose caller grants less than
+    # the callee's own job block requests — a real "startup_failure" this PR
+    # hit, unrelated to comment-marker being unset here (verified live: the
+    # error names line/col and says so explicitly, not something the plan
+    # doc anticipated). pull-requests: write is dead weight for what this
+    # call actually does, kept only because the platform demands it.
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    with:
+      artifact-name: roborazzi-screenshots
+      dest-path: app/src/test/snapshots/images
+      commit-message: 'ci: refresh recorded screenshots'
+      branch-ref: ${{ github.event.pull_request.head.ref }}
+      # The tested SHA, not the branch name: the artifact was rendered
+      # against this specific commit, and expected-head-sha is what lets the
+      # hub workflow tell a genuine lost race (branch-ref advanced past this
+      # since) apart from an ordinary no-op — see that workflow's own README.
+      expected-head-sha: ${{ github.event.pull_request.head.sha }}
+      # comment-marker stays unset ('', the default): this repo posts its own
+      # richer visual diff comment instead (post-screenshot-diff below), not
+      # the hub's plain status line.
+      dispatch-workflow: android-ci.yml
+      pr-number: ${{ github.event.pull_request.number }}
+
+  # Embeds every snapshot this PR adds, removes, or changes, pinned to commit
+  # SHAs, into a single auto-updated PR comment (marker: <!-- screenshot-diff
+  # -->) so reviewers see the visual delta inline without downloading the
+  # artifact. Split out of `screenshot-tests`/`sync-screenshots` into its own
+  # job because a reusable-workflow job (`sync-screenshots` above) can't carry
+  # extra steps of its own.
+  post-screenshot-diff:
+    name: Post screenshot diffs as a PR comment
+    runs-on: ubuntu-latest
+    needs: [sync-screenshots]
+    # Same-repo-PR-ness is already implied here: sync-screenshots only
+    # reaches `success` (rather than being skipped) on that path, per its own
+    # `if:` above.
+    if: needs.sync-screenshots.result == 'success'
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          fetch-depth: 0
+          # The hub workflow's own authoritative result — the resulting head
+          # of branch-ref after it ran, whether or not it actually pushed —
+          # never a commit made locally in this job (there isn't one) or one
+          # that might not have actually landed. Diffing against anything
+          # else risks pinning an image URL to a SHA the branch was never
+          # actually at.
+          ref: ${{ needs.sync-screenshots.outputs.commit-sha }}
+          persist-credentials: false
 
       - name: Post screenshot diffs as a PR comment
         # GitHub renders "Binary files not rendered" for PNG diffs in the mobile
@@ -438,19 +477,13 @@ jobs:
         # raw.githubusercontent.com: that CDN origin never sees a github.com
         # session cookie, so every embed 404s once the repo is private.
         continue-on-error: true
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          # Same hardening as the commit step, for the same reason: these run
-          # after PR-controlled build code, and `git status`/`git diff` will
-          # execute a `core.fsmonitor` pathname if one was planted.
-          mkdir -p "$RUNNER_TEMP/no-hooks"
-          safe_git=(git -c "core.hooksPath=$RUNNER_TEMP/no-hooks" -c core.fsmonitor=false -c credential.helper=)
-          BASE_SHA=$("${safe_git[@]}" merge-base HEAD "origin/${GITHUB_BASE_REF}")
-          HEAD_SHA=$("${safe_git[@]}" rev-parse HEAD)
+          BASE_SHA=$(git merge-base HEAD "origin/${GITHUB_BASE_REF}")
+          HEAD_SHA=$(git rev-parse HEAD)
           # Deletions count. A removed or renamed screenshot test is a *change
           # to the UI record* with no after-image, and the step that clears the
           # directory before recording makes it a reachable state rather than a
@@ -461,7 +494,7 @@ jobs:
           # rename-only PR would then report itself as having no screenshot
           # changes at all. With it, the same rename arrives as a deletion plus
           # an addition, which is also the truthful thing to show a reviewer.
-          mapfile -t entries < <("${safe_git[@]}" diff --no-renames --name-status "$BASE_SHA" HEAD -- app/src/test/snapshots/images/ | grep -E '^[AMD]' || true)
+          mapfile -t entries < <(git diff --no-renames --name-status "$BASE_SHA" HEAD -- app/src/test/snapshots/images/ | grep -E '^[AMD]' || true)
           raw="https://github.com/${GITHUB_REPOSITORY}/raw"
           files="https://github.com/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}/files"
           if [ ${#entries[@]} -eq 0 ]; then
@@ -551,27 +584,6 @@ jobs:
             fi
           fi
 
-      - name: Upload Roborazzi screenshots
-        # Unconditional: a job that died before any test ran still uploads an
-        # empty directory, and that emptiness is itself the diagnosis.
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: roborazzi-screenshots
-          path: app/src/test/snapshots/images/
-          if-no-files-found: ignore
-
-      - name: Upload screenshot test reports
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: screenshot-test-reports
-          path: |
-            app/build/reports/tests/
-            app/build/test-results/
-          if-no-files-found: ignore
-          retention-days: 1
-
   # The one check the main ruleset requires today. Always runs, always
   # reports — green only when every heavy job succeeded, or when they were
   # skipped and the skip is INDEPENDENTLY verified as justified: the diff
@@ -590,7 +602,7 @@ jobs:
     name: gate
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [classify, build, screenshot-tests]
+    needs: [classify, build, screenshot-tests, sync-screenshots]
     if: always()
     permissions:
       contents: read
@@ -610,9 +622,21 @@ jobs:
           # before the heavy jobs ran; a pull_request run takes the same
           # commit from its own event payload.
           base-sha: ${{ needs.classify.outputs.base_sha }}
+          # `sync` folds "skipped because this run can't sync" into
+          # "success": mikelward/lanes' gate() requires every named result to
+          # be uniformly success or uniformly skipped (lanes.mjs's
+          # parseResults/gate), and sync-screenshots is *expected* to skip on
+          # a fork PR or a push to main while build/screenshots succeed —
+          # left unfolded, that mix reads as "not all green, and not a
+          # justified skip" and fails every such run, including every push
+          # to main. A skip that instead means screenshot-tests itself was
+          # skipped (the docs-only path) is left alone, so it still lines up
+          # with build/screenshots also reading skipped there rather than
+          # breaking that path's own all-skipped justification instead.
           results: >-
             build=${{ needs.build.result }}
             screenshots=${{ needs.screenshot-tests.result }}
+            sync=${{ (needs.sync-screenshots.result == 'skipped' && needs.screenshot-tests.result == 'success') && 'success' || needs.sync-screenshots.result }}
 
   # The renamed check (mikelward/lanes#9) — this is what the ruleset should
   # require once it has reported at least once on a real pull_request run.
@@ -622,7 +646,7 @@ jobs:
     name: lanes
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [classify, build, screenshot-tests]
+    needs: [classify, build, screenshot-tests, sync-screenshots]
     if: always()
     permissions:
       contents: read
@@ -639,9 +663,21 @@ jobs:
           pr: ${{ github.event.pull_request.number || inputs.pr }}
           classify-result: ${{ needs.classify.result }}
           base-sha: ${{ needs.classify.outputs.base_sha }}
+          # `sync` folds "skipped because this run can't sync" into
+          # "success": mikelward/lanes' gate() requires every named result to
+          # be uniformly success or uniformly skipped (lanes.mjs's
+          # parseResults/gate), and sync-screenshots is *expected* to skip on
+          # a fork PR or a push to main while build/screenshots succeed —
+          # left unfolded, that mix reads as "not all green, and not a
+          # justified skip" and fails every such run, including every push
+          # to main. A skip that instead means screenshot-tests itself was
+          # skipped (the docs-only path) is left alone, so it still lines up
+          # with build/screenshots also reading skipped there rather than
+          # breaking that path's own all-skipped justification instead.
           results: >-
             build=${{ needs.build.result }}
             screenshots=${{ needs.screenshot-tests.result }}
+            sync=${{ (needs.sync-screenshots.result == 'skipped' && needs.screenshot-tests.result == 'success') && 'success' || needs.sync-screenshots.result }}
 
   deploy:
     name: Build the release AAB
