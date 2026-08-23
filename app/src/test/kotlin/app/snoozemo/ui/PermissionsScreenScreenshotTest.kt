@@ -327,6 +327,39 @@ class PermissionsScreenScreenshotTest {
         composeRule.onNodeWithText("Couldn't open Settings").assertDoesNotExist()
     }
 
+    @Test
+    fun `a pinned crash raises the banner here too, above everything else`() {
+        // On a cold start with Do Not Disturb access missing,
+        // MainActivity.applyAccess routes straight here — the actual
+        // first-landed screen in that case, not MainScreen — so a crash from
+        // before that same cold start has to be reachable from here or it
+        // goes unseen until the user finishes this screen and navigates back
+        // on their own (Codex, PR #89, fresh evidence).
+        var shared = 0
+
+        capture("permissions-screen-crash-banner.png") {
+            PermissionsScreen(
+                access = PolicyAccess.DENIED,
+                notifications = null,
+                notificationsReachTheUser = true,
+                location = null,
+                settingsFailure = null,
+                crashPending = true,
+                shareFailed = false,
+                dismissFailed = false,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onLocationRow = {},
+                onDone = {},
+                onShareDebugLog = { shared++ },
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Share").performClick()
+        assertEquals(1, shared)
+    }
+
     /**
      * Renders [content] the way `MainActivity` does and records it under
      * [name] when a name is given.
