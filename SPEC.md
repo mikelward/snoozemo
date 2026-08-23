@@ -358,6 +358,17 @@ Channel `snooze_active`, `IMPORTANCE_DEFAULT`, ongoing, not dismissible while th
 
 `+30 min` matches the sheet's step (§4.4), so extending uses the same mental unit as choosing.
 
+Tapping the card itself, rather than one of its two actions, opens `MainScreen` (landed
+2026-08-23) — the notification is the one thing a snoozing user is already looking at, so it is
+also the natural route back into the app for anyone who wants more than `End now` or `+30 min`.
+
+**Tap-to-open is a plain foreground activity launch, not routed through the trampoline the two
+actions use.** `End now` and `+30 min` fire `PendingIntent.getService` indirectly through
+`TileTrampolineActivity`, because a background service start the platform or an OEM refuses is
+*consumed silently* — no app code ever learns it was refused — and the trampoline is what notices
+and recovers. An activity launch from a notification tap carries no such refusal case: the platform
+always honors it, so there is nothing here for a trampoline to catch.
+
 **The countdown is the platform's chronometer, not text Snoozemo formats.** A notification is only
 rebuilt on a state change, so a remaining time written into the body is the value it had when the
 snooze was armed — still reading `8h 0m left` seven hours later, which is worse than showing nothing

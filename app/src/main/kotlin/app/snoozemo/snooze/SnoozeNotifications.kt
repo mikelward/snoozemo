@@ -12,6 +12,7 @@ import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenFailure
+import app.snoozemo.ui.MainActivity
 
 /**
  * The "you are snoozed" affordance (SPEC.md §4.3) and every reason a snooze
@@ -138,6 +139,7 @@ class SnoozeNotifications(private val context: Context) {
             .setWhen(System.currentTimeMillis() + snooze.remaining(SnoozeClock.read()).toMillis())
             .setUsesChronometer(true)
             .setChronometerCountDown(true)
+            .setContentIntent(contentPendingIntent())
             .addAction(
                 android.app.Notification.Action.Builder(
                     null,
@@ -462,6 +464,25 @@ class SnoozeNotifications(private val context: Context) {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
 
+    /**
+     * Tapping the card itself — not one of its actions — opens the app.
+     *
+     * Straight to [MainActivity], unlike the two actions above: this is a plain
+     * foreground activity launch, which the platform always allows from a
+     * notification tap, so there is no refused-background-start case for a
+     * trampoline to recover from here. `CLEAR_TOP` collapses back onto an
+     * existing instance rather than stacking a second one when the app is
+     * already open behind the shade.
+     */
+    private fun contentPendingIntent(): PendingIntent =
+        PendingIntent.getActivity(
+            context,
+            REQUEST_CONTENT,
+            Intent(context, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
     companion object {
         /**
          * Creates the channels ahead of the first tap.
@@ -505,6 +526,7 @@ class SnoozeNotifications(private val context: Context) {
         const val REQUEST_EXTEND = 11
         const val REQUEST_RELEASE_STUCK = 12
         const val REQUEST_DISMISS_STUCK = 13
+        const val REQUEST_CONTENT = 14
 
         /** Handled by [NotificationActionReceiver]; takes the card down and nothing else. */
         const val ACTION_DISMISS_STUCK = "app.snoozemo.action.DISMISS_STUCK"
