@@ -177,10 +177,14 @@ internal fun SettingsScreen(
             actionRunning = sharing,
         )
         // Same row shape and position as the sibling Simmo repo's Settings foot.
+        // Padded, unlike a bare Text row, so the tap target clears Android's
+        // 48dp minimum rather than sitting at the titleMedium text's own
+        // ~24dp height.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onOpenPrivacyPolicy),
+                .clickable(onClick = onOpenPrivacyPolicy)
+                .padding(vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
