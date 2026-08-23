@@ -822,7 +822,15 @@ class MainActivity : ComponentActivity() {
         // instance. Re-reads the pin rather than trusting a captured value,
         // so it is correct regardless of which instance's tap triggered it.
         crashPinWatch = DebugLogging.watchCrashPinOutcome {
-            DebugLogging.hasPinnedCrash { pinned -> runOnUiThread { crashPending = pinned } }
+            // A failed check (checkSucceeded = false) is left alone rather
+            // than applied as `false`: the metadata read itself threw, so
+            // there is no fresh answer to show, and treating "couldn't
+            // check" the same as "nothing pinned" would silently hide a
+            // crash still genuinely sitting there (Codex, PR #89). Already
+            // logged where the read actually failed.
+            DebugLogging.hasPinnedCrash { pinned, checkSucceeded ->
+                if (checkSucceeded) runOnUiThread { crashPending = pinned }
+            }
             runOnUiThread { debugLogCleanupFailed = DebugLogging.lastDisableCleanupFailed }
         }
         // Same immediate-sync reason as shareFailed just below: a disable's
@@ -960,8 +968,28 @@ class MainActivity : ComponentActivity() {
                 // the debug-log worker, not a cache hit off an
                 // already-loaded preferences file. See `crashPending`'s own
                 // comment for why once, here, is enough.
-                DebugLogging.hasPinnedCrash { pinned ->
-                    runOnUiThread { crashPending = pinned }
+                // See crashPinWatch's own comment: a failed check is left
+                // alone rather than downgraded to "nothing pinned". This is
+                // the only read that ever runs for a fresh cold start,
+                // though — nothing else re-checks until a Share/Dismiss/
+                // settings-toggle outcome fires crashPinWatch — so leaving
+                // it alone here would leave crashPending stuck at its
+                // default false for this process's whole lifetime,
+                // indistinguishable from a confirmed absence (Codex,
+                // PR #89). One immediate retry is enough for the failure
+                // this actually guards against: a momentary metadata-access
+                // hiccup, not a persistent condition; a second consecutive
+                // failure is already logged at the file layer and left as
+                // the only case this can't self-heal without waiting for
+                // the app's next launch.
+                DebugLogging.hasPinnedCrash { pinned, checkSucceeded ->
+                    if (checkSucceeded) {
+                        runOnUiThread { crashPending = pinned }
+                    } else {
+                        DebugLogging.hasPinnedCrash { retryPinned, retrySucceeded ->
+                            if (retrySucceeded) runOnUiThread { crashPending = retryPinned }
+                        }
+                    }
                 }
             }
         }

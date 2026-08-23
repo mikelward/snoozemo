@@ -109,16 +109,27 @@ class DebugLoggingTest {
     // --- the crash-pin pass-throughs (TODO.md Phase 5, docs/DEBUG.md) ---
 
     @Test
-    fun `hasPinnedCrash is false before install`() {
+    fun `hasPinnedCrash before install reports a failed check, not confirmed absence`() {
+        // A crash.log from a previous run exists independently of whether
+        // install() has finished in this process, so a missing sink can
+        // never confirm "nothing pinned" — only "not checked yet",
+        // indistinguishable from install() itself having failed and left
+        // sink permanently null (Codex, PR #89, fresh evidence after the
+        // hasPinnedCrash checkSucceeded fix).
         var pinned: Boolean? = null
-        DebugLogging.hasPinnedCrash { pinned = it }
+        var checkSucceeded: Boolean? = null
+        DebugLogging.hasPinnedCrash { p, c -> pinned = p; checkSucceeded = c }
         DebugLogging.awaitIdleForTest()
 
         assertEquals(false, pinned)
+        assertEquals(false, checkSucceeded)
     }
 
     @Test
-    fun `readPreviousOrCrash reads nothing before install`() {
+    fun `readPreviousOrCrash before install reports a failed read, not a clean empty one`() {
+        // Same reasoning as hasPinnedCrash above: a pinned crash from a
+        // previous run cannot be told apart from "genuinely nothing to
+        // report" if this process never got as far as checking.
         var text: String? = "not yet read"
         var wasCrash: Boolean? = null
         var readSucceeded: Boolean? = null
@@ -127,9 +138,7 @@ class DebugLoggingTest {
 
         assertEquals(null, text)
         assertEquals(false, wasCrash)
-        // Nothing before install has run means there is nothing pinned to
-        // miss — reported as a successful (empty) read, not a failed one.
-        assertEquals(true, readSucceeded)
+        assertEquals(false, readSucceeded)
     }
 
     @Test
@@ -238,7 +247,7 @@ class DebugLoggingTest {
 
         var pinned: Boolean? = null
         val watch = DebugLogging.watchCrashPinOutcome {
-            DebugLogging.hasPinnedCrash { pinned = it }
+            DebugLogging.hasPinnedCrash { p, _ -> pinned = p }
         }
 
         try {

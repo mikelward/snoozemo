@@ -376,13 +376,28 @@ internal class DebugFileSink internal constructor(
     /**
      * Whether a crashed run is currently pinned, holding the `previous` slot
      * (SPEC.md §4.6) — what the post-crash banner shows on.
+     *
+     * [checkSucceeded] is false only when the metadata check itself threw —
+     * never when there was simply nothing pinned. Collapsing that failure
+     * into a plain `false` read exactly like an honestly-absent pin (Codex,
+     * PR #89): the banner would then silently hide a crash that is still
+     * genuinely sitting there, unread, with nothing telling the user it
+     * could not be checked. A caller that gets `checkSucceeded = false`
+     * must leave whatever it already believed alone, not downgrade it.
      */
-    fun hasPinnedCrash(onResult: (Boolean) -> Unit) {
+    fun hasPinnedCrash(onResult: (pinned: Boolean, checkSucceeded: Boolean) -> Unit) {
         runCatching {
             worker.execute {
-                onResult(runCatching { crash.exists() }.getOrDefault(false))
+                val exists = runCatching { crash.exists() }
+                    .onFailure { runCatching { Log.w(TAG, "Checking for a pinned crash failed.", it) } }
+                    .getOrNull()
+                if (exists == null) {
+                    onResult(false, false)
+                } else {
+                    onResult(exists, true)
+                }
             }
-        }.onFailure { onResult(false) }
+        }.onFailure { onResult(false, false) }
     }
 
     /**
@@ -403,8 +418,31 @@ internal class DebugFileSink internal constructor(
     fun readPreviousOrCrash(onResult: (text: String?, wasCrash: Boolean, readSucceeded: Boolean) -> Unit) {
         runCatching {
             worker.execute {
-                val (file, wasCrash) = if (crash.exists()) crash to true else previous to false
-                val fileExists = runCatching { file.exists() }.getOrDefault(false)
+                val pinned = runCatching { crash.exists() }
+                    .onFailure { runCatching { Log.w(TAG, "Checking for a pinned crash failed.", it) } }
+                    .getOrNull()
+                if (pinned == null) {
+                    // An exception here would otherwise escape this
+                    // Runnable entirely, on the worker thread, never
+                    // reaching onResult — every caller would then wait out
+                    // its own timeout and log a misleading "timed out"
+                    // instead of the real storage failure (Codex, PR #89).
+                    onResult(null, false, false)
+                    return@execute
+                }
+                val (file, wasCrash) = if (pinned) crash to true else previous to false
+                val fileExists = runCatching { file.exists() }
+                    .onFailure { runCatching { Log.w(TAG, "Checking for the previous run's debug log failed.", it) } }
+                    .getOrNull()
+                if (fileExists == null) {
+                    // Same escape the crash-pin check above already guards
+                    // against: an unlogged getOrDefault(false) here would
+                    // read identically to a genuinely absent file, and
+                    // readSucceeded would then compute true — reporting a
+                    // failed check as a clean empty read (Codex, PR #89).
+                    onResult(null, wasCrash, false)
+                    return@execute
+                }
                 val text = if (fileExists) {
                     runCatching { file.readText() }
                         .onFailure { runCatching { Log.w(TAG, "Reading the previous run's debug log failed.", it) } }
@@ -450,7 +488,15 @@ internal class DebugFileSink internal constructor(
                         // PR #89). This reads the delete's own result.
                         crash.delete()
                     }
-                }.getOrDefault(false)
+                }
+                    // The three ops above can each throw (a full disk, a
+                    // permission change mid-write), and an unguarded
+                    // `getOrDefault` discarded that exception the same way
+                    // it discards an honest `false` from the delete's own
+                    // result above — losing exactly the diagnostic a
+                    // storage failure needs (Codex, PR #89).
+                    .onFailure { runCatching { Log.w(TAG, "Consuming the crash pin threw.", it) } }
+                    .getOrDefault(false)
                 if (!consumed) {
                     runCatching { Log.w(TAG, "Could not consume the crash pin; it stays pinned for a retry.") }
                 }
@@ -766,26 +812,37 @@ internal object DebugLogging {
     }.getOrDefault("unknown")
 
     /**
-     * Whether a crashed run is currently pinned (SPEC.md §4.6) — false, safely,
-     * before [install] has run: there is nothing to be pinned yet.
+     * Whether a crashed run is currently pinned (SPEC.md §4.6). See
+     * [DebugFileSink.hasPinnedCrash] for [checkSucceeded] — no [sink] yet
+     * reports a failed check too, the same as that check throwing: a
+     * crash.log from a previous run exists independently of whether
+     * [install] has finished in *this* process, so a missing sink is never
+     * confirmed absence, only "not checked yet" — indistinguishable, until
+     * now, from a genuine installation failure that leaves [sink] null
+     * forever (Codex, PR #89). The ordinary startup race (a read landing
+     * before [install]'s own worker task has finished) self-heals through
+     * the same retry [MainActivity] already applies to any other failed
+     * check.
      */
-    fun hasPinnedCrash(onResult: (Boolean) -> Unit) {
+    fun hasPinnedCrash(onResult: (pinned: Boolean, checkSucceeded: Boolean) -> Unit) {
         runCatching {
             worker.execute {
-                sink?.hasPinnedCrash(onResult) ?: onResult(false)
+                sink?.hasPinnedCrash(onResult) ?: onResult(false, false)
             }
-        }.onFailure { onResult(false) }
+        }.onFailure { onResult(false, false) }
     }
 
     /**
-     * See [DebugFileSink.readPreviousOrCrash]. Nothing before [install] has
-     * run, so there is nothing pinned to miss — reported as a successful
-     * (empty) read, not a failed one.
+     * See [DebugFileSink.readPreviousOrCrash] and [hasPinnedCrash]'s own
+     * comment on why a missing [sink] reports a failed read, not a clean
+     * empty one (Codex, PR #89): a pinned crash from a previous run cannot
+     * be told apart from "genuinely nothing to report" if this process
+     * never got as far as checking.
      */
     fun readPreviousOrCrash(onResult: (text: String?, wasCrash: Boolean, readSucceeded: Boolean) -> Unit) {
         runCatching {
             worker.execute {
-                sink?.readPreviousOrCrash(onResult) ?: onResult(null, false, true)
+                sink?.readPreviousOrCrash(onResult) ?: onResult(null, false, false)
             }
         }.onFailure { onResult(null, false, false) }
     }
