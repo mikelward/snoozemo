@@ -1257,16 +1257,20 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Three findings from
-      Codex's review of PR #89 landed in the same PR: a config change mid-Share/Dismiss could
-      strand the outcome on the now-dead activity instance — fixed with
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Four rounds of
+      findings from Codex's review of PR #89 landed in the same PR: a config change mid-Share/
+      Dismiss could strand the outcome on the now-dead activity instance — fixed with
       `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
       `watchSaveOutcome`'s existing single-slot, re-read-the-truth shape; `crashPending` was being
       cleared from a landed clipboard copy alone rather than the pin's actual consumption result —
-      fixed by routing through the watch above instead; and `consumeCrashPin`'s copy+delete
+      fixed by routing through the watch above instead; `consumeCrashPin`'s copy+delete
       fallback read `runCatching{}.isSuccess` instead of `delete()`'s own return, so a refused
       delete after a successful copy read as consumed while `crash.log` was still on disk — fixed
-      to read the delete's own boolean.
+      to read the delete's own boolean; and a landed clipboard copy could still consume the pin
+      even when the previous-run read that would have included the crash in the shared text had
+      timed out — fixed with `DebugReport.Payload.pinConsumeSafe`, which `collectPayload` sets to
+      `false` on a timed-out read and `share()` now requires alongside a landed copy before
+      consuming the pin.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
