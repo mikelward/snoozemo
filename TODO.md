@@ -1257,7 +1257,7 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty-six rounds of
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty-seven rounds of
       Codex findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
@@ -1493,7 +1493,21 @@ the point is that every other line of the app is worthless if it isn't true.
       copy genuinely landed, so the share genuinely succeeded, and the file-layer refusal is not
       silent — `crashPending` is re-read (via `watchCrashPinOutcome`, unconditional since round
       26) immediately after, so the banner stays visibly on screen with its own retry affordance
-      rather than a distinct message. Replied with the reasoning and resolved.
+      rather than a distinct message. Replied with the reasoning and resolved. One more, round
+      twenty-seven: `deliveriesCompleted`/`lastDeliveryResult` were recorded only *after* the
+      pin-consume wait finished, inside the same `deliveryLock` critical section as the wait
+      itself — so a retry tapped once an earlier attempt's clipboard write and chooser launch had
+      already both genuinely landed, with only the (up to two-second) pin cleanup left
+      outstanding, blocked on `deliveryLock` for that same duration before it could even see the
+      outcome waiting for it, reading as the retry silently doing nothing. Fixed by recording the
+      outcome and releasing `deliveryLock` before the pin-consume wait begins, so a share() call's
+      own synchronous wait on its own pin consume no longer holds up anyone else's read of
+      `deliveriesCompleted`. Covered by a new `DebugReportShareTest` case: attempt 1's own
+      clipboard/chooser calls resolve immediately but its `consumeCrashPin` blocks; attempt 2,
+      tapped only once attempt 1 reaches that blocked wait, must resolve within 500ms with its own
+      real clipboard write and chooser launch (correctly finding no overlap, since attempt 1 had
+      already fully delivered by the time attempt 2's ticket was drawn) rather than waiting out
+      attempt 1's still-open cleanup step.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
