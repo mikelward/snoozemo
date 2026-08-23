@@ -394,10 +394,19 @@ internal class DebugFileSink internal constructor(
                     // anyway while a pin holds the slot. Same fallback shape
                     // as `rotate()`'s own renames, for a filesystem that
                     // refuses cross-name renames.
-                    crash.renameTo(previous) || runCatching {
+                    if (crash.renameTo(previous)) {
+                        true
+                    } else {
                         crash.copyTo(previous, overwrite = true)
+                        // The copy landing is necessary but not sufficient:
+                        // `delete()` reports refusal by returning false, not
+                        // by throwing, so `.isSuccess` alone would call a
+                        // refused delete "consumed" while `crash.log` is
+                        // still sitting there — reappearing as pinned again
+                        // after a restart with nothing saying why (Codex,
+                        // PR #89). This reads the delete's own result.
                         crash.delete()
-                    }.isSuccess
+                    }
                 }.getOrDefault(false)
                 if (!consumed) {
                     runCatching { Log.w(TAG, "Could not consume the crash pin; it stays pinned for a retry.") }
@@ -625,13 +634,41 @@ internal object DebugLogging {
     }
 
     /**
+     * The current screen's ear for a completed [consumeCrashPin] — a direct
+     * Dismiss, or the one a landed `DebugReport.share` performs. Mirrors
+     * [watchSaveOutcome] and exists for the identical reason (flagged by
+     * Codex on PR #89): a configuration change can recreate the activity
+     * while the consuming call is still on this worker, and the completion
+     * callback that started it closes over the now-dead instance — updating
+     * it is invisible to the user. The replacement registers here before the
+     * old instance unregisters, so it is always the one that hears this.
+     *
+     * Deliberately carries no value: the observer re-reads [hasPinnedCrash]
+     * itself, so it always answers with the current truth regardless of
+     * which instance's tap triggered the completion, the same way
+     * [watchSaveOutcome]'s observer re-reads [DebugLogStore] rather than
+     * trusting a captured one.
+     */
+    fun watchCrashPinOutcome(onChange: () -> Unit): AutoCloseable {
+        onCrashPinOutcome = onChange
+        return AutoCloseable { if (onCrashPinOutcome === onChange) onCrashPinOutcome = null }
+    }
+
+    @Volatile
+    private var onCrashPinOutcome: (() -> Unit)? = null
+
+    /**
      * See [DebugFileSink.consumeCrashPin]. Reported as success before
      * [install] has run — there is nothing pinned to consume.
      */
     fun consumeCrashPin(onResult: (Boolean) -> Unit) {
         runCatching {
             worker.execute {
-                sink?.consumeCrashPin(onResult) ?: onResult(true)
+                val notifyAndReport: (Boolean) -> Unit = { consumed ->
+                    runCatching { onCrashPinOutcome?.invoke() }
+                    onResult(consumed)
+                }
+                sink?.consumeCrashPin(notifyAndReport) ?: notifyAndReport(true)
             }
         }.onFailure { onResult(false) }
     }
@@ -650,6 +687,7 @@ internal object DebugLogging {
     /** Test-only: forgets the installed sink so the next install runs fresh. */
     internal fun resetForTest() {
         onSaveOutcome = null
+        onCrashPinOutcome = null
         worker.submit {
             sink = null
             lastSaveRefused = false

@@ -148,4 +148,64 @@ class DebugReportShareTest {
 
         assertEquals(DebugReport.Result(clipboardCopied = true, reachedUser = true), result)
     }
+
+    // --- lastShareFailed / watchShareOutcome (Codex, PR #89: a config change
+    // must not strand the outcome on a dead activity's own closure) ---
+
+    @Test
+    fun `lastShareFailed reflects the most recently completed share`() {
+        DebugReport.share(
+            context,
+            payloadCollect = { "irrelevant" },
+            clipboardWrite = { _, _ -> false },
+            chooserLaunch = { _, _ -> false },
+            consumeCrashPin = {},
+        )
+        assertTrue(DebugReport.lastShareFailed)
+
+        DebugReport.share(
+            context,
+            payloadCollect = { "irrelevant" },
+            clipboardWrite = { _, _ -> true },
+            chooserLaunch = { _, _ -> true },
+            consumeCrashPin = {},
+        )
+        assertFalse("a later successful share supersedes the earlier failure", DebugReport.lastShareFailed)
+    }
+
+    @Test
+    fun `watchShareOutcome fires after a share completes, with the result already applied`() {
+        var heardFailed: Boolean? = null
+        val watch = DebugReport.watchShareOutcome { heardFailed = DebugReport.lastShareFailed }
+
+        try {
+            DebugReport.share(
+                context,
+                payloadCollect = { "irrelevant" },
+                clipboardWrite = { _, _ -> false },
+                chooserLaunch = { _, _ -> false },
+                consumeCrashPin = {},
+            )
+        } finally {
+            watch.close()
+        }
+
+        assertEquals(true, heardFailed)
+    }
+
+    @Test
+    fun `closing a watch stops it from hearing later shares`() {
+        var heard = 0
+        DebugReport.watchShareOutcome { heard++ }.close()
+
+        DebugReport.share(
+            context,
+            payloadCollect = { "irrelevant" },
+            clipboardWrite = { _, _ -> true },
+            chooserLaunch = { _, _ -> true },
+            consumeCrashPin = {},
+        )
+
+        assertEquals(0, heard)
+    }
 }

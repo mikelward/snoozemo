@@ -150,4 +150,69 @@ class DebugLoggingTest {
         // actually reached a `DebugFileSink`, not just the guard above it.
         assertEquals(true, consumed)
     }
+
+    // --- watchCrashPinOutcome (Codex, PR #89: a Share/Dismiss tap's own
+    // completion must not be the only way its result reaches the screen —
+    // a configuration change can hand the screen to a replacement instance
+    // first) ---
+
+    @Test
+    fun `watchCrashPinOutcome fires after consumeCrashPin completes, before install`() {
+        var fired = 0
+        val watch = DebugLogging.watchCrashPinOutcome { fired++ }
+
+        try {
+            DebugLogging.consumeCrashPin {}
+            DebugLogging.awaitIdleForTest()
+        } finally {
+            watch.close()
+        }
+
+        assertEquals(1, fired)
+    }
+
+    @Test
+    fun `watchCrashPinOutcome fires once a real sink's consume completes too`() {
+        DebugLogging.install(context)
+        var fired = 0
+        val watch = DebugLogging.watchCrashPinOutcome { fired++ }
+
+        try {
+            DebugLogging.consumeCrashPin {}
+            DebugLogging.awaitIdleForTest()
+        } finally {
+            watch.close()
+        }
+
+        assertEquals(1, fired)
+    }
+
+    @Test
+    fun `closing watchCrashPinOutcome stops it from hearing later completions`() {
+        var fired = 0
+        DebugLogging.watchCrashPinOutcome { fired++ }.close()
+
+        DebugLogging.consumeCrashPin {}
+        DebugLogging.awaitIdleForTest()
+
+        assertEquals(0, fired)
+    }
+
+    @Test
+    fun `a later watch registration replaces the earlier one, like watchSaveOutcome`() {
+        var firstHeard = 0
+        var secondHeard = 0
+        val first = DebugLogging.watchCrashPinOutcome { firstHeard++ }
+        // The replacement registers before the old instance's close runs —
+        // the same ordering `onStop` guarantees on a configuration change.
+        val second = DebugLogging.watchCrashPinOutcome { secondHeard++ }
+        first.close()
+
+        DebugLogging.consumeCrashPin {}
+        DebugLogging.awaitIdleForTest()
+        second.close()
+
+        assertEquals("the old instance's deferred close must not evict the replacement", 0, firstHeard)
+        assertEquals(1, secondHeard)
+    }
 }
