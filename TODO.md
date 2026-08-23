@@ -1332,7 +1332,16 @@ the point is that every other line of the app is worthless if it isn't true.
       `lastDismissFailed` before its own consume even starts; and `DebugLogging.lastDisableCleanupFailed`
       — which nothing had ever cleared, since only a disable ever wrote it — is now reset on a
       successful re-enable, so it can no longer resurface at a later restart under a switch that
-      has been back On for a while.
+      has been back On for a while. One more from that same round: the attempt ticket only ever
+      guarded `lastShareFailed`, never the delivery itself — a second tap while an earlier attempt
+      was still collecting its payload still started a second, unsynchronized delivery, so both
+      attempts could write the clipboard and open a chooser, unordered, letting a slower older
+      attempt overwrite a retry's report on the clipboard or open a second chooser after the user
+      had already seen the retry resolve — fixed by serializing delivery itself under a dedicated
+      lock, re-checking the ticket once that lock is actually held (not just at entry) so a
+      superseded attempt found stale only once it reaches the front of the queue skips delivery
+      entirely; kept as a separate lock from the one `nextAttempt()` uses, so issuing a ticket on
+      the tap thread never waits on a background attempt's binder/IPC work.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
