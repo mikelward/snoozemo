@@ -3,10 +3,13 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-      No INTERNET permission, deliberately and permanently (SPEC.md §12):
-      nothing can leave the device at all, which is what makes the Play Data
-      Safety answer "no data collected, no data shared" trivially auditable.
-      Adding it is a product decision, not an implementation detail.
+      No INTERNET permission today (SPEC.md §12): nothing can leave the
+      device, which is what makes the Play Data Safety answer "no data
+      collected, no data shared" trivially auditable. Not a permanent
+      constraint — Crashlytics or similar is expected later, gated by a
+      user-facing opt-out — but adding it is a product decision, not an
+      implementation detail, and the day it lands this comment and §12 both
+      need to say so.
     -->
 
     <!--
