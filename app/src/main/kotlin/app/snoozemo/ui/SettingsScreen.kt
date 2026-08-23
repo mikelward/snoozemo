@@ -46,14 +46,14 @@ fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(
-            text = stringResource(R.string.settings_screen_title),
+            text = stringResource(R.string.settings_title),
             style = MaterialTheme.typography.headlineMedium,
         )
         Button(
             onClick = onOpenPermissions,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(stringResource(R.string.permissions_screen_title))
+            Text(stringResource(R.string.permissions_title))
         }
         // Permanent, and null until the store has answered. Permanent because
         // it is what makes the tile banner's forever-dismissal on MainScreen

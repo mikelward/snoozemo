@@ -988,11 +988,11 @@ class MainActivity : ComponentActivity() {
                 return@Thread
             }
             val outcome = when (state) {
-                ZenRuleState.FAILED -> R.string.debug_rule_failed
+                ZenRuleState.FAILED -> R.string.rule_failed
                 // Switched off in Settings: the app cannot snooze and must say
                 // so rather than looking ready. Snoozemo does not re-enable it
                 // — that switch is the user's (SPEC.md §5.1).
-                ZenRuleState.DISABLED -> R.string.debug_rule_disabled
+                ZenRuleState.DISABLED -> R.string.rule_disabled
                 ZenRuleState.READY, ZenRuleState.MISSING_ACCESS -> {
                     // READY refutes a rule-status message an earlier check left
                     // standing — the user re-enabled the rule in Settings, and
@@ -1004,8 +1004,8 @@ class MainActivity : ComponentActivity() {
                     if (StaleRuleClaim.refutedBy(state)) {
                         runOnUiThread {
                             if (refresh != latestAccessRefresh) return@runOnUiThread
-                            if (lastOutcome == getString(R.string.debug_rule_disabled) ||
-                                lastOutcome == getString(R.string.debug_rule_failed)
+                            if (lastOutcome == getString(R.string.rule_disabled) ||
+                                lastOutcome == getString(R.string.rule_failed)
                             ) {
                                 lastOutcome = null
                             }

@@ -13,11 +13,11 @@
       PermissionsScreen (the interstitial) and SettingsScreen.
     -->
     <!-- TODO: translate -->
-    <string name="permissions_screen_title" tools:ignore="MissingTranslation">Permissions</string>
+    <string name="permissions_title" tools:ignore="MissingTranslation">Permissions</string>
     <!-- TODO: translate -->
     <string name="permissions_done" tools:ignore="MissingTranslation">Done</string>
     <!-- TODO: translate -->
-    <string name="settings_screen_title" tools:ignore="MissingTranslation">Settings</string>
+    <string name="settings_title" tools:ignore="MissingTranslation">Settings</string>
     <!--
       MainScreen's Do Not Disturb banner. Reuses `setup_dnd_missing` for the body
       and `setup_action_grant` for the button, so the wording matches the same
@@ -25,7 +25,7 @@
       does not need, is its own string.
     -->
     <!-- TODO: translate -->
-    <string name="main_dnd_banner_title" tools:ignore="MissingTranslation">Do Not Disturb access needed</string>
+    <string name="dnd_banner_title" tools:ignore="MissingTranslation">Do Not Disturb access needed</string>
     <!--
       The setup rows: a title, how the capability stands, and a button carrying
       the verb — but only while there is something left to do. A row whose
@@ -132,13 +132,13 @@
     <!-- TODO: translate -->
     <string name="failure_could_not_open_settings" tools:ignore="MissingTranslation">Couldn\'t open Settings</string>
     <!-- TODO: translate -->
-    <string name="debug_arm" tools:ignore="MissingTranslation">Snooze</string>
+    <string name="arm" tools:ignore="MissingTranslation">Snooze</string>
     <!-- TODO: translate -->
-    <string name="debug_release" tools:ignore="MissingTranslation">End snooze</string>
+    <string name="release" tools:ignore="MissingTranslation">End snooze</string>
     <!-- TODO: translate -->
-    <string name="debug_rule_failed" tools:ignore="MissingTranslation">Do Not Disturb access is on, but Snoozemo could not create its rule</string>
+    <string name="rule_failed" tools:ignore="MissingTranslation">Do Not Disturb access is on, but Snoozemo could not create its rule</string>
     <!-- TODO: translate -->
-    <string name="debug_rule_disabled" tools:ignore="MissingTranslation">Snoozemo\'s rule is switched off in Settings</string>
+    <string name="rule_disabled" tools:ignore="MissingTranslation">Snoozemo\'s rule is switched off in Settings</string>
 
     <!-- Ongoing notification and endings (SPEC.md §4.3, §4.5). -->
     <!-- TODO: translate -->

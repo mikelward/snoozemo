@@ -670,10 +670,15 @@ the point is that every other line of the app is worthless if it isn't true.
       `Granted` or `Allowed`, and Simmo has no permissions *settings* screen of its own to compare
       against, only its one-time onboarding flow. Deferred rather than guessed at; needs a real
       answer, not a coin flip between two similarly-defensible options.
-- [ ] **Rename `debug_arm`, `debug_release` and the other `debug_*` string IDs**
+- [x] **Rename `debug_arm`, `debug_release` and the other `debug_*` string IDs**
       (maintainer, 2026-08-22; narrowed 2026-08-23 now the composable rename above has landed).
-      Low-risk and mechanical, but its own PR rather than folded into unrelated work, per the
-      original note.
+      **Landed** (2026-08-23) as `arm`, `release`, `rule_failed`, `rule_disabled` — topic-named
+      rather than screen-prefixed (maintainer, 2026-08-23: naming a string after whichever
+      composable currently renders it is what produced `debug_*` outliving `DebugScreen` in the
+      first place). Swept the same fix over the screen split's own new strings while in here:
+      `permissions_screen_title` → `permissions_title`, `settings_screen_title` →
+      `settings_title`, `main_dnd_banner_title` → `dnd_banner_title` — the last one paired with
+      `tile_banner_title`, the sibling banner that already had this right.
 - [ ] The two rows (`until <time>` seeded at now + 1 h rounded to the half hour, and
       `until I leave`), with `−` / `+` in 30-minute steps, floored at 30 min from now and
       ceilinged at the 8 h backstop.
