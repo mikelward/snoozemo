@@ -1565,7 +1565,24 @@ the point is that every other line of the app is worthless if it isn't true.
       `boolLabel` helper. Origin/main moved during this round (an unrelated Play-update-banner PR
       touching the same shared UI files); rebased with three real conflicts resolved by hand
       (interleaved but non-overlapping additions each time) — full suite green throughout, and
-      Roborazzi's own screenshot comparisons would have caught any real merge mistake.
+      Roborazzi's own screenshot comparisons would have caught any real merge mistake. A
+      thirty-first round brought a real fifth: the vanished-file recheck's own `file.exists()`
+      call can itself throw, and `runCatching { ... }.getOrDefault(false)` discarded that
+      exception the same way it discarded an honest "still exists" `false`, leaving it unlogged
+      unlike every sibling check in the function — fixed by logging it before falling back;
+      behavior unchanged (a failed recheck still falls through to the retry-worthy path, correctly,
+      since it can't confirm the file is actually gone), purely closing the missing diagnostic. No
+      dedicated regression test: `File.exists()` doesn't throw under normal JVM I/O conditions
+      (only via a `SecurityManager`, unsupported cleanly on JDK 21's test harness), so there's no
+      practical way to force this specific branch. A separate finding on the same round was
+      **declined and flagged instead of fixed**: a *persistent* `DebugLogging.install()` failure
+      leaves `crashPending` at its compile-time `false` forever — the exact residual gap the
+      thirtieth round's own fix already named as accepted ("a persistent installation failure is
+      the one case left genuinely unable to self-heal"), and the fourth finding on the same
+      "boolean collapses a check-failure into confirmed absence" pattern (rounds 28, 30 ×2). Per
+      the standing "stop patching once findings on the same mechanism stop converging" guidance,
+      this one is recorded below under *Decisions needing review* instead of patched narrowly, and
+      the review thread was left open rather than resolved.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
