@@ -239,12 +239,15 @@ class EdgeToEdgeScreenshotTest {
             trackingMode = null,
             remaining = null,
             lastOutcome = null,
+            crashPending = false,
             onOpenPermissions = {},
             onOpenSettings = {},
             onAddTile = {},
             onDismissTileBanner = {},
             onArm = {},
             onRelease = {},
+            onShareDebugLog = {},
+            onDismissCrash = {},
         )
     }
 

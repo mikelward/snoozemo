@@ -1239,9 +1239,12 @@ the point is that every other line of the app is worthless if it isn't true.
       post-crash banner offering to share the crashed run or dismiss it. Only a crash raises the
       banner — an ordinary process death, force-stop, or app update leaves the run shareable without
       nagging. Sizing matters: the payload crosses a Binder transaction twice, and an over-large one
-      fails both silently, so bound it per section and in total. **Home is `SettingsScreen`**
-      (maintainer, 2026-08-23, once the screen split below landed) — beside the debug-log toggle
-      it already carries, not a new screen of its own. **Landed**: planned in `docs/DEBUG.md`
+      fails both silently, so bound it per section and in total. **The `Share debug logs` action's
+      home is `SettingsScreen`** (maintainer, 2026-08-23, once the screen split below landed) —
+      beside the debug-log toggle it already carries, not a new screen of its own. **The crash
+      banner's home is `MainScreen`** instead (maintainer, refined once the split above landed) —
+      the screen the user actually lands on, above even the Do-Not-Disturb-access banner, rather
+      than a screen only reached by navigating to Settings. **Landed**: planned in `docs/DEBUG.md`
       first (comparing the sibling Simmo/ClothesCast repos' own implementations, then narrowing —
       Snoozemo has no rules/settings dump to report, so the structured header is build/device/
       permission-and-capability state only), then built as `app/snooze/DebugReport.kt`
@@ -1253,8 +1256,17 @@ the point is that every other line of the app is worthless if it isn't true.
       proof of delivery `ACTION_SEND` itself can't provide — never on the chooser merely opening,
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
-      regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, and
-      `SettingsScreenScreenshotTest`.
+      regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Three findings from
+      Codex's review of PR #89 landed in the same PR: a config change mid-Share/Dismiss could
+      strand the outcome on the now-dead activity instance — fixed with
+      `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
+      `watchSaveOutcome`'s existing single-slot, re-read-the-truth shape; `crashPending` was being
+      cleared from a landed clipboard copy alone rather than the pin's actual consumption result —
+      fixed by routing through the watch above instead; and `consumeCrashPin`'s copy+delete
+      fallback read `runCatching{}.isSuccess` instead of `delete()`'s own return, so a refused
+      delete after a successful copy read as consumed while `crash.log` was still on disk — fixed
+      to read the delete's own boolean.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding

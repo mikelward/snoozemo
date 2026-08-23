@@ -644,10 +644,11 @@ correctly"; the position answers "where do you live", which no bug report needs.
 `docs/PRIVACY.md` describes what the log carries before it ships (AGENTS.md, *Privacy*).
 
 **A crashed run says so, and survives rotation.** When a previous run ended in an
-uncaught exception, the app's own screen raises a banner offering to share that run or dismiss it,
-rather than relying on the user to remember a Settings action. Only a crash raises it — an ordinary
-process death, a force-stop, or an app update does not, since those runs' logs stay shareable
-without nagging.
+uncaught exception, `MainScreen` — the screen the user actually lands on, above even the
+Do-Not-Disturb-access banner — raises a banner offering to share that run or dismiss it, rather
+than relying on the user to remember a Settings action (maintainer, 2026-08-23). Only a crash
+raises it — an ordinary process death, a force-stop, or an app update does not, since those runs'
+logs stay shareable without nagging.
 
 A crashed run is **pinned, not rotated**: the crash handler leaves a marker, the next start moves
 that run to a distinct crash-suffixed name, and ordinary rotation does not overwrite it. Without

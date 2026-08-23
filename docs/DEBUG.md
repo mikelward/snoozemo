@@ -16,8 +16,10 @@ The recording and persistence half is fully built and unchanged by this work:
 - `SettingsScreen` already carries the on/off switch (`DebugLogRow`).
 
 None of that reads its own files back out. This plan is entirely about the *reading* and
-*sharing* half: a `Share debug logs` action and a post-crash banner, both living on
-`SettingsScreen` (maintainer, 2026-08-23 — not a new screen).
+*sharing* half: a `Share debug logs` action on `SettingsScreen` (maintainer, 2026-08-23 — not a
+new screen) and a post-crash banner on `MainScreen` — the screen the user actually lands on,
+above even the Do-Not-Disturb-access banner (maintainer, refined during implementation), rather
+than a screen reached only by navigating to Settings.
 
 ## What the sibling repos do
 
@@ -135,22 +137,35 @@ the one piece of crash evidence that explains a stuck or early-ended snooze).
 
 ### 5. UI
 
-- **`Share debug logs`** button on `SettingsScreen`, beside the existing `DebugLogRow`. A
-  failure line under it (both routes failed) follows the `debugLogSaveFailed` row's own
-  shape — inside the row, not a `Toast`, not appended below the scrolling column.
-- **Crash banner** at the top of `SettingsScreen`, shown only while `hasPinnedCrash()` is
-  true — modeled on ClothesCast's `LastCrashBannerCard`: title, body, `Dismiss` (text
-  button, consumes the pin without sharing) and `Share` (filled button, shares — which
-  itself consumes the pin only on a landed clipboard copy, so a failed share leaves the
-  banner up for a retry rather than silently dropping the crash).
+- **`Share debug logs`** row on `SettingsScreen`, beside the existing `DebugLogRow` — reuses
+  `SetupRow`'s shape (title, status, a verb button) even though sharing is repeatable rather
+  than a capability to fix once, so its action never drops away. A failure line under it
+  (both routes failed) follows the `debugLogSaveFailed` row's own shape — inside the row, not
+  a `Toast`, not appended below the scrolling column.
+- **Crash banner** on `MainScreen`, above even the Do-Not-Disturb-access banner, shown only
+  while `hasPinnedCrash()` is true — modeled on ClothesCast's `LastCrashBannerCard`: title,
+  body, `Dismiss` (text button, consumes the pin without sharing) and `Share` (filled button,
+  shares — which itself consumes the pin only on a landed clipboard copy, so a failed share
+  leaves the banner up for a retry rather than silently dropping the crash). `MainScreen`
+  rather than `SettingsScreen`, refined during implementation (maintainer): it is the screen
+  the user actually lands on, and a crash is exactly the thing that should not wait for a
+  navigation to Settings to be seen. The `Share debug logs` row's own home is unaffected.
 - Read once, at the first frame after this activity's own (re)start — see "No cross-process
-  crash polling" above. No `onStart` re-poll is needed: nothing outside this activity's own
-  Dismiss/Share taps can change the pin while it is alive.
+  crash polling" above. **A completed Share or Dismiss does not write the screen's state
+  directly from its own completion callback** — a configuration change can recreate the
+  activity while the call is still in flight, and that closure would then update a dead
+  instance invisibly to the user (Codex, PR #89). Instead `DebugLogging.watchCrashPinOutcome`
+  and `DebugReport.watchShareOutcome` mirror `DebugLogging.watchSaveOutcome`'s existing
+  shape exactly: a single-slot, process-level callback that any live instance can register
+  for in `onStart`/unregister in `onStop`, fired after the operation completes, which the
+  observer answers by re-reading the current truth rather than trusting a captured value.
 
 ### 6. Tests
 
 - `DebugFileSinkTest` — the three new read/consume methods: rename semantics, the copy+delete
-  fallback, idempotency of `consumeCrashPin` when the file is already gone.
+  fallback (crucially reading `crash.delete()`'s own return, not `runCatching{}.isSuccess`,
+  which reads true on a refused delete that threw nothing — Codex, PR #89), idempotency of
+  `consumeCrashPin` when the file is already gone.
 - A payload-builder test (mirrors Simmo's `buildDebugReportPayload` / ClothesCast's
   `buildBugReportPayload`) — pure function, unit-tested for section assembly and truncation.
 - A share-flow test (mirrors `DebugReportShareTest` / `BugReportShareTest`) — the four
@@ -160,8 +175,12 @@ the one piece of crash evidence that explains a stuck or early-ended snooze).
   ("as a hard rule with its own automated test"): the built payload never contains a raw
   coordinate, a full SSID/BSSID, or a user-typed place name, exercised against a log/state
   containing genuinely realistic-looking fixture values for all three.
-- `SettingsScreenScreenshotTest` gains cases for the crash banner (present/absent) and the
-  share row's failure state.
+- Coverage for the two outcome watches themselves: fires after completion, closing stops it
+  from hearing later completions, and a later registration doesn't get evicted by an earlier
+  instance's deferred close — the same three properties `DebugLoggingTest` already pins for
+  `watchSaveOutcome`.
+- `MainScreenScreenshotTest` gains cases for the crash banner (present/absent);
+  `SettingsScreenScreenshotTest` gains one for the share row's failure state.
 
 ### 7. Docs that must land in the same PR as the feature
 
@@ -173,6 +192,6 @@ the one piece of crash evidence that explains a stuck or early-ended snooze).
   hidden-vs-disabled question) under `Decisions needing review` if it isn't resolved by the
   time that PR lands.
 
-`SPEC.md` §4.6 already describes the target behavior in full (on-by-default, share sheet +
-clipboard fallback, the crash pin, "home is SettingsScreen") — no changes expected there
-unless the implementation deviates from what it already says.
+`SPEC.md` §4.6 already describes most of the target behavior (on-by-default, share sheet +
+clipboard fallback, the crash pin) — it now also names `MainScreen` as the banner's home,
+added once that was refined during implementation.
