@@ -1621,20 +1621,25 @@ the point is that every other line of the app is worthless if it isn't true.
       way a failed one already does. Two existing mid-delivery tests were also corrected — they
       used `pinConsumeSafe = false` for the delivery they expected to be *reused*, which no longer
       qualifies.
-- [ ] **Simplify `DebugReport.share()`'s concurrency by coalescing at the tap** (flagged
-      2026-08-23, after PR #89's review). Twelve of that PR's forty-nine findings (10, 11, 12, 21,
-      27, 29, 30, 32, 40, 46, 49) are all in this one function's concurrency, and each fix has
-      added another field or condition to the same mechanism: `attemptTicket`,
-      `deliveriesCompleted`, `lastDeliveryResult`, `lastDeliveryPinConsumeSafe`, a
+- [x] **Simplified `DebugReport.share()`'s concurrency by coalescing at the tap** (maintainer,
+      2026-08-23, in PR #89 itself rather than a follow-up). Twelve of that PR's forty-nine
+      findings (10, 11, 12, 21, 27, 29, 30, 32, 40, 46, 49) were all in this one function's
+      concurrency, and each fix had added another field or condition to the same mechanism:
+      `attemptTicket`, `deliveriesCompleted`, `lastDeliveryResult`, `lastDeliveryPinConsumeSafe`, a
       `deliveriesAtIssue` map, and two locks — all to answer one question, *what happens when the
-      user taps Share twice quickly*. **The proposal**: gate the Share affordance while a share is
-      in flight (disable or debounce it), so a second tap can't happen at all. That deletes the
-      entire overlapping-delivery reuse branch and four of those fields, since the machinery
-      exists only to retroactively decide that a second tap was a duplicate — the hard part, and
-      the part the user can't see. It is also better feedback: a disabled button that says
-      *sharing…* beats a tap that silently resolves into another attempt's outcome. **The cost**:
-      a real design change to a mechanism that is currently green and well covered, so it belongs
-      in its own PR rather than as more churn on #89. Reversible: the reuse branch is one block.
+      user taps Share twice quickly*. **Landed**: `DebugReport.shareInFlight`, raised
+      synchronously by `nextAttempt()` on the tap thread and cleared when that attempt's outcome
+      lands, with both Share affordances (the Settings row and the crash banner's button) disabled
+      on it and reading *Sharing…* while it holds. The second concurrent tap can no longer be made,
+      so `deliveriesCompleted`, `lastDeliveryResult`, `lastDeliveryPinConsumeSafe`, the
+      `deliveriesAtIssue` map and the whole overlapping-delivery reuse branch are gone — a net
+      ~250 lines removed across the class and its tests. `deliveryLock` and the ticket check stay
+      as the floor beneath the gate, since gating is a UI contract and the function must still
+      behave if a future caller doesn't honor it. The flag is process-level for the same reason
+      the ticket is: a configuration change mid-share must not hand the replacement instance a
+      re-enabled button for a share still running. It clears before the pin-consume wait, not
+      after, for the same reason the outcome always did (round 27) — holding the button disabled
+      through up to two seconds of cleanup would read as the app doing nothing.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
