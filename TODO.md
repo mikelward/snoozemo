@@ -1118,6 +1118,31 @@ that can only be settled on a real device, ordered by risk.
 Nothing here is scheduled; each is a sequel that follows from something already built
 (`SPEC.md` §14).
 
+- [ ] **Adopt `mikelward/ci-commit-artifact` for the screenshot-refresh commit.** (maintainer,
+      2026-08-23) Today the `screenshot-tests` job in `android-ci.yml` runs the PR's own
+      Gradle/Roborazzi code (untrusted) and then, in that *same* job, commits and pushes
+      the refreshed PNGs and dispatches a re-run — the exact structural risk
+      `ci-commit-artifact`'s README describes (PR-controlled code that ran earlier in a job
+      can plant a hook or rewrite git config before a later step's push, regardless of that
+      step's own care). `ci-commit-artifact` fixes this by moving the commit/push into a
+      separate reusable job (`commit-artifact.yml`) that never executes anything from the
+      PR — it only downloads the already-rendered artifact and pushes it.
+      - It also solves the loop-prevention problem this repo currently works around with
+        `workflow_dispatch` (the `pr`-input dance described atop `android-ci.yml`, lines
+        27–45): passing a `push-token` secret (a fine-grained PAT, repo-secret convention
+        name `CI_COMMIT_ARTIFACT_TOKEN` across the fleet) authenticates the push as a real
+        identity instead of `GITHUB_TOKEN`, so the push itself retriggers `pull_request`
+        naturally — no `workflow_dispatch` round-trip needed. Check whether that PAT should
+        run as the maintainer, a bot collaborator account, or a GitHub App installation
+        token — whichever is allowlisted to trigger required checks on this repo — and
+        whether `dispatch-workflow` (still safe for our plain `pull_request` trigger per
+        that secret's own description) is simpler to keep for now than adding a new secret.
+      - Not investigated yet: whether `ci-commit-artifact`'s single-artifact-directory
+        model (`artifact-name` → `dest-path`) maps cleanly onto
+        `app/src/test/snapshots/images/`, and what changes downstream (the "Commit
+        refreshed screenshots" and "Post screenshot diffs as a PR comment" steps currently
+        assume the push happens in-job, before the diff-comment step runs in the same job).
+
 - [ ] **Screenshot job: surface a missing `--tests` class clearly instead of Gradle's raw
       output.** (maintainer, 2026-08-23) When a screenshot job step's `--tests` filter
       matches no class — branch behind `main`, a renamed test, a step added without its
