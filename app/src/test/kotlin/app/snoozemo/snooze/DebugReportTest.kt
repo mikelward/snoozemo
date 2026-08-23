@@ -61,6 +61,53 @@ class DebugReportTest {
         assertTrue(requiredAndDenied.contains("Location (background): denied"))
     }
 
+    /**
+     * A capability check that itself threw (a transient system-service
+     * failure) used to substitute `false`, so the report said "denied" —
+     * indistinguishable from a genuine, confirmed denial — even though the
+     * report's recipient has no way to see the logcat line recording the
+     * real cause. This is the report's whole reason to exist: a state that
+     * couldn't be determined must not read the same as a state that was
+     * (Codex, PR #89).
+     */
+    @Test
+    fun `a capability check that itself failed reads as unknown, not a confirmed denial`() {
+        val payload = payload(
+            policyAccessGranted = null,
+            notificationsGranted = null,
+            locationFineGranted = null,
+            locationCoarseGranted = null,
+            locationBackgroundGranted = null,
+            locationServicesEnabled = null,
+            batterySaverOn = null,
+            tileAdded = null,
+        )
+
+        assertTrue(payload.contains("Do Not Disturb access: unknown"))
+        assertTrue(payload.contains("Notifications: unknown"))
+        assertTrue(payload.contains("Location (foreground): unknown"))
+        assertTrue(payload.contains("Location (background): unknown"))
+        assertTrue(payload.contains("Location services on: unknown"))
+        assertTrue(payload.contains("Battery saver on: unknown"))
+        assertTrue(payload.contains("Quick Settings tile added: unknown"))
+    }
+
+    @Test
+    fun `an unknown foreground-location fine check still reports a real coarse grant`() {
+        // Only a genuinely confirmed grant should read as granted — one
+        // failed check among the pair must not silently fall through to
+        // "denied" just because the other happened to succeed and be true.
+        // A failed fine check alongside a confirmed coarse grant must not
+        // read as "coarse only" either — that label asserts fine is
+        // confirmed absent, which a failed check never confirmed (Codex,
+        // PR #89, fresh evidence).
+        val fineUnknown = payload(locationFineGranted = null, locationCoarseGranted = true)
+        assertTrue(fineUnknown.contains("Location (foreground): granted (coarse); fine check failed"))
+
+        val bothUnknown = payload(locationFineGranted = null, locationCoarseGranted = null)
+        assertTrue(bothUnknown.contains("Location (foreground): unknown"))
+    }
+
     @Test
     fun `omits the previous-run section when there is nothing to show`() {
         val payload = payload(previousRun = null)
@@ -215,15 +262,15 @@ class DebugReportTest {
         androidRelease: String = "16",
         androidSdkInt: Int = 36,
         locale: Locale = Locale.US,
-        policyAccessGranted: Boolean = true,
-        notificationsGranted: Boolean = true,
-        locationFineGranted: Boolean = true,
-        locationCoarseGranted: Boolean = true,
-        locationBackgroundGranted: Boolean = true,
+        policyAccessGranted: Boolean? = true,
+        notificationsGranted: Boolean? = true,
+        locationFineGranted: Boolean? = true,
+        locationCoarseGranted: Boolean? = true,
+        locationBackgroundGranted: Boolean? = true,
         locationBackgroundRequired: Boolean = true,
-        locationServicesEnabled: Boolean = true,
-        batterySaverOn: Boolean = false,
-        tileAdded: Boolean = true,
+        locationServicesEnabled: Boolean? = true,
+        batterySaverOn: Boolean? = false,
+        tileAdded: Boolean? = true,
         previousRun: String? = null,
         previousRunCrashed: Boolean = false,
         previousRunOmitted: Boolean = false,
