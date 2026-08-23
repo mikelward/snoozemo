@@ -42,6 +42,8 @@ internal fun SettingsScreen(
     // meaningful alongside a `Downloaded` [playUpdate] — see that field's
     // own comment on `MainActivity`.
     playUpdateRestartFailed: Boolean = false,
+    crashPending: Boolean,
+    shareFailed: Boolean,
     onOpenPermissions: () -> Unit,
     onTileRow: () -> Unit,
     onFiltersRow: () -> Unit,
@@ -49,6 +51,8 @@ internal fun SettingsScreen(
     onStartPlayUpdate: () -> Unit = {},
     onCompletePlayUpdate: () -> Unit = {},
     onDismissPlayUpdate: () -> Unit = {},
+    onShareDebugLog: () -> Unit,
+    onDismissCrash: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -63,10 +67,15 @@ internal fun SettingsScreen(
             text = stringResource(R.string.settings_title),
             style = MaterialTheme.typography.headlineMedium,
         )
-        // Above the permanent rows, the same "most urgent thing first" order
-        // the sibling Simmo repo's own banner follows: there is something to
-        // act on here, where the rows below mostly just state what already
-        // holds.
+        // First, above everything else touched rarely: a crashed run is the
+        // one thing on this screen that needs acting on rather than merely
+        // being available (SPEC.md §4.6).
+        if (crashPending) {
+            CrashBanner(onShare = onShareDebugLog, onDismiss = onDismissCrash)
+        }
+        // Next, the same "most urgent thing first" order the sibling Simmo
+        // repo's own banner follows: there is something to act on here,
+        // where the rows below mostly just state what already holds.
         (playUpdate as? PlayUpdateState.Available)?.takeIf { it.shouldPrompt }?.let { update ->
             PlayUpdateBanner(
                 progress = update.progress,
@@ -128,5 +137,15 @@ internal fun SettingsScreen(
         debugLogEnabled?.let {
             DebugLogRow(enabled = it, saveFailed = debugLogSaveFailed, onChange = onDebugLog)
         }
+        // Always offered, unlike the rows above: there is no "done" state to
+        // reach — sharing is repeatable, not a capability to fix once — so
+        // SetupRow's action is always present rather than dropping away.
+        SetupRow(
+            title = stringResource(R.string.setup_debug_log_share_title),
+            status = stringResource(R.string.setup_debug_log_share_status),
+            action = stringResource(R.string.setup_debug_log_share_action),
+            onAction = onShareDebugLog,
+            failure = stringResource(R.string.setup_debug_log_share_failed).takeIf { shareFailed },
+        )
     }
 }

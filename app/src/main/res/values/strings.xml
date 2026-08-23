@@ -148,6 +148,35 @@
     <!-- TODO: translate -->
     <string name="play_update_banner_dismiss" tools:ignore="MissingTranslation">Dismiss</string>
     <!--
+      The debug log's share action (SPEC.md §4.6): the share sheet plus a
+      clipboard fallback, so a snooze that ended early or never ended can be
+      reported. Reuses SetupRow's shape — title, status, a verb button — even
+      though sharing is repeatable rather than a capability to fix once.
+    -->
+    <!-- TODO: translate -->
+    <string name="setup_debug_log_share_title" tools:ignore="MissingTranslation">Share debug logs</string>
+    <!-- TODO: translate -->
+    <string name="setup_debug_log_share_status" tools:ignore="MissingTranslation">Recent snooze activity, to help fix a bug</string>
+    <!-- TODO: translate -->
+    <string name="setup_debug_log_share_action" tools:ignore="MissingTranslation">Share</string>
+    <!-- TODO: translate -->
+    <string name="setup_debug_log_share_failed" tools:ignore="MissingTranslation">Couldn\'t share the debug log</string>
+    <!--
+      The post-crash banner (SPEC.md §4.6): shown on SettingsScreen only while
+      an uncaught-exception run is pinned. Share hands it to DebugReport, which
+      picks the pinned run up automatically; Dismiss consumes the pin without
+      sharing. Either way the pin is gone afterward — SPEC.md §4.6, "sharing
+      consumes the pin".
+    -->
+    <!-- TODO: translate -->
+    <string name="crash_banner_title" tools:ignore="MissingTranslation">Snoozemo crashed</string>
+    <!-- TODO: translate -->
+    <string name="crash_banner_body" tools:ignore="MissingTranslation">A debug log was saved on your device. Share it to help fix the bug? Nothing is sent until you choose where.</string>
+    <!-- TODO: translate -->
+    <string name="crash_banner_share" tools:ignore="MissingTranslation">Share</string>
+    <!-- TODO: translate -->
+    <string name="crash_banner_dismiss" tools:ignore="MissingTranslation">Dismiss</string>
+    <!--
       The tile banner. The app screen keeps its own snooze button, but the tile
       is the way in (SPEC.md §4.2) — easier, and where people already go to
       silence a phone — so the screen leads with it rather than listing it as
