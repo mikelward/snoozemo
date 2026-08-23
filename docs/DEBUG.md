@@ -1,0 +1,178 @@
+# Debug log sharing — implementation plan
+
+Planning doc for `TODO.md` Phase 5's "Sharing the debug log" item (`SPEC.md` §4.6). Docs
+only — no code in this PR. Written by copying the shape of the sibling repos' own
+implementations (Simmo's `DebugReport.kt`, ClothesCast's `diag/BugReport.kt` +
+`LastCrashBanner.kt`) and narrowing it to what Snoozemo's SPEC actually asks for.
+
+## What already exists (Phase 3)
+
+The recording and persistence half is fully built and unchanged by this work:
+
+- `core/SnoozeDebugLog` — the in-memory ring buffer (`snapshot()`), the privacy floor
+  (types-and-frames only, no raw coordinates/SSID/place names).
+- `app/snooze/DebugLogFiles.kt` — `DebugFileSink` (rotation, the crash pin, delete-on-off),
+  `DebugLogStore` (the on/off setting), `DebugLogging` (install + the settings-screen glue).
+- `SettingsScreen` already carries the on/off switch (`DebugLogRow`).
+
+None of that reads its own files back out. This plan is entirely about the *reading* and
+*sharing* half: a `Share debug logs` action and a post-crash banner, both living on
+`SettingsScreen` (maintainer, 2026-08-23 — not a new screen).
+
+## What the sibling repos do
+
+**Simmo (`DebugReport.kt`)**: builds a plain-text payload (build/device info, permission
+grants, a full settings/rules dump, the in-memory log, the previous run's log if it didn't
+exit cleanly), copies it to the clipboard, and fires `Intent.ACTION_SEND` through a chooser.
+Both routes are best-effort and independent; a failure notifies the user only if *neither*
+landed. The previous run's file is deleted only after the clipboard copy is confirmed —
+never on the chooser's say-so, since `ACTION_SEND` has no delivery callback. Injectable seams
+(`payloadCollect`, `clipboardWrite`, `chooserLaunch`) make every combination unit-testable
+without a real `Activity` or `ClipboardManager`.
+
+**ClothesCast (`diag/BugReport.kt` + `ui/today/LastCrashBanner.kt`)**: the same
+clipboard-then-chooser shape, plus a `LastCrashBannerCard` shown on the main screen when an
+unacknowledged crash file exists — `Share report` and `Dismiss`, both of which mark the
+crash acknowledged so the banner doesn't reappear. Crash state is a process-wide
+`StateFlow<Boolean>`, refreshed on `ON_RESUME` so a crash written by another process is
+picked up without a restart.
+
+Snoozemo takes the payload/delivery shape from both and the crash-banner shape from
+ClothesCast, but differs in two ways forced by its own architecture and SPEC:
+
+- **No settings/rules dump.** Simmo's payload is dominated by the user's rules; Snoozemo has
+  no equivalent structured state worth dumping — the log *is* the report. The structured
+  header shrinks to build/device/permissions only.
+- **No cross-process crash polling.** Snoozemo is single-process (`ZenRuleIdStore`'s own
+  comment notes no `android:process` anywhere), so ClothesCast's `ON_RESUME` re-check for a
+  crash written by a sibling process doesn't apply — a crash pin is read once, at the first
+  frame after this app's own (re)start, the same discipline every other `MainActivity` row
+  already follows.
+- **Callback-based, not `Flow`.** `:app` uses `Thread` + callback throughout (`MainActivity`,
+  `DebugLogging` itself) rather than coroutines/`StateFlow` — `kotlinx-coroutines-android` is
+  a dependency but is used in exactly one file (`SnoozeService`) today. New code follows the
+  established local convention rather than introducing a second concurrency style for one
+  feature.
+
+## What Snoozemo's version needs
+
+### 1. Reading `DebugFileSink`'s files
+
+New methods on `DebugFileSink`, all enqueued on its existing FIFO worker (never blocking the
+caller) and answering through a callback, the same shape `DebugLogging.setEnabled` already
+uses:
+
+- `hasPinnedCrash(onResult: (Boolean) -> Unit)` — `crash.exists()`.
+- `readPreviousOrCrash(onResult: (text: String?, wasCrash: Boolean) -> Unit)` — the pin holds
+  the `previous` slot (SPEC.md §4.6), so exactly one of `previous.log` / `crash.log` can be
+  present at a time; read whichever exists.
+- `consumeCrashPin(onResult: (Boolean) -> Unit)` — the rename that both Dismiss and a landed
+  Share perform: `crash.log` → `previous.log` (falling back to copy+delete, same as
+  `rotate()`'s own fallback), after which it is an ordinary previous run — shareable, and
+  rotated away like any other (SPEC.md §4.6, "the pin holds the previous slot"). Idempotent:
+  a `crash.log` that is already gone is a no-op, not a failure.
+
+`DebugLogging` gets thin pass-throughs (`hasPinnedCrash`, `readPreviousOrCrash`,
+`consumeCrashPin`) that no-op safely (`onResult` with the "nothing to report" answer) when no
+sink is installed yet — mirrors `DebugLogging.setEnabled`'s own "not installed" handling.
+
+### 2. Building the payload
+
+New file, `app/snooze/DebugReport.kt` (package-mate of `DebugLogFiles.kt` — needs
+`Context`/`Intent`/`ClipboardManager`, so it stays in `:app`, not `:core`).
+
+Sections, in order:
+
+1. **Header** — `Snoozemo debug log`, captured timestamp.
+2. **Build** — version name/code, build type, application id, debuggable.
+3. **Device** — manufacturer, model, Android release + SDK int, locale.
+4. **State** — DND policy access, notification permission, location permission (foreground
+   and background), whether location services are on system-wide, battery-saver state,
+   whether the tile has been added. Every one of these is a fact already in `SPEC.md`'s
+   correctness checklist ("no Wi-Fi, no location fix, permission revoked mid-snooze, ...")
+   and each is a plausible whole answer to "why didn't it end" (SPEC.md §4.6).
+5. **Previous run** — present only when `readPreviousOrCrash` found one; labeled `(ended in
+   an uncaught exception)` when `wasCrash` is true, otherwise unlabeled.
+6. **Recent log** — `SnoozeDebugLog.snapshot()`, newest-last, the same shape Simmo's
+   "Recent log" section uses.
+
+No settings/rules section — see above.
+
+### 3. Size bounds
+
+Same reasoning as both siblings: the payload crosses Binder twice (into the clipboard, then
+again in the chooser's `ACTION_SEND` extra), the per-process buffer is shared and ~1 MB, and
+strings parcel as UTF-16 (2 bytes/char). Proposed budgets, scaled down from Simmo's (which
+carries a full rule/SIM dump Snoozemo has no equivalent of) toward ClothesCast's smaller
+figures, since Snoozemo's structured section is closer to ClothesCast's build/device/permissions
+header than to Simmo's rule dump:
+
+| Section | Budget (chars) |
+|---|---|
+| Total (`MAX_SHARE_PAYLOAD_CHARS`) | 60,000 |
+| Structured header (build/device/state) | 4,000 |
+| Previous/crashed run | 25,000 |
+| Recent log | 30,000 |
+
+Numbers are a starting point for the implementation PR, not a commitment — they get pinned
+by that PR's own bounds test (mirroring `DebugReportBoundsTest` / `BugReportBoundsTest`),
+and can move if a real payload doesn't fit comfortably.
+
+### 4. Delivery
+
+`Intent.ACTION_SEND`, `type = "text/plain"`, `EXTRA_SUBJECT = "Snoozemo debug log —
+$versionName"`, `EXTRA_TEXT = <payload>`, wrapped in `Intent.createChooser`. Clipboard copy
+(`ClipData.newPlainText`) is attempted independently and always, not gated on the chooser.
+`Toast`/on-row failure text only when *both* fail to land — matching the `DebugLogRow`
+pattern already on this screen (a short message under the tapped control, not a `Toast`,
+since nothing else on this screen uses one).
+
+The crash pin is consumed **only when the clipboard copy is confirmed** — the durable proof
+of delivery, since `ACTION_SEND` has no send/selection callback and firing the chooser is not
+proof the user completed a share. A share whose clipboard copy failed leaves the crash file
+in place for a retry, per AGENTS.md principle 3 ("never lose the user's settings" extended to
+the one piece of crash evidence that explains a stuck or early-ended snooze).
+
+### 5. UI
+
+- **`Share debug logs`** button on `SettingsScreen`, beside the existing `DebugLogRow`. A
+  failure line under it (both routes failed) follows the `debugLogSaveFailed` row's own
+  shape — inside the row, not a `Toast`, not appended below the scrolling column.
+- **Crash banner** at the top of `SettingsScreen`, shown only while `hasPinnedCrash()` is
+  true — modeled on ClothesCast's `LastCrashBannerCard`: title, body, `Dismiss` (text
+  button, consumes the pin without sharing) and `Share` (filled button, shares — which
+  itself consumes the pin only on a landed clipboard copy, so a failed share leaves the
+  banner up for a retry rather than silently dropping the crash).
+- Read once, at the first frame after this activity's own (re)start — see "No cross-process
+  crash polling" above. No `onStart` re-poll is needed: nothing outside this activity's own
+  Dismiss/Share taps can change the pin while it is alive.
+
+### 6. Tests
+
+- `DebugFileSinkTest` — the three new read/consume methods: rename semantics, the copy+delete
+  fallback, idempotency of `consumeCrashPin` when the file is already gone.
+- A payload-builder test (mirrors Simmo's `buildDebugReportPayload` / ClothesCast's
+  `buildBugReportPayload`) — pure function, unit-tested for section assembly and truncation.
+- A share-flow test (mirrors `DebugReportShareTest` / `BugReportShareTest`) — the four
+  clipboard×chooser outcome combinations, and that the pin is consumed on and only on a
+  landed clipboard copy.
+- A **floor test**, called out explicitly because `docs/PRIVACY.md` already promises one
+  ("as a hard rule with its own automated test"): the built payload never contains a raw
+  coordinate, a full SSID/BSSID, or a user-typed place name, exercised against a log/state
+  containing genuinely realistic-looking fixture values for all three.
+- `SettingsScreenScreenshotTest` gains cases for the crash banner (present/absent) and the
+  share row's failure state.
+
+### 7. Docs that must land in the same PR as the feature
+
+- `docs/PRIVACY.md`'s "The debug log" section currently says "there is currently no sharing
+  feature" (written when the log was recording-only) — it must describe the real feature
+  before the code ships (`TODO.md`'s own item, AGENTS.md *Project documentation*: "before the
+  sharing surface ships... is the rule, not a preference").
+- `TODO.md` — check the item off; log any autopilot guess (the exact size budgets above, the
+  hidden-vs-disabled question) under `Decisions needing review` if it isn't resolved by the
+  time that PR lands.
+
+`SPEC.md` §4.6 already describes the target behavior in full (on-by-default, share sheet +
+clipboard fallback, the crash pin, "home is SettingsScreen") — no changes expected there
+unless the implementation deviates from what it already says.
