@@ -1257,20 +1257,28 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Four rounds of
-      findings from Codex's review of PR #89 landed in the same PR: a config change mid-Share/
-      Dismiss could strand the outcome on the now-dead activity instance — fixed with
-      `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
-      `watchSaveOutcome`'s existing single-slot, re-read-the-truth shape; `crashPending` was being
-      cleared from a landed clipboard copy alone rather than the pin's actual consumption result —
-      fixed by routing through the watch above instead; `consumeCrashPin`'s copy+delete
-      fallback read `runCatching{}.isSuccess` instead of `delete()`'s own return, so a refused
-      delete after a successful copy read as consumed while `crash.log` was still on disk — fixed
-      to read the delete's own boolean; and a landed clipboard copy could still consume the pin
-      even when the previous-run read that would have included the crash in the shared text had
-      timed out — fixed with `DebugReport.Payload.pinConsumeSafe`, which `collectPayload` sets to
-      `false` on a timed-out read and `share()` now requires alongside a landed copy before
-      consuming the pin.
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Six rounds of
+      findings from Codex's review of PR #89 landed in the same PR, all on the crash-pin/dismiss
+      mechanism: a config change mid-Share/Dismiss could strand the outcome on the now-dead
+      activity instance — fixed with `DebugLogging.watchCrashPinOutcome`/
+      `DebugReport.watchShareOutcome`, mirroring `watchSaveOutcome`'s existing single-slot,
+      re-read-the-truth shape; `crashPending` was being cleared from a landed clipboard copy alone
+      rather than the pin's actual consumption result — fixed by routing through the watch above
+      instead; `consumeCrashPin`'s copy+delete fallback read `runCatching{}.isSuccess` instead of
+      `delete()`'s own return, so a refused delete after a successful copy read as consumed while
+      `crash.log` was still on disk — fixed to read the delete's own boolean; a landed clipboard
+      copy could still consume the pin even when the previous-run read that would have included
+      the crash in the shared text had timed out — fixed with `DebugReport.Payload.pinConsumeSafe`,
+      which `collectPayload` sets to `false` on a timed-out read; the same read could also fail
+      outright (`readText()` throwing on a real, still-pinned crash file) without that being
+      distinguished from a genuinely empty read — fixed by threading a `readSucceeded` flag through
+      `readPreviousOrCrash` that `pinConsumeSafe` also requires (and by wrapping that call's own
+      `Log.w` in its own `runCatching`, the one call site in the file that wasn't, which is what a
+      plain-JUnit test for this exact path surfaced); and Dismiss discarded `consumeCrashPin`'s
+      result entirely, so a refused consume left the banner up with no explanation — fixed with
+      `DebugLogging.dismissCrashPin`/`watchDismissOutcome`/`lastDismissFailed`, mirroring the
+      share-outcome plumbing, surfaced on the banner as "Couldn't dismiss — try again" and
+      deliberately distinct from a Share's own refused consume, which stays unsurfaced on purpose.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
