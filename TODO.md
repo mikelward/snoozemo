@@ -154,23 +154,53 @@ the point is that every other line of the app is worthless if it isn't true.
       `onCreate` before any UI, launched via `startActivityAndCollapse(PendingIntent)`.
 - [x] Ongoing notification on channel `snooze_active`, `IMPORTANCE_LOW`, with `End now` and
       `+30 min` actions (`SPEC.md` §4.3).
-- [x] Let the ongoing and ended notification channels bypass Do Not Disturb (`SPEC.md` §5.7,
-      maintainer, 2026-08-23). `setBypassDnd(true)` on both `snooze_active` and `snooze_ended`
-      at channel creation — pure code, no separate settings prompt, because arming already
-      requires the same `ACCESS_NOTIFICATION_POLICY` access the flag needs to take effect. Both
-      channels, not just the ongoing one: `snooze_ended` carries the failure and stuck-rule
-      cards, which can post while the rule is still on. **Still owed: verify on a real device**
-      that the flag actually keeps the cards audible/visible through the app's own DND — nothing
-      in this sandbox can confirm the platform honors it (hardware item 12 below).
+- [x] Let the ongoing notification and the stuck-rule alert bypass Do Not Disturb (`SPEC.md`
+      §5.7, maintainer, 2026-08-23). `setBypassDnd(true)` on `snooze_active` and on a third,
+      emergency-only channel `snooze_urgent` created for `showStuckRule()` alone — pure code,
+      no separate settings prompt, because arming already requires the same
+      `ACCESS_NOTIFICATION_POLICY` access the flag needs to take effect. `snooze_ended`
+      deliberately does **not** bypass (see the split below). **Still owed: verify on a real
+      device** that the flag actually keeps the cards audible/visible through the app's own
+      DND — nothing in this sandbox can confirm the platform honors it (hardware item 12
+      below).
+- [x] **Split the emergency alert onto its own channel, off `snooze_ended`** (Codex, PR #92;
+      maintainer, 2026-08-23). `setBypassDnd` is channel-wide, not scoped to Snoozemo's own
+      rule, so a bypassing `snooze_ended` would let a routine notice — `showEnded()`'s
+      departure/cap card, an interim "couldn't end the snooze, trying again" — sound through
+      an unrelated DND source (a Bedtime schedule, another app's rule) that the user chose for
+      reasons that have nothing to do with Snoozemo. Only `showStuckRule()` — the sole way back
+      from a phone that may still be silenced by Snoozemo's own rule — genuinely needs to
+      survive that; it moved to its own `snooze_urgent` channel and everything else stayed on
+      `snooze_ended`, non-bypassing. Retires the "Decisions needing review" entry this replaced.
 - [x] **Reapply the bypass once policy access is actually granted** (Codex, PR #92). Channel
       creation runs from `warm()` at app startup, before onboarding can have granted
       `ACCESS_NOTIFICATION_POLICY` — and the platform only honors `setBypassDnd` from a caller
       that currently holds it, silently keeping `bypassDnd = false` on a channel created without
-      it. `SnoozeNotifications.reapplyDndBypass()` re-issues both channels unconditionally
+      it. `SnoozeNotifications.reapplyDndBypass()` re-issues all three channels unconditionally
       (idempotent when nothing needs to change) and is called from both places the app already
       reconciles a policy-access change (`SnoozeService.reconcilePolicyAccess`,
       `MainActivity.ensureRuleInBackground`), so the first snooze after granting access still
       gets bypass-capable channels rather than waiting for a process restart.
+- [x] **Reapply the bypass for an out-of-band access grant too** (Codex, PR #92). The two call
+      sites above both rely on the app noticing the access change while running; granting
+      access directly from system Settings while neither `MainActivity` nor `SnoozeService` is
+      alive to observe it, followed by the very first arm of a process that never saw the
+      change, goes straight through `ACTION_ARM` — deliberately excluded from
+      `reconcilePolicyAccess` to keep policy IPC off the arm path. `SnoozeNotifications
+      .reapplyDndBypassOnce()` closes it: called from `showOngoing()` **and** from
+      `SnoozeService.armWithCap()` right after `beginArming()` returns, whatever it returns —
+      both safe because `beginArming` has already made its zen-state IPC by the time it
+      returns, so reapplying there costs nothing the tap-to-silence stretch depends on.
+- [x] **Cover the refused-arm path too, and only mark the reapply done on success** (Codex, PR
+      #92). Two follow-on gaps in the fix above: (1) a refused arm can still have left
+      `STATE_TRUE` on the rule (§7.1) and cascade straight into `beginRelease()` and
+      `showStuckRule()` — the one alert that most needs to survive Snoozemo's own DND — without
+      `showOngoing()` ever running, since that only fires on a successful arm; closed by the
+      `armWithCap()` call site above, which runs regardless of `beginArming`'s outcome. (2) the
+      once-per-process guard was being set *before* confirming `createNotificationChannel`
+      actually succeeded, so a transient IPC failure on the first attempt would have skipped
+      every later retry for the rest of that process; `reapplyDndBypassOnce()` now marks itself
+      done only inside the success branch.
 - [x] `SnoozeController` state machine (IDLE / ARMING / ARMED / CHECKING / RELEASED) as
       plain Kotlin over an injected clock — the unit-test surface for everything that
       follows. Covers the three invariants directly: the cap fires (and can't be made to
@@ -1431,11 +1461,14 @@ that can only be settled on a real device, ordered by risk.
         OEM fork shipping without it. Not a crash either way if one does
         (`openSettings()`'s `runCatching` around `startActivity`), but confirm the row lands on
         the right screen on a real Pixel first, then Samsung at Phase 8.
-12. [ ] **`setBypassDnd(true)` actually keeps `snooze_active` / `snooze_ended` audible and
-        visible through Snoozemo's own zen rule** (`SPEC.md` §5.7). Arm a snooze, confirm the
-        ongoing card and a triggered failure/stuck-rule card still alert as expected rather than
-        being filtered like an ordinary notification. Also confirm the per-channel "Override Do
-        Not Disturb" toggle in Settings reflects the flag and that switching it off there is
+12. [ ] **`setBypassDnd(true)` actually keeps `snooze_active` / `snooze_urgent` audible and
+        visible through Snoozemo's own zen rule, and `snooze_ended` genuinely does not**
+        (`SPEC.md` §5.7). Arm a snooze, confirm the ongoing card and a triggered stuck-rule
+        card still alert as expected rather than being filtered like an ordinary notification —
+        and confirm a routine `showEnded()`/failure card on `snooze_ended` is filtered normally
+        when an *unrelated* DND source (e.g. Bedtime) is active, per the maintainer's decision
+        to leave that one subject to other DND rules. Also confirm the per-channel "Override Do
+        Not Disturb" toggle in Settings reflects each flag and that switching it off there is
         honored (the user's explicit override, per §5.7). **Test on a fresh install or after
         clearing app data** — like importance, this is set at channel creation.
 
@@ -1688,18 +1721,6 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     a snooze that ends on a duration cap needs the same controller.
 
 ## Decisions needing review
-- **`setBypassDnd(true)` on `snooze_ended` bypasses *any* active DND, not just Snoozemo's own
-  rule** (Codex, PR #92; maintainer, 2026-08-23: debatable, leave as-is for now). The channel
-  carries routine notices — `showEnded()`'s departure/cap cards, the `+30 min`/extend failures
-  — alongside the genuinely emergency `showStuckRule()`. Because the flag is channel-wide, a
-  routine "snooze ended" card can still make sound through an unrelated DND source that's
-  active for its own reason (a Bedtime schedule, another app's rule) even though Snoozemo's own
-  rule already released cleanly — which cuts against the "total silence is the user's choice"
-  spirit of §5.5. The alternative — a second, non-bypassing channel for the routine notices,
-  keeping bypass only on whatever the emergency exit turns out to be — is a real, permanent
-  product surface (another channel in the user's notification settings, and channel importance
-  is fixed at creation once shipped) rather than a small fix, so it's parked here rather than
-  decided in the PR that raised it. Worth a second look before release.
 - **Consider an in-app banner (or similar Settings-surfaced cue) for a
   changed hosted privacy policy.** `docs/PRIVACY.md` now rides the docs lane
   and is never forced into release notes (2026-08-22 — see AGENTS.md

@@ -998,7 +998,16 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * `finally` rather than each `return` remembering to clear it.
      */
     private fun armWithCap(capExpiresAt: Instant, at: ClockReading) {
-        if (!controller.beginArming(capExpiresAt, at)) {
+        val armed = controller.beginArming(capExpiresAt, at)
+        // Regardless of the outcome, and before branching on it: `beginArming`
+        // has already made its zen-state IPC by the time it returns, so this
+        // is on the far side of the arm-path rule, not ahead of it. It has to
+        // run here rather than only from `showOngoing()` — a refused arm can
+        // still have left `STATE_TRUE` on the rule (SPEC.md §7.1) and cascade
+        // straight into `beginRelease()` and `showStuckRule()` below without
+        // `showOngoing()` ever running (Codex, PR #92).
+        notifications.reapplyDndBypassOnce()
+        if (!armed) {
             // Arming was refused. The IDLE transition has already dealt with the
             // record and the notification; the cap alarm is ours to take back.
             //

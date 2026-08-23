@@ -164,6 +164,8 @@
     <!-- TODO: translate -->
     <string name="channel_ended" tools:ignore="MissingTranslation">Snooze ended</string>
     <!-- TODO: translate -->
+    <string name="channel_urgent" tools:ignore="MissingTranslation">Do Not Disturb stuck</string>
+    <!-- TODO: translate -->
     <string name="ongoing_title" tools:ignore="MissingTranslation">Snoozing</string>
     <!-- TODO: translate -->
     <string name="ongoing_ends_when_you_leave" tools:ignore="MissingTranslation">Ends when you leave</string>
