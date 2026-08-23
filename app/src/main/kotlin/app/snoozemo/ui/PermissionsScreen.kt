@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -73,10 +72,7 @@ fun PermissionsScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(
-            text = stringResource(R.string.permissions_title),
-            style = MaterialTheme.typography.headlineMedium,
-        )
+        SnoozemoTitleRow(title = stringResource(R.string.permissions_title))
         // Same placement and reasoning as MainScreen's own — above
         // everything else, since this can be the actual first-landed screen
         // (Codex, PR #89, fresh evidence).

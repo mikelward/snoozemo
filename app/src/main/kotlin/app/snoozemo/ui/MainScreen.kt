@@ -90,10 +90,7 @@ fun MainScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(
-            text = stringResource(R.string.app_name),
-            style = MaterialTheme.typography.headlineMedium,
-        )
+        SnoozemoTitleRow(title = stringResource(R.string.app_name))
         // First, above even the access banner: this is the screen the user
         // actually lands on, so a crashed run is surfaced where it will be
         // seen rather than tucked away on SettingsScreen (SPEC.md §4.6,

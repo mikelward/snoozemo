@@ -1,5 +1,6 @@
 package app.snoozemo.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -21,8 +22,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.snoozemo.R
 import app.snoozemo.UpdateProgress
@@ -47,6 +51,47 @@ fun SnoozemoTheme(content: @Composable () -> Unit) {
         colorScheme = colorScheme,
         content = content,
     )
+}
+
+/**
+ * The app's mark: the bare `ic_launcher_foreground` vector, same as the
+ * sibling Simmo repo's own `SimmoMark` — no background shape behind it.
+ *
+ * `ic_launcher_foreground` is white strokes only (it doubles as the
+ * `monochrome` themed-icon layer, which the system tints itself rather than
+ * reading its own color), so it needs the same treatment in-app: tinted to
+ * `onSurface` here, the same way the launcher tints the themed layer, rather
+ * than trusting a color the vector doesn't actually carry. `onSurface`
+ * rather than a fixed dark color so the mark stays legible against both
+ * themes' page background, not just the light one. `TODO.md` still tracks
+ * reconsidering the launcher icon itself.
+ */
+@Composable
+internal fun SnoozemoMark(size: Dp, modifier: Modifier = Modifier) {
+    Image(
+        painter = painterResource(R.drawable.ic_launcher_foreground),
+        contentDescription = null,
+        colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onSurface),
+        modifier = modifier.size(size),
+    )
+}
+
+/**
+ * The one page-title row, used by every screen (`MainScreen`,
+ * `PermissionsScreen`, `SettingsScreen`): [SnoozemoMark] beside the title, so
+ * a user finds the same mark in the same place everywhere in the app — the
+ * sibling Simmo repo's `SimmoTopBar`.
+ */
+@Composable
+internal fun SnoozemoTitleRow(title: String, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SnoozemoMark(size = 32.dp)
+        Text(text = title, style = MaterialTheme.typography.headlineMedium)
+    }
 }
 
 /** Which setup row a failure belongs beside. */
