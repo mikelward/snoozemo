@@ -260,4 +260,144 @@ class DebugFileSinkTest {
         startAndAwait()
         assertTrue(file("crash.log").readText().contains("uncaught exception"))
     }
+
+    // --- reading and consuming the pin (TODO.md Phase 5, docs/DEBUG.md) ---
+
+    @Test
+    fun `hasPinnedCrash is false with nothing pinned`() {
+        val sink = startAndAwait()
+
+        var pinned: Boolean? = null
+        sink.hasPinnedCrash { pinned = it }
+        sink.awaitIdleForTest()
+
+        assertEquals(false, pinned)
+    }
+
+    @Test
+    fun `hasPinnedCrash is true once a crash is pinned`() {
+        dir.mkdirs()
+        file("current.log").writeText("the run that crashed")
+        file("current.log.crash").writeText("1")
+        val sink = startAndAwait()
+
+        var pinned: Boolean? = null
+        sink.hasPinnedCrash { pinned = it }
+        sink.awaitIdleForTest()
+
+        assertEquals(true, pinned)
+    }
+
+    @Test
+    fun `readPreviousOrCrash reads the pin over an ordinary previous run`() {
+        // Per SPEC.md §4.6 the pin holds the slot, so in practice the two
+        // never coexist — this fixture pins deliberately to prove the read
+        // still prefers the pin if it somehow found both. No start() here:
+        // reading does not need rotation to have run first.
+        dir.mkdirs()
+        file("crash.log").writeText("the crashed run")
+        file("previous.log").writeText("should not be read")
+        val sink = sink()
+
+        var text: String? = null
+        var wasCrash: Boolean? = null
+        sink.readPreviousOrCrash { t, c -> text = t; wasCrash = c }
+        sink.awaitIdleForTest()
+
+        assertEquals("the crashed run", text)
+        assertEquals(true, wasCrash)
+    }
+
+    @Test
+    fun `readPreviousOrCrash reads the ordinary previous run when nothing is pinned`() {
+        dir.mkdirs()
+        file("previous.log").writeText("an ordinary earlier run")
+        val sink = startAndAwait()
+
+        var text: String? = null
+        var wasCrash: Boolean? = null
+        sink.readPreviousOrCrash { t, c -> text = t; wasCrash = c }
+        sink.awaitIdleForTest()
+
+        assertEquals("an ordinary earlier run", text)
+        assertEquals(false, wasCrash)
+    }
+
+    @Test
+    fun `readPreviousOrCrash reads the pin, and says it was a crash`() {
+        dir.mkdirs()
+        file("current.log").writeText("the run that crashed")
+        file("current.log.crash").writeText("1")
+        val sink = startAndAwait()
+
+        var text: String? = null
+        var wasCrash: Boolean? = null
+        sink.readPreviousOrCrash { t, c -> text = t; wasCrash = c }
+        sink.awaitIdleForTest()
+
+        assertEquals("the run that crashed", text)
+        assertEquals(true, wasCrash)
+    }
+
+    @Test
+    fun `readPreviousOrCrash reads null when there is nothing to read`() {
+        val sink = startAndAwait()
+
+        var text: String? = "not yet read"
+        sink.readPreviousOrCrash { t, _ -> text = t }
+        sink.awaitIdleForTest()
+
+        assertEquals(null, text)
+    }
+
+    @Test
+    fun `consumeCrashPin turns the pin into an ordinary previous run`() {
+        dir.mkdirs()
+        file("current.log").writeText("the run that crashed")
+        file("current.log.crash").writeText("1")
+        val sink = startAndAwait()
+        assertTrue("precondition: the pin took", file("crash.log").exists())
+
+        var consumed: Boolean? = null
+        sink.consumeCrashPin { consumed = it }
+        sink.awaitIdleForTest()
+
+        assertEquals(true, consumed)
+        assertFalse("the pin is gone", file("crash.log").exists())
+        assertEquals(
+            "and the run reads back as an ordinary previous run",
+            "the run that crashed",
+            file("previous.log").readText(),
+        )
+    }
+
+    @Test
+    fun `consumeCrashPin is a no-op success when nothing is pinned`() {
+        val sink = startAndAwait()
+
+        var consumed: Boolean? = null
+        sink.consumeCrashPin { consumed = it }
+        sink.awaitIdleForTest()
+
+        assertEquals("nothing to consume is not a failure", true, consumed)
+    }
+
+    @Test
+    fun `a crash pin that cannot move stays pinned for a retry`() {
+        dir.mkdirs()
+        file("current.log").writeText("the run that crashed")
+        file("current.log.crash").writeText("1")
+        val sink = startAndAwait()
+        assertTrue(file("crash.log").exists())
+        // Make both the rename and the copy fallback refuse, the same fixture
+        // shape the rotation tests above use.
+        File(file("previous.log"), "occupied").apply { parentFile!!.mkdirs() }.writeText("x")
+
+        var consumed: Boolean? = null
+        sink.consumeCrashPin { consumed = it }
+        sink.awaitIdleForTest()
+
+        assertEquals(false, consumed)
+        assertTrue("the crash log survives a failed consume", file("crash.log").exists())
+    }
 }

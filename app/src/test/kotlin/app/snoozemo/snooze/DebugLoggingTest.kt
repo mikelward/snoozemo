@@ -104,4 +104,50 @@ class DebugLoggingTest {
         SnoozeDebugLog.event("recorded while on")
         assertTrue(SnoozeDebugLog.snapshot().any { it.contains("recorded while on") })
     }
+
+    // --- the crash-pin pass-throughs (TODO.md Phase 5, docs/DEBUG.md) ---
+
+    @Test
+    fun `hasPinnedCrash is false before install`() {
+        var pinned: Boolean? = null
+        DebugLogging.hasPinnedCrash { pinned = it }
+        DebugLogging.awaitIdleForTest()
+
+        assertEquals(false, pinned)
+    }
+
+    @Test
+    fun `readPreviousOrCrash reads nothing before install`() {
+        var text: String? = "not yet read"
+        var wasCrash: Boolean? = null
+        DebugLogging.readPreviousOrCrash { t, c -> text = t; wasCrash = c }
+        DebugLogging.awaitIdleForTest()
+
+        assertEquals(null, text)
+        assertEquals(false, wasCrash)
+    }
+
+    @Test
+    fun `consumeCrashPin reports success before install — nothing to consume`() {
+        var consumed: Boolean? = null
+        DebugLogging.consumeCrashPin { consumed = it }
+        DebugLogging.awaitIdleForTest()
+
+        assertEquals(true, consumed)
+    }
+
+    @Test
+    fun `installed pass-throughs reach the sink`() {
+        DebugLogging.install(context)
+        DebugLogging.awaitIdleForTest()
+
+        var consumed: Boolean? = null
+        DebugLogging.consumeCrashPin { consumed = it }
+        DebugLogging.awaitIdleForTest()
+
+        // No crash pinned in this run — a real sink answers the same
+        // trivial-success as the no-sink case, but this pins that the call
+        // actually reached a `DebugFileSink`, not just the guard above it.
+        assertEquals(true, consumed)
+    }
 }

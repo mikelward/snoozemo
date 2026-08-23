@@ -347,6 +347,66 @@ internal class DebugFileSink internal constructor(
         }
     }
 
+    /**
+     * Whether a crashed run is currently pinned, holding the `previous` slot
+     * (SPEC.md §4.6) — what the post-crash banner shows on.
+     */
+    fun hasPinnedCrash(onResult: (Boolean) -> Unit) {
+        runCatching {
+            worker.execute {
+                onResult(runCatching { crash.exists() }.getOrDefault(false))
+            }
+        }.onFailure { onResult(false) }
+    }
+
+    /**
+     * The run holding the `previous` slot right now, and whether it got there
+     * by crashing. Only one of [crash] / [previous] is ever present at once
+     * (SPEC.md §4.6, "the pin holds the previous slot"), so reading whichever
+     * exists is exactly the file the sharing surface should offer.
+     */
+    fun readPreviousOrCrash(onResult: (text: String?, wasCrash: Boolean) -> Unit) {
+        runCatching {
+            worker.execute {
+                val (file, wasCrash) = if (crash.exists()) crash to true else previous to false
+                val text = runCatching { file.takeIf { it.exists() }?.readText() }
+                    .onFailure { Log.w(TAG, "Reading the previous run's debug log failed.", it) }
+                    .getOrNull()
+                onResult(text, wasCrash)
+            }
+        }.onFailure { onResult(null, false) }
+    }
+
+    /**
+     * Consumes the crash pin — the rename both a landed Share and Dismiss
+     * perform (SPEC.md §4.6): `crash.log` becomes an ordinary `previous.log`,
+     * shareable and rotated away like any other run from here on. A no-op,
+     * reported as success, when there is nothing pinned to consume — the
+     * caller does not have to know which case it is in.
+     */
+    fun consumeCrashPin(onResult: (Boolean) -> Unit) {
+        runCatching {
+            worker.execute {
+                val consumed = runCatching {
+                    if (!crash.exists()) return@runCatching true
+                    // A rename onto an existing file replaces it, so nothing
+                    // needs pre-deleting — and nothing should exist there
+                    // anyway while a pin holds the slot. Same fallback shape
+                    // as `rotate()`'s own renames, for a filesystem that
+                    // refuses cross-name renames.
+                    crash.renameTo(previous) || runCatching {
+                        crash.copyTo(previous, overwrite = true)
+                        crash.delete()
+                    }.isSuccess
+                }.getOrDefault(false)
+                if (!consumed) {
+                    runCatching { Log.w(TAG, "Could not consume the crash pin; it stays pinned for a retry.") }
+                }
+                onResult(consumed)
+            }
+        }.onFailure { onResult(false) }
+    }
+
     /** Test-only: blocks until the worker drains, rotation included. */
     internal fun awaitIdleForTest() {
         worker.submit {}.get()
@@ -543,9 +603,48 @@ internal object DebugLogging {
         "${info.versionName} (${info.longVersionCode})"
     }.getOrDefault("unknown")
 
-    /** Test-only: blocks until the worker drains, install and toggles included. */
+    /**
+     * Whether a crashed run is currently pinned (SPEC.md §4.6) — false, safely,
+     * before [install] has run: there is nothing to be pinned yet.
+     */
+    fun hasPinnedCrash(onResult: (Boolean) -> Unit) {
+        runCatching {
+            worker.execute {
+                sink?.hasPinnedCrash(onResult) ?: onResult(false)
+            }
+        }.onFailure { onResult(false) }
+    }
+
+    /** See [DebugFileSink.readPreviousOrCrash]. Nothing before [install] has run. */
+    fun readPreviousOrCrash(onResult: (text: String?, wasCrash: Boolean) -> Unit) {
+        runCatching {
+            worker.execute {
+                sink?.readPreviousOrCrash(onResult) ?: onResult(null, false)
+            }
+        }.onFailure { onResult(null, false) }
+    }
+
+    /**
+     * See [DebugFileSink.consumeCrashPin]. Reported as success before
+     * [install] has run — there is nothing pinned to consume.
+     */
+    fun consumeCrashPin(onResult: (Boolean) -> Unit) {
+        runCatching {
+            worker.execute {
+                sink?.consumeCrashPin(onResult) ?: onResult(true)
+            }
+        }.onFailure { onResult(false) }
+    }
+
+    /**
+     * Test-only: blocks until the worker drains, install and toggles
+     * included — and, once a sink exists, until *its* worker drains too, so a
+     * test that just asked for a file read or a toggle can trust the result
+     * is in before this returns. The read runs on this worker itself, which
+     * is where [sink] may safely be read.
+     */
     internal fun awaitIdleForTest() {
-        worker.submit {}.get()
+        worker.submit { sink?.awaitIdleForTest() }.get()
     }
 
     /** Test-only: forgets the installed sink so the next install runs fresh. */
