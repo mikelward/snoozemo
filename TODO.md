@@ -1257,7 +1257,7 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Eighteen rounds of
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Nineteen rounds of
       Codex findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
@@ -1376,7 +1376,23 @@ the point is that every other line of the app is worthless if it isn't true.
       disable's own delete had genuinely removed left `crashPending` stuck true on screen, since
       nothing else re-reads `hasPinnedCrash` while the activity stays on the same screen — fixed
       by firing the watch unconditionally, since whether the file still exists is always this
-      callback's own real answer regardless of which generation asked for the delete.
+      callback's own real answer regardless of which generation asked for the delete. Two more,
+      round nineteen: the delivery-serialization fix's own ticket check only caught an attempt
+      superseded *before* it started delivering, not one whose tap landed while an earlier,
+      still-current attempt was already mid-delivery — that earlier attempt can't be interrupted
+      once its clipboard write or chooser launch has started, so a tap landing in that window
+      still went on to open a second chooser and copy a second time once it reached the front of
+      the queue — fixed with a `deliveriesCompleted` generation counter, snapshotted at `share()`'s
+      entry: an attempt that finds the counter moved since it started reuses the in-flight
+      delivery's own outcome instead of duplicating it, so the outcome it reports still reflects
+      what genuinely reached the user rather than a fabricated failure; and `hasPinnedCrash`'s own
+      `crash.exists()` check collapsed a genuine I/O failure into the same `false` as an honestly
+      absent pin, with nothing logged either way — fixed by logging the sanitized exception before
+      falling back to `false`, matching `readPreviousOrCrash`'s own existing pattern. That specific
+      failure mode has no dedicated regression test — `File.exists()` doesn't throw from ordinary
+      filesystem tricks (a directory-in-place-of-a-file, an occupied path), only from a
+      `SecurityManager` denial, and nothing in this suite has a working technique for that; noted
+      rather than silently claimed as covered.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
