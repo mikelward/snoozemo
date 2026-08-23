@@ -1292,16 +1292,27 @@ the point is that every other line of the app is worthless if it isn't true.
       and publishes it as a downloadable `app-release-aab` workflow artifact, for the manual seed
       upload Play requires (`docs/play-store-internal-track.md`). R8 stays off — a separate
       follow-up once there is a device to verify a shrunk build against.
-- [ ] **Automatic upload to the Play internal track.** Deliberately not this PR's scope
-      (maintainer, 2026-08-22): a `r0adkll/upload-google-play` step plus the "What's new"
-      generation from commit subjects described in `AGENTS.md`, and their own doc/secrets-table
-      additions, were built and then pulled back out so that PR could stay focused on the
-      manual-build path. Follow-up work: the release-notes generator (ported from the sibling
-      Simmo/Type Launcher repos' deploy job, unchanged in shape), the Play service account and
-      its Google Cloud/Console setup, and the `PLAY_SERVICE_ACCOUNT_JSON` secret. **Play Console
-      setup itself (the account, the app listing, the declarations)** is the maintainer's own
-      one-time work either way, tracked in `docs/play-store-internal-track.md` rather than here
-      since it's account/console state, not code.
+- [ ] **Automatic upload to the Play internal track.** Deliberately not the first `deploy`-job
+      PR's scope (maintainer, 2026-08-22): a `r0adkll/upload-google-play` step plus the "What's
+      new" generation from commit subjects described in `AGENTS.md`, and their own
+      doc/secrets-table additions, were built and then pulled back out so that PR could stay
+      focused on the manual-build path.
+      **The code half has since landed, opened as its own PR (2026-08-23) rather than merged
+      straight to `main`** — the release-notes generator (ported from the sibling
+      Simmo/Type Launcher repos' deploy job, unchanged in shape), the `Compose Play Store release
+      notes` and `Upload to Play Store internal track` steps, and `docs/play-store-internal-track.md`'s
+      matching setup steps (4-6: enable the API, create the service account, grant it "Release to
+      testing tracks" only) and secrets-table entry. Every added step gates on
+      `PLAY_SERVICE_ACCOUNT_JSON` being present, so the PR is safe to merge on its own — nothing
+      uploads until the secret exists.
+      **Deliberately held un-merged pending a maintainer check** (maintainer, 2026-08-23): the Play
+      Console declarations this doc's own "App content declarations" section describes (Data
+      safety, content rating, target audience) and the permissions declaration form once the
+      demonstration video lands, plus confirming the service account is actually granted only
+      "Release to testing tracks" and never a production-track scope. Merging the workflow change
+      itself doesn't publish anything — only adding `PLAY_SERVICE_ACCOUNT_JSON` afterward does —
+      but the check is on the PR, not the secret, so a reviewer doesn't have to re-derive from the
+      diff what to verify before flipping it on.
 - [x] Make a release build **fail** when its version can't be derived from git, rather than
       warning (`app/build.gradle.kts`). The fallback exists so a checkout without git still
       builds; once a build can reach a tester or Play, falling back to versionCode 1 is
