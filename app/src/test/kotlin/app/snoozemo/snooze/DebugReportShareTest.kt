@@ -30,7 +30,7 @@ class DebugReportShareTest {
 
         val result = DebugReport.share(
             context,
-            payloadCollect = { "irrelevant" },
+            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> true },
             chooserLaunch = { _, _ -> true },
             consumeCrashPin = { onResult -> pinConsumed = true; onResult(true) },
@@ -47,7 +47,7 @@ class DebugReportShareTest {
 
         val result = DebugReport.share(
             context,
-            payloadCollect = { "irrelevant" },
+            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> false },
             chooserLaunch = { _, _ -> true },
             consumeCrashPin = { pinConsumed = true },
@@ -64,7 +64,7 @@ class DebugReportShareTest {
 
         val result = DebugReport.share(
             context,
-            payloadCollect = { "irrelevant" },
+            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> false },
             chooserLaunch = { _, _ -> false },
             consumeCrashPin = { pinConsumed = true },
@@ -100,7 +100,7 @@ class DebugReportShareTest {
     fun `a share that fails to consume the pin still reports what it delivered`() {
         val result = DebugReport.share(
             context,
-            payloadCollect = { "irrelevant" },
+            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> true },
             chooserLaunch = { _, _ -> true },
             consumeCrashPin = { onResult -> onResult(false) },
@@ -112,6 +112,26 @@ class DebugReportShareTest {
         // next hasPinnedCrash read.
         assertTrue(result.clipboardCopied)
         assertTrue(result.reachedUser)
+    }
+
+    @Test
+    fun `a payload that could not confirm the pinned crash was included does not consume the pin`() {
+        var pinConsumed = false
+
+        val result = DebugReport.share(
+            context,
+            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = false) },
+            clipboardWrite = { _, _ -> true },
+            chooserLaunch = { _, _ -> true },
+            consumeCrashPin = { pinConsumed = true },
+        )
+
+        // The clipboard copy landed, but the collector couldn't confirm the
+        // pinned crash actually made it into the shared text (its read
+        // timed out or failed) — consuming the pin here would delete the
+        // only evidence of a crash the user never actually saw reported.
+        assertTrue(result.clipboardCopied)
+        assertFalse("collection couldn't confirm the crash was included, so the pin must survive", pinConsumed)
     }
 
     @Test
@@ -140,7 +160,7 @@ class DebugReportShareTest {
     fun `an exception from consumeCrashPin does not take the share down with it`() {
         val result = DebugReport.share(
             context,
-            payloadCollect = { "irrelevant" },
+            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> true },
             chooserLaunch = { _, _ -> true },
             consumeCrashPin = { throw RuntimeException("boom") },
@@ -156,7 +176,7 @@ class DebugReportShareTest {
     fun `lastShareFailed reflects the most recently completed share`() {
         DebugReport.share(
             context,
-            payloadCollect = { "irrelevant" },
+            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> false },
             chooserLaunch = { _, _ -> false },
             consumeCrashPin = {},
@@ -165,7 +185,7 @@ class DebugReportShareTest {
 
         DebugReport.share(
             context,
-            payloadCollect = { "irrelevant" },
+            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> true },
             chooserLaunch = { _, _ -> true },
             consumeCrashPin = {},
@@ -181,7 +201,7 @@ class DebugReportShareTest {
         try {
             DebugReport.share(
                 context,
-                payloadCollect = { "irrelevant" },
+                payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
                 clipboardWrite = { _, _ -> false },
                 chooserLaunch = { _, _ -> false },
                 consumeCrashPin = {},
@@ -200,7 +220,7 @@ class DebugReportShareTest {
 
         DebugReport.share(
             context,
-            payloadCollect = { "irrelevant" },
+            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> true },
             chooserLaunch = { _, _ -> true },
             consumeCrashPin = {},
