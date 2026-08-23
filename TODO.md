@@ -1257,7 +1257,7 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Nineteen rounds of
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty rounds of
       Codex findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
@@ -1392,7 +1392,15 @@ the point is that every other line of the app is worthless if it isn't true.
       failure mode has no dedicated regression test — `File.exists()` doesn't throw from ordinary
       filesystem tricks (a directory-in-place-of-a-file, an occupied path), only from a
       `SecurityManager` denial, and nothing in this suite has a working technique for that; noted
-      rather than silently claimed as covered.
+      rather than silently claimed as covered. One more, round twenty, caught on the very fix
+      above: the mid-delivery reuse's early return skipped the outcome-application block
+      entirely, and the earlier, now-stale attempt's own outcome-application skips too since its
+      ticket no longer matches — so a reused *failure* never reached `lastShareFailed` or
+      `watchShareOutcome` at all, leaving the user with no failure message even though nothing
+      actually delivered. Fixed by applying the reused outcome through the same
+      `synchronized(applyLock) { if (attempt >= attemptTicket) { ... } }` check before returning
+      it, so the latest ticket still authoritatively updates visible state whether it delivered
+      itself or reused an overlapping delivery's result.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
