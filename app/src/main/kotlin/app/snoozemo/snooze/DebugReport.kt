@@ -48,6 +48,18 @@ internal object DebugReport {
         val reachedUser: Boolean,
     )
 
+    /**
+     * What [collectPayload] (or a test's own seam) produced.
+     *
+     * [pinConsumeSafe] is false whenever the text might not actually carry a
+     * pinned crash that exists — the previous-run read timed out, or the
+     * fallback path ran — so [share] must not treat a landed copy as proof
+     * the crash was shared (Codex, PR #89): consuming the pin on a report
+     * that silently omitted the crash would lose the only evidence a banner
+     * exists to protect, for a share that never actually carried it.
+     */
+    data class Payload(val text: String, val pinConsumeSafe: Boolean)
+
     /** How long [share] waits for [consumeCrashPin] before giving up on it for this attempt. */
     private const val CONSUME_PIN_TIMEOUT_MS = 2_000L
 
@@ -88,9 +100,12 @@ internal object DebugReport {
      * On a landed clipboard copy, also consumes the crash pin if one was
      * pinned — SPEC.md §4.6, "sharing consumes the pin" — never on the
      * chooser merely opening, which is not proof the user completed
-     * anything. A share whose clipboard copy failed leaves the pin in place
-     * for a retry, so the evidence a crash banner exists for is never lost
-     * to a share that didn't actually land. The pin's own consumer already
+     * anything, and never when [Payload.pinConsumeSafe] is false, which
+     * means the text this landed copy carries might not actually include a
+     * pinned crash that exists (Codex, PR #89). A share whose clipboard
+     * copy failed leaves the pin in place for a retry, so the evidence a
+     * crash banner exists for is never lost to a share that didn't actually
+     * land. The pin's own consumer already
      * notifies its own watch ([DebugLogging.watchCrashPinOutcome]) with the
      * *real* outcome, so a caller must not infer the pin is gone from
      * [Result.clipboardCopied] alone — a landed copy only means consuming was
@@ -102,14 +117,15 @@ internal object DebugReport {
      */
     fun share(
         context: Context,
-        payloadCollect: (Context) -> String = ::collectPayload,
+        payloadCollect: (Context) -> Payload = ::collectPayload,
         clipboardWrite: (Context, String) -> Boolean = ::copyToClipboard,
         chooserLaunch: (Context, String) -> Boolean = ::startShare,
         consumeCrashPin: (onResult: (Boolean) -> Unit) -> Unit = DebugLogging::consumeCrashPin,
     ): Result {
-        val text = runCatching { payloadCollect(context) }
+        val payload = runCatching { payloadCollect(context) }
             .onFailure { Log.e(TAG, "Building the debug report failed; sharing a minimal fallback.", it) }
-            .getOrElse { fallbackPayload(it) }
+            .getOrElse { Payload(fallbackPayload(it), pinConsumeSafe = false) }
+        val text = payload.text
         val copied = runCatching { clipboardWrite(context, text) }
             .onFailure { Log.e(TAG, "Copying the debug report to the clipboard failed.", it) }
             .getOrDefault(false)
@@ -119,7 +135,7 @@ internal object DebugReport {
         if (!copied && !launched) {
             Log.e(TAG, "Sharing the debug report reached neither the clipboard nor the chooser.")
         }
-        if (copied) {
+        if (copied && payload.pinConsumeSafe) {
             val latch = CountDownLatch(1)
             runCatching { consumeCrashPin { latch.countDown() } }
                 .onFailure { Log.e(TAG, "Consuming the crash pin failed.", it) }
@@ -136,9 +152,9 @@ internal object DebugReport {
     /** How long [collectPayload] waits on the debug-log worker for the previous run's file. */
     private const val READ_TIMEOUT_MS = 2_000L
 
-    private fun collectPayload(context: Context): String {
-        val (previousRun, previousRunCrashed) = blockingReadPreviousOrCrash()
-        return buildDebugReportPayload(
+    private fun collectPayload(context: Context): Payload {
+        val previousRunRead = blockingReadPreviousOrCrash()
+        val text = buildDebugReportPayload(
             nowMillis = System.currentTimeMillis(),
             versionName = appVersionName(context),
             versionCode = appVersionCode(context),
@@ -156,10 +172,15 @@ internal object DebugReport {
             locationServicesEnabled = isLocationServicesEnabled(context),
             batterySaverOn = isBatterySaverOn(context),
             tileAdded = isTileAdded(context),
-            previousRun = previousRun,
-            previousRunCrashed = previousRunCrashed,
+            previousRun = previousRunRead.text,
+            previousRunCrashed = previousRunRead.wasCrash,
             recentLog = SnoozeDebugLog.snapshot(),
         )
+        // Only safe when the read actually completed: a timeout can't tell
+        // "nothing was pinned" from "something was pinned and we didn't wait
+        // long enough to find out" (Codex, PR #89) — and confusing the two
+        // is exactly what would consume a pin the shared text never carried.
+        return Payload(text, pinConsumeSafe = !previousRunRead.timedOut)
     }
 
     /**
@@ -177,24 +198,30 @@ internal object DebugReport {
         append(renderRecentLog(SnoozeDebugLog.snapshot(), MAX_LOG_PAYLOAD_CHARS))
     }
 
+    /** What [blockingReadPreviousOrCrash] found, and whether the read completed in time. */
+    private data class PreviousRunRead(val text: String?, val wasCrash: Boolean, val timedOut: Boolean)
+
     /**
      * Bridges [DebugLogging.readPreviousOrCrash]'s callback so [collectPayload]
      * can read it inline — safe to block on here because this already runs on
      * its own caller-provided thread, never the FIFO worker it is waiting on.
      * Bounded so a stuck worker degrades the report rather than hanging the
-     * share indefinitely.
+     * share indefinitely; [PreviousRunRead.timedOut] is what tells the caller
+     * this happened, since a timeout must not be reported the same way as a
+     * genuinely empty read (SPEC.md §4.6; Codex, PR #89).
      */
-    private fun blockingReadPreviousOrCrash(): Pair<String?, Boolean> {
+    private fun blockingReadPreviousOrCrash(): PreviousRunRead {
         val latch = CountDownLatch(1)
         var result: Pair<String?, Boolean> = null to false
         DebugLogging.readPreviousOrCrash { text, wasCrash ->
             result = text to wasCrash
             latch.countDown()
         }
-        if (!latch.await(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+        val completed = latch.await(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        if (!completed) {
             Log.w(TAG, "Reading the previous run's debug log timed out; reporting without it.")
         }
-        return result
+        return PreviousRunRead(result.first, result.second, timedOut = !completed)
     }
 
     private fun isPolicyAccessGranted(context: Context): Boolean =

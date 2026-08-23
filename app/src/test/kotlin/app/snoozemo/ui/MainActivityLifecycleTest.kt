@@ -59,7 +59,7 @@ class MainActivityLifecycleTest {
         // after onStop.
         DebugReport.share(
             activity.applicationContext,
-            payloadCollect = { "irrelevant" },
+            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> false },
             chooserLaunch = { _, _ -> false },
             consumeCrashPin = {},
