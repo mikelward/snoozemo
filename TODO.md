@@ -1332,51 +1332,79 @@ the point is that every other line of the app is worthless if it isn't true.
       - **Specifically flagged by Codex on the original version: whether
         `backgroundLocationPermission.launch()` can show the "Allow all the time" dialog at
         all**, versus needing to route the user to the app's location-permission Settings page
-        instead. Softened by evidence, not settled: ClothesCast's own
-        `LocationSettings.kt` calls the identical `launch(ACCESS_BACKGROUND_LOCATION)` and its
-        code comment states this deep-links to the real system picker on its tested devices —
-        but that's a different app's device matrix, not proof for Snoozemo's own minSdk/target,
-        so still verify on a real Pixel before relying on it for the demonstration video. Not
-        changed blind either way: routing to Settings preemptively would be worse UX on whichever
-        OS versions the in-place dialog *does* work on, and a snooze still degrades gracefully
-        either way (`SPEC.md` §3.6) — a UX gap in the settings row, not a principle 1/2 safety
-        issue.
-      - **Plan for filming the demonstration video** (maintainer asked for this 2026-08-22; not
-        yet executed). Order matters — the first step below decides whether the later ones are
-        even possible to film as written:
-        1. **Resolve the background-dialog question first** (the sub-bullet above) — install a
-           debug build on the real Pixel, reset Snoozemo's location permission and the app's
-           storage (Settings → Apps → Snoozemo → clear permission + storage, so
-           `LocationPromptStore`'s denial history is gone too), and tap the `Location` row twice
-           (once for foreground, then Continue on the rationale dialog) to see whether
-           `backgroundLocationPermission.launch()` actually shows "Allow all the time" on this
-           device's OS version. If it does not, a Settings-fallback fix is needed **before**
-           filming — the video has to show a real system prompt, not a request that silently
-           no-ops.
-        2. **Arm a snooze at the current location** (from the tile or `DebugScreen`) so the
-           geofence registers around the phone's real position — the geofence/presence work
-           landed in Phase 3 as of 2026-08-22, so this is now real, not a stub.
-        3. **Enable mock locations**: Developer Options → "Select mock location app", plus either
-           a small mock-GPS app from Play or a one-line `LocationManager.addTestProvider` /
-           `setTestProviderLocation` script. This is what stands in for a real walk, so the phone
-           never has to physically leave.
+        instead. **Confirmed (maintainer, 2026-08-23, real Pixel 9)**: it shows the real system
+        picker, matching ClothesCast's own `LocationSettings.kt`'s identical
+        `launch(ACCESS_BACKGROUND_LOCATION)` call — Snoozemo's `MainActivity.kt` already uses the
+        same `registerForActivityResult(ActivityResultContracts.RequestPermission())` pattern, so
+        there was nothing to change here; this was purely the device-matrix uncertainty the
+        earlier note flagged. Filming step 1 (below) is done — the remaining steps are open.
+      - **Plan for filming the demonstration video** (maintainer asked for this 2026-08-22; step 1
+        done 2026-08-23, steps 2-7 not yet executed — reordered 2026-08-23 to insert a permission
+        reset before recording and move arming after it, Codex, PR #98). Order matters — the first
+        step below
+        decided whether the later ones were even possible to film as written:
+        1. ~~Resolve the background-dialog question first~~ — **done (maintainer, 2026-08-23,
+           real Pixel 9)**: tapping the `Location` row twice (foreground, then Continue on the
+           rationale dialog) shows the real system "Allow all the time" picker. No
+           Settings-fallback fix needed; the video can show a real system prompt as planned.
+        2. **Reset location permissions before doing anything else** (Codex, PR #98, second
+           pass — a real ordering bug in this plan, caught immediately after step 1's
+           confirmation left both permissions granted on the test device). Settings → Apps →
+           Snoozemo → clear permission + storage, so the `Location` row is back in its
+           `ASKABLE` state and `LocationPromptStore`'s denial history is gone too. This has to
+           happen **before** arming, not after: `fixLocation()`
+           (`app/src/main/kotlin/app/snoozemo/ui/MainActivity.kt:842-856`) opens the app's
+           Settings page instead of a dialog once both permissions already read `GRANTED` — so
+           filming step 4 below with permissions already granted (as they are right now, from
+           confirming step 1) would show nothing but a Settings-page deep link, not the prompts
+           the video needs. And resetting *after* arming would revoke the very grant the just-
+           armed snooze depends on, degrading or ending it before steps 5-6 could film a real
+           departure.
+        3. **Enable mock locations**: Developer Options → "Select mock location app", plus one of:
+           a joystick/route-simulation app from Play (e.g. "Fake GPS Location-GPS JoyStick" or
+           "Fake GPS Location and Joystick" — both use the same official test-provider mechanism,
+           no root); or a command-line-driven mock provider for scripted, repeatable moves —
+           [android-mock-location-for-development](https://github.com/amotzte/android-mock-location-for-development)
+           or its fork
+           [android-mock-location-from-command-line](https://github.com/jarridgraham/android-mock-location-from-command-line)
+           take lat/lon over `adb shell am broadcast`; Appium's `io.appium.settings` app supports
+           the same via `adb shell am start-foreground-service`. Either way this is what stands in
+           for a real walk, so the phone never has to physically leave — and a scripted/route
+           option can move faster than actual walking speed if a real-time walk would make the
+           recording too long.
         4. **Record in one take** (`adb shell screenrecord` or the device's screen recorder),
            starting before tapping the `Location` row: the foreground system dialog → grant →
            the background rationale dialog → Continue → the background system dialog → grant
            "Allow all the time".
-        5. **Still in the same recording**, use the mock-location app to move the reported
+        5. **Still in the same recording, now that permissions are granted**: arm a snooze at
+           the current location (from the tile or `DebugScreen`) so the geofence registers
+           around the phone's real position with full tracking from the start — the
+           geofence/presence work landed in Phase 3 as of 2026-08-22, so this is now real, not a
+           stub. Armed *after* the permission grant this time (see step 2's own note on why the
+           original ordering had this backwards), not before it.
+        6. **Still in the same recording**, use the mock-location app to move the reported
            position outside the anchor's geofence radius, and show the exit actually firing —
            the ongoing notification updating and Do Not Disturb turning off — so the video
            demonstrates the permission driving the feature, not just being requested and left
            unused.
-        6. Trim and attach the recording to the Permissions Declaration Form alongside the
-           written justification already drafted in `docs/play-store-internal-track.md`.
-        - **Open question, not settled here:** whether Play's reviewers accept a video that
-          shows Android's own "mock location app active" status-bar indicator during the
-          walk-away portion, or expect an unmistakably real walk instead. Worth a quick check of
-          Play's current guidance before relying on mock locations for the actual submission —
-          flagging rather than guessing, since a rejected declaration costs real review-cycle
-          time.
+        7. Trim and attach the recording to the Permissions Declaration Form alongside a written
+           justification. **Correction (2026-08-23): that justification is not actually drafted
+           anywhere yet** — `docs/play-store-internal-track.md` only notes that the form exists
+           and what it's blocked on; this step still needs the written text itself, not just the
+           video.
+        - **Open question, checked 2026-08-23, still not settled:** whether Play's reviewers
+          accept a video that shows Android's own "mock location app active" status-bar indicator
+          during the walk-away portion, or expect an unmistakably real walk instead. Google's own
+          Play Console Help page on background location (`support.google.com/googleplay/android-developer/answer/9799150`)
+          says the video must "clearly demonstrate the location-based feature," without stating
+          how the location change may be produced — no explicit confirmation or prohibition of
+          mock/simulated location found in official docs or Play Console Help community threads
+          after a real search. The practical reasoning for using mock location anyway: showing a
+          real home/office location in a submitted video is itself worth avoiding, and mock
+          location via Android's own official Developer Options mechanism is standard practice —
+          but this is still a real, unverified risk, not a confirmed-safe path. Still worth a
+          direct check (or asking in the Play Console Help community) before relying on it for
+          the actual submission — a rejected declaration costs a real review cycle.
 - [ ] **Copy candidates for `setup_location_granted`**, in place of "Tracking your place":
       "Unsnooze when you leave a location", or simply "Allowed" to match the DND and notification
       rows' granted state. Not applied yet — changing it would churn the screenshot snapshots for
