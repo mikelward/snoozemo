@@ -1582,7 +1582,18 @@ the point is that every other line of the app is worthless if it isn't true.
       "boolean collapses a check-failure into confirmed absence" pattern (rounds 28, 30 ×2). Per
       the standing "stop patching once findings on the same mechanism stop converging" guidance,
       this one is recorded below under *Decisions needing review* instead of patched narrowly, and
-      the review thread was left open rather than resolved.
+      the review thread was left open rather than resolved. A thirty-second round brought a real,
+      distinct concurrency bug: `deliveriesCompleted++`/`lastDeliveryResult = delivered` were
+      written only under `deliveryLock`, but `nextAttempt()` reads `deliveriesCompleted` under
+      `applyLock` instead — deliberately, so a tap never blocks on an in-progress delivery — so
+      the two different locks guarding the same field gave that read no happens-before guarantee
+      against the write, letting a retry's baseline snapshot land inconsistently between the
+      counter bump and the result assignment and duplicate a delivery that had already reached the
+      user. Fixed by also wrapping the write in `synchronized(applyLock) { ... }`, cheap since that
+      lock's critical sections are already brief field writes and it's reentrant; `nextAttempt()`
+      itself still never touches `deliveryLock`. No dedicated regression test: the race needs a
+      window between two statements with no injectable seam, and now that both writes are atomic
+      under one lock, that window no longer exists to construct a test against.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
