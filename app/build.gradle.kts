@@ -190,8 +190,15 @@ android {
             // Co-installs beside a release build instead of colliding on the
             // package name.
             applicationIdSuffix = ".debug"
+            // `app.snoozemo.debug` is unknown to Play — an update check would
+            // always come back empty, so skip it (and the Play IPC) entirely.
+            // Only meaningful on the `play` flavor; the `direct` flavor's own
+            // update checker never reads this field (SPEC.md's flavor split).
+            buildConfigField("boolean", "PLAY_UPDATE_CHECKS_ENABLED", "false")
         }
         release {
+            // Only the Play build can be updated by Play, so only it asks.
+            buildConfigField("boolean", "PLAY_UPDATE_CHECKS_ENABLED", "true")
             // R8 stays off for now — a separate follow-up once there is a
             // device to verify a shrunk build against (TODO.md, Phase 6). The
             // signing config below is this slice: a local release build stays
@@ -209,6 +216,9 @@ android {
 
     buildFeatures {
         compose = true
+        // Only for PLAY_UPDATE_CHECKS_ENABLED below — the `play` flavor's own
+        // update-check gate, mirroring the sibling Simmo repo.
+        buildConfig = true
     }
 
     compileOptions {
@@ -256,6 +266,13 @@ dependencies {
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
+    // Not used directly — pins the transitive `androidx.fragment` version the
+    // `registerForActivityResult` API family needs (1.3.0+; the `play` flavor's
+    // Play Services stack alone pulls a pre-1.3 `fragment` that fails Android
+    // Lint's `InvalidFragmentVersionForActivityResult` check across every
+    // `registerForActivityResult` call in the app, not only the new one this
+    // PR adds).
+    implementation(libs.androidx.fragment)
     implementation(libs.androidx.lifecycle.runtime.compose)
     // Dispatchers.Main for the service's presence collection — stated
     // explicitly rather than leaned on transitively through Compose.
@@ -263,6 +280,10 @@ dependencies {
     // The §6.10 periodic backstop: a deferrable, batched wake per half hour
     // while armed — the cheap kind of periodic (SPEC.md §9).
     implementation(libs.androidx.work.runtime)
+    // The `play` flavor's update banner (Play's in-app update flow) — scoped
+    // to this flavor alone, same as `presence`'s geofencing dependency, since
+    // `direct` carries no Play Services dependency at all (SPEC.md §3.4).
+    "playImplementation"(libs.play.app.update)
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)
