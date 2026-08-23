@@ -41,11 +41,13 @@ class SettingsScreenScreenshotTest {
         capture("settings-screen-idle.png") {
             SettingsScreen(
                 tileAdded = true,
+                filtersRuleId = null,
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
                 onOpenPermissions = { opened++ },
                 onTileRow = {},
+                onFiltersRow = {},
                 onDebugLog = {},
             )
         }
@@ -61,11 +63,13 @@ class SettingsScreenScreenshotTest {
         capture("settings-screen-tile-missing.png") {
             SettingsScreen(
                 tileAdded = false,
+                filtersRuleId = null,
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
                 onOpenPermissions = {},
                 onTileRow = { tapped++ },
+                onFiltersRow = {},
                 onDebugLog = {},
             )
         }
@@ -82,11 +86,13 @@ class SettingsScreenScreenshotTest {
         capture("settings-screen-idle.png") {
             SettingsScreen(
                 tileAdded = true,
+                filtersRuleId = null,
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
+                onFiltersRow = {},
                 onDebugLog = {},
             )
         }
@@ -104,16 +110,81 @@ class SettingsScreenScreenshotTest {
         capture("settings-screen-tile-refused.png") {
             SettingsScreen(
                 tileAdded = false,
+                filtersRuleId = null,
                 settingsFailure = SetupRowId.TILE,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
+                onFiltersRow = {},
                 onDebugLog = {},
             )
         }
 
         composeRule.onNodeWithText("Couldn't add the tile").assertExists()
+    }
+
+    @Test
+    fun `the Filters row is hidden until there is a rule to edit`() {
+        capture {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+            )
+        }
+
+        // Absent, not disabled — a button with nothing yet behind it is the
+        // dead tap this screen's rows are built to avoid (TODO.md).
+        composeRule.onNodeWithText("Filters").assertDoesNotExist()
+    }
+
+    @Test
+    fun `the Filters row opens the rule's own interruption-filter screen`() {
+        var opened = 0
+
+        capture("settings-screen-filters.png") {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = "example-rule-id",
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = { opened++ },
+                onDebugLog = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Filters").assertExists()
+        composeRule.onNodeWithText("Edit").performClick()
+        assertEquals(1, opened)
+    }
+
+    @Test
+    fun `a refused Filters trip is said on the row`() {
+        capture("settings-screen-filters-refused.png") {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = "example-rule-id",
+                settingsFailure = SetupRowId.FILTERS,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Couldn't open Settings").assertExists()
     }
 
     @Test
@@ -123,11 +194,13 @@ class SettingsScreenScreenshotTest {
         capture {
             SettingsScreen(
                 tileAdded = true,
+                filtersRuleId = null,
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
+                onFiltersRow = {},
                 onDebugLog = { changed = it },
             )
         }
@@ -141,11 +214,13 @@ class SettingsScreenScreenshotTest {
         capture("settings-screen-debug-log-save-failed.png") {
             SettingsScreen(
                 tileAdded = true,
+                filtersRuleId = null,
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = true,
                 onOpenPermissions = {},
                 onTileRow = {},
+                onFiltersRow = {},
                 onDebugLog = {},
             )
         }
@@ -160,11 +235,13 @@ class SettingsScreenScreenshotTest {
         capture("settings-screen-idle-dark.png") {
             SettingsScreen(
                 tileAdded = true,
+                filtersRuleId = null,
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
+                onFiltersRow = {},
                 onDebugLog = {},
             )
         }

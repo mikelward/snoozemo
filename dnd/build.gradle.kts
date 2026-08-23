@@ -3,15 +3,14 @@ plugins {
 }
 
 // All NotificationManager / AutomaticZenRule contact lives here (SPEC.md §11),
-// so the rest of the app never touches the DND APIs directly and the SDK-34
-// fallbacks stay in one place.
+// so the rest of the app never touches the DND APIs directly.
 
 android {
     namespace = "app.snoozemo.dnd"
     compileSdk = 37
 
     defaultConfig {
-        minSdk = 34
+        minSdk = 35
     }
 
     compileOptions {

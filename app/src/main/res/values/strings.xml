@@ -95,6 +95,24 @@
     <!-- TODO: translate -->
     <string name="setup_tile_added" tools:ignore="MissingTranslation">Added</string>
     <!--
+      The Filters row (TODO.md Phase 4): a shortcut to the system's own screen
+      for editing Snoozemo's rule's interruption filter — which calls,
+      messages, alarms and apps still break through. Distinct from
+      `setup_dnd_title`, which grants the *permission* to change zen state at
+      all; this opens the *rule's own* configuration, previously reachable
+      only by finding it in system DND settings by hand. Hidden entirely
+      rather than shown disabled while DND access isn't granted or no rule
+      exists yet (`SettingsScreen`), so there is never a button that opens to
+      nothing. `setup_action_add` isn't reused here — "Add" describes
+      creating something, and this row edits a rule that already exists.
+    -->
+    <!-- TODO: translate -->
+    <string name="setup_filters_title" tools:ignore="MissingTranslation">Filters</string>
+    <!-- TODO: translate -->
+    <string name="setup_filters_status" tools:ignore="MissingTranslation">What still gets through</string>
+    <!-- TODO: translate -->
+    <string name="setup_action_edit" tools:ignore="MissingTranslation">Edit</string>
+    <!--
       The debug log's switch (SPEC.md §4.6): on by default, and turning it off
       deletes what was kept. Copy is the maintainer's own wording (2026-08-22).
     -->

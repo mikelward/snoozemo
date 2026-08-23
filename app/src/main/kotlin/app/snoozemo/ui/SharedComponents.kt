@@ -43,6 +43,7 @@ enum class SetupRowId {
     NOTIFICATIONS,
     LOCATION,
     TILE,
+    FILTERS,
 }
 
 /**
