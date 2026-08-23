@@ -1257,7 +1257,7 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Eleven rounds of Codex
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twelve rounds of Codex
       findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
@@ -1293,7 +1293,17 @@ the point is that every other line of the app is worthless if it isn't true.
       every share the replacement instance fired read as stale — fixed by moving ticket issuance
       into `DebugReport.nextAttempt()` itself, the same owner that compares tickets, so a
       configuration change (which only resets activity-scoped state) can no longer desynchronize
-      the two.
+      the two. Two more after that: the ticket fix above still compared an attempt against the
+      highest *applied* ticket, so an older attempt could still apply its own outcome the moment
+      it completed as long as nothing had been applied yet — even after a newer attempt's ticket
+      had already been issued and was still in flight — fixed by comparing against the highest
+      *issued* ticket instead, so only the single most-recently-issued attempt can ever apply;
+      and the payload's own privacy-floor test fed fixtures that never contained the banned
+      values it was asserting against, so it passed regardless of whether the code was correct —
+      fixed by splitting it into a genuinely structural test (the header has no string field a
+      coordinate/SSID/place name could pass through) and a test that exercises realistic
+      banned-looking values in `previousRun`/`recentLog` and documents that those two channels are
+      forwarded verbatim, with the real floor held by `SnoozeDebugLog` call-site discipline.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
