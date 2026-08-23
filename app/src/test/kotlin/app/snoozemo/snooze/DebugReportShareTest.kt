@@ -3,9 +3,11 @@ package app.snoozemo.snooze
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import app.snoozemo.core.SnoozeDebugLog
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -23,6 +25,20 @@ import org.robolectric.RobolectricTestRunner
 class DebugReportShareTest {
 
     private val context: Application get() = ApplicationProvider.getApplicationContext()
+
+    // Isolates DebugReport's process-level state (lastShareFailed, and now
+    // the attempt-ordering guard) between tests — without this, a test using
+    // an explicit attempt number could leave a later, default-attempt (0)
+    // test's own outcome silently discarded as "stale".
+    @Before
+    fun setUp() {
+        DebugReport.resetForTest()
+    }
+
+    @After
+    fun tearDown() {
+        DebugReport.resetForTest()
+    }
 
     @Test
     fun `a landed clipboard copy consumes the crash pin`() {
@@ -191,6 +207,186 @@ class DebugReportShareTest {
             consumeCrashPin = {},
         )
         assertFalse("a later successful share supersedes the earlier failure", DebugReport.lastShareFailed)
+    }
+
+    @Test
+    fun `a slower older attempt does not overwrite a faster newer attempt's outcome`() {
+        // Both tickets are drawn upfront — tap 1, then tap 2 — so the ticket
+        // counter already sits at 2 by the time either share() call runs.
+        // Calling attempt 2's share (a fast retry) before attempt 1's (a
+        // slow first try) is exactly what "tap 1, then tap 2, but 2
+        // finishes first" looks like from DebugReport's point of view
+        // (Codex, PR #89).
+        val attempt1 = DebugReport.nextAttempt()
+        val attempt2 = DebugReport.nextAttempt()
+
+        DebugReport.share(
+            context,
+            attempt = attempt2,
+            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
+            clipboardWrite = { _, _ -> true },
+            chooserLaunch = { _, _ -> true },
+            consumeCrashPin = {},
+        )
+        assertFalse("the newer, faster attempt succeeded", DebugReport.lastShareFailed)
+
+        DebugReport.share(
+            context,
+            attempt = attempt1,
+            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
+            clipboardWrite = { _, _ -> false },
+            chooserLaunch = { _, _ -> false },
+            consumeCrashPin = {},
+        )
+
+        assertFalse(
+            "an older attempt finishing late must not un-report the newer attempt's success",
+            DebugReport.lastShareFailed,
+        )
+    }
+
+    @Test
+    fun `a newer attempt's own genuine failure still applies over an already-applied older success`() {
+        val attempt1 = DebugReport.nextAttempt()
+        DebugReport.share(
+            context,
+            attempt = attempt1,
+            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
+            clipboardWrite = { _, _ -> true },
+            chooserLaunch = { _, _ -> true },
+            consumeCrashPin = {},
+        )
+        assertFalse(DebugReport.lastShareFailed)
+
+        val attempt2 = DebugReport.nextAttempt()
+        DebugReport.share(
+            context,
+            attempt = attempt2,
+            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
+            clipboardWrite = { _, _ -> false },
+            chooserLaunch = { _, _ -> false },
+            consumeCrashPin = {},
+        )
+
+        assertTrue(DebugReport.lastShareFailed)
+    }
+
+    @Test
+    fun `an older attempt completing while a newer one is still in flight is discarded, not just raced`() {
+        // Tap 1 starts a share; the user taps again before it finishes,
+        // issuing attempt 2's ticket — attempt 2 is now "in flight" but
+        // hasn't completed. Attempt 1 then finishes (fails). Comparing only
+        // against the highest *applied* attempt would have let this apply,
+        // since nothing had been applied yet — showing a stale failure the
+        // user's still-pending retry hadn't earned, and one that would
+        // never clear if the retry then stalled (Codex, PR #89, third round
+        // on this mechanism). Comparing against the *issued* ticket instead
+        // means attempt 1's completion is discarded outright, the moment a
+        // newer ticket exists — not merely outraced by one that finishes
+        // first.
+        val attempt1 = DebugReport.nextAttempt()
+        DebugReport.nextAttempt() // attempt 2's ticket issued; its share never runs in this test
+
+        DebugReport.share(
+            context,
+            attempt = attempt1,
+            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
+            clipboardWrite = { _, _ -> false },
+            chooserLaunch = { _, _ -> false },
+            consumeCrashPin = {},
+        )
+
+        assertFalse(
+            "an older attempt must not surface its outcome once a newer ticket has been issued, " +
+                "even if the newer attempt hasn't completed yet",
+            DebugReport.lastShareFailed,
+        )
+    }
+
+    @Test
+    fun `nextAttempt tickets are strictly increasing and process-level, not caller-scoped`() {
+        // The bug this guards: an earlier version drew the ticket from a
+        // field on the activity, which a configuration change resets to
+        // zero — behind the process-level high-water mark DebugReport
+        // already compares against, so every share the replacement
+        // instance fired read as stale (Codex, PR #89, second round). A
+        // fresh "caller" here is simulated by simply not touching any
+        // local state between calls — nextAttempt is the only source of
+        // truth, so there is nothing to reset.
+        val first = DebugReport.nextAttempt()
+        val second = DebugReport.nextAttempt()
+        val third = DebugReport.nextAttempt()
+
+        assertTrue(second > first)
+        assertTrue(third > second)
+    }
+
+    @Test
+    fun `nextAttempt clears a prior failure so a config change mid-retry can't reload it`() {
+        // The bug this guards: a caller only clears its own local
+        // shareFailed when it starts a retry, never DebugReport's own
+        // lastShareFailed — so if the activity is recreated while that
+        // retry is still in flight, the replacement's onStart reloads the
+        // *previous* attempt's still-true outcome and shows a failure the
+        // retry already superseded (Codex, PR #89).
+        val firstAttempt = DebugReport.nextAttempt()
+        DebugReport.share(
+            context,
+            attempt = firstAttempt,
+            payloadCollect = { DebugReport.Payload("text", pinConsumeSafe = true) },
+            clipboardWrite = { _, _ -> false },
+            chooserLaunch = { _, _ -> false },
+            consumeCrashPin = {},
+        )
+        assertTrue("precondition: the first attempt genuinely failed", DebugReport.lastShareFailed)
+
+        // Simulates a retry's tap — nextAttempt() alone, before the retry's
+        // own share() call has had any chance to complete.
+        DebugReport.nextAttempt()
+
+        assertFalse(
+            "issuing the next ticket must clear the previous attempt's failure immediately, " +
+                "not only once this new attempt's own result is in",
+            DebugReport.lastShareFailed,
+        )
+    }
+
+    @Test
+    fun `a share fired with a ticket from a simulated fresh activity is never stale`() {
+        // Attempt 1 lands first (a slow first tap), then a "configuration
+        // change" hands the screen to a replacement instance whose own
+        // first share still draws its ticket from nextAttempt() — never
+        // starting back over at 1 — so its outcome is never discarded as
+        // older than a tap that, from the ticket source's point of view,
+        // came first.
+        val firstAttempt = DebugReport.nextAttempt()
+        DebugReport.share(
+            context,
+            attempt = firstAttempt,
+            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
+            clipboardWrite = { _, _ -> false },
+            chooserLaunch = { _, _ -> false },
+            consumeCrashPin = {},
+        )
+        assertTrue(DebugReport.lastShareFailed)
+
+        // The "replacement activity" draws its own ticket the same way —
+        // through DebugReport, not a field it owns — so it is guaranteed
+        // higher than firstAttempt regardless of anything reset on its side.
+        val replacementAttempt = DebugReport.nextAttempt()
+        DebugReport.share(
+            context,
+            attempt = replacementAttempt,
+            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
+            clipboardWrite = { _, _ -> true },
+            chooserLaunch = { _, _ -> true },
+            consumeCrashPin = {},
+        )
+
+        assertFalse(
+            "the replacement instance's own share must not be discarded as stale",
+            DebugReport.lastShareFailed,
+        )
     }
 
     @Test

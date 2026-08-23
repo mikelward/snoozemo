@@ -80,10 +80,64 @@ internal object DebugReport {
     @Volatile
     private var onShareOutcome: (() -> Unit)? = null
 
+    /**
+     * The latest share attempt ticket issued so far — see [nextAttempt]. A
+     * second tap while an earlier attempt is still collecting its payload
+     * starts a second, unsynchronized [share] call, and the two can finish
+     * in either order. [share] compares its own `attempt` against this
+     * field, not against the highest attempt whose outcome has *landed*:
+     * comparing against completions alone let an older attempt that was
+     * still in flight when a newer one was issued apply its own outcome the
+     * moment it finished, even though the newer tap the user is actually
+     * waiting on hadn't resolved yet — a stale failure (or success) shown,
+     * or shown indefinitely if the newer attempt then stalled (Codex,
+     * PR #89, third round on this mechanism). Comparing against the issued
+     * ticket instead means only the single most-recently-issued attempt can
+     * ever update the visible state, whenever it finishes; every superseded
+     * attempt's own completion is discarded outright, not merely raced.
+     *
+     * Deliberately process-level, not caller-scoped: an activity-scoped
+     * counter reset to zero by a configuration change would hand out
+     * tickets *lower* than the process-level high-water mark already
+     * reached before the recreation, so every share fired by the
+     * replacement instance would read as stale and never surface (Codex,
+     * PR #89, second round on this same mechanism). Guarded by [applyLock]
+     * rather than left `@Volatile`, since applying an outcome is a
+     * read-compare-write, not a single field write.
+     */
+    private var attemptTicket: Int = 0
+
+    private val applyLock = Any()
+
+    /**
+     * Issues the next share attempt ticket, for a caller that can fire more
+     * than one concurrently-running share (the repeatable Share button) and
+     * wants the *visible* outcome to track the latest tap — see [share]'s
+     * own `attempt` parameter and [attemptTicket]. Safe to call from any
+     * thread; callers still call it synchronously at tap time, before
+     * starting the background work, so ticket order is tap order.
+     *
+     * Also clears [lastShareFailed]: a caller only clears its own local
+     * failure flag when it starts a retry, and a configuration change or
+     * restart mid-retry would otherwise have the replacement instance's
+     * `onStart` reload the *previous* attempt's still-true process-level
+     * outcome and show a failure message the retry already superseded —
+     * indefinitely, if the retry itself then stalled (Codex, PR #89). Since
+     * only this ticket's own eventual completion may apply an outcome from
+     * here on (the `attempt >= attemptTicket` guard in [share]), clearing
+     * the shared flag the moment the new ticket is issued is safe: nothing
+     * else can set it back to `true` before this attempt's own result does.
+     */
+    fun nextAttempt(): Int = synchronized(applyLock) {
+        lastShareFailed = false
+        ++attemptTicket
+    }
+
     /** Test-only: resets the process-level outcome state so tests don't leak into each other. */
     internal fun resetForTest() {
         lastShareFailed = false
         onShareOutcome = null
+        synchronized(applyLock) { attemptTicket = 0 }
     }
 
     /** Mirrors [DebugLogging.watchSaveOutcome]; see [lastShareFailed]. */
@@ -115,9 +169,23 @@ internal object DebugReport {
      * [payloadCollect], [clipboardWrite], [chooserLaunch], and
      * [consumeCrashPin] are injectable test seams; production uses the
      * defaults.
+     *
+     * [attempt] identifies which tap this call answers, so a caller that can
+     * fire more than one concurrently-running share (the repeatable Share
+     * button) can make the *visible* outcome track the latest tap rather
+     * than whichever attempt's binder/disk work happens to finish last — see
+     * [attemptTicket]. Obtain it from [nextAttempt] at tap time, before
+     * starting the background work — never from a caller-scoped counter,
+     * which a configuration change would reset behind the process-level
+     * high-water mark this compares against (Codex, PR #89). The default of
+     * 0 is fine for a single, non-concurrent call (tests, and any future
+     * caller that never fires two attempts at once): every such call's own
+     * attempt is trivially `>=` the ticket counter, which nothing else ever
+     * advances in that case.
      */
     fun share(
         context: Context,
+        attempt: Int = 0,
         payloadCollect: (Context) -> Payload = ::collectPayload,
         clipboardWrite: (Context, String) -> Boolean = ::copyToClipboard,
         chooserLaunch: (Context, String) -> Boolean = ::startShare,
@@ -145,8 +213,19 @@ internal object DebugReport {
             }
         }
         val result = Result(clipboardCopied = copied, reachedUser = copied || launched)
-        lastShareFailed = !result.reachedUser
-        runCatching { onShareOutcome?.invoke() }
+        // Only the single most-recently-issued attempt may update the
+        // visible state — an attempt superseded by a later tap discards its
+        // own outcome here regardless of whether that later tap has
+        // completed yet, so a stale failure (or success) is never shown
+        // over a retry the user is still waiting on (Codex, PR #89, third
+        // round on this mechanism). The Result returned below is still this
+        // attempt's own truth; only the shared, visible state is guarded.
+        synchronized(applyLock) {
+            if (attempt >= attemptTicket) {
+                lastShareFailed = !result.reachedUser
+                runCatching { onShareOutcome?.invoke() }
+            }
+        }
         return result
     }
 
