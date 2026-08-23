@@ -1257,7 +1257,7 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Nine rounds of Codex
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Eleven rounds of Codex
       findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
@@ -1281,10 +1281,19 @@ the point is that every other line of the app is worthless if it isn't true.
       on the sink's own worker without notifying `watchCrashPinOutcome`, so a banner already on
       screen kept offering to share a file that no longer existed — fixed with an `onDisabled`
       callback on `DebugFileSink.setEnabled`, fired once the delete completes and wired to the
-      same watch; and `docs/PRIVACY.md`'s "short version" and "What leaves your phone" summaries
+      same watch; `docs/PRIVACY.md`'s "short version" and "What leaves your phone" summaries
       still claimed Android's new-phone transfer was the only way stored data could reach another
       device, contradicting "The debug log" section further down the same policy — fixed to name
-      sharing as a second, user-initiated way, still never automatic.
+      sharing as a second, user-initiated way, still never automatic; a second Share tap while an
+      earlier attempt was still collecting its payload started a second unsynchronized thread, so
+      whichever attempt happened to finish last in real time won `lastShareFailed` even if it was
+      the *older* tap — fixed with an `attempt` ticket on `share()`; and the first version of that
+      fix drew the ticket from a field on the activity, which a configuration change resets to
+      zero — behind the process-level high-water mark `DebugReport` already compares against, so
+      every share the replacement instance fired read as stale — fixed by moving ticket issuance
+      into `DebugReport.nextAttempt()` itself, the same owner that compares tickets, so a
+      configuration change (which only resets activity-scoped state) can no longer desynchronize
+      the two.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
