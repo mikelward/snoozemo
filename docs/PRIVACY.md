@@ -4,28 +4,33 @@
 
 ## The short version
 
-**Snoozemo does not send anything you do to anyone.** There is no account to create, no
+**Snoozemo does not send anything automatically.** There is no account to create, no
 analytics, no advertising, no crash reporting, and no server for any of it to go to.
 Snoozemo does need to know where you are — that is the whole point of "stay quiet until I
-leave here" — but that answer is worked out on your phone and never sent anywhere. The one
-way what it stores can reach a second device is Android's own new-phone setup transfer,
-covered under **Backup**.
+leave here" — but that answer is worked out on your phone and never sent anywhere on its
+own. Two things can still move its data off the phone, and both need you to act first:
+Android's own new-phone setup transfer, covered under **Backup**, and the *Share debug logs*
+button — you build the report and choose where it goes, covered under **The debug log**.
 
 ## What leaves your phone
 
-Snoozemo sends nothing, anywhere, to anyone.
+Snoozemo sends nothing automatically, to anyone.
 
 It does not ask Android for the `INTERNET` permission, so it cannot open a network
-connection at all. That is not a promise you have to take on trust: Android enforces it,
-and the permission list is in the app's manifest, which anyone can read in the source at
-<https://github.com/mikelward/snoozemo>.
+connection at all — nothing here is ever an upload. That is not a promise you have to take
+on trust: Android enforces it, and the permission list is in the app's manifest, which
+anyone can read in the source at <https://github.com/mikelward/snoozemo>.
 
 Our Google Play Data Safety declaration says the same thing: **no data collected, no data
-shared**.
+shared** — "shared" there means transmitted by the app itself, which Snoozemo cannot do.
 
-The one thing that can move Snoozemo's data off a phone is Android itself, when you set up
-a new phone from your old one. That is a copy you asked for, going to a device you own, and
-it is covered under **Backup** below.
+Two things can still move Snoozemo's data off a phone, and both are things you do, not
+things Snoozemo does on its own. Android itself, when you set up a new phone from your old
+one — a copy you asked for, going to a device you own, covered under **Backup** below. And
+the *Share debug logs* button, or the post-crash banner's own Share action: tapping either
+builds a plain-text report and hands it to the clipboard and Android's share sheet, so a
+destination is something you pick, not something Snoozemo decides — covered under **The
+debug log** below.
 
 ## What Snoozemo keeps on your phone
 
