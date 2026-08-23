@@ -1257,7 +1257,7 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty-one rounds of
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty-two rounds of
       Codex findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
@@ -1412,7 +1412,25 @@ the point is that every other line of the app is worthless if it isn't true.
       floor for logs is coordinates, SSIDs/BSSIDs, and place names, none of which a clipboard,
       chooser, or file-I/O exception in this path can plausibly carry, and the exact
       `Log.e(TAG, "<description>", it)` shape is already used consistently in dozens of
-      already-reviewed call sites throughout this file.)
+      already-reviewed call sites throughout this file.) Three more, round twenty-two:
+      `docs/PRIVACY.md`'s "what the report contains" list omitted the capture timestamp,
+      application id, debuggable flag, and locale, all of which `buildDebugReportPayload`
+      genuinely includes — fixed by adding them to the disclosure, none of them anything
+      requiring a behavior change. The `deliveriesAtEntry` snapshot the mid-delivery-overlap
+      checks (rounds 19–21) rely on was taken inside `share()` itself, on the caller's own
+      background thread — but that thread's actual scheduling can lag the tap that started it,
+      so a retry tapped while an earlier attempt was still delivering, whose thread wasn't
+      scheduled until after that delivery finished, would sample `deliveriesCompleted`
+      post-increment and miss the very overlap its tap occurred during, delivering a second
+      time regardless — fixed by having `nextAttempt()` capture the snapshot synchronously on
+      the tap thread itself (keyed by ticket in a small map `share()` looks up), where
+      thread-scheduling delay can't reach it. And `readPreviousOrCrash`'s own initial
+      `crash.exists()` check — the one deciding which file to read — wasn't wrapped in its own
+      `runCatching` the way `hasPinnedCrash`'s equivalent check (round 20) already was; an
+      exception there escaped the worker's `Runnable` entirely, so
+      `onResult` was never called and every `Share` then waited out its own two-second timeout
+      and logged a misleading "timed out" instead of the real storage failure — fixed by
+      wrapping it the same way, returning an explicit failed read instead.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
