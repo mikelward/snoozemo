@@ -185,6 +185,32 @@ class DebugReportShareTest {
         assertTrue(text.contains("--- State ---"))
     }
 
+    /**
+     * `appVersionName`/`appVersionCode` fell back to "unknown"/-1 on a
+     * `PackageManager` exception without logging it (Codex, PR #89) — a
+     * failed lookup then read exactly like a normal one that happened to
+     * turn up nothing, with no trace of why. Removing the app's own package
+     * from the shadow `PackageManager` forces the same
+     * `NameNotFoundException` `getPackageInfo` would throw on a genuine
+     * lookup failure; the share must still complete with the documented
+     * fallback rather than hanging or crashing.
+     */
+    @Test
+    fun `a package-manager lookup failure falls back cleanly instead of hanging the share`() {
+        org.robolectric.Shadows.shadowOf(context.packageManager).removePackage(context.packageName)
+        var sharedText: String? = null
+
+        val result = DebugReport.share(
+            context,
+            clipboardWrite = { _, text -> sharedText = text; true },
+            chooserLaunch = { _, _ -> true },
+        )
+
+        assertTrue(result.clipboardCopied)
+        val text = requireNotNull(sharedText)
+        assertTrue(text.contains("Version: unknown (-1)"))
+    }
+
     @Test
     fun `a pinned crash that reads back blank is not consumed, and the report says so`() {
         // A crash marker can land without its content ever reaching disk —

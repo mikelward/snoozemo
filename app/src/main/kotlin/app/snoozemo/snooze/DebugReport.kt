@@ -524,11 +524,13 @@ internal object DebugReport {
 
     private fun appVersionName(context: Context): String = runCatching {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
-    }.getOrDefault("unknown")
+    }.onFailure { Log.w(TAG, "DebugReport could not read the app's own version name.", it) }
+        .getOrDefault("unknown")
 
     private fun appVersionCode(context: Context): Long = runCatching {
         context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
-    }.getOrDefault(-1L)
+    }.onFailure { Log.w(TAG, "DebugReport could not read the app's own version code.", it) }
+        .getOrDefault(-1L)
 
     /** Returns whether the share chooser actually launched. */
     private fun startShare(context: Context, text: String): Boolean =
@@ -543,7 +545,14 @@ internal object DebugReport {
             // harmless when the caller is one too.
             chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(chooser)
-        }.isSuccess
+        }
+            // Logged here, not left to share()'s own outer runCatching: this
+            // function already catches its own exception and returns false
+            // normally, so that outer catch never sees it — with a landed
+            // clipboard copy, that left a chooser that silently never opened
+            // with no diagnostic explanation anywhere (Codex, PR #89).
+            .onFailure { Log.e(TAG, "Launching the share chooser failed.", it) }
+            .isSuccess
 
     /** Returns whether the report actually landed on the clipboard. */
     private fun copyToClipboard(context: Context, text: String): Boolean =
@@ -555,7 +564,12 @@ internal object DebugReport {
                 cm.setPrimaryClip(ClipData.newPlainText("Snoozemo debug log", text))
                 true
             }
-        }.getOrDefault(false)
+        }
+            // Same reason as startShare's own logging just above: this
+            // function's own runCatching already stops the exception from
+            // reaching share()'s outer one.
+            .onFailure { Log.e(TAG, "Copying the debug report to the clipboard failed.", it) }
+            .getOrDefault(false)
 }
 
 /**
