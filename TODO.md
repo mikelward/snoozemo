@@ -1233,7 +1233,7 @@ the point is that every other line of the app is worthless if it isn't true.
       Bedtime's own rule taking exclusive ownership of the interruption filter instead of union-ing
       with Snoozemo's, or a One UI-specific composition quirk (`SPEC.md` §10). Not touched by the
       screen-split PR that logged this.
-- [ ] **Sharing the debug log** (`SPEC.md` §4.6) — the user-facing half of the Phase 3 log,
+- [x] **Sharing the debug log** (`SPEC.md` §4.6) — the user-facing half of the Phase 3 log,
       matching the sibling repos: a `Share debug logs` action through the system share sheet with a
       copy-to-clipboard fallback (no `INTERNET`, so the share sheet *is* the transport), and a
       post-crash banner offering to share the crashed run or dismiss it. Only a crash raises the
@@ -1241,7 +1241,20 @@ the point is that every other line of the app is worthless if it isn't true.
       nagging. Sizing matters: the payload crosses a Binder transaction twice, and an over-large one
       fails both silently, so bound it per section and in total. **Home is `SettingsScreen`**
       (maintainer, 2026-08-23, once the screen split below landed) — beside the debug-log toggle
-      it already carries, not a new screen of its own.
+      it already carries, not a new screen of its own. **Landed**: planned in `docs/DEBUG.md`
+      first (comparing the sibling Simmo/ClothesCast repos' own implementations, then narrowing —
+      Snoozemo has no rules/settings dump to report, so the structured header is build/device/
+      permission-and-capability state only), then built as `app/snooze/DebugReport.kt`
+      (`DebugReport.share`, mirroring Simmo's `DebugReport`/ClothesCast's `BugReport` shape: an
+      injectable-seamed clipboard-then-chooser flow, a pure `buildDebugReportPayload` with its own
+      section budgets summing under `MAX_SHARE_PAYLOAD_CHARS`) plus three new `DebugFileSink`/
+      `DebugLogging` read methods (`hasPinnedCrash`, `readPreviousOrCrash`, `consumeCrashPin`) and
+      a `CrashBanner` composable. The pin is consumed only on a landed clipboard copy — the durable
+      proof of delivery `ACTION_SEND` itself can't provide — never on the chooser merely opening,
+      so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
+      `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
+      regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, and
+      `SettingsScreenScreenshotTest`.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
@@ -1279,8 +1292,10 @@ the point is that every other line of the app is worthless if it isn't true.
       with no subsequent refresh ever succeeding, is a real (if narrow) gap. Worth a proper look at
       `refreshAccess()`'s failure handling in general — what it does for `access` itself, not a
       Filters-specific patch — if this comes up again or gets revisited for other reasons.
-- [ ] `docs/PRIVACY.md` must describe what the log carries **before** the sharing surface ships —
-      that ordering is the rule, not a preference (AGENTS.md, *Privacy*).
+- [x] `docs/PRIVACY.md` must describe what the log carries **before** the sharing surface ships —
+      that ordering is the rule, not a preference (AGENTS.md, *Privacy*). **Landed** alongside the
+      sharing surface above: "The debug log" section now describes the `Share debug logs` button
+      and the crash banner, what the report adds beyond the log itself, and restates the floor.
 
 ## Phase 6 (M6) — Internal-track release on Play
 

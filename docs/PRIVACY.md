@@ -1,6 +1,6 @@
 # Snoozemo privacy policy
 
-**Last updated: 2026-08-21. Covers Snoozemo v1 for Android.**
+**Last updated: 2026-08-23. Covers Snoozemo v1 for Android.**
 
 ## The short version
 
@@ -156,11 +156,26 @@ warning — a log that starts off guarantees the first one is the one nobody cap
 **Turning it off deletes everything the log kept, immediately**, including an unshared
 crash record: off means off, not "stop writing but keep the old files".
 
-**None of it leaves your phone.** The app cannot open a network connection, and there is
-currently no sharing feature: the log exists so that a future *Share debug logs* action —
-always an explicit act, through Android's share sheet, with you choosing the destination —
-can make a bug reportable. Per the rule under **Changes to this policy**, that feature will
-be described here before it ships.
+**None of it leaves your phone unless you share it.** The app cannot open a network
+connection, so there is no automatic upload of any kind — the only way this log reaches
+anyone else is the *Share debug logs* button in Settings, and the banner offering to share
+after a crash. Both are always an explicit act: tapping either builds a plain-text report and
+puts it on your clipboard, then opens Android's own share sheet so you choose the
+destination — email, a messaging app, a bug report form, wherever you decide to paste it.
+Nothing is sent anywhere by Snoozemo itself.
+
+**What the report contains, beyond the log described above**: your app version, device model
+and Android version, and whether Do Not Disturb access, notifications, and location are
+currently granted, whether location services and battery saver are on, and whether the
+Quick Settings tile has been added — all facts that commonly explain why a snooze
+misbehaved, none of them anything you typed. If the app's previous run ended in a crash, that
+run's log is included too, labeled as a crash, and sharing it (or dismissing the banner
+without sharing) clears it the same way the two-run limit above does.
+
+**The crash banner appears only after a crash** — an ordinary close, a force-stop, or an app
+update never raises it — and only until you share or dismiss it. The floor above is unchanged
+for a shared report: never a raw coordinate, a full Wi-Fi network name or identifier, or a
+place name you typed, whatever the report contains otherwise.
 
 ## Backup
 
