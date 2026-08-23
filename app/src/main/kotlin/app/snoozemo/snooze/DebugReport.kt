@@ -67,6 +67,12 @@ internal object DebugReport {
     @Volatile
     private var onShareOutcome: (() -> Unit)? = null
 
+    /** Test-only: resets the process-level outcome state so tests don't leak into each other. */
+    internal fun resetForTest() {
+        lastShareFailed = false
+        onShareOutcome = null
+    }
+
     /** Mirrors [DebugLogging.watchSaveOutcome]; see [lastShareFailed]. */
     fun watchShareOutcome(onChange: () -> Unit): AutoCloseable {
         onShareOutcome = onChange

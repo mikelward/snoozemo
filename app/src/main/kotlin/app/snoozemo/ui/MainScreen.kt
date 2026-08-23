@@ -51,6 +51,8 @@ fun MainScreen(
     lastOutcome: String?,
     /** Whether a crashed run is currently pinned (SPEC.md §4.6) — the crash banner's own state. */
     crashPending: Boolean,
+    /** Whether the last debug-log share reached neither the clipboard nor the chooser. */
+    shareFailed: Boolean,
     // Only SetupRowId.TILE is ever relevant here — this banner has no other
     // capability to fail — but the type is shared with the other screens'
     // failure-routing rather than narrowed to a Boolean, so a caller reading
@@ -93,7 +95,7 @@ fun MainScreen(
         // seen rather than tucked away on SettingsScreen (SPEC.md §4.6,
         // maintainer, 2026-08-23).
         if (crashPending) {
-            CrashBanner(onShare = onShareDebugLog, onDismiss = onDismissCrash)
+            CrashBanner(onShare = onShareDebugLog, onDismiss = onDismissCrash, shareFailed = shareFailed)
         }
         // The one required capability, stated as a problem rather than listed
         // as a row: nothing on this screen can arm without it, so it is a
