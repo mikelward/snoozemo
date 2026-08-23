@@ -148,13 +148,23 @@ class SnoozeNotifications(private val context: Context) {
      * nothing the tap-to-silence stretch depends on.
      *
      * Attempted once per process, like [ensureChannels], and only marked done
-     * on success — a refused write here must not skip the retry a later arm
-     * or reconciliation owes it. After the first successful arm the service's
-     * own receiver is registered anyway, and every later grant is caught by
-     * [reapplyDndBypass]'s regular call sites instead.
+     * once access is actually held — checked directly, because a caught
+     * exception is the wrong signal here. `createNotificationChannel` does not
+     * throw for a caller lacking `ACCESS_NOTIFICATION_POLICY`; it returns
+     * normally while the platform silently keeps `bypassDnd = false` (that is
+     * the whole reason this method exists). A tile tap before the user has
+     * ever granted access reaches `armWithCap`'s call to this just as surely
+     * as a granted one does, and treating that "success" as done would leave
+     * the guard permanently satisfied over channels that were never actually
+     * fixed (Codex, PR #92). Checked before attempting, too, so a no-access
+     * arm doesn't spend binder calls achieving nothing. After the first
+     * *access-holding* attempt the service's own receiver is registered
+     * anyway, and every later grant is caught by [reapplyDndBypass]'s regular
+     * call sites instead.
      */
     fun reapplyDndBypassOnce() {
         if (bypassReapplyAttempted) return
+        if (manager?.isNotificationPolicyAccessGranted != true) return
         runCatching { createChannels() }.fold(
             onSuccess = { bypassReapplyAttempted = true },
             onFailure = {
@@ -616,6 +626,9 @@ class SnoozeNotifications(private val context: Context) {
             channelsCreated = false
             bypassReapplyAttempted = false
         }
+
+        /** Test-only: whether [reapplyDndBypassOnce] has marked itself done. */
+        internal fun bypassReapplyAttemptedForTest(): Boolean = bypassReapplyAttempted
 
         private const val TAG = "SnoozeNotifications"
 
