@@ -55,6 +55,8 @@ fun MainScreen(
     shareFailed: Boolean,
     /** Whether the last Dismiss tap on the crash banner was refused by the file layer. */
     dismissFailed: Boolean,
+    /** Whether a share is already running, disabling the banner's Share button. */
+    sharing: Boolean = false,
     // Only SetupRowId.TILE is ever relevant here — this banner has no other
     // capability to fail — but the type is shared with the other screens'
     // failure-routing rather than narrowed to a Boolean, so a caller reading
@@ -102,6 +104,7 @@ fun MainScreen(
                 onDismiss = onDismissCrash,
                 shareFailed = shareFailed,
                 dismissFailed = dismissFailed,
+                sharing = sharing,
             )
         }
         // The one required capability, stated as a problem rather than listed

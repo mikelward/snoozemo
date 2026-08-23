@@ -161,6 +161,13 @@
     <string name="setup_debug_log_share_status" tools:ignore="MissingTranslation">Recent snooze activity, to help fix a bug</string>
     <!-- TODO: translate -->
     <string name="setup_debug_log_share_action" tools:ignore="MissingTranslation">Share</string>
+    <!--
+      Replaces the Share label on both Share affordances while one is
+      actually running, so the disabled button says why it is disabled
+      rather than just refusing the tap.
+    -->
+    <!-- TODO: translate -->
+    <string name="share_in_progress" tools:ignore="MissingTranslation">Sharing…</string>
     <!-- TODO: translate -->
     <string name="setup_debug_log_share_failed" tools:ignore="MissingTranslation">Couldn\'t share the debug log</string>
     <!--

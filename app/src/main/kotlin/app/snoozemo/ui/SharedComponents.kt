@@ -90,6 +90,15 @@ internal fun SetupRow(
     action: String?,
     onAction: () -> Unit,
     failure: String? = null,
+    /**
+     * Whether this row's own action is currently running, disabling its
+     * button while it is. Only the debug-log share row uses it so far — that
+     * action is repeatable and slow enough to tap twice, and gating it here
+     * is what removes the concurrent second tap rather than reconciling one
+     * afterwards (`DebugReport.shareInFlight`). Every other row's action
+     * either completes instantly or leaves the screen.
+     */
+    actionRunning: Boolean = false,
 ) {
     Surface(
         shape = MaterialTheme.shapes.medium,
@@ -135,7 +144,7 @@ internal fun SetupRow(
                 }
             }
             action?.let {
-                Button(onClick = onAction) { Text(it) }
+                Button(onClick = onAction, enabled = !actionRunning) { Text(it) }
             }
         }
     }
@@ -315,6 +324,13 @@ internal fun CrashBanner(
     onDismiss: () -> Unit,
     shareFailed: Boolean = false,
     dismissFailed: Boolean = false,
+    /**
+     * Whether a share is already running. The Share button is disabled while
+     * it is, so a second tap can't be made at all — which is what lets
+     * `DebugReport` stay free of the machinery that used to reconcile one
+     * after the fact (`DebugReport.shareInFlight`).
+     */
+    sharing: Boolean = false,
 ) {
     Surface(
         shape = MaterialTheme.shapes.medium,
@@ -363,8 +379,12 @@ internal fun CrashBanner(
                 TextButton(onClick = onDismiss) {
                     Text(stringResource(R.string.crash_banner_dismiss))
                 }
-                Button(onClick = onShare) {
-                    Text(stringResource(R.string.crash_banner_share))
+                Button(onClick = onShare, enabled = !sharing) {
+                    Text(
+                        stringResource(
+                            if (sharing) R.string.share_in_progress else R.string.crash_banner_share,
+                        ),
+                    )
                 }
             }
         }

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -466,6 +467,38 @@ class SettingsScreenScreenshotTest {
         composeRule.onNodeWithText("Couldn't share the debug log").assertExists()
         composeRule.onNodeWithText("Share").performClick()
         assertEquals(1, shared)
+    }
+
+    @Test
+    fun `the share row disables its own button while a share is running`() {
+        // The gate that replaced the delivery-layer reuse machinery
+        // (`DebugReport.shareInFlight`): a second tap can't be made while
+        // the first is resolving, so nothing downstream has to work out
+        // afterwards that it was a duplicate. The label says why the button
+        // is disabled rather than just refusing the tap.
+        var shared = 0
+
+        capture("settings-screen-sharing.png") {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                debugLogCleanupFailed = false,
+                shareFailed = false,
+                sharing = true,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onShareDebugLog = { shared++ },
+            )
+        }
+
+        composeRule.onNodeWithText("Sharing…").assertIsNotEnabled()
+        composeRule.onNodeWithText("Sharing…").performClick()
+        assertEquals("a disabled button must not fire its action", 0, shared)
     }
 
     @Test

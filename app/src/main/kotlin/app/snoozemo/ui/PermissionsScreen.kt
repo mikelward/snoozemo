@@ -52,6 +52,8 @@ fun PermissionsScreen(
     shareFailed: Boolean = false,
     /** Whether the last Dismiss tap on the crash banner was refused by the file layer. */
     dismissFailed: Boolean = false,
+    /** Whether a share is already running, disabling the banner's Share button. */
+    sharing: Boolean = false,
     onAccessRow: () -> Unit,
     onNotificationsRow: () -> Unit,
     onLocationRow: () -> Unit,
@@ -84,6 +86,7 @@ fun PermissionsScreen(
                 onDismiss = onDismissCrash,
                 shareFailed = shareFailed,
                 dismissFailed = dismissFailed,
+                sharing = sharing,
             )
         }
         // Nothing at all until access has been read, rather than a guess in

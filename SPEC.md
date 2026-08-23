@@ -676,6 +676,17 @@ not done: a disposable diagnostic belongs in the cache, eviction costs a nice-to
 anything the user relies on, and the alternative keeps crash logs alive past the retention this
 section promises.
 
+**Sharing is repeatable, so only one share runs at a time** (2026-08-23). Both Share affordances —
+the permanent Settings row and the crash banner's own button — are disabled while a share is
+resolving, and say *Sharing…* rather than silently refusing the tap. The alternative, letting a
+second tap start a second concurrent share and working out afterwards which one the user meant, was
+built first and removed: reconciling two in-flight deliveries needed a completed-delivery counter,
+the last delivery's outcome and pin-safety, and a map of per-attempt snapshots, and that machinery
+was itself the single largest source of defects in this feature (PR #89). Coalescing at the tap
+deletes the question instead of answering it, and reads better besides — a disabled button that says
+what it is doing beats a tap that resolves into some other attempt's outcome. The delivery path stays
+serialized underneath as a floor, so the guarantee does not depend on every caller honoring the gate.
+
 ---
 
 ## 5. Do Not Disturb mechanism

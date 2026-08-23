@@ -469,6 +469,43 @@ class MainScreenScreenshotTest {
     }
 
     @Test
+    fun `the crash banner disables its own Share button while a share is running`() {
+        // Same gate as the Settings row's (`DebugReport.shareInFlight`) —
+        // this banner's Share button is a second route to the same call, so
+        // it has to be gated too or the tap it prevents could still be made
+        // from here.
+        var shared = 0
+
+        capture("main-screen-crash-banner-sharing.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                lastOutcome = null,
+                crashPending = true,
+                shareFailed = false,
+                dismissFailed = false,
+                sharing = true,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = { shared++ },
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Sharing…").assertIsNotEnabled()
+        composeRule.onNodeWithText("Sharing…").performClick()
+        assertEquals("a disabled button must not fire its action", 0, shared)
+    }
+
+    @Test
     fun `a share that fails from the crash banner says so on the banner itself`() {
         // The banner's own Share button reaches the same DebugReport.share
         // call the permanent Settings row uses — a failure from this one

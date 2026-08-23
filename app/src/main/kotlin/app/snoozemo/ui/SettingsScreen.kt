@@ -44,6 +44,8 @@ internal fun SettingsScreen(
     playUpdateRestartFailed: Boolean = false,
     debugLogCleanupFailed: Boolean,
     shareFailed: Boolean,
+    /** Whether a share is already running, disabling the share row's button. */
+    sharing: Boolean = false,
     onOpenPermissions: () -> Unit,
     onTileRow: () -> Unit,
     onFiltersRow: () -> Unit,
@@ -142,9 +144,12 @@ internal fun SettingsScreen(
         SetupRow(
             title = stringResource(R.string.setup_debug_log_share_title),
             status = stringResource(R.string.setup_debug_log_share_status),
-            action = stringResource(R.string.setup_debug_log_share_action),
+            action = stringResource(
+                if (sharing) R.string.share_in_progress else R.string.setup_debug_log_share_action,
+            ),
             onAction = onShareDebugLog,
             failure = stringResource(R.string.setup_debug_log_share_failed).takeIf { shareFailed },
+            actionRunning = sharing,
         )
     }
 }

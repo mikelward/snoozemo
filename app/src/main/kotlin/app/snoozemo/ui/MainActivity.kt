@@ -462,6 +462,20 @@ class MainActivity : ComponentActivity() {
      */
     internal var shareFailed by mutableStateOf(false)
 
+    /**
+     * Whether a share is currently in flight, so both Share affordances (the
+     * permanent Settings row and the crash banner's own button) can be
+     * disabled while it resolves.
+     *
+     * This is what makes a second concurrent tap impossible, which is why
+     * `DebugReport` no longer has to reconcile one after the fact — see
+     * [DebugReport.shareInFlight]. Read from the same process-level owner
+     * and applied through [shareWatch], for the same dead-instance reason
+     * [shareFailed] is: a configuration change mid-share must not hand the
+     * replacement instance a re-enabled button for a share still running.
+     */
+    internal var sharing by mutableStateOf(false)
+
     /** The handle for the share-outcome watch; see [onStart] and [DebugReport.watchShareOutcome]. */
     private var shareWatch: AutoCloseable? = null
 
@@ -679,6 +693,7 @@ class MainActivity : ComponentActivity() {
                             crashPending = crashPending,
                             shareFailed = shareFailed,
                             dismissFailed = dismissFailed,
+                            sharing = sharing,
                             settingsFailure = settingsFailure,
                             onOpenPermissions = { openPermissions(Screen.MAIN) },
                             onOpenSettings = { screen = Screen.SETTINGS },
@@ -706,6 +721,7 @@ class MainActivity : ComponentActivity() {
                                 crashPending = crashPending,
                                 shareFailed = shareFailed,
                                 dismissFailed = dismissFailed,
+                                sharing = sharing,
                                 onAccessRow = ::openPolicyAccessSettings,
                                 onNotificationsRow = ::fixNotifications,
                                 onLocationRow = ::fixLocation,
@@ -726,6 +742,7 @@ class MainActivity : ComponentActivity() {
                                 playUpdateRestartFailed = playUpdateRestartFailed,
                                 debugLogCleanupFailed = debugLogCleanupFailed,
                                 shareFailed = shareFailed,
+                                sharing = sharing,
                                 onOpenPermissions = { openPermissions(Screen.SETTINGS) },
                                 onTileRow = ::addTile,
                                 onFiltersRow = ::openFilters,
@@ -844,7 +861,10 @@ class MainActivity : ComponentActivity() {
         // already hold an outcome nothing has shown yet.
         debugLogCleanupFailed = DebugLogging.lastDisableCleanupFailed
         shareWatch = DebugReport.watchShareOutcome {
-            runOnUiThread { shareFailed = DebugReport.lastShareFailed }
+            runOnUiThread {
+                shareFailed = DebugReport.lastShareFailed
+                sharing = DebugReport.shareInFlight
+            }
         }
         // Syncs immediately, unlike crashPending (which self-heals through
         // readNotificationsAfterFirstFrame's own hasPinnedCrash read): a share
@@ -855,6 +875,11 @@ class MainActivity : ComponentActivity() {
         // (Codex, PR #89). A plain volatile read, not file I/O, so this costs
         // nothing in front of the first frame.
         shareFailed = DebugReport.lastShareFailed
+        // Same read, same reason: a share started before a configuration
+        // change is still running, and this replacement instance must show
+        // its button disabled rather than re-offering a tap that is already
+        // in flight.
+        sharing = DebugReport.shareInFlight
         // Same shape and same reason as shareWatch/shareFailed just above,
         // for a Dismiss tap's own refused consume (Codex, PR #89).
         dismissWatch = DebugLogging.watchDismissOutcome {
@@ -1794,10 +1819,18 @@ class MainActivity : ComponentActivity() {
      * compares against, and every share the replacement instance fired
      * would then read as stale (Codex, PR #89, second round on this same
      * mechanism).
+     *
+     * Drawing that ticket also raises [DebugReport.shareInFlight], which
+     * both Share affordances are disabled on ([sharing]) — so the second
+     * tap this whole mechanism used to reconcile after the fact simply
+     * can't be made. Set synchronously here on the main thread, before the
+     * background work starts, so there is no window in which a thread's
+     * scheduling delay could let another tap through.
      */
     private fun shareDebugLog() {
         shareFailed = false
         val attempt = DebugReport.nextAttempt()
+        sharing = true
         Thread { DebugReport.share(applicationContext, attempt) }.start()
     }
 
