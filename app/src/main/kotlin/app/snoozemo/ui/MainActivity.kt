@@ -56,6 +56,7 @@ import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.snooze.ActiveSnoozeStore
 import app.snoozemo.snooze.DebugLogStore
 import app.snoozemo.snooze.DebugLogging
+import app.snoozemo.snooze.DebugReport
 import app.snoozemo.snooze.LocationPromptStore
 import app.snoozemo.snooze.NotificationPromptStore
 import app.snoozemo.snooze.PlayUpdateStore
@@ -415,6 +416,26 @@ class MainActivity : ComponentActivity() {
     private var debugLogSaveFailed by mutableStateOf(false)
 
     /**
+     * Whether a crashed run is currently pinned (SPEC.md §4.6) — the post-crash
+     * banner's own state. Defaults to **false** so the banner cannot flash on a
+     * screen that has not finished reading yet, the same discipline
+     * [tileBannerDismissed] follows for the same reason. Read once, at the
+     * first frame after this activity's own (re)start: nothing outside this
+     * activity's own Share/Dismiss taps can change the pin while it is alive
+     * (`docs/DEBUG.md` — the app is single-process, so there is no sibling
+     * process to poll for on resume the way the ClothesCast repo's banner does).
+     */
+    private var crashPending by mutableStateOf(false)
+
+    /**
+     * Whether the last debug-log share reached neither the clipboard nor the
+     * chooser. Cleared by the next tap, like [debugLogSaveFailed] — the
+     * message describes the previous attempt, and a new one supersedes it
+     * whatever it returns.
+     */
+    private var shareFailed by mutableStateOf(false)
+
+    /**
      * Which row's Settings trip was refused, if either was.
      *
      * Held per row rather than as one message at the foot of the screen: the
@@ -645,6 +666,8 @@ class MainActivity : ComponentActivity() {
                                 debugLogSaveFailed = debugLogSaveFailed,
                                 playUpdate = displayedPlayUpdate,
                                 playUpdateRestartFailed = playUpdateRestartFailed,
+                                crashPending = crashPending,
+                                shareFailed = shareFailed,
                                 onOpenPermissions = { openPermissions(Screen.SETTINGS) },
                                 onTileRow = ::addTile,
                                 onFiltersRow = ::openFilters,
@@ -652,6 +675,8 @@ class MainActivity : ComponentActivity() {
                                 onStartPlayUpdate = ::startPlayUpdate,
                                 onCompletePlayUpdate = ::completePlayUpdate,
                                 onDismissPlayUpdate = ::dismissPlayUpdate,
+                                onShareDebugLog = ::shareDebugLog,
+                                onDismissCrash = ::dismissCrash,
                             )
                         }
                     }
@@ -837,6 +862,13 @@ class MainActivity : ComponentActivity() {
                 // starts at `NotAvailable`), so there is nothing in flight to
                 // clobber.
                 dismissedPlayUpdateVersionCode = playUpdateStore.dismissedVersionCode
+                // Async, unlike the reads above: this is a real file check on
+                // the debug-log worker, not a cache hit off an
+                // already-loaded preferences file. See `crashPending`'s own
+                // comment for why once, here, is enough.
+                DebugLogging.hasPinnedCrash { pinned ->
+                    runOnUiThread { crashPending = pinned }
+                }
             }
         }
     }
@@ -1587,6 +1619,39 @@ class MainActivity : ComponentActivity() {
             }
         }
         Log.e(TAG, "No Play Store target available to open the listing.")
+    }
+
+    /**
+     * Shares the debug log (SPEC.md §4.6), from either the permanent row or
+     * the crash banner's own Share button — the same flow either way, since
+     * [DebugReport.share] already picks up a pinned crash automatically
+     * (`DebugLogging.readPreviousOrCrash`) and consumes the pin itself once
+     * the share actually lands.
+     *
+     * Runs off the main thread: [DebugReport.share] does binder and disk I/O
+     * (policy access, permission checks, reading the previous run's file),
+     * none of which belongs in front of a tap the user expects to be instant.
+     */
+    private fun shareDebugLog() {
+        shareFailed = false
+        Thread {
+            val result = DebugReport.share(applicationContext)
+            runOnUiThread {
+                if (result.clipboardCopied) crashPending = false
+                if (!result.reachedUser) shareFailed = true
+            }
+        }.start()
+    }
+
+    /**
+     * Dismisses the crash banner without sharing — consumes the pin directly
+     * (SPEC.md §4.6): afterward the run is an ordinary previous run, shareable
+     * from the permanent row and rotated away like any other.
+     */
+    private fun dismissCrash() {
+        DebugLogging.consumeCrashPin { consumed ->
+            runOnUiThread { if (consumed) crashPending = false }
+        }
     }
 
     /**

@@ -301,6 +301,53 @@ internal fun PlayUpdateBanner(
 }
 
 /**
+ * The post-crash banner (SPEC.md §4.6, `docs/DEBUG.md`): shown on
+ * [SettingsScreen] only while an uncaught-exception run is pinned. Modeled
+ * on [TileBanner]'s shape — a card that makes a case, not a [SetupRow] that
+ * states a fact — but colored for a problem rather than an opportunity.
+ *
+ * `onShare` hands off through the same share flow the permanent row below
+ * uses; it is *this* banner's job only to know it should appear and to ask.
+ */
+@Composable
+internal fun CrashBanner(
+    onShare: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.crash_banner_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = stringResource(R.string.crash_banner_body),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.crash_banner_dismiss))
+                }
+                Button(onClick = onShare) {
+                    Text(stringResource(R.string.crash_banner_share))
+                }
+            }
+        }
+    }
+}
+
+/**
  * The debug log's on/off switch (SPEC.md §4.6): on by default, and turning it
  * off deletes what was kept.
  *
