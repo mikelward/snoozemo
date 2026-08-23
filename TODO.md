@@ -172,46 +172,26 @@ the point is that every other line of the app is worthless if it isn't true.
       from a phone that may still be silenced by Snoozemo's own rule — genuinely needs to
       survive that; it moved to its own `snooze_urgent` channel and everything else stayed on
       `snooze_ended`, non-bypassing. Retires the "Decisions needing review" entry this replaced.
-- [x] **Reapply the bypass once policy access is actually granted** (Codex, PR #92). Channel
-      creation runs from `warm()` at app startup, before onboarding can have granted
-      `ACCESS_NOTIFICATION_POLICY` — and the platform only honors `setBypassDnd` from a caller
-      that currently holds it, silently keeping `bypassDnd = false` on a channel created without
-      it. `SnoozeNotifications.reapplyDndBypass()` re-issues all three channels unconditionally
-      (idempotent when nothing needs to change) and is called from both places the app already
-      reconciles a policy-access change (`SnoozeService.reconcilePolicyAccess`,
-      `MainActivity.ensureRuleInBackground`), so the first snooze after granting access still
-      gets bypass-capable channels rather than waiting for a process restart.
-- [x] **Reapply the bypass for an out-of-band access grant too** (Codex, PR #92). The two call
-      sites above both rely on the app noticing the access change while running; granting
-      access directly from system Settings while neither `MainActivity` nor `SnoozeService` is
-      alive to observe it, followed by the very first arm of a process that never saw the
-      change, goes straight through `ACTION_ARM` — deliberately excluded from
-      `reconcilePolicyAccess` to keep policy IPC off the arm path. `SnoozeNotifications
-      .reapplyDndBypassOnce()` closes it: called from `showOngoing()` **and** from
-      `SnoozeService.armWithCap()` right after `beginArming()` returns, whatever it returns —
-      both safe because `beginArming` has already made its zen-state IPC by the time it
-      returns, so reapplying there costs nothing the tap-to-silence stretch depends on.
-- [x] **Cover the refused-arm path too, and only mark the reapply done on success** (Codex, PR
-      #92). Two follow-on gaps in the fix above: (1) a refused arm can still have left
-      `STATE_TRUE` on the rule (§7.1) and cascade straight into `beginRelease()` and
-      `showStuckRule()` — the one alert that most needs to survive Snoozemo's own DND — without
-      `showOngoing()` ever running, since that only fires on a successful arm; closed by the
-      `armWithCap()` call site above, which runs regardless of `beginArming`'s outcome. (2) the
-      once-per-process guard was being set *before* confirming `createNotificationChannel`
-      actually succeeded, so a transient IPC failure on the first attempt would have skipped
-      every later retry for the rest of that process; `reapplyDndBypassOnce()` now marks itself
-      done only inside the success branch.
-- [x] **"Didn't throw" was still the wrong signal for success** (Codex, PR #92). The fix above
-      marked the guard done whenever `createNotificationChannel` didn't throw — but a caller
-      lacking `ACCESS_NOTIFICATION_POLICY` gets a normal return with `bypassDnd` silently kept
-      false, which is exactly the platform behavior this whole feature exists to work around. An
-      arm attempted before the user has ever granted access reaches `armWithCap`'s call to
-      `reapplyDndBypassOnce()` just as surely as a granted one does, and the old check would have
-      marked that "done" too — permanently, since nothing else clears the guard.
-      `reapplyDndBypassOnce()` now checks `NotificationManager.isNotificationPolicyAccessGranted`
-      directly before attempting, and only marks itself done when that's true. Covered by
-      `SnoozeNotificationsChannelTest`, using Robolectric's `setNotificationPolicyAccessGranted`
-      to simulate the denied case the shadow otherwise can't reach on its own.
+- [x] **Keep the bypass correct however access was granted, and however late a bypassing alert
+      posts** (Codex, PR #92, many rounds — the mechanism below is the final state, arrived at
+      after several real gaps were found and fixed in getting there; see PR #92's history for the
+      iteration). Channel creation runs from `warm()` at app startup, before onboarding can have
+      granted `ACCESS_NOTIFICATION_POLICY` — and the platform only honors `setBypassDnd` from a
+      caller that currently holds that access, silently keeping `bypassDnd = false` on a channel
+      created without it. `SnoozeNotifications.reapplyDndBypassOnce()` re-issues the channels and
+      is called from exactly two places, each immediately before it posts: `showOngoing()` and
+      `showStuckRule()` — never from `SnoozeService.armWithCap()`, which was tried and consistently
+      turned out to sit ahead of a durable write (the record's save, or `beginRelease()`'s release
+      obligation) that a process death could lose. Both call sites are safe for the arm-path rule
+      because `beginArming()` has already made its zen-state IPC by the time either one runs. The
+      guard checks `NotificationManager.isNotificationPolicyAccessGranted` directly — not whether
+      `createNotificationChannel` merely avoided throwing, which is a different and weaker signal —
+      and is contained the same way every other binder call in this class is, treating a failed
+      read as "not granted" so a later attempt retries. Marked done only once access is actually
+      confirmed held, so a no-access attempt (a tile tap before the user has ever granted access)
+      never permanently satisfies it over channels that were never actually fixed. Covered by
+      `SnoozeNotificationsChannelTest`, including the denied-access case Robolectric's shadow can't
+      reach on its own (`setNotificationPolicyAccessGranted`).
 - [x] **The ongoing card needed `setOnlyAlertOnce`, and didn't have it** (Codex, PR #92; `SPEC.md`
       §4.3). `showOngoing()` reposts on every `ARMED`/`CHECKING` transition, including routine
       presence evidence flip-flopping while a snooze runs — not just the initial arm. Before this
@@ -221,35 +201,6 @@ the point is that every other line of the app is worthless if it isn't true.
       with `setOnlyAlertOnce(true)` — only the first post of the card alerts, later ones update
       quietly — and covered by `SnoozeNotificationsChannelTest` asserting
       `Notification.FLAG_ONLY_ALERT_ONCE`.
-- [x] **Two more gaps in the reapply logic** (Codex, PR #92). (1) `reapplyDndBypassOnce()`'s
-      `isNotificationPolicyAccessGranted` read was itself unguarded — called from `armWithCap()`
-      right after the zen rule has already gone `STATE_TRUE`, so an escaping exception there would
-      unwind the caller before the record was written or the notification posted, over a phone
-      DND had already silenced. Wrapped the same way every other binder call in this class is,
-      treating a failed read as "not granted" so a later attempt retries. (2) the one
-      `armWithCap()` attempt is not the only place `showStuckRule()` can fire from — release
-      escalation can retry across several alarm-scheduled rungs before giving up — so a failed
-      first attempt left nothing to retry the bypass before the one alert meant to survive a stuck
-      rule finally posts. `showStuckRule()` now makes its own `reapplyDndBypassOnce()` attempt
-      immediately before posting; cheap and a no-op once it has already succeeded.
-- [x] **The `armWithCap()` reapply call was ahead of the record's save, not behind it** (Codex,
-      PR #92). It ran unconditionally right after `beginArming()` returned, whatever it returned —
-      including on a successful arm, where the `ARMED` transition had already run `showOngoing()`
-      (with its own `reapplyDndBypassOnce()`) synchronously *inside* `beginArming()`, before the
-      record is force-saved to disk a few lines later in `armWithCap()`. An extra, redundant call
-      sitting in front of that save widened the window between the zen rule going `STATE_TRUE` and
-      the one write that can find it again after a process death, for nothing the success path
-      needed. Moved inside the refused-arm branch only, where it is still the one place that
-      catches a `STATE_TRUE` left behind by a refused arm before `beginRelease()` and
-      `showStuckRule()`.
-- [x] **The fix above just moved the same problem to the other branch** (Codex, PR #92). Once
-      inside the refused-arm branch only, the reapply call now sat ahead of *that* branch's own
-      durable write — `beginRelease()` establishing the release obligation — the same class of
-      risk as before, just relocated. The actual fix: remove the `armWithCap()` call entirely.
-      `showStuckRule()`'s own attempt (two bullets up) already runs immediately before *it*
-      posts, however many release-escalation rungs later that turns out to be, so nothing
-      upstream needs to try on its behalf — the call in `armWithCap()` had become pure
-      redundancy with a durability cost, on both branches, once `showStuckRule()` covered itself.
 - [x] `SnoozeController` state machine (IDLE / ARMING / ARMED / CHECKING / RELEASED) as
       plain Kotlin over an injected clock — the unit-test surface for everything that
       follows. Covers the three invariants directly: the cap fires (and can't be made to
