@@ -1129,14 +1129,31 @@ Nothing here is scheduled; each is a sequel that follows from something already 
       PR — it only downloads the already-rendered artifact and pushes it.
       - It also solves the loop-prevention problem this repo currently works around with
         `workflow_dispatch` (the `pr`-input dance described atop `android-ci.yml`, lines
-        27–45): passing a `push-token` secret (a fine-grained PAT, repo-secret convention
-        name `CI_COMMIT_ARTIFACT_TOKEN` across the fleet) authenticates the push as a real
-        identity instead of `GITHUB_TOKEN`, so the push itself retriggers `pull_request`
-        naturally — no `workflow_dispatch` round-trip needed. Check whether that PAT should
-        run as the maintainer, a bot collaborator account, or a GitHub App installation
-        token — whichever is allowlisted to trigger required checks on this repo — and
-        whether `dispatch-workflow` (still safe for our plain `pull_request` trigger per
-        that secret's own description) is simpler to keep for now than adding a new secret.
+        27–45): passing a `push-token` secret authenticates the push as a real identity
+        instead of `GITHUB_TOKEN`, so the push itself retriggers CI naturally — no
+        `workflow_dispatch` round-trip needed.
+      - **Identity, checked against how the fleet actually does this (2026-08-23):**
+        `typelauncher` already wires this up — `secrets.CI_COMMIT_ARTIFACT_TOKEN`, a
+        fine-grained PAT (Contents: read/write, scoped to that one repository), not a
+        GitHub App. The fleet's App pattern (`LANES_APP_ID`/`LANES_APP_PRIVATE_KEY`,
+        `GRADLE_UPDATE_APP_ID`/`GRADLE_UPDATE_APP_PRIVATE_KEY` in `typelauncher`) is used
+        for other jobs (posting the required `lanes` status, opening dependency-update
+        PRs) — nobody in the fleet points an App at the commit-artifact push specifically.
+        Either a PAT is minted by the maintainer's own account or a dedicated bot
+        collaborator account — both need a human to create it from GitHub's Settings →
+        Developer settings (or to create and install an App, if that route is preferred
+        instead); no agent can self-provision this.
+      - **`push-token` is only load-bearing for a `pull_request_target` caller.**
+        `typelauncher` runs its whole CI under `pull_request_target` (a separate, bigger
+        change made for unrelated reasons — protecting the workflow definition from PR
+        tampering) and needs `push-token` there because `dispatch-workflow` is unsafe
+        under that trigger. Snoozemo's `android-ci.yml` still runs plain `pull_request`,
+        where `ci-commit-artifact`'s own validation logic already treats
+        `dispatch-workflow` as safe — so for snoozemo, `push-token` would be a
+        simplification (drop the two-step dispatch dance and the `pr` input plumbing), not
+        a correctness requirement. Worth deciding whether that simplification is worth a
+        new PAT/secret to maintain, or whether to keep `dispatch-workflow` and adopt only
+        the clean-job security fix.
       - Not investigated yet: whether `ci-commit-artifact`'s single-artifact-directory
         model (`artifact-name` → `dest-path`) maps cleanly onto
         `app/src/test/snapshots/images/`, and what changes downstream (the "Commit
