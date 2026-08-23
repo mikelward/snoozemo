@@ -162,6 +162,15 @@ the point is that every other line of the app is worthless if it isn't true.
       cards, which can post while the rule is still on. **Still owed: verify on a real device**
       that the flag actually keeps the cards audible/visible through the app's own DND — nothing
       in this sandbox can confirm the platform honors it (hardware item 12 below).
+- [x] **Reapply the bypass once policy access is actually granted** (Codex, PR #92). Channel
+      creation runs from `warm()` at app startup, before onboarding can have granted
+      `ACCESS_NOTIFICATION_POLICY` — and the platform only honors `setBypassDnd` from a caller
+      that currently holds it, silently keeping `bypassDnd = false` on a channel created without
+      it. `SnoozeNotifications.reapplyDndBypass()` re-issues both channels unconditionally
+      (idempotent when nothing needs to change) and is called from both places the app already
+      reconciles a policy-access change (`SnoozeService.reconcilePolicyAccess`,
+      `MainActivity.ensureRuleInBackground`), so the first snooze after granting access still
+      gets bypass-capable channels rather than waiting for a process restart.
 - [x] `SnoozeController` state machine (IDLE / ARMING / ARMED / CHECKING / RELEASED) as
       plain Kotlin over an injected clock — the unit-test surface for everything that
       follows. Covers the three invariants directly: the cap fires (and can't be made to

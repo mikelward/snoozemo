@@ -57,29 +57,58 @@ class SnoozeNotifications(private val context: Context) {
     private fun ensureChannels() {
         if (channelsCreated) return
         runCatching {
-            // A channel's importance is fixed at creation: once the user can
-            // see a channel the level is theirs, and later calls with a
-            // different value are ignored. So a device that already ran a build
-            // with this channel at `IMPORTANCE_LOW` keeps it there until its app
-            // data is cleared — worth knowing when testing, and nothing more
-            // than that while nothing has shipped. After release, changing the
-            // level would need a new channel id.
-            manager.createNotificationChannel(
-                NotificationChannel(CHANNEL_ACTIVE, context.getString(R.string.channel_active), NotificationManager.IMPORTANCE_DEFAULT)
-                    .apply { setBypassDnd(true) },
-            )
-            manager.createNotificationChannel(
-                // Bypasses too: showFailure/showStuckRule post here, and both can
-                // fire while the rule Snoozemo just turned on is still active — the
-                // stuck-rule card is the only way back from a phone that may be
-                // silenced with nothing else able to un-silence it (SPEC.md §5.7),
-                // so it cannot be the one thing our own DND swallows.
-                NotificationChannel(CHANNEL_ENDED, context.getString(R.string.channel_ended), NotificationManager.IMPORTANCE_DEFAULT)
-                    .apply { setBypassDnd(true) },
-            )
+            createChannels()
             channelsCreated = true
         }.onFailure {
             Log.e(TAG, "Creating the notification channels failed; continuing without them.", it)
+        }
+    }
+
+    /**
+     * A channel's importance is fixed at creation: once the user can see a
+     * channel the level is theirs, and later calls with a different value are
+     * ignored. So a device that already ran a build with this channel at
+     * `IMPORTANCE_LOW` keeps it there until its app data is cleared — worth
+     * knowing when testing, and nothing more than that while nothing has
+     * shipped. After release, changing the level would need a new channel id.
+     *
+     * `setBypassDnd` is not fixed the same way — see [reapplyDndBypass].
+     */
+    private fun createChannels() {
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_ACTIVE, context.getString(R.string.channel_active), NotificationManager.IMPORTANCE_DEFAULT)
+                .apply { setBypassDnd(true) },
+        )
+        manager.createNotificationChannel(
+            // Bypasses too: showFailure/showStuckRule post here, and both can
+            // fire while the rule Snoozemo just turned on is still active — the
+            // stuck-rule card is the only way back from a phone that may be
+            // silenced with nothing else able to un-silence it (SPEC.md §5.7),
+            // so it cannot be the one thing our own DND swallows.
+            NotificationChannel(CHANNEL_ENDED, context.getString(R.string.channel_ended), NotificationManager.IMPORTANCE_DEFAULT)
+                .apply { setBypassDnd(true) },
+        )
+    }
+
+    /**
+     * Re-issues both channels so a `setBypassDnd(true)` the platform rejected
+     * before this app held `ACCESS_NOTIFICATION_POLICY` is honored once it does.
+     *
+     * The platform only honors a channel's bypass flag from a caller that
+     * currently holds policy access; a channel created without it keeps
+     * `bypassDnd = false` regardless of what was requested, silently, and
+     * [ensureChannels]'s once-per-process guard means the ordinary construction
+     * path — `warm()` at app startup, well before onboarding can have granted
+     * anything — never asks again (Codex, PR #92). So this is unconditional,
+     * called from wherever the app already reconciles policy access (never the
+     * arm path, which cannot pay for this IPC): `createNotificationChannel` on
+     * an existing channel is a no-op for whatever hasn't changed, so a call that
+     * finds nothing to fix costs a couple of cheap binder round trips and
+     * nothing else.
+     */
+    fun reapplyDndBypass() {
+        runCatching { createChannels() }.onFailure {
+            Log.e(TAG, "Reapplying the DND-bypass channels failed; a later reconciliation retries.", it)
         }
     }
 

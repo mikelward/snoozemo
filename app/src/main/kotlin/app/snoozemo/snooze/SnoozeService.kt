@@ -432,7 +432,14 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 SnoozeDebugLog.event("policy access revoked mid-snooze; ending")
                 controller.end(EndReason.LOST_CAPABILITY)
             }
-            PolicyAccessAction.EnsureRule -> zen.ensureRule()
+            PolicyAccessAction.EnsureRule -> {
+                zen.ensureRule()
+                // Same trigger as the rule: access just arrived, which is
+                // exactly when a channel `warm()` created before onboarding
+                // granted it needs to be re-issued (SnoozeNotifications
+                // .reapplyDndBypass).
+                notifications.reapplyDndBypass()
+            }
             PolicyAccessAction.None -> Unit
         }
     }

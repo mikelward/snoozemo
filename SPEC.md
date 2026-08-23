@@ -802,9 +802,19 @@ worked, and the failure and stuck-rule cards (§4.5) that can post *while the ru
 including the one notification that exists to hand back a phone that may be stuck silenced, which
 cannot itself be a casualty of that silence.
 
-This only takes effect with `ACCESS_NOTIFICATION_POLICY` granted, which arming already requires
-(§5.2) — so by the time any of these channels has something to post, the access `setBypassDnd`
-needs is already in place, and this is pure code with no separate prompt.
+This only takes effect for a caller that currently holds `ACCESS_NOTIFICATION_POLICY` — which
+arming already requires (§5.2), so by the time a snooze exists to report on, the access
+`setBypassDnd` needs is in place. Channel *creation* is earlier than that, though:
+`SnoozeNotifications.warm()` runs from `Application.onCreate()`, on every process start including
+the very first one, well before onboarding can have granted anything. A channel created without
+that access silently keeps `bypassDnd = false` regardless of what was requested — the platform
+resets it rather than deferring the choice — and creating a channel that already exists is
+otherwise a no-op, so the ordinary once-per-process construction path never asks again (Codex, PR
+#92). `SnoozeNotifications.reapplyDndBypass()` closes that: it re-issues both channels
+unconditionally, and is called wherever the app already reconciles a policy-access change
+(`SnoozeService.reconcilePolicyAccess()`, `MainActivity.ensureRuleInBackground()` —
+`PolicyAccessAction.EnsureRule`, both off the arm path) rather than gated by the once-only flag, so
+access granted after the channels first existed still reaches them.
 
 It is a per-channel importance flag, not a zen-rule change, so it does not touch §5.6's "Snoozemo
 touches only its own rule" invariant. The user can still switch it off per-channel in Settings
