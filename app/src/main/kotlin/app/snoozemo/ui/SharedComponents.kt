@@ -16,6 +16,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -31,8 +32,16 @@ import app.snoozemo.R
  */
 @Composable
 fun SnoozemoTheme(content: @Composable () -> Unit) {
+    // Built once per dark-mode reading rather than on every recomposition:
+    // `lightColorScheme()`/`darkColorScheme()` allocate a whole new
+    // `ColorScheme` (dozens of `Color` fields), and this composable sits
+    // above every screen this app has — every one of them recomposing
+    // through a scope that rebuilds the palette from scratch would be waste
+    // for no visual difference.
+    val darkTheme = isSystemInDarkTheme()
+    val colorScheme = remember(darkTheme) { if (darkTheme) darkColorScheme() else lightColorScheme() }
     MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme(),
+        colorScheme = colorScheme,
         content = content,
     )
 }
