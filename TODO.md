@@ -1257,7 +1257,7 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty-three rounds of
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty-four rounds of
       Codex findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
@@ -1441,7 +1441,19 @@ the point is that every other line of the app is worthless if it isn't true.
       same test gap as the two exists()-related fixes before it (28, 33) — `File.exists()`
       doesn't throw from this suite's usual tricks, and this one additionally shares a single
       lazily-resolved directory with the check above it, so a throwing `dirProvider` can't
-      isolate just this call either; noted rather than silently claimed as covered.
+      isolate just this call either; noted rather than silently claimed as covered. One more,
+      round twenty-four, back on `MainActivity`: a retry-enable tapped on a previous instance
+      can still be in flight when a configuration change hands off to a replacement — that
+      replacement's own `onStart` read of `lastDisableCleanupFailed` runs before the retry's
+      write settles, so it can copy the stale pre-completion value, and the tap's own completion
+      callback belongs to the dead instance, so nothing else was correcting it.
+      `debugLogWatch`'s own callback, which *is* registered on the live replacement, only
+      refreshed `debugLogEnabled` and `debugLogSaveFailed` when it fired — never
+      `debugLogCleanupFailed` — so a stale "some saved files couldn't be deleted" warning could
+      sit under an enabled switch indefinitely. Fixed by refreshing it there too. Also corrected
+      that field's own doc comment, which still claimed the read was gated on the requested
+      value being a disable — a claim the earlier unconditional-read fix (25) had already made
+      false without the comment being updated to match.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
