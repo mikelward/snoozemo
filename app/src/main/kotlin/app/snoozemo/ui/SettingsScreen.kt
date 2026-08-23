@@ -46,6 +46,15 @@ internal fun SettingsScreen(
     shareFailed: Boolean,
     /** Whether a share is already running, disabling the share row's button. */
     sharing: Boolean = false,
+    /**
+     * Whether a crashed run is currently pinned (`SPEC.md` §4.6). Every
+     * screen renders the banner while one is, this one included: `onCreate`
+     * restores [Screen] from saved state, so a process killed while the user
+     * was on Settings comes back *here*, not on [MainScreen] (Codex, PR #89).
+     */
+    crashPending: Boolean = false,
+    /** Whether the last Dismiss tap on the crash banner was refused by the file layer. */
+    dismissFailed: Boolean = false,
     onOpenPermissions: () -> Unit,
     onTileRow: () -> Unit,
     onFiltersRow: () -> Unit,
@@ -54,6 +63,7 @@ internal fun SettingsScreen(
     onCompletePlayUpdate: () -> Unit = {},
     onDismissPlayUpdate: () -> Unit = {},
     onShareDebugLog: () -> Unit,
+    onDismissCrash: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -68,6 +78,18 @@ internal fun SettingsScreen(
             text = stringResource(R.string.settings_title),
             style = MaterialTheme.typography.headlineMedium,
         )
+        // Above everything else, exactly as on the other two screens: which
+        // screen the user lands on is not something this feature should have
+        // to reason about (SPEC.md §4.6).
+        if (crashPending) {
+            CrashBanner(
+                onShare = onShareDebugLog,
+                onDismiss = onDismissCrash,
+                shareFailed = shareFailed,
+                dismissFailed = dismissFailed,
+                sharing = sharing,
+            )
+        }
         // Above the permanent rows, the same "most urgent thing first" order
         // the sibling Simmo repo's own banner follows: there is something to
         // act on here, where the rows below mostly just state what already
