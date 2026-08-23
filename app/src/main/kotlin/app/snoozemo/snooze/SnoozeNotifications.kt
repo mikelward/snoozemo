@@ -221,6 +221,16 @@ class SnoozeNotifications(private val context: Context) {
             .setContentTitle(context.getString(R.string.ongoing_title))
             .setContentText(body)
             .setOngoing(true)
+            // This card is reposted on every ARMED/CHECKING transition, which
+            // includes presence evidence flip-flopping (ProbablyLeft then
+            // StillHere) while a snooze runs — routine updates, not events the
+            // user needs alerted to. Without this, each repost would sound or
+            // vibrate again on a channel that now bypasses Snoozemo's own DND
+            // (§5.7): a snooze that used to be silent by accident (the platform's
+            // own filter caught the repeat alert) would otherwise become audibly
+            // noisy by design (Codex, PR #92). Only the first post of this id
+            // alerts; later ones update the countdown and text quietly.
+            .setOnlyAlertOnce(true)
             // The countdown is the platform's to run, not ours. Formatting it
             // into the text bakes in the value at post time, and this
             // notification is only rebuilt on a state change — so a snooze armed

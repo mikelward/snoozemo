@@ -212,6 +212,15 @@ the point is that every other line of the app is worthless if it isn't true.
       directly before attempting, and only marks itself done when that's true. Covered by
       `SnoozeNotificationsChannelTest`, using Robolectric's `setNotificationPolicyAccessGranted`
       to simulate the denied case the shadow otherwise can't reach on its own.
+- [x] **The ongoing card needed `setOnlyAlertOnce`, and didn't have it** (Codex, PR #92; `SPEC.md`
+      §4.3). `showOngoing()` reposts on every `ARMED`/`CHECKING` transition, including routine
+      presence evidence flip-flopping while a snooze runs — not just the initial arm. Before this
+      PR the channel didn't bypass DND, so a repost re-alerting was a latent bug the platform's
+      own filter happened to catch; once `snooze_active` started bypassing Snoozemo's own DND, the
+      same repost would have genuinely re-sounded or re-vibrated on every presence re-check. Fixed
+      with `setOnlyAlertOnce(true)` — only the first post of the card alerts, later ones update
+      quietly — and covered by `SnoozeNotificationsChannelTest` asserting
+      `Notification.FLAG_ONLY_ALERT_ONCE`.
 - [x] `SnoozeController` state machine (IDLE / ARMING / ARMED / CHECKING / RELEASED) as
       plain Kotlin over an injected clock — the unit-test surface for everything that
       follows. Covers the three invariants directly: the cap fires (and can't be made to
