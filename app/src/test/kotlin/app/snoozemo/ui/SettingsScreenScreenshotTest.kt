@@ -538,6 +538,55 @@ class SettingsScreenScreenshotTest {
     }
 
     @Test
+    fun `the privacy policy row opens it`() {
+        var opened = 0
+
+        capture {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                debugLogCleanupFailed = false,
+                shareFailed = false,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onShareDebugLog = {},
+                onOpenPrivacyPolicy = { opened++ },
+            )
+        }
+
+        composeRule.onNodeWithText("Privacy policy").performClick()
+        assertEquals(1, opened)
+    }
+
+    @Test
+    fun `the version is shown at the foot of the page`() {
+        capture {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                debugLogCleanupFailed = false,
+                shareFailed = false,
+                versionName = "1.2.3",
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onShareDebugLog = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Version 1.2.3").assertExists()
+    }
+
+    @Test
     fun `idle in dark`() {
         RuntimeEnvironment.setQualifiers("+night")
 

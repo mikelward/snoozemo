@@ -281,4 +281,17 @@
     <string name="failure_could_not_extend" tools:ignore="MissingTranslation">Couldn\'t add 30 minutes</string>
     <!-- TODO: translate -->
     <string name="extend_at_max" tools:ignore="MissingTranslation">Already at the time limit</string>
+
+    <!-- The app version, at the foot of Settings — same format as the sibling Simmo repo. -->
+    <!-- TODO: translate -->
+    <string name="settings_version" tools:ignore="MissingTranslation">Version %1$s</string>
+
+    <!--
+      The privacy policy link, same row and position as the sibling Simmo repo's
+      Settings foot. `settings_privacy_url` is a build-time constant, not
+      user-facing text, so it is never translated — same as Simmo's own copy.
+    -->
+    <!-- TODO: translate -->
+    <string name="settings_privacy_policy" tools:ignore="MissingTranslation">Privacy policy</string>
+    <string name="settings_privacy_url" translatable="false">https://mikelward.github.io/snoozemo/PRIVACY.html</string>
 </resources>
