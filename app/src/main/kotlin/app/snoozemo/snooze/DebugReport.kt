@@ -497,30 +497,39 @@ internal object DebugReport {
         return PreviousRunRead(result.first, result.second, timedOut = !completed, readSucceeded = result.third)
     }
 
-    private fun isPolicyAccessGranted(context: Context): Boolean =
+    // Each of these returns null, not a substituted false, on its own
+    // exception: the report exists specifically to diagnose failures, and
+    // a check that couldn't run is not the same fact as a confirmed denial
+    // or a confirmed-off toggle — collapsing "couldn't tell" into "false"
+    // let a transient system-service failure read as a real capability
+    // problem, with the only trace of the difference sitting in logcat,
+    // which the report's recipient never sees (Codex, PR #89). Rendered as
+    // "unknown" by grantLabel/boolLabel below rather than a state that
+    // looks the same as a genuine answer.
+    private fun isPolicyAccessGranted(context: Context): Boolean? =
         runCatching { AndroidZenController.default(context).policyAccess() == PolicyAccess.GRANTED }
             .onFailure { Log.w(TAG, "DebugReport could not read policy access.", it) }
-            .getOrDefault(false)
+            .getOrNull()
 
-    private fun isPermissionGranted(context: Context, permission: String): Boolean =
+    private fun isPermissionGranted(context: Context, permission: String): Boolean? =
         runCatching {
             ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
-        }.onFailure { Log.w(TAG, "DebugReport permission check failed: $permission", it) }.getOrDefault(false)
+        }.onFailure { Log.w(TAG, "DebugReport permission check failed: $permission", it) }.getOrNull()
 
-    private fun isLocationServicesEnabled(context: Context): Boolean =
+    private fun isLocationServicesEnabled(context: Context): Boolean? =
         runCatching { context.getSystemService(LocationManager::class.java)?.isLocationEnabled == true }
             .onFailure { Log.w(TAG, "DebugReport could not read location-services state.", it) }
-            .getOrDefault(false)
+            .getOrNull()
 
-    private fun isBatterySaverOn(context: Context): Boolean =
+    private fun isBatterySaverOn(context: Context): Boolean? =
         runCatching { context.getSystemService(PowerManager::class.java)?.isPowerSaveMode == true }
             .onFailure { Log.w(TAG, "DebugReport could not read battery-saver state.", it) }
-            .getOrDefault(false)
+            .getOrNull()
 
-    private fun isTileAdded(context: Context): Boolean =
+    private fun isTileAdded(context: Context): Boolean? =
         runCatching { TilePresenceStore(context).isAdded() }
             .onFailure { Log.w(TAG, "DebugReport could not read the tile's presence.", it) }
-            .getOrDefault(false)
+            .getOrNull()
 
     private fun appVersionName(context: Context): String = runCatching {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
@@ -587,15 +596,15 @@ internal fun buildDebugReportPayload(
     androidRelease: String,
     androidSdkInt: Int,
     locale: Locale,
-    policyAccessGranted: Boolean,
-    notificationsGranted: Boolean,
-    locationFineGranted: Boolean,
-    locationCoarseGranted: Boolean,
-    locationBackgroundGranted: Boolean,
+    policyAccessGranted: Boolean?,
+    notificationsGranted: Boolean?,
+    locationFineGranted: Boolean?,
+    locationCoarseGranted: Boolean?,
+    locationBackgroundGranted: Boolean?,
     locationBackgroundRequired: Boolean,
-    locationServicesEnabled: Boolean,
-    batterySaverOn: Boolean,
-    tileAdded: Boolean,
+    locationServicesEnabled: Boolean?,
+    batterySaverOn: Boolean?,
+    tileAdded: Boolean?,
     previousRun: String?,
     previousRunCrashed: Boolean,
     previousRunOmitted: Boolean = false,
@@ -627,9 +636,9 @@ internal fun buildDebugReportPayload(
             "Location (background): " +
                 backgroundLocationLabel(locationBackgroundGranted, locationBackgroundRequired),
         )
-        appendLine("Location services on: $locationServicesEnabled")
-        appendLine("Battery saver on: $batterySaverOn")
-        appendLine("Quick Settings tile added: $tileAdded")
+        appendLine("Location services on: ${boolLabel(locationServicesEnabled)}")
+        appendLine("Battery saver on: ${boolLabel(batterySaverOn)}")
+        appendLine("Quick Settings tile added: ${boolLabel(tileAdded)}")
     }
     val boundedHead = if (head.length > MAX_STRUCTURED_CHARS) {
         head.take(MAX_STRUCTURED_CHARS) + "\n…(details truncated to keep the report shareable)\n"
@@ -685,7 +694,14 @@ private fun renderRecentLog(recentLog: List<String>, budgetChars: Int): String =
     }
 }
 
-private fun grantLabel(granted: Boolean): String = if (granted) "granted" else "denied"
+private fun grantLabel(granted: Boolean?): String = when (granted) {
+    true -> "granted"
+    false -> "denied"
+    null -> "unknown"
+}
+
+/** See the helper functions in [DebugReport] this renders: null means the check itself failed. */
+private fun boolLabel(value: Boolean?): String = value?.toString() ?: "unknown"
 
 /**
  * The `direct` flavor never declares `ACCESS_BACKGROUND_LOCATION`
@@ -695,9 +711,10 @@ private fun grantLabel(granted: Boolean): String = if (granted) "granted" else "
  * direct build, since nothing in that flavor ever requests or expects it
  * (Codex, PR #89). Says "not required" instead whenever
  * [required] is false, from the flavor-specific
- * `locationTrackingNeedsBackgroundPermission`.
+ * `locationTrackingNeedsBackgroundPermission` — a compile-time constant,
+ * never itself a failed runtime check, so it stays non-nullable.
  */
-private fun backgroundLocationLabel(granted: Boolean, required: Boolean): String =
+private fun backgroundLocationLabel(granted: Boolean?, required: Boolean): String =
     if (!required) "not required for this build" else grantLabel(granted)
 
 /**
@@ -706,11 +723,20 @@ private fun backgroundLocationLabel(granted: Boolean, required: Boolean): String
  * [grantLabel] alone — indistinguishable from no grant at all, even though
  * the presence engine treats it as a real, if fatal, capability loss
  * (`LocationPermission`'s own KDoc, Codex PR #79) rather than a simple
- * missing permission (Codex, PR #89). This says which of the three it is.
+ * missing permission (Codex, PR #89). This says which of the three it is —
+ * and if either underlying check itself failed, says so rather than
+ * reading as a confirmed "denied" (Codex, PR #89, fresh evidence).
+ *
+ * A confirmed coarse grant alongside a *failed* fine check is its own case,
+ * not folded into "coarse only": that label asserts fine is confirmed
+ * absent, which a failed check never confirmed — fine could genuinely be
+ * granted too (Codex, PR #89, fresh evidence).
  */
-private fun foregroundLocationLabel(fineGranted: Boolean, coarseGranted: Boolean): String = when {
-    fineGranted -> "granted (fine)"
-    coarseGranted -> "granted (coarse only)"
+private fun foregroundLocationLabel(fineGranted: Boolean?, coarseGranted: Boolean?): String = when {
+    fineGranted == true -> "granted (fine)"
+    fineGranted == null && coarseGranted == true -> "granted (coarse); fine check failed"
+    coarseGranted == true -> "granted (coarse only)"
+    fineGranted == null || coarseGranted == null -> "unknown"
     else -> "denied"
 }
 
