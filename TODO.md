@@ -1257,7 +1257,7 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty-eight rounds of
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty-nine rounds of
       Codex findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
@@ -1533,7 +1533,18 @@ the point is that every other line of the app is worthless if it isn't true.
       also isn't left stuck: `consumeCrashPin`'s no-op success on an already-gone file still fires
       the crash-pin watch unconditionally (round 26), which re-reads `hasPinnedCrash` fresh and
       correctly clears `crashPending` once the share completes. Replied quoting the spec and
-      resolved.
+      resolved. One more, round twenty-nine: `DebugLogging.hasPinnedCrash`/`readPreviousOrCrash`'s
+      own fallback for a null `sink` — meaning `install()` either hasn't run yet or genuinely failed
+      and left `sink` permanently null — reported a confirmed clean result (`checkSucceeded`/
+      `readSucceeded` both `true`) rather than a failed one. A crash.log from a previous run exists
+      independently of whether this process's own `install()` call has succeeded, so a missing sink
+      can never actually confirm absence — only "not checked", the same as the check itself
+      throwing. Fixed by reporting a failed check/read instead, which composes for free with the
+      retry `MainActivity`'s cold-start read already applies (round 28) for the ordinary,
+      self-healing startup race; a persistent installation failure is the one case genuinely left
+      unable to self-heal, matching round 28's own accepted stopping point. Covered by updating the
+      two existing "before install" `DebugLoggingTest` cases to assert the corrected (failed, not
+      clean) outcome.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
