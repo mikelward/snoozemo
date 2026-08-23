@@ -69,6 +69,19 @@ class DebugReportTest {
     }
 
     @Test
+    fun `says the previous run could not be read, rather than reading like nothing happened`() {
+        // A blank previousRun is ambiguous on its own: genuinely nothing to
+        // report, or a read that timed out or failed and silently dropped a
+        // pinned crash along with it. A share that lands while quietly
+        // omitting the one thing the crash banner exists to deliver must
+        // not read as a clean report (Codex, PR #89).
+        val omitted = payload(previousRun = null, previousRunOmitted = true)
+
+        assertTrue(omitted.contains("--- Previous run ---"))
+        assertTrue(omitted.contains("could not be included in this report"))
+    }
+
+    @Test
     fun `labels an ordinary previous run distinctly from a crashed one`() {
         val ordinary = payload(previousRun = "state=ARMED", previousRunCrashed = false)
         val crashed = payload(previousRun = "state=ARMED", previousRunCrashed = true)
@@ -213,6 +226,7 @@ class DebugReportTest {
         tileAdded: Boolean = true,
         previousRun: String? = null,
         previousRunCrashed: Boolean = false,
+        previousRunOmitted: Boolean = false,
         recentLog: List<String> = emptyList(),
     ): String = buildDebugReportPayload(
         nowMillis = 0L,
@@ -236,6 +250,7 @@ class DebugReportTest {
         tileAdded = tileAdded,
         previousRun = previousRun,
         previousRunCrashed = previousRunCrashed,
+        previousRunOmitted = previousRunOmitted,
         recentLog = recentLog,
     )
 }

@@ -234,6 +234,7 @@ internal object DebugReport {
 
     private fun collectPayload(context: Context): Payload {
         val previousRunRead = blockingReadPreviousOrCrash()
+        val previousRunOmitted = previousRunRead.omitted
         val text = buildDebugReportPayload(
             nowMillis = System.currentTimeMillis(),
             versionName = appVersionName(context),
@@ -256,17 +257,26 @@ internal object DebugReport {
             tileAdded = isTileAdded(context),
             previousRun = previousRunRead.text,
             previousRunCrashed = previousRunRead.wasCrash,
+            previousRunOmitted = previousRunOmitted,
             recentLog = SnoozeDebugLog.snapshot(),
         )
-        // Only safe when the read actually completed *and* actually
-        // succeeded: a timeout can't tell "nothing was pinned" from
-        // "something was pinned and we didn't wait long enough to find
-        // out", and a thrown `readText()` can't tell it from "the crash
-        // file couldn't be read" either (Codex, PR #89, two rounds) —
-        // confusing any of these with a genuinely empty read is exactly
-        // what would consume a pin the shared text never carried.
-        return Payload(text, pinConsumeSafe = !previousRunRead.timedOut && previousRunRead.readSucceeded)
+        // Only safe when the read actually completed, actually succeeded,
+        // *and* the crash it was reading actually has content: a timeout
+        // can't tell "nothing was pinned" from "something was pinned and we
+        // didn't wait long enough to find out", a thrown `readText()` can't
+        // tell it from "the crash file couldn't be read" either (Codex,
+        // PR #89, two rounds), and a pinned crash whose file exists but
+        // reads back blank — process death mid-write, between the marker
+        // landing and the content itself — can't tell it from a genuinely
+        // empty previous run (Codex, PR #89, third round). Confusing any of
+        // these with a clean, complete report is exactly what would consume
+        // a pin the shared text never actually carried.
+        return Payload(text, pinConsumeSafe = !previousRunOmitted)
     }
+
+    /** Whether [collectPayload]'s read couldn't confirm the pin's content actually reached the report. */
+    private val PreviousRunRead.omitted: Boolean
+        get() = timedOut || !readSucceeded || (wasCrash && text.isNullOrBlank())
 
     /**
      * A minimal payload for when [collectPayload] itself throws — the one
@@ -406,6 +416,7 @@ internal fun buildDebugReportPayload(
     tileAdded: Boolean,
     previousRun: String?,
     previousRunCrashed: Boolean,
+    previousRunOmitted: Boolean = false,
     recentLog: List<String>,
 ): String {
     val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(Date(nowMillis))
@@ -444,7 +455,21 @@ internal fun buildDebugReportPayload(
         head
     }
     val previousSection = if (previousRun.isNullOrBlank()) {
-        ""
+        // A blank previousRun is ambiguous on its own — genuinely nothing to
+        // report, or a read that timed out, failed, or (for a pinned crash
+        // specifically) came back empty and silently dropped whatever it
+        // would have shown. Say so explicitly rather than rendering the
+        // same as "nothing to show", since a share that landed while
+        // quietly omitting the one thing the crash banner exists to
+        // deliver is otherwise indistinguishable from a clean one (Codex,
+        // PR #89, two rounds — the wording deliberately names no specific
+        // cause, since a timeout and a genuinely blank pinned crash file
+        // land here the same way).
+        if (previousRunOmitted) {
+            "\n--- Previous run ---\n(could not be included in this report — try Share again)\n"
+        } else {
+            ""
+        }
     } else {
         buildString {
             appendLine()
