@@ -413,6 +413,12 @@ because it looks current. `setUsesChronometer` against the absolute cap ticks by
 go stale. It also means the body says only what *kind* of snooze this is — `Ends when you leave`,
 `Wi-Fi only`, `Timer only` — which is the part that actually needs words.
 
+**This card only alerts once.** It is reposted on every ARMED/CHECKING transition while a snooze
+runs — routine presence re-checks, not events the user needs alerted to — and the channel bypasses
+Snoozemo's own Do Not Disturb (§5.7), so a repost that re-sounded or re-vibrated on every re-check
+would be genuinely noisy rather than merely a latent one DND used to catch by accident. Only the
+first post of the card alerts; later ones update the countdown and text quietly.
+
 **Not `IMPORTANCE_LOW`, deliberately** (maintainer, 2026-08-12) — this started low, on the reasoning
 that an ongoing status card should stay out of the way, and that was wrong for this particular card.
 

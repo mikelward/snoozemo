@@ -1,8 +1,10 @@
 package app.snoozemo.snooze
 
+import android.app.Notification
 import android.app.NotificationManager
 import app.snoozemo.R
 import app.snoozemo.core.EndReason
+import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -59,6 +61,26 @@ class SnoozeNotificationsChannelTest {
         val posted = shadowOf(manager).allNotifications
             .last { shadowOf(it).contentTitle?.toString() == stringOf(R.string.failure_rule_stuck) }
         assertEquals(SnoozeNotifications.CHANNEL_URGENT, posted.channelId)
+    }
+
+    /**
+     * `showOngoing()` reposts on every ARMED/CHECKING transition — including
+     * presence evidence flip-flopping while a snooze runs, not just the
+     * initial arm. Without `setOnlyAlertOnce`, each repost would re-sound or
+     * re-vibrate on a channel that now bypasses Snoozemo's own DND — a snooze
+     * that used to be silent by accident (the platform's own filter caught
+     * the repeat alert) would otherwise become audibly noisy by design
+     * (Codex, PR #92).
+     */
+    @Test
+    fun `the ongoing card only alerts once, not on every repost`() {
+        val notifications = SnoozeNotifications(appContext)
+
+        notifications.showOngoing(snoozeFixture(Instant.parse("2026-08-22T09:00:00Z")))
+
+        val posted = shadowOf(manager).allNotifications
+            .last { shadowOf(it).contentTitle?.toString() == stringOf(R.string.ongoing_title) }
+        assertTrue(posted.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0)
     }
 
     @Test
