@@ -436,8 +436,11 @@ class MainActivity : ComponentActivity() {
      * message describes the previous attempt, and a new one supersedes it
      * whatever it returns. Applied through [shareWatch], for the same
      * dead-instance reason [crashPending] is.
+     *
+     * Internal rather than private only so a test can pin it directly, the
+     * same test-only reason [screen] and [latestAccessRefresh] already are.
      */
-    private var shareFailed by mutableStateOf(false)
+    internal var shareFailed by mutableStateOf(false)
 
     /** The handle for the share-outcome watch; see [onStart] and [DebugReport.watchShareOutcome]. */
     private var shareWatch: AutoCloseable? = null
@@ -636,6 +639,7 @@ class MainActivity : ComponentActivity() {
                             remaining = activeSnooze?.remaining(now),
                             lastOutcome = lastOutcome,
                             crashPending = crashPending,
+                            shareFailed = shareFailed,
                             settingsFailure = settingsFailure,
                             onOpenPermissions = { openPermissions(Screen.MAIN) },
                             onOpenSettings = { screen = Screen.SETTINGS },
@@ -774,6 +778,15 @@ class MainActivity : ComponentActivity() {
         shareWatch = DebugReport.watchShareOutcome {
             runOnUiThread { shareFailed = DebugReport.lastShareFailed }
         }
+        // Syncs immediately, unlike crashPending (which self-heals through
+        // readNotificationsAfterFirstFrame's own hasPinnedCrash read): a share
+        // that finished while this activity was stopped — backgrounded during
+        // the background thread's binder/disk work, or a configuration change
+        // — fired the watch above on a dead or not-yet-registered instance,
+        // so lastShareFailed can already hold an outcome nothing has shown yet
+        // (Codex, PR #89). A plain volatile read, not file I/O, so this costs
+        // nothing in front of the first frame.
+        shareFailed = DebugReport.lastShareFailed
     }
 
     /**

@@ -66,6 +66,7 @@ class MainScreenScreenshotTest {
                 remaining = null,
                 lastOutcome = null,
                 crashPending = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -99,6 +100,7 @@ class MainScreenScreenshotTest {
                 remaining = null,
                 lastOutcome = null,
                 crashPending = false,
+                shareFailed = false,
                 onOpenPermissions = { opened++ },
                 onOpenSettings = {},
                 onAddTile = {},
@@ -136,6 +138,7 @@ class MainScreenScreenshotTest {
                 remaining = null,
                 lastOutcome = null,
                 crashPending = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -162,6 +165,7 @@ class MainScreenScreenshotTest {
                 remaining = null,
                 lastOutcome = null,
                 crashPending = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -193,6 +197,7 @@ class MainScreenScreenshotTest {
                 remaining = null,
                 lastOutcome = null,
                 crashPending = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -219,6 +224,7 @@ class MainScreenScreenshotTest {
                 remaining = Duration.ofHours(3).plusMinutes(40),
                 lastOutcome = null,
                 crashPending = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -247,12 +253,16 @@ class MainScreenScreenshotTest {
                 trackingMode = TrackingMode.WIFI_ONLY,
                 remaining = Duration.ofMinutes(45),
                 lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
             )
         }
 
@@ -272,12 +282,16 @@ class MainScreenScreenshotTest {
                 trackingMode = TrackingMode.DURATION_ONLY,
                 remaining = Duration.ofHours(8),
                 lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
             )
         }
 
@@ -300,6 +314,7 @@ class MainScreenScreenshotTest {
                 remaining = null,
                 lastOutcome = null,
                 crashPending = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = { added++ },
@@ -337,6 +352,7 @@ class MainScreenScreenshotTest {
                 remaining = null,
                 lastOutcome = null,
                 crashPending = false,
+                shareFailed = false,
                 settingsFailure = SetupRowId.TILE,
                 onOpenPermissions = {},
                 onOpenSettings = {},
@@ -364,6 +380,7 @@ class MainScreenScreenshotTest {
                 remaining = null,
                 lastOutcome = null,
                 crashPending = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -390,6 +407,7 @@ class MainScreenScreenshotTest {
                 remaining = null,
                 lastOutcome = "Couldn't snooze",
                 crashPending = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -415,8 +433,11 @@ class MainScreenScreenshotTest {
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = false,
+                trackingMode = null,
+                remaining = null,
                 lastOutcome = null,
                 crashPending = true,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -435,6 +456,38 @@ class MainScreenScreenshotTest {
     }
 
     @Test
+    fun `a share that fails from the crash banner says so on the banner itself`() {
+        // The banner's own Share button reaches the same DebugReport.share
+        // call the permanent Settings row uses — a failure from this one
+        // must render here too, not only on a screen the user has not
+        // navigated to (Codex, PR #89).
+        capture("main-screen-crash-banner-share-failed.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                lastOutcome = null,
+                crashPending = true,
+                shareFailed = true,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Snoozemo crashed").assertExists()
+        composeRule.onNodeWithText("Couldn't share the debug log").assertExists()
+    }
+
+    @Test
     fun `no crash pinned, no banner`() {
         capture {
             MainScreen(
@@ -442,8 +495,11 @@ class MainScreenScreenshotTest {
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = false,
+                trackingMode = null,
+                remaining = null,
                 lastOutcome = null,
                 crashPending = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -472,6 +528,7 @@ class MainScreenScreenshotTest {
                 remaining = null,
                 lastOutcome = null,
                 crashPending = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = { opened++ },
                 onAddTile = {},
@@ -509,6 +566,7 @@ class MainScreenScreenshotTest {
                 remaining = Duration.ofHours(3).plusMinutes(40),
                 lastOutcome = null,
                 crashPending = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},

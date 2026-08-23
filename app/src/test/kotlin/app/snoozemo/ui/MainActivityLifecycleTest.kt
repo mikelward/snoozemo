@@ -1,5 +1,8 @@
 package app.snoozemo.ui
 
+import app.snoozemo.snooze.DebugReport
+import org.junit.After
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -33,5 +36,41 @@ class MainActivityLifecycleTest {
                 "visible could act after the screen is started again",
             activity.latestAccessRefresh > issued,
         )
+    }
+
+    /**
+     * A share that finishes while this activity is stopped fires
+     * `DebugReport.watchShareOutcome` on a callback nothing is registered
+     * for — `onStop` already unregistered it — so `shareFailed` must be
+     * synced from `DebugReport.lastShareFailed` again at the next `onStart`,
+     * or the failure message is lost for good (Codex, PR #89).
+     */
+    @Test
+    fun `a restart picks up a share outcome missed while stopped`() {
+        DebugReport.resetForTest()
+        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        val activity = controller.get()
+        controller.pause().stop()
+        assertFalse("precondition: nothing has failed yet", activity.shareFailed)
+
+        // The share itself still runs to completion and updates the
+        // process-level outcome regardless of whether anything is watching —
+        // this is what a background thread's completion looks like landing
+        // after onStop.
+        DebugReport.share(
+            activity.applicationContext,
+            payloadCollect = { "irrelevant" },
+            clipboardWrite = { _, _ -> false },
+            chooserLaunch = { _, _ -> false },
+            consumeCrashPin = {},
+        )
+
+        controller.start()
+
+        assertTrue(
+            "onStart must sync shareFailed from the outcome missed while stopped",
+            activity.shareFailed,
+        )
+        DebugReport.resetForTest()
     }
 }

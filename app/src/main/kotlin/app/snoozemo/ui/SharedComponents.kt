@@ -313,6 +313,7 @@ internal fun PlayUpdateBanner(
 internal fun CrashBanner(
     onShare: () -> Unit,
     onDismiss: () -> Unit,
+    shareFailed: Boolean = false,
 ) {
     Surface(
         shape = MaterialTheme.shapes.medium,
@@ -332,6 +333,18 @@ internal fun CrashBanner(
                 text = stringResource(R.string.crash_banner_body),
                 style = MaterialTheme.typography.bodyMedium,
             )
+            // A tap that reached neither the clipboard nor the chooser has to
+            // say so here — this banner's own Share button is a second route
+            // to the same DebugReport.share call the permanent Settings row
+            // uses, and a failure from this one must not go unsaid just
+            // because this screen has no other place it renders (Codex,
+            // PR #89).
+            if (shareFailed) {
+                Text(
+                    text = stringResource(R.string.setup_debug_log_share_failed),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
