@@ -100,6 +100,17 @@ data class PresenceUpdate(
     val event: PresenceEvent?,
     /** Null when location is answering normally; the reason when it is not. */
     val degradation: DegradationCause?,
+    /**
+     * Whether the §6.6 Wi-Fi grace period is currently running — a level like
+     * [degradation], restated on every update rather than announced once, for
+     * the same PR #33 reason: a transient "grace just started" event could be
+     * lost to the same orderings that made recovery unsafe to announce.
+     * [SnoozeController] reads this to tell "Wi-Fi is tracking" from
+     * "Wi-Fi just failed and a timer is running" — a distinction
+     * [degradation] alone cannot make, since it says *that* location can't
+     * confirm presence, not *why* a grace period exists at all.
+     */
+    val graceActive: Boolean = false,
 )
 
 /** What the presence engine has concluded, in increasing order of confidence. */

@@ -226,6 +226,10 @@ class SnoozeNotifications(private val context: Context) {
             TrackingMode.FULL -> context.getString(R.string.ongoing_ends_when_you_leave)
             // Says what it can actually do, not what it wishes it could.
             TrackingMode.WIFI_ONLY -> context.getString(R.string.ongoing_wifi_only)
+            // Unverifiable, not "tracking" — the label above this one is what
+            // Wi-Fi tracking actually looks like, and this is what happens
+            // the instant that stops being true (SPEC.md §6.6).
+            TrackingMode.WIFI_GRACE -> context.getString(R.string.ongoing_wifi_grace)
             TrackingMode.DURATION_ONLY -> context.getString(R.string.ongoing_timer_only)
         }
         val notification = android.app.Notification.Builder(context, CHANNEL_ACTIVE)

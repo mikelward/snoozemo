@@ -661,17 +661,25 @@ the point is that every other line of the app is worthless if it isn't true.
       - [ ] **The degradation *cause* stops at the controller** (Codex, PR #31). `Presence` now
         tells `FIXES_TOO_VAGUE` from `NO_LOCATION_FIX`, and `SnoozeController` maps both to the
         same `TrackingMode`, which is all `SnoozeService.onTrackingChanged` renders from — so the
-        notification says `Wi-Fi only` either way and the distinction never reaches the user.
+        notification says the same thing either way and the distinction never reaches the user.
         Fixing it means new user-facing copy, which needs the propose-in-chat-and-approve step
         (`AGENTS.md`, *Translations*), so it is a follow-up rather than part of the engine PR.
-        - **And the *mode* is wrong too, during the grace period** (Codex, PR #31). `modeFor`
-          picks `WIFI_ONLY` whenever the anchor *has* an SSID, so while the grace period runs —
-          Wi-Fi gone, location vague — the notification claims Wi-Fi is tracking a snooze that
-          nothing is tracking. `DURATION_ONLY` is not the fix: it says only the cap will end
-          this, when in fact a five-minute grace period will. **No existing `TrackingMode`
-          describes "unverifiable, ending shortly unless something recovers"**, which is what
-          the user actually needs to read, so this wants the same approved-copy step and
-          probably a mode of its own. Both halves land together.
+        Despite this item's own earlier note, **the two halves did not land together**: only the
+        mode half below is fixed; this cause-distinction half is still open and its own copy has
+        not been proposed.
+        - [x] **The *mode* was wrong too, during the grace period** (Codex, PR #31; landed
+          2026-08-23). `modeFor` picked `WIFI_ONLY` whenever the anchor *had* an SSID, so while
+          the grace period ran — Wi-Fi gone, location vague — the notification claimed Wi-Fi was
+          tracking a snooze that nothing was tracking. Fixed with a new `TrackingMode.WIFI_GRACE`
+          (`Wi-Fi lost — ending soon`, approved by the maintainer over `Wi-Fi changed — ending
+          soon` — "lost" names the actual trigger, `AnchorWifiLost`) and a new
+          `PresenceUpdate.graceActive` level, restated every update like `degradation` for the
+          same PR #33 ordering reason rather than announced once. Checked *ahead of* `degradation`
+          in `modeFor`, because grace can start (for a Wi-Fi-only anchor) before enough failed
+          observations have accumulated for `degradation` to move off null. Not a rung of its own
+          in `SnoozeController.honest()`'s degrade-walk — no real monitor's `supportedModes()`
+          ever names it, so it stands or falls with `WIFI_ONLY`'s own support, or it would degrade
+          straight to `DURATION_ONLY` for want of an entry nothing was ever going to add.
       - [x] **Recovering from degraded mode has no path back** (found while building the engine).
         The engine forgot a degradation once location or the anchor's Wi-Fi returned, but the
         controller left the `TrackingMode` lowered, so the notification kept reporting degraded

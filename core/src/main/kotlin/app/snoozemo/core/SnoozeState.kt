@@ -69,6 +69,19 @@ enum class TrackingMode {
      */
     WIFI_ONLY,
 
+    /**
+     * The anchor's Wi-Fi is gone and location cannot confirm a departure
+     * either — unverifiable, and the §6.6 grace period is running: the snooze
+     * ends automatically unless something recovers first. Distinct from
+     * [WIFI_ONLY] because that name means "Wi-Fi is what's tracking this",
+     * which stops being true the instant Wi-Fi is what was just lost (Codex,
+     * PR #31) — the same watch, a worse answer, not a different capability
+     * tier. Not a rung [honest] can reach on its own: it stands or falls with
+     * [WIFI_ONLY]'s own support, since nothing watches this that doesn't also
+     * watch that.
+     */
+    WIFI_GRACE,
+
     /** Neither signal is available. Only the duration cap will end this snooze. */
     DURATION_ONLY;
 

@@ -7,7 +7,9 @@ import app.snoozemo.core.PresenceEvent
 import app.snoozemo.core.PresenceSignal
 import java.time.Instant
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -121,6 +123,38 @@ class PresenceFeedTest {
         feed.accept(PresenceSignal.AnchorWifiAssociated(armedAtMs + 5_000))
 
         assertNull("a real return to the anchor's Wi-Fi calls grace off", feed.graceDeadlineMs)
+    }
+
+    @Test
+    fun `graceActive is true the instant a Wi-Fi-only anchor loses its network`() {
+        // TrackingMode.WIFI_GRACE's whole reason to exist: an anchor with no
+        // usable fix has grace start the moment Wi-Fi is lost, before enough
+        // failed observations ever accumulate for `degradation` to move off
+        // null — so a caller reading `degradation` alone would still see a
+        // healthy update on this exact delivery.
+        val feed = PresenceFeed(
+            Anchor(ssid = "AnchorNet", capturedAt = Instant.EPOCH),
+            seedElapsedRealtimeMs = armedAtMs,
+        )
+
+        val update = feed.accept(PresenceSignal.AnchorWifiLost(armedAtMs + 5_000))
+
+        assertNull("no location to fail yet", update.degradation)
+        assertTrue("grace started on this very delivery", update.graceActive)
+    }
+
+    @Test
+    fun `graceActive is false once a genuine Wi-Fi return clears the deadline`() {
+        val restoredDeadlineMs = armedAtMs + 60_000
+        val feed = PresenceFeed(
+            Anchor(ssid = "AnchorNet", capturedAt = Instant.EPOCH),
+            seedElapsedRealtimeMs = armedAtMs,
+            seedGraceDeadlineMs = restoredDeadlineMs,
+        )
+
+        val update = feed.accept(PresenceSignal.AnchorWifiAssociated(armedAtMs + 5_000))
+
+        assertFalse("Wi-Fi is back; nothing left for the timer to bound", update.graceActive)
     }
 
     @Test
