@@ -169,13 +169,15 @@ puts it on your clipboard, then opens Android's own share sheet so you choose th
 destination — email, a messaging app, a bug report form, wherever you decide to paste it.
 Nothing is sent anywhere by Snoozemo itself.
 
-**What the report contains, beyond the log described above**: your app version, device model
-and Android version, and whether Do Not Disturb access, notifications, and location are
-currently granted, whether location services and battery saver are on, and whether the
-Quick Settings tile has been added — all facts that commonly explain why a snooze
-misbehaved, none of them anything you typed. If the app's previous run ended in a crash, that
-run's log is included too, labeled as a crash, and sharing it (or dismissing the banner
-without sharing) clears it the same way the two-run limit above does.
+**What the report contains, beyond the log described above**: the time the report was
+captured, your app version, the app's package identifier, whether it's a debug build, your
+device model and Android version, your phone's language and region setting, and whether Do
+Not Disturb access, notifications, and location are currently granted, whether location
+services and battery saver are on, and whether the Quick Settings tile has been added — all
+facts that commonly explain why a snooze misbehaved, none of them anything you typed. If the
+app's previous run ended in a crash, that run's log is included too, labeled as a crash, and
+sharing it (or dismissing the banner without sharing) clears it the same way the two-run
+limit above does.
 
 **The crash banner appears only after a crash** — an ordinary close, a force-stop, or an app
 update never raises it — and only until you share or dismiss it. The floor above is unchanged
