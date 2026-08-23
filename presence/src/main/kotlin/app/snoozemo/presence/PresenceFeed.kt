@@ -25,6 +25,23 @@ import app.snoozemo.core.PresenceUpdate
 internal class PresenceFeed(
     private val anchor: Anchor,
     seedElapsedRealtimeMs: Long,
+    /**
+     * A grace deadline restored from disk (TODO.md, "the grace deadline has
+     * to survive process death"), or null for a fresh arm.
+     *
+     * Without this, a monitor restarted after the process died — the common
+     * case with no foreground service — always constructs a feed with
+     * [PresenceState.graceDeadlineMs] null, indistinguishable from "no grace
+     * period is running." That is wrong two ways: a `GraceElapsed` the
+     * mailbox held while the process was dead is read as a stale alarm and
+     * dropped instead of ending the snooze, and a live signal that would
+     * otherwise recompute a *fresh* five-minute window
+     * (`Presence.graceFrom`'s `state.graceDeadlineMs ?: graceFrom(...)`)
+     * silently discards the original deadline instead of resuming it. Seeding
+     * this before anything else runs is what lets both cases fall through to
+     * already-tested engine behavior with no new branching.
+     */
+    seedGraceDeadlineMs: Long? = null,
 ) {
 
     /**
@@ -40,8 +57,20 @@ internal class PresenceFeed(
      * transition by definition.
      */
     private var state = PresenceState(
-        atAnchorWifi = anchor.ssid != null,
+        // A restored grace deadline can only exist because Wi-Fi was lost —
+        // `Presence.wifiLost` is the only place that ever sets it — so
+        // seeding it alongside the anchor's own default "associated" belief
+        // built an internally impossible state (Codex, PR #91, fifth pass).
+        // Worse than merely wrong: `Presence.associated`'s duplicate guard
+        // (`if (state.atAnchorWifi) return step(state, null, anchor)`)
+        // means a *genuine* later report that Wi-Fi is back would have been
+        // read as a repeat of what the seed already claimed and silently
+        // dropped — the deadline would then never clear even though the
+        // user plainly returned, ending the snooze five minutes after a
+        // presence the engine had already been told about and ignored.
+        atAnchorWifi = seedGraceDeadlineMs == null && anchor.ssid != null,
         latestEvidenceMs = seedElapsedRealtimeMs,
+        graceDeadlineMs = seedGraceDeadlineMs,
     )
 
     /** What the engine currently wants from location (SPEC.md §6.7). */

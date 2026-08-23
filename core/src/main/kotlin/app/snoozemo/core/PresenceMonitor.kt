@@ -29,8 +29,21 @@ interface PresenceMonitor {
      * arrived while the process was dead (flagged by Codex on PR #73).
      * Anything older than the seed is stale by construction; anything the
      * snooze should act on is newer.
+     *
+     * [armedAtEpochMs] is the same arm moment in wall-clock time —
+     * `ActiveSnooze.startedAt`, the one field the record treats as the
+     * snooze's identity for its whole life (`ActiveSnooze.retryStillApplies`
+     * answers the same question the same way). A monitor that needs to
+     * persist something across its own restarts and tell one snooze's
+     * leftovers from another's (Codex, PR #91: a monitor-owned deadline that
+     * outlived the snooze it belonged to seeding a later, unrelated one) has
+     * to compare against *this*, not [sinceElapsedRealtimeMs] — elapsed
+     * realtime resets at reboot and drifts under a clock-change
+     * restatement, so two calls for the same snooze can carry different
+     * values of it, while [armedAtEpochMs] is set once, at genuine arm
+     * time, and never recomputed.
      */
-    fun start(anchor: Anchor, sinceElapsedRealtimeMs: Long): Flow<PresenceUpdate>
+    fun start(anchor: Anchor, sinceElapsedRealtimeMs: Long, armedAtEpochMs: Long): Flow<PresenceUpdate>
 
     /**
      * Stops watching and releases everything `start` acquired — network

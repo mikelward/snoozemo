@@ -1136,6 +1136,21 @@ duration cap, hours later, for a user who left the building five minutes in. So 
 starts when location gives up rather than only when it never started, and it is called off the
 moment either signal answers again.
 
+**The deadline survives the process dying, which it does routinely with no foreground service**
+(landed 2026-08-23). The real countdown is a platform `AlarmManager` alarm, which is durable on
+its own; what is not is the engine's own memory of *why* — a service killed mid-grace and
+restarted comes back with no record of the deadline unless something persisted it, and without
+that a due alarm reads as a stale one and the snooze runs to the duration cap instead, silently
+losing exactly the five minutes this section promises. The deadline is written to disk as a
+wall-clock instant on every change and read back translated into whichever boot is asking,
+resuming the original countdown rather than restarting a fresh one — the same failure the earlier
+mitigation (re-arming a fresh five minutes on every restore) only bounded rather than closed.
+Deliberately **without** the duration cap's defense against a backwards clock change (§7,
+`ActiveSnooze.bootReference`): the cap is the backstop with nothing above it and needs that
+defense; the grace deadline is a softer mechanism the cap already bounds regardless, so a clock
+wound back during an outage can make grace run longer than five minutes, but never longer than
+the cap itself.
+
 **A run of readings that place nobody is reported, not absorbed.** One vague fix is ordinary —
 walking past a lift shaft produces one. Several in a row means location has stopped answering, and
 the user is owed that in the notification (§8.1) rather than left with a snooze that looks tracked

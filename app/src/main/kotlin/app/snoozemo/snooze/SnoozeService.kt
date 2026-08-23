@@ -270,7 +270,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         val startedAt = snooze.startedAt
         val seed = presenceSeedFor(snooze)
         presenceJob = presenceScope.launch {
-            presenceMonitor.start(snooze.anchor, seed).collect { update ->
+            presenceMonitor.start(snooze.anchor, seed, startedAt.toEpochMilli()).collect { update ->
                 val running = controller.active
                 if (running == null || running.startedAt != startedAt) return@collect
                 controller.onPresenceUpdate(update)

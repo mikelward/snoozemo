@@ -59,6 +59,71 @@ class PresenceFeedTest {
     }
 
     @Test
+    fun `a restored grace deadline is not read as stale`() {
+        // TODO.md: "the grace deadline has to survive process death". A
+        // deadline seeded from disk must be believed, not treated as a fresh
+        // feed's default null — otherwise a `GraceElapsed` the platform alarm
+        // fired while the process was dead is read as a stale alarm and
+        // dropped instead of ending the snooze.
+        val restoredDeadlineMs = armedAtMs + 60_000
+        val feed = PresenceFeed(
+            anchor,
+            seedElapsedRealtimeMs = armedAtMs,
+            seedGraceDeadlineMs = restoredDeadlineMs,
+        )
+
+        val update = feed.accept(PresenceSignal.GraceElapsed(atElapsedRealtimeMs = restoredDeadlineMs + 1))
+
+        assertEquals(PresenceEvent.Departed, update.event)
+    }
+
+    @Test
+    fun `a restored grace deadline still pending is preserved, not restarted`() {
+        // The other half of the same bug: a live signal that would otherwise
+        // compute a *fresh* five-minute window (`Presence.graceFrom`'s
+        // `state.graceDeadlineMs ?: graceFrom(...)`) must find the seeded
+        // deadline already occupying that slot, or a restore silently resets
+        // the countdown instead of resuming it.
+        val restoredDeadlineMs = armedAtMs + 60_000
+        val feed = PresenceFeed(
+            Anchor(ssid = "AnchorNet", capturedAt = Instant.EPOCH),
+            seedElapsedRealtimeMs = armedAtMs,
+            seedGraceDeadlineMs = restoredDeadlineMs,
+        )
+
+        // Wi-Fi still away is exactly what the restore-time re-observation
+        // (`PlatformWifiWatch`'s cold re-check) redelivers.
+        feed.accept(PresenceSignal.AnchorWifiLost(armedAtMs + 5_000))
+
+        assertEquals(
+            "the original deadline stands, not a new one from the redelivery",
+            restoredDeadlineMs,
+            feed.graceDeadlineMs,
+        )
+    }
+
+    @Test
+    fun `a genuine Wi-Fi return clears a restored deadline instead of being swallowed as a duplicate`() {
+        // The seed must not also claim `atAnchorWifi = true` alongside a
+        // restored deadline (Codex, PR #91, fifth pass): `Presence.associated`
+        // treats an already-true state as a repeat and no-ops
+        // (`if (state.atAnchorWifi) return step(state, null, anchor)`), so a
+        // wrongly "already associated" seed would have silently dropped the
+        // one signal that should have cleared this deadline — the user
+        // actually returned, and the engine would never have found out.
+        val restoredDeadlineMs = armedAtMs + 60_000
+        val feed = PresenceFeed(
+            Anchor(ssid = "AnchorNet", capturedAt = Instant.EPOCH),
+            seedElapsedRealtimeMs = armedAtMs,
+            seedGraceDeadlineMs = restoredDeadlineMs,
+        )
+
+        feed.accept(PresenceSignal.AnchorWifiAssociated(armedAtMs + 5_000))
+
+        assertNull("a real return to the anchor's Wi-Fi calls grace off", feed.graceDeadlineMs)
+    }
+
+    @Test
     fun `state carries across signals`() {
         val feed = PresenceFeed(anchor, seedElapsedRealtimeMs = armedAtMs)
         feed.accept(PresenceSignal.GeofenceExit(armedAtMs + 60_000))

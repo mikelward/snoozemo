@@ -470,20 +470,159 @@ the point is that every other line of the app is worthless if it isn't true.
         listener belongs with the same device-state watching the checking burst needs) and the
         on-device verification the whole item is gated on. The grace alarm for
         `graceDeadlineMs` landed with the Wi-Fi suppressor slice.
-      - [ ] **The grace deadline has to survive process death** (Codex, PR #31, re-flagged and
+      - [x] **The grace deadline has to survive process death** (Codex, PR #31, re-flagged and
         partly mitigated on PR #77). `PresenceState` is in-memory only; a service killed after
-        arming the five-minute grace alarm comes back with no deadline, so the alarm's signal is
-        ignored and the snooze runs to the cap — the silence the grace period exists to bound.
-        PR #77's `PlatformWifiWatch` fix for the "started already disconnected" gap bounds the
-        worst case for a Wi-Fi-only anchor: a cold restore now explicitly re-reads the current
+        arming the five-minute grace alarm came back with no deadline, so the alarm's signal was
+        ignored and the snooze ran to the cap — the silence the grace period exists to bound.
+        PR #77's `PlatformWifiWatch` fix for the "started already disconnected" gap bounded the
+        worst case for a Wi-Fi-only anchor: a cold restore explicitly re-reads the current
         association on registration, so a restore that lands still off the anchor's network
-        re-delivers `AnchorWifiLost` and re-arms a *fresh* five-minute grace from the restore
-        moment — one extra grace window of latency, not silence to the cap. A fenced anchor that
-        was already degraded when it died still has the gap open until this lands. The monitor is
-        what owns persistence, so this lands with it, and there are two frames to get right: the
-        deadline is elapsed realtime, so it survives process death but **not** a reboot, where the
-        alarm is gone too and the boot restore has to re-derive it. `ActiveSnooze.bootReference`
-        already exists for exactly this problem on the duration cap.
+        re-delivers `AnchorWifiLost` — which, with no deadline remembered, re-armed a *fresh*
+        five-minute grace from the restore moment rather than resuming the original one.
+        **Landed** (maintainer, 2026-08-23): `GraceDeadlineStore` (new, `presence/.../geofence`)
+        persists the deadline as a wall-clock instant whenever `GeofencePresenceMonitor` reconciles
+        the platform alarm, and `PresenceFeed` gained an optional seed so a restore reads it back
+        *before* the bridge's mailbox replay or the Wi-Fi watch's redelivery lands — both already
+        do the right thing once the state isn't lying about being fresh: a `GraceElapsed` the
+        mailbox held while the process was dead now correctly ends the snooze instead of being read
+        as a stale alarm, and `Presence.graceFrom`'s `state.graceDeadlineMs ?: graceFrom(...)`
+        preserves the resumed deadline instead of overwriting it with a new one. No new
+        signal-delivery code was needed — the fix is entirely in what the fresh state believes at
+        construction. The platform alarm is also explicitly re-armed on a restore that found a
+        persisted deadline, closing the reboot gap (`AlarmManager` entries don't survive one).
+        **Deliberately without `ActiveSnooze.bootReference`'s dual-frame defense** against a
+        backwards clock change, unlike this note's own earlier suggestion to mirror it — wall time
+        alone is stored, so the frame conversion is identical whether zero or several reboots
+        happened since. The cap has nothing above it and needs that defense; the grace deadline is
+        a soft mechanism the cap already backstops regardless, so a wound-back clock can make grace
+        run long but never longer than the cap. Tests: `PresenceFeedTest` (the seed is honored, and
+        a live redelivery doesn't overwrite it) and `GraceDeadlineStoreTest` (the frame arithmetic,
+        including across a simulated reboot and an already-overdue restore).
+        **Two ordering/identity gaps in the first pass, both caught by Codex on the PR and fixed
+        before merge**: the save had to happen *before* `GraceAlarm.reconcile`, not after — a
+        process death in between left a real armed alarm with a store that still said null, the
+        same failure mode this item exists to close, just narrowed to one line's width. And the
+        store needed the same identity check `ActiveSnooze.startedAt` already gives the record
+        itself: a snooze that ends *during* grace and dies before `stop()`'s clear runs left a
+        leftover deadline that a completely unrelated, later snooze would otherwise inherit and
+        could end early. `GraceDeadlineStore` now keys entries to the arm moment
+        (`PresenceFeed`'s own seed) and ignores a mismatch.
+        **A second Codex pass on the same head found three more, all fixed before merge**: (1)
+        clearing the store the instant `feed.accept` produced `Departed` was itself the bug this
+        item exists to close, just moved — `send` only *queues* the event, so a process death
+        before the collector actually ends the snooze and erases the record found no deadline to
+        make sense of the bridge's still-retained `GraceElapsed` replay; skipped now whenever the
+        event is `Departed`, leaving `stop()` as the sole clearer once the end is confirmed. (2) the
+        arm-moment identity used `sinceElapsedRealtimeMs` translated through the same wall-clock
+        arithmetic as the deadline — stable within one process, but the same snooze could compare
+        unequal to itself after a reboot or a mid-snooze clock-change restatement, since both shift
+        that translation. `PresenceMonitor.start` gained an `armedAtEpochMs` parameter —
+        `ActiveSnooze.startedAt`, compared directly with no arithmetic of its own, the one value the
+        record itself already trusts as identity for the same reason (`retryStillApplies`). (3) the
+        deadline's save and the alarm's reconcile ran outside `feedLock`, so two `deliver` calls on
+        different platform callback threads could finish their feed transitions in one order (correctly
+        serialized by the lock) and their persistence in the other — stranding a stale deadline. A
+        sequence number taken inside `feedLock` and checked before either side effect runs is what
+        keeps only the newest transition's belief on disk, without widening the lock to cover a binder
+        call and a disk write.
+        **A third pass found two more, both fixed before merge**: (1) the save used `apply()`, which
+        returns before the write is durable — ordering it before `GraceAlarm.reconcile` proved
+        nothing on its own, since a kill between the (unconfirmed) write and the alarm arming was
+        the same gap moved rather than closed. `save`/`clear` now use `commit()` and return whether
+        the write actually landed; the alarm is only armed on a confirmed save, and a failed one logs
+        and leaves that signal ungraced rather than pretend it took (the duration cap alone bounds it
+        from there, same as before this PR). (2) the persistence decision — that the deadline
+        survives a restart at all, resuming rather than restarting the countdown, and deliberately
+        without the cap's clock-tamper defense — was recorded only here, while `SPEC.md` §6.6 still
+        described just the platform alarm. Added to §6.6 alongside the existing grace-period
+        discussion.
+        **A fourth pass found two more, both fixed before merge**: (1) `PresenceFeed`'s seed claimed
+        `atAnchorWifi = true` (from the anchor's own recorded SSID) *alongside* a restored non-null
+        grace deadline — an internally impossible combination, since only a Wi-Fi loss ever arms one.
+        `Presence.associated`'s duplicate guard then silently swallowed the one signal that should
+        have cleared it: a genuine return to the anchor's Wi-Fi during the outage read as a repeat of
+        what the seed already claimed. `atAnchorWifi` is now seeded false whenever a restored deadline
+        is present. (2) even with that fixed, the bridge's mailbox could still replay a held
+        `GraceElapsed` and resolve the snooze as `Departed` before the Wi-Fi watch's own synchronous,
+        constructor-time check of the *current* association ran — `PresenceState.resolved` ignores
+        every signal after, so the live evidence arrived too late to matter. The watch is now
+        constructed before the bridge attaches, so a genuine return to Wi-Fi is processed as a real
+        transition first. A fifth finding in the same pass, unrelated to correctness: the durable
+        `commit()` from the third pass runs synchronously, and `deliver` is reached from main-thread
+        platform callbacks (`PlatformWifiWatch`'s in particular) for the life of a snooze, not only on
+        the arm path `AGENTS.md` singles out — moved onto a single serialized `Dispatchers.IO` worker,
+        submitted from inside the same lock that already orders the writes against each other, so
+        submission order and execution order stay the same.
+        **A sixth pass found two more, both fixed before merge**: (1) the fourth pass's own fix
+        reopened the third pass's durability guarantee — `producer.launch` does not block its caller,
+        so the calling callback could return, and the process could be reclaimed, before the launched
+        `commit()` ever actually ran, recreating the exact process-death gap this whole item exists to
+        close. Reverted to a direct, synchronous call: `AGENTS.md`'s own principle order puts
+        never-fail-silently above don't-make-the-user-wait when the two genuinely conflict, and
+        `ActiveSnoozeStore.save` already makes this same trade on the arm and release paths for the
+        same reason — a two-`Long` write is not the kind of work principle 5 is guarding against. (2)
+        a failed *setting* write (as opposed to a failed clear) left that signal merely "ungraced," on
+        the assumption a later signal's own save would eventually succeed — but an anchor already off
+        its Wi-Fi with no usable fix has location duty `NONE` and may never produce another signal, so
+        nothing would ever retry and the snooze could silently run to the cap instead of ending in five
+        minutes. A failed setting write now ends the snooze via `PresenceEvent.CapabilityLost` /
+        `MONITORING_UNAVAILABLE`, the existing fail-open path; a failed *clearing* write still only
+        logs, since that failure follows good news (presence evidence already cleared grace) and
+        ending the snooze there would be a punitive overreaction to an unrelated write failure.
+        **A seventh pass raised the other side of the sixth pass's own trade-off**: the revert to a
+        synchronous `commit()` runs on whichever thread `deliver` is called from — often the main
+        thread — on *every* presence signal, not only when the grace deadline actually changes;
+        during a check burst's fixes that is a disk write per fix for no reason, which is the real
+        main-thread cost, not the commit call itself. Fixed by tracking what the store is confirmed
+        to hold (seeded from the restore read, since a restored deadline is already durable) and
+        skipping the whole write when the current deadline already matches it — updated only on a
+        *confirmed* save, never optimistically, so a failed write still retries on the next signal
+        carrying the same value instead of being wrongly believed to have landed. Real transitions —
+        Wi-Fi lost, Wi-Fi back, a restore — are rare and still write synchronously, so this closes the
+        frequency complaint without touching the durability guarantee the sixth pass fixed, and
+        without the larger, riskier change (moving the platform callbacks themselves off the main
+        thread) Codex's literal suggestion implied.
+        **An eighth pass found two more, both fixed before merge**: (1) the second pass's own fix —
+        skip persistence entirely for the `deliver` call that produced `Departed` — only covered that
+        one call. `send` still only queues the event, and a *later* signal delivered before the
+        collector consumes it and calls `stop()` sees the engine's own already-resolved,
+        grace-cleared state (`PresenceState.resolved`) and would clear the durable deadline itself —
+        stranding the bridge's retained `GraceElapsed` exactly as the second pass meant to prevent,
+        just reachable from a different call. Fixed with a latch (`departedObserved`) set the moment
+        any call sees `Departed` and checked by every call after, so the skip now covers the whole
+        generation, not just the one delivery. (2) `persistenceLock`, its sequence counter, and the
+        "what's already durable" tracker were all local to one `start()`'s `callbackFlow` — no lock
+        ordered them against a *different* generation's, so a rapid end-and-rearm could leave an old,
+        still-in-flight `deliver` call free to write after a new snooze had already started, clobbering
+        the current snooze's identity in the single `SharedPreferences` file every generation shares
+        and potentially rearming or canceling the wrong platform alarm. Moved all of it onto the
+        instance, gated by a `persistenceGeneration` claimed at the start of every `start()` (and
+        retired by `stop()`) under the same lock every write checks — a call from a superseded
+        generation now finds no generation to match and writes nothing, full stop, rather than relying
+        only on the identity check already in `GraceDeadlineStore` to catch it after the fact.
+        **A ninth pass found a genuine gap left unfixed in this PR, flagged for the maintainer rather
+        than resolved unilaterally**: the sixth pass's fail-open (`trySend(CapabilityLost(...))` on a
+        failed grace-deadline write) is itself only an in-process `Flow` send — if the process dies
+        between that `trySend` and `SnoozeService`'s collector actually acting on it, the ending
+        decision is lost and a restore starts fresh believing the snooze is still healthy. Correctly
+        diagnosed, but not new or unique to grace: `reportRegistration`'s `Fatal` branch and
+        `onPermissionLost`'s mapping already end a snooze the identical way, unguarded, since PR
+        #70/#72/#75. Making the whole class durable through this window is a systemic redesign, not
+        something to invent inside a PR scoped to grace-deadline persistence — flagged in chat and
+        left unresolved on the PR thread. **Maintainer decision (2026-08-23): make it durable.**
+        Follow-up tracked below.
+      - [ ] **Make every `CapabilityLost` ending in `GeofencePresenceMonitor` durable through both a
+        process death and a reboot** (maintainer decision, 2026-08-23, following the ninth-pass flag
+        on PR #91 above). Three sites currently end a snooze via a bare `trySend`/`trySend` chain —
+        `reportRegistration`'s `Fatal` branch, `onPermissionLost`'s mapping, and the grace-deadline
+        write-failure branch — none of them durable through the window between the send and
+        `SnoozeService`'s collector actually consuming it. Chosen approach mirrors the grace mechanism
+        this PR just built rather than folding into `ActiveSnoozeStore` or an alarm-only fix: a small
+        durable store (a "pending capability loss" cause, keyed like `GraceDeadlineStore` to
+        `armedAtEpochMs`) written with `commit()` *before* the send, paired with a near-immediate
+        `AlarmManager` alarm as the actual wake mechanism — a persisted flag alone does nothing if
+        nothing is scheduled to act on it, and only the alarm survives a reboot the way `GraceAlarm`
+        already does. Reconciled from the store on every restore, same shape as `restoredGraceDeadlineMs`.
       - [ ] **The degradation *cause* stops at the controller** (Codex, PR #31). `Presence` now
         tells `FIXES_TOO_VAGUE` from `NO_LOCATION_FIX`, and `SnoozeController` maps both to the
         same `TrackingMode`, which is all `SnoozeService.onTrackingChanged` renders from — so the
@@ -1778,7 +1917,6 @@ Guessed while making the clock change survive a reboot (autopilot, 2026-08-12):
   `+30 min` to write back — a repair undone by the button beside it. The cost is bounded by
   how rarely a clock is actually set, and the same start already happens on the expired
   path. Reversible by having the receiver write the record and merely notify the service.
-
 ## Keeping the phone alive: the options ledger
 
 Everything considered for "how does Snoozemo stay able to end a snooze", with why each was or was
