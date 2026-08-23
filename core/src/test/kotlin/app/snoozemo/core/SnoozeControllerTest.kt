@@ -53,6 +53,7 @@ class SnoozeControllerTest {
             calls += snoozed to trigger
             return outcome
         }
+        override fun ruleId() = "fake-rule-id"
     }
 
     private class Recorder : SnoozeController.Listener {

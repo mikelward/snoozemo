@@ -37,6 +37,17 @@ interface ZenController {
      * it, not what is convenient.
      */
     fun setSnoozed(snoozed: Boolean, trigger: ZenTrigger, placeName: String): ZenOutcome
+
+    /**
+     * The id of the rule [ensureRule] has already prepared, if it has.
+     *
+     * A memory read, not a binder call, so it is safe to call from the main
+     * thread once the id has been warmed — the same discipline the arm path's
+     * own id read follows. Null means only "not known yet" or "no rule
+     * exists"; a caller that needs to tell those apart, or that needs the id
+     * confirmed against the platform, calls [ensureRule] instead.
+     */
+    fun ruleId(): String?
 }
 
 /** Whether the app may change zen state at all. */

@@ -171,8 +171,13 @@ class MainActivity : ComponentActivity() {
      * `DENIED` would flash `Snoozemo needs Do Not Disturb access` and a grant
      * button at a user who granted it months ago; `GRANTED` would offer to arm
      * something that cannot arm.
+     *
+     * Internal rather than private, like [zenRuleId] below, only so a test can
+     * drive [filtersRuleId]/[openFilters] directly without the real async
+     * `ensureRule()` round trip in the way; nothing outside this class reads
+     * it in production.
      */
-    private var access by mutableStateOf<PolicyAccess?>(null)
+    internal var access by mutableStateOf<PolicyAccess?>(null)
 
     /**
      * Null for the same reason, and read at the same point: the check is a
@@ -228,6 +233,49 @@ class MainActivity : ComponentActivity() {
      * dialog. Read alongside everything else after the first frame.
      */
     private var tileAdded by mutableStateOf<Boolean?>(null)
+
+    /**
+     * The zen rule's own id, so `SettingsScreen`'s Filters row can deep-link
+     * straight to the system's interruption-filter screen for it (`TODO.md`).
+     * Null hides the row — while this hasn't been read yet, while there is
+     * genuinely nothing to edit, and while the last check couldn't confirm
+     * the id is still good, which is the same "nothing to show until there's
+     * something to show" discipline every other row here follows.
+     *
+     * Set **only** from [ensureRuleInBackground]'s verified result — `READY`
+     * or `DISABLED`, both reached only after `ensureRule()` has confirmed the
+     * rule exists — and cleared on `FAILED`. Never from a bare
+     * [ZenController.ruleId] read: that is the persisted store's unverified
+     * value, and a rule the user deleted from system Settings leaves a stale
+     * id there until `ensureRule()` next confirms or replaces it. Rendering
+     * that unverified id would put up a tappable row whose tap opens Settings
+     * to a rule that no longer exists — a silent dead end `startActivity`
+     * cannot report as a failure, since launching the intent still succeeds
+     * (Codex, PR #88).
+     *
+     * Internal rather than private so a test can set it directly and drive
+     * [openFilters]'s actual `startActivity` call — the async chain that
+     * populates this in production (`ensureRuleInBackground`, off a raw
+     * background `Thread`) has no seam a JVM test can advance deterministically,
+     * and this repo's own testing rules rule out papering over that with
+     * sleeps or polling (Codex, PR #88).
+     */
+    internal var zenRuleId by mutableStateOf<String?>(null)
+
+    /**
+     * What [zenRuleId] should actually show as, once [access] is known: a rule
+     * id read before Do Not Disturb access was confirmed granted — or one left
+     * over from before access was revoked — must not offer a row that deep-links
+     * into a filter screen for a rule this app can no longer be sure is usable.
+     *
+     * No resolution check against `Settings.ACTION_AUTOMATIC_ZEN_RULE_SETTINGS`
+     * here: that action's AOSP intent-filter is gated behind Modes UI, an
+     * Android 15+ feature flag with no lower-API path to the same screen —
+     * minSdk is 35 precisely so this is guaranteed rather than probed
+     * per-device (`SPEC.md` §11, PR #88).
+     */
+    private val filtersRuleId: String?
+        get() = zenRuleId.takeIf { access == PolicyAccess.GRANTED }
 
     /**
      * Whether the tile banner has been sent away for good.
@@ -471,11 +519,13 @@ class MainActivity : ComponentActivity() {
                             BackHandler { screen = Screen.MAIN }
                             SettingsScreen(
                                 tileAdded = tileAdded,
+                                filtersRuleId = filtersRuleId,
                                 settingsFailure = settingsFailure,
                                 debugLogEnabled = debugLogEnabled,
                                 debugLogSaveFailed = debugLogSaveFailed,
                                 onOpenPermissions = { openPermissions(Screen.SETTINGS) },
                                 onTileRow = ::addTile,
+                                onFiltersRow = ::openFilters,
                                 onDebugLog = ::setDebugLog,
                             )
                         }
@@ -629,6 +679,12 @@ class MainActivity : ComponentActivity() {
                 // front of the first frame.
                 tileAdded = tileStore.isAdded()
                 tileBannerDismissed = tileStore.isBannerDismissed()
+                // `zenRuleId` is deliberately not read here. Unlike the two
+                // stores above, `zen.ruleId()` is the *unverified* persisted
+                // value — see `zenRuleId`'s own comment — so it is left for
+                // `ensureRuleInBackground` to set once `ensureRule()` has
+                // actually confirmed it. `watchAccessAfterFirstFrame` (called
+                // alongside this) is what starts that chain.
                 // Its own one-key file, warmed by `DebugLogging.install` at
                 // process start, so this is a memory hit like the two above.
                 // Held off while a tap's write is still on the worker: the
@@ -1040,6 +1096,33 @@ class MainActivity : ComponentActivity() {
                 Log.e(TAG, "Ensuring the zen rule failed; leaving the screen as it is.", it)
                 return@Thread
             }
+            // `zenRuleId`, published or cleared before anything else below
+            // reads `state`. READY and DISABLED are the two outcomes
+            // `ensureRule()` reaches only after confirming the rule exists —
+            // freshly created, or looked up and found present-but-off — and a
+            // disabled rule is not a rule that "doesn't exist yet", so
+            // Filters stays offered for it too. FAILED means the lookup
+            // itself didn't complete, so a previously published id is no
+            // longer confirmed current: a rule deleted from system Settings
+            // while this screen was backgrounded, then re-verified with a
+            // transient binder failure, must not leave that dead id tappable
+            // indefinitely (Codex, PR #88). Unlike the arm path's own id,
+            // which deliberately *keeps* a FAILED reading's id
+            // (`AndroidZenController`) because an active rule must stay
+            // nameable, hiding this convenience row on uncertainty costs
+            // nothing — it reappears on the next successful check.
+            // MISSING_ACCESS touches nothing: `filtersRuleId` already hides
+            // the row on `access` alone.
+            when (state) {
+                ZenRuleState.READY, ZenRuleState.DISABLED -> {
+                    val id = zen.ruleId()
+                    runOnUiThread { if (refresh == latestAccessRefresh) zenRuleId = id }
+                }
+                ZenRuleState.FAILED -> {
+                    runOnUiThread { if (refresh == latestAccessRefresh) zenRuleId = null }
+                }
+                ZenRuleState.MISSING_ACCESS -> Unit
+            }
             val outcome = when (state) {
                 ZenRuleState.FAILED -> R.string.rule_failed
                 // Switched off in Settings: the app cannot snooze and must say
@@ -1248,6 +1331,46 @@ class MainActivity : ComponentActivity() {
 
     private fun openPolicyAccessSettings() {
         openSettings(SetupRowId.DND, Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+    }
+
+    /**
+     * Opens the system's own screen for Snoozemo's rule — which calls,
+     * messages, alarms and apps still break through — pre-selected to the
+     * rule this app already owns (`TODO.md`). Distinct from
+     * [openPolicyAccessSettings]: that grants the *permission* to change zen
+     * state at all, this edits the *rule's own* interruption filter, which is
+     * otherwise only reachable by finding the rule in system DND settings by
+     * hand.
+     *
+     * `Settings.ACTION_AUTOMATIC_ZEN_RULE_SETTINGS` /
+     * `Settings.EXTRA_AUTOMATIC_ZEN_RULE_ID`, **not**
+     * `NotificationManager`'s near-identically-named
+     * `ACTION_AUTOMATIC_ZEN_RULE` / `EXTRA_AUTOMATIC_RULE_ID` — this PR's own
+     * first attempt used those, and they don't reach this screen: AOSP's
+     * Settings manifest declares an intent-filter for
+     * `android.settings.AUTOMATIC_ZEN_RULE_SETTINGS` on
+     * `Settings$ModeSettingsActivity`, whose fragment
+     * (`ZenModeFragmentBase`) reads the rule id via
+     * `Settings.EXTRA_AUTOMATIC_ZEN_RULE_ID` — confirmed by reading that
+     * source directly, not by javadoc alone, after `NotificationManager`'s
+     * own action turned out to have no receiver anywhere in AOSP Settings
+     * (Codex, PR #88).
+     *
+     * `filtersRuleId` is what the row is shown or hidden on, so a stale null
+     * here would mean the row was never offered in the first place — nothing
+     * left to guard.
+     *
+     * Internal rather than private, like [access] and [zenRuleId] above, so a
+     * test can call it directly with those set and inspect the resulting
+     * intent (Codex, PR #88).
+     */
+    internal fun openFilters() {
+        val ruleId = filtersRuleId ?: return
+        openSettings(
+            SetupRowId.FILTERS,
+            Intent(Settings.ACTION_AUTOMATIC_ZEN_RULE_SETTINGS)
+                .putExtra(Settings.EXTRA_AUTOMATIC_ZEN_RULE_ID, ruleId),
+        )
     }
 
     /**

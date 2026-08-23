@@ -369,6 +369,11 @@ the point is that every other line of the app is worthless if it isn't true.
       deprecated `Intent` overload on API 33; raising the floor deleted the version branch and the
       lint suppression together, so the arm path is a single code path again. Reasoning recorded in
       `SPEC.md` §11.
+      - [x] **Raised again, to minSdk 35** (maintainer, 2026-08-23, PR #88). The Filters row's
+        `Settings.ACTION_AUTOMATIC_ZEN_RULE_SETTINGS` needs Modes UI, an Android 15+ AOSP feature
+        flag with no lower-API equivalent that reaches the same per-rule screen — unlike the 33→34
+        move, there was no version-branch alternative to delete, only Android 14 devices to drop.
+        Reasoning recorded in `SPEC.md` §11.
 - [ ] Verify what the tile looks like in the **compact/collapsed** Quick Settings panel on Pixel
       and One UI. Some presentations show the icon only — no label, no subtitle — so the glyph has
       to carry the meaning alone. Widens the §10 question about whether `Tile.setSubtitle` renders
@@ -861,17 +866,43 @@ the point is that every other line of the app is worthless if it isn't true.
       fails both silently, so bound it per section and in total. **Home is `SettingsScreen`**
       (maintainer, 2026-08-23, once the screen split below landed) — beside the debug-log toggle
       it already carries, not a new screen of its own.
-- [ ] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
-      (maintainer, 2026-08-23), tentatively labeled `Filters` — lets the user edit which calls,
-      messages, alarms and apps break through Snoozemo's rule, which today is only reachable by
-      finding the rule in system DND settings by hand. Distinct from the DND-access row's
+- [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
+      (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
+      alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
+      the rule in system DND settings by hand. Distinct from the DND-access row's
       `ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS` (that grants the *permission*; this opens the
-      *rule's own* configuration): the real target looks like
-      `NotificationManager.ACTION_AUTOMATIC_ZEN_RULE_SETTINGS` with `EXTRA_AUTOMATIC_ZEN_RULE_ID`
-      (API 30+, no fallback needed — minSdk is 34) and needs `ZenController` to expose the rule id
-      it already holds from `ensureRule()`. Still needs a disabled/hidden state for whenever DND
-      access isn't granted and no rule exists yet. Not touched by the screen-split PR that logged
-      this.
+      *rule's own* configuration). **Landed**, on the third try at the target, each wrong guess
+      caught by a stronger check than the last: this entry's own draft named
+      `ACTION_AUTOMATIC_ZEN_RULE_SETTINGS`/`EXTRA_AUTOMATIC_ZEN_RULE_ID` on `NotificationManager`,
+      neither of which exists there; PR #88's first landed version instead used
+      `NotificationManager.ACTION_AUTOMATIC_ZEN_RULE`/`EXTRA_AUTOMATIC_RULE_ID`, which do exist
+      and passed a same-PR Robolectric test asserting exactly those values, but Codex found no
+      receiver for that action anywhere in AOSP Settings; reading AOSP Settings' manifest and
+      `ZenModeFragmentBase` source directly (not javadoc alone) turned up the real pair —
+      `android.provider.Settings.ACTION_AUTOMATIC_ZEN_RULE_SETTINGS` with
+      `Settings.EXTRA_AUTOMATIC_ZEN_RULE_ID` — a different class than either earlier guess, and
+      the one actually declared as an exported intent-filter on `Settings$ModeSettingsActivity`.
+      That intent-filter is gated behind the `android.app.modes_ui` feature flag ("Modes"), which
+      AOSP ties to API 35 with no lower-API path to the same screen (Codex, PR #88, a fourth
+      round). Rather than probing `PackageManager.resolveActivity` per device and hiding the row
+      when it comes back empty, minSdk was raised to 35 (`SPEC.md` §11) — the row's own repair
+      surface for a genuinely refused `startActivity` (`openSettings()`'s existing `runCatching`)
+      was already there for actual platform refusals; a *guaranteed*-absent receiver on part of
+      the install base called for dropping that part of the install base, not for a second code
+      path to detect and work around it. `ZenController` now exposes the rule id it already holds
+      via `ruleId()` (a memory read once warmed, like the arm path's own id read). The row is
+      hidden, not disabled, whenever DND access isn't granted or no rule exists yet
+      (`MainActivity.filtersRuleId`).
+- [ ] **`refreshAccess()`'s own `zen.policyAccess()` read has no failure handling beyond "leave
+      state as it was and hope the next refresh corrects it"** (Codex, PR #88) — the comment on its
+      catch already says as much ("the screen keeps whatever it last knew, and the next refresh
+      asks again"), and that's pre-existing, not something the Filters row introduced. Codex's
+      specific ask — clear `zenRuleId` when this read throws — was left out of PR #88 as out of
+      scope for a row that only *reads* the existing `access` field, not because the underlying
+      concern is wrong: a genuinely stuck `access`/`zenRuleId` after a transient read failure,
+      with no subsequent refresh ever succeeding, is a real (if narrow) gap. Worth a proper look at
+      `refreshAccess()`'s failure handling in general — what it does for `access` itself, not a
+      Filters-specific patch — if this comes up again or gets revisited for other reasons.
 - [ ] `docs/PRIVACY.md` must describe what the log carries **before** the sharing surface ships —
       that ordering is the rule, not a preference (AGENTS.md, *Privacy*).
 
@@ -1141,6 +1172,14 @@ that can only be settled on a real device, ordered by risk.
         in Do Not Disturb anyway). Also check the status-bar icon reads at that size while
         snoozing. **Test on a fresh install or after clearing app data** — channel importance
         is fixed at creation, so a device that ran an earlier build keeps the old level.
+11. [ ] **Does the `SettingsScreen` Filters row's `Settings.ACTION_AUTOMATIC_ZEN_RULE_SETTINGS`
+        deep link actually resolve on a real device** (`TODO.md`'s own Phase 5 entry, PR #88)?
+        Confirmed against AOSP Settings' manifest and source rather than guessed, and minSdk was
+        raised to 35 so every supported device carries the Modes UI feature flag that action's
+        intent-filter is gated behind — but AOSP source is a floor, not a guarantee against an
+        OEM fork shipping without it. Not a crash either way if one does
+        (`openSettings()`'s `runCatching` around `startActivity`), but confirm the row lands on
+        the right screen on a real Pixel first, then Samsung at Phase 8.
 
 ### Samsung, at Phase 8
 

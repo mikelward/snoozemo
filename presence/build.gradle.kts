@@ -20,7 +20,7 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        minSdk = 34
+        minSdk = 35
     }
 
     // The same distribution dimension `:app` declares, so each APK links the

@@ -66,6 +66,8 @@ internal class RefusingZen : ZenController {
         calls += snoozed to trigger
         return outcome
     }
+
+    override fun ruleId(): String? = "refusing-zen-rule-id"
 }
 
 /**

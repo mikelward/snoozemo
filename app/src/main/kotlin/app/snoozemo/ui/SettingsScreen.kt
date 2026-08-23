@@ -29,11 +29,13 @@ import app.snoozemo.R
 @Composable
 fun SettingsScreen(
     tileAdded: Boolean?,
+    filtersRuleId: String?,
     settingsFailure: SetupRowId?,
     debugLogEnabled: Boolean?,
     debugLogSaveFailed: Boolean,
     onOpenPermissions: () -> Unit,
     onTileRow: () -> Unit,
+    onFiltersRow: () -> Unit,
     onDebugLog: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -76,6 +78,22 @@ fun SettingsScreen(
                 onAction = onTileRow,
                 failure = stringResource(R.string.failure_could_not_add_tile)
                     .takeIf { settingsFailure == SetupRowId.TILE },
+            )
+        }
+        // Absent rather than disabled while there is nothing yet to edit: no
+        // Do Not Disturb access, or access granted but the rule not created
+        // yet (TODO.md's "SettingsScreen button to the system zen rule's own
+        // interruption-filter screen" — MainActivity clears `filtersRuleId`
+        // in both cases). A button with nothing behind it is the dead tap
+        // AGENTS.md's error-handling rules exist to keep off this screen.
+        filtersRuleId?.let {
+            SetupRow(
+                title = stringResource(R.string.setup_filters_title),
+                status = stringResource(R.string.setup_filters_status),
+                action = stringResource(R.string.setup_action_edit),
+                onAction = onFiltersRow,
+                failure = stringResource(R.string.failure_could_not_open_settings)
+                    .takeIf { settingsFailure == SetupRowId.FILTERS },
             )
         }
         // Below the tile row, deliberately: touched rarely — usually never.

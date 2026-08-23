@@ -318,10 +318,15 @@ disabled with nothing yet explaining why), and from `SettingsScreen`'s Permissio
 after. Only that first reading routes automatically; a later revocation mid-snooze surfaces on
 `MainScreen`'s banner instead (§8.2's own recovery path), so losing access never yanks the user off
 whatever they were doing. `SettingsScreen` holds everything touched rarely — usually never: the
-permanent tile row, the debug-log switch, and the Permissions entry. None of the three rows is
-gated behind another being resolved first — leaving any of them is always one tap, on the same "fail
-open" principle the duration cap itself follows (D7): a setup flow that cannot be left without
-finishing it is a trap, not onboarding.
+permanent tile row, the debug-log switch, the Permissions entry, and a Filters row that deep-links
+straight to the system's own screen for editing which calls, messages, alarms and apps break
+through Snoozemo's rule — previously reachable only by finding the rule in system DND settings by
+hand (landed 2026-08-23). Filters is hidden, not shown disabled, whenever Do Not Disturb access
+isn't granted or the rule doesn't exist yet — a button that opens to nothing is worse than no
+button. None of the rows is gated behind another being resolved first — leaving any of them is
+always one tap, on the same "fail open" principle the duration cap itself follows (D7): a setup
+flow that cannot be left
+without finishing it is a trap, not onboarding.
 
 The screen leads with a **banner** urging the tile, dismissed **once and forever**, above a tile
 **entry that is permanent** (maintainer, 2026-08-13) — the banner lives on `MainScreen`, the entry
@@ -737,7 +742,6 @@ Create **one** long-lived rule at first successful onboarding, not one per snooz
 user-visible objects and churning them would litter the DND settings screen. Persist the returned id.
 
 ```kotlin
-// API 35+ (Android 15 and above)
 val rule = AutomaticZenRule.Builder("Snoozemo", CONDITION_ID)
     .setType(AutomaticZenRule.TYPE_OTHER)
     .setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
@@ -751,13 +755,9 @@ val rule = AutomaticZenRule.Builder("Snoozemo", CONDITION_ID)
 val ruleId = nm.addAutomaticZenRule(rule)   // requires ACCESS_NOTIFICATION_POLICY
 ```
 
-`CONDITION_ID` is a stable app-owned URI, e.g. `Uri.parse("snoozemo://snooze")`.
-
-On API 34 use the older `AutomaticZenRule(name, owner, configurationActivity, conditionId, policy,
-interruptionFilter, enabled)` constructor. `owner` may be null provided `configurationActivity` is
-set — a `ConditionProviderService` has not been necessary since API 29, when
-`setAutomaticZenRuleState` was introduced as its replacement, and `ConditionProviderService` is
-deprecated. Do not implement one.
+`CONDITION_ID` is a stable app-owned URI, e.g. `Uri.parse("snoozemo://snooze")`. This `Builder` is
+API 35+ only; minSdk is 35 (raised from 34, PR #88 — §11), so there is no older-constructor fallback
+to carry.
 
 ### 5.4 Turning the rule on and off
 
@@ -765,18 +765,14 @@ deprecated. Do not implement one.
 fun setSnoozed(on: Boolean, reason: Reason, placeName: String) {
     val state = if (on) Condition.STATE_TRUE else Condition.STATE_FALSE
     val summary = if (on) "Snoozing at $placeName" else "Left $placeName"
-    val condition =
-        if (Build.VERSION.SDK_INT >= 35)
-            Condition(CONDITION_ID, summary, state, reason.toConditionSource())
-        else
-            Condition(CONDITION_ID, summary, state)
+    val condition = Condition(CONDITION_ID, summary, state, reason.toConditionSource())
     nm.setAutomaticZenRuleState(ruleId, condition)
 }
 ```
 
-The API 35 `source` argument is worth setting correctly: `Condition.SOURCE_USER_ACTION` when the
-user tapped the tile, `Condition.SOURCE_CONTEXT` when the presence engine decided. The platform
-surfaces this in the Modes UI so the user can tell "I did this" from "my phone did this."
+The `source` argument is worth setting correctly: `Condition.SOURCE_USER_ACTION` when the user
+tapped the tile, `Condition.SOURCE_CONTEXT` when the presence engine decided. The platform surfaces
+this in the Modes UI so the user can tell "I did this" from "my phone did this."
 
 ### 5.5 Zen policy
 
@@ -786,7 +782,7 @@ genuine emergency reachable. Total silence is available in settings but is not t
 defaulting a location-triggered mechanism to "nothing gets through" is how you miss something that
 matters.
 
-Optionally, on API 35+, attach `ZenDeviceEffects` (`setShouldDimWallpaper`, `setShouldUseNightMode`,
+Optionally attach `ZenDeviceEffects` (`setShouldDimWallpaper`, `setShouldUseNightMode`,
 `setShouldDisplayGrayscale`) as an opt-in "make the phone boring too" setting. Nice-to-have, not v1
 scope.
 
@@ -1885,21 +1881,31 @@ Application ID `app.snoozemo`; module packages hang off it (`app.snoozemo.tile`,
 `app.snoozemo.dnd`, `app.snoozemo.presence`). The zen rule's condition URI is
 `snoozemo://snooze` (§5.3).
 
-**minSdk 34** (Android 14) — gives `requestAddTileService`, `POST_NOTIFICATIONS`, and modern Wi-Fi
-APIs without version branches, and covers every Pixel and Samsung flagship still receiving updates
-in 2026.
+**minSdk 35** (Android 15) — gives `requestAddTileService`, `POST_NOTIFICATIONS`, and modern Wi-Fi
+APIs without version branches, and Modes UI, the AOSP feature that makes the `SettingsScreen`
+Filters row's target resolve (§4.2's screen split).
 
-The floor started at 33 for exactly those reasons, and was raised to 34 by the maintainer once the
-tile landed (2026-08-11). API 33's `startActivityAndCollapse` takes an `Intent`; the overload that
-takes a `PendingIntent` — the one that isn't deprecated, and the one every current example uses — is
-API 34+. Carrying 33 meant a version branch plus a deprecation suppression on the single hottest
-path in the app, the tile tap that arms a snooze (§4.1, §6.9), which is the last place that should
-carry a rarely-exercised second code path. Android 13 devices are the cost; a correct, single-path
-arm is the benefit, and the arm path is goal 1.
+The floor started at 33 for the first three of those reasons, and was raised to 34 by the
+maintainer once the tile landed (2026-08-11). API 33's `startActivityAndCollapse` takes an
+`Intent`; the overload that takes a `PendingIntent` — the one that isn't deprecated, and the one
+every current example uses — is API 34+. Carrying 33 meant a version branch plus a deprecation
+suppression on the single hottest path in the app, the tile tap that arms a snooze (§4.1, §6.9),
+which is the last place that should carry a rarely-exercised second code path. Android 13 devices
+were the cost; a correct, single-path arm was the benefit, and the arm path is goal 1.
+
+Raised again, to 35, by the maintainer once Filters landed (2026-08-23, PR #88). Its deep link —
+`Settings.ACTION_AUTOMATIC_ZEN_RULE_SETTINGS`, confirmed against AOSP Settings' own manifest and
+source — is declared behind the `android.app.modes_ui` feature flag, which AOSP ties to API 35 and
+has no lower-API equivalent that reaches the same per-rule screen: unlike the 33→34 move, there was
+no version branch to write instead, only Android 14 devices to carry the row without or drop
+entirely. Dropped, since a permanently-hidden row on part of the install base is a worse trade than
+the same floor bump goal 1's `startActivityAndCollapse` already crossed once for a smaller reason.
+Covers every Pixel and Samsung flagship still receiving updates in 2026.
 
 **targetSdk 36** (Android 16) — Play requires 36 for new uploads and updates from 31 Aug 2026, so
-start there. The API 35 `AutomaticZenRule.Builder` / 4-arg `Condition` paths still need an SDK-34
-fallback (§5.3, §5.4); that is the only significant version branching left in the app.
+start there. minSdk 35 means the `AutomaticZenRule.Builder` / 4-arg `Condition` paths (§5.3, §5.4)
+need no version branch at all — the last significant one, the SDK-34 `AutomaticZenRule` constructor
+fallback, was deleted along with the minSdk raise (PR #88).
 
 ### Data
 

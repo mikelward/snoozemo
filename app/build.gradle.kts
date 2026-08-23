@@ -134,11 +134,13 @@ android {
 
     defaultConfig {
         applicationId = "app.snoozemo"
-        // minSdk 34 (Android 14) buys requestAddTileService, POST_NOTIFICATIONS,
+        // minSdk 35 (Android 15) buys requestAddTileService, POST_NOTIFICATIONS,
         // the modern Wi-Fi APIs, and the PendingIntent overload of
         // startActivityAndCollapse — the tile's whole arm path — without version
-        // branches (SPEC.md §11).
-        minSdk = 34
+        // branches, and (raised from 34, PR #88) Modes UI, which is what makes
+        // `Settings.ACTION_AUTOMATIC_ZEN_RULE_SETTINGS` resolve for the
+        // Filters row (SPEC.md §11).
+        minSdk = 35
         targetSdk = 36
         versionCode = gitCommitCount
         versionName = "$baseVersionName.$gitCommitCount+$gitShortSha"

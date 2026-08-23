@@ -5,7 +5,6 @@ import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
-import android.os.Build
 import android.service.notification.Condition
 import android.service.notification.ZenPolicy
 import android.util.Log
@@ -325,11 +324,7 @@ class AndroidZenController(
     ): ZenOutcome {
         val state = if (snoozed) Condition.STATE_TRUE else Condition.STATE_FALSE
         val summary = if (snoozed) "Snoozing at $placeName" else "Left $placeName"
-        val condition = if (Build.VERSION.SDK_INT >= 35) {
-            Condition(CONDITION_URI, summary, state, trigger.toConditionSource())
-        } else {
-            Condition(CONDITION_URI, summary, state)
-        }
+        val condition = Condition(CONDITION_URI, summary, state, trigger.toConditionSource())
 
         return runCatching { notificationManager.setAutomaticZenRuleState(ruleId, condition) }
             .fold(
@@ -344,33 +339,18 @@ class AndroidZenController(
             )
     }
 
+    override fun ruleId(): String? = store.ruleId()
+
     private fun buildRule(): AutomaticZenRule =
-        if (Build.VERSION.SDK_INT >= 35) {
-            AutomaticZenRule.Builder(ZenRule.NAME, CONDITION_URI)
-                .setType(AutomaticZenRule.TYPE_OTHER)
-                .setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
-                .setZenPolicy(defaultPolicy())
-                .setConfigurationActivity(configurationActivity)
-                .setTriggerDescription(TRIGGER_DESCRIPTION)
-                .setManualInvocationAllowed(true)
-                .setEnabled(true)
-                .build()
-        } else {
-            // API 34. `owner` may be null provided configurationActivity is
-            // set; a ConditionProviderService has not been needed since API 29,
-            // when setAutomaticZenRuleState replaced it, and is deprecated
-            // (SPEC.md §5.3).
-            @Suppress("DEPRECATION")
-            AutomaticZenRule(
-                ZenRule.NAME,
-                null,
-                configurationActivity,
-                CONDITION_URI,
-                defaultPolicy(),
-                NotificationManager.INTERRUPTION_FILTER_PRIORITY,
-                true,
-            )
-        }
+        AutomaticZenRule.Builder(ZenRule.NAME, CONDITION_URI)
+            .setType(AutomaticZenRule.TYPE_OTHER)
+            .setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
+            .setZenPolicy(defaultPolicy())
+            .setConfigurationActivity(configurationActivity)
+            .setTriggerDescription(TRIGGER_DESCRIPTION)
+            .setManualInvocationAllowed(true)
+            .setEnabled(true)
+            .build()
 
     /**
      * The shape most people already expect from DND, and one that keeps a
