@@ -1257,7 +1257,7 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Seventeen rounds of
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Eighteen rounds of
       Codex findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
@@ -1363,7 +1363,20 @@ the point is that every other line of the app is worthless if it isn't true.
       return false normally, so `share()`'s outer `runCatching` around each seam never actually
       saw it — leaving a landed clipboard copy with a chooser that silently never opened, or a
       failed copy, with no diagnostic explanation anywhere — fixed by logging inside each
-      function's own `runCatching`, where the exception is still visible.
+      function's own `runCatching`, where the exception is still visible. Two more, round
+      eighteen, both on the `disableGeneration` fix: the Settings row's own reconciliation only
+      re-read `lastDisableCleanupFailed` when the *requested* value was a disable — but a
+      requested *enable* that storage refused never reaches `DebugLogging.setEnabled`'s persisted
+      branch at all, leaving `lastDisableCleanupFailed` exactly as it was and the switch snapped
+      back to Off, while the screen's gate on the requested value quietly kept showing the
+      optimistic clear — fixed by reading the field unconditionally, which is safe since a
+      genuinely successful enable already clears it synchronously before this callback runs; and
+      gating `onCrashPinOutcome`'s own invocation on the same generation check as the
+      cleanup-failure verdict suppressed the pin-state notification too — a crash.log the
+      disable's own delete had genuinely removed left `crashPending` stuck true on screen, since
+      nothing else re-reads `hasPinnedCrash` while the activity stays on the same screen — fixed
+      by firing the watch unconditionally, since whether the file still exists is always this
+      callback's own real answer regardless of which generation asked for the delete.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
