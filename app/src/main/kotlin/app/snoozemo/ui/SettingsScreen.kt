@@ -80,10 +80,7 @@ internal fun SettingsScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(
-            text = stringResource(R.string.settings_title),
-            style = MaterialTheme.typography.headlineMedium,
-        )
+        SnoozemoTitleRow(title = stringResource(R.string.settings_title))
         // Above everything else, exactly as on the other two screens: which
         // screen the user lands on is not something this feature should have
         // to reason about (SPEC.md §4.6).
