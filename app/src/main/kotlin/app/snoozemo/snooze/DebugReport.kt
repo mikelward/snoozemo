@@ -176,11 +176,14 @@ internal object DebugReport {
             previousRunCrashed = previousRunRead.wasCrash,
             recentLog = SnoozeDebugLog.snapshot(),
         )
-        // Only safe when the read actually completed: a timeout can't tell
-        // "nothing was pinned" from "something was pinned and we didn't wait
-        // long enough to find out" (Codex, PR #89) — and confusing the two
-        // is exactly what would consume a pin the shared text never carried.
-        return Payload(text, pinConsumeSafe = !previousRunRead.timedOut)
+        // Only safe when the read actually completed *and* actually
+        // succeeded: a timeout can't tell "nothing was pinned" from
+        // "something was pinned and we didn't wait long enough to find
+        // out", and a thrown `readText()` can't tell it from "the crash
+        // file couldn't be read" either (Codex, PR #89, two rounds) —
+        // confusing any of these with a genuinely empty read is exactly
+        // what would consume a pin the shared text never carried.
+        return Payload(text, pinConsumeSafe = !previousRunRead.timedOut && previousRunRead.readSucceeded)
     }
 
     /**
@@ -198,30 +201,40 @@ internal object DebugReport {
         append(renderRecentLog(SnoozeDebugLog.snapshot(), MAX_LOG_PAYLOAD_CHARS))
     }
 
-    /** What [blockingReadPreviousOrCrash] found, and whether the read completed in time. */
-    private data class PreviousRunRead(val text: String?, val wasCrash: Boolean, val timedOut: Boolean)
+    /**
+     * What [blockingReadPreviousOrCrash] found: whether the read completed
+     * in time, and — if it did — whether it actually succeeded (as against
+     * a real, still-pinned file that couldn't be read).
+     */
+    private data class PreviousRunRead(
+        val text: String?,
+        val wasCrash: Boolean,
+        val timedOut: Boolean,
+        val readSucceeded: Boolean,
+    )
 
     /**
      * Bridges [DebugLogging.readPreviousOrCrash]'s callback so [collectPayload]
      * can read it inline — safe to block on here because this already runs on
      * its own caller-provided thread, never the FIFO worker it is waiting on.
      * Bounded so a stuck worker degrades the report rather than hanging the
-     * share indefinitely; [PreviousRunRead.timedOut] is what tells the caller
-     * this happened, since a timeout must not be reported the same way as a
-     * genuinely empty read (SPEC.md §4.6; Codex, PR #89).
+     * share indefinitely; [PreviousRunRead.timedOut] and
+     * [PreviousRunRead.readSucceeded] are what tell the caller a timeout or a
+     * read failure happened, since neither must be reported the same way as
+     * a genuinely empty read (SPEC.md §4.6; Codex, PR #89, two rounds).
      */
     private fun blockingReadPreviousOrCrash(): PreviousRunRead {
         val latch = CountDownLatch(1)
-        var result: Pair<String?, Boolean> = null to false
-        DebugLogging.readPreviousOrCrash { text, wasCrash ->
-            result = text to wasCrash
+        var result = Triple<String?, Boolean, Boolean>(null, false, true)
+        DebugLogging.readPreviousOrCrash { text, wasCrash, readSucceeded ->
+            result = Triple(text, wasCrash, readSucceeded)
             latch.countDown()
         }
         val completed = latch.await(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         if (!completed) {
             Log.w(TAG, "Reading the previous run's debug log timed out; reporting without it.")
         }
-        return PreviousRunRead(result.first, result.second, timedOut = !completed)
+        return PreviousRunRead(result.first, result.second, timedOut = !completed, readSucceeded = result.third)
     }
 
     private fun isPolicyAccessGranted(context: Context): Boolean =

@@ -364,17 +364,34 @@ internal class DebugFileSink internal constructor(
      * by crashing. Only one of [crash] / [previous] is ever present at once
      * (SPEC.md §4.6, "the pin holds the previous slot"), so reading whichever
      * exists is exactly the file the sharing surface should offer.
+     *
+     * [readSucceeded] is false only when the file exists but `readText()`
+     * itself threw — never when there was simply nothing to read. A caller
+     * deciding whether it is safe to consume a crash pin needs this
+     * distinction: a `null` text because the file didn't exist means there
+     * was nothing to lose, but a `null` text because a real, still-pinned
+     * crash file couldn't be read means the shared report silently omitted
+     * it (Codex, PR #89) — collapsing both into one signal is what let a
+     * read failure look identical to an empty read.
      */
-    fun readPreviousOrCrash(onResult: (text: String?, wasCrash: Boolean) -> Unit) {
+    fun readPreviousOrCrash(onResult: (text: String?, wasCrash: Boolean, readSucceeded: Boolean) -> Unit) {
         runCatching {
             worker.execute {
                 val (file, wasCrash) = if (crash.exists()) crash to true else previous to false
-                val text = runCatching { file.takeIf { it.exists() }?.readText() }
-                    .onFailure { Log.w(TAG, "Reading the previous run's debug log failed.", it) }
-                    .getOrNull()
-                onResult(text, wasCrash)
+                val fileExists = runCatching { file.exists() }.getOrDefault(false)
+                val text = if (fileExists) {
+                    runCatching { file.readText() }
+                        .onFailure { runCatching { Log.w(TAG, "Reading the previous run's debug log failed.", it) } }
+                        .getOrNull()
+                } else {
+                    null
+                }
+                onResult(text, wasCrash, !fileExists || text != null)
             }
-        }.onFailure { onResult(null, false) }
+            // The task itself couldn't even be submitted (worker rejected
+            // it) — unlike a plain empty read, this means we truly don't
+            // know whether a crash is pinned, so it must not read as safe.
+        }.onFailure { onResult(null, false, false) }
     }
 
     /**
@@ -624,13 +641,17 @@ internal object DebugLogging {
         }.onFailure { onResult(false) }
     }
 
-    /** See [DebugFileSink.readPreviousOrCrash]. Nothing before [install] has run. */
-    fun readPreviousOrCrash(onResult: (text: String?, wasCrash: Boolean) -> Unit) {
+    /**
+     * See [DebugFileSink.readPreviousOrCrash]. Nothing before [install] has
+     * run, so there is nothing pinned to miss — reported as a successful
+     * (empty) read, not a failed one.
+     */
+    fun readPreviousOrCrash(onResult: (text: String?, wasCrash: Boolean, readSucceeded: Boolean) -> Unit) {
         runCatching {
             worker.execute {
-                sink?.readPreviousOrCrash(onResult) ?: onResult(null, false)
+                sink?.readPreviousOrCrash(onResult) ?: onResult(null, false, true)
             }
-        }.onFailure { onResult(null, false) }
+        }.onFailure { onResult(null, false, false) }
     }
 
     /**
@@ -674,6 +695,45 @@ internal object DebugLogging {
     }
 
     /**
+     * Whether the most recently completed [dismissCrashPin] was refused by
+     * the file layer — distinct from a Share's own [consumeCrashPin] call,
+     * whose refusal is deliberately not surfaced (`DebugReportShareTest`,
+     * "a share that fails to consume the pin still reports what it
+     * delivered"): a Share that reached the user already told them
+     * something happened, but a Dismiss tap that silently does nothing
+     * leaves no explanation at all (Codex, PR #89). Process-level, for the
+     * same dead-instance reason as [lastSaveRefused] and
+     * `DebugReport.lastShareFailed`.
+     */
+    @Volatile
+    var lastDismissFailed: Boolean = false
+        private set
+
+    @Volatile
+    private var onDismissOutcome: (() -> Unit)? = null
+
+    /** Mirrors [watchCrashPinOutcome] / `DebugReport.watchShareOutcome`; see [lastDismissFailed]. */
+    fun watchDismissOutcome(onChange: () -> Unit): AutoCloseable {
+        onDismissOutcome = onChange
+        return AutoCloseable { if (onDismissOutcome === onChange) onDismissOutcome = null }
+    }
+
+    /**
+     * Dismisses the crash banner directly (SPEC.md §4.6): consumes the pin
+     * and records whether the file layer actually let it happen, for
+     * [watchDismissOutcome] to surface. [watchCrashPinOutcome] still fires
+     * too, from the [consumeCrashPin] call this makes — that resync of
+     * [hasPinnedCrash] is unconditional and correct either way, since a
+     * refused consume really does leave the crash still pinned.
+     */
+    fun dismissCrashPin() {
+        consumeCrashPin { consumed ->
+            lastDismissFailed = !consumed
+            runCatching { onDismissOutcome?.invoke() }
+        }
+    }
+
+    /**
      * Test-only: blocks until the worker drains, install and toggles
      * included — and, once a sink exists, until *its* worker drains too, so a
      * test that just asked for a file read or a toggle can trust the result
@@ -688,6 +748,8 @@ internal object DebugLogging {
     internal fun resetForTest() {
         onSaveOutcome = null
         onCrashPinOutcome = null
+        onDismissOutcome = null
+        lastDismissFailed = false
         worker.submit {
             sink = null
             lastSaveRefused = false
