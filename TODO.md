@@ -1257,7 +1257,7 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty-seven rounds of
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty-eight rounds of
       Codex findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
@@ -1507,7 +1507,33 @@ the point is that every other line of the app is worthless if it isn't true.
       tapped only once attempt 1 reaches that blocked wait, must resolve within 500ms with its own
       real clipboard write and chooser launch (correctly finding no overlap, since attempt 1 had
       already fully delivered by the time attempt 2's ticket was drawn) rather than waiting out
-      attempt 1's still-open cleanup step.
+      attempt 1's still-open cleanup step. Round twenty-eight brought two more findings, one fixed
+      and one declined. Fixed: the cold-start `hasPinnedCrash` read in
+      `readNotificationsAfterFirstFrame` is the *only* check that ever runs for a fresh process —
+      nothing else re-checks until a Share/Dismiss/settings-toggle outcome fires `crashPinWatch` —
+      so round twenty-six's "leave `crashPending` alone on a failed check" fix did nothing for a
+      failure on that very first read: there was no prior successful reading to preserve, so
+      `crashPending` just sat at its compile-time default `false`, indistinguishable from a
+      confirmed absence, for that process's entire lifetime. Fixed with one immediate retry on a
+      failed cold-start check — enough for the failure this actually guards against (a momentary
+      metadata-access hiccup, not a persistent condition); a second consecutive failure is already
+      logged at the file layer and left as the one case this can't self-heal without the app's next
+      launch. Not independently tested with a forced two-failures-in-a-row fixture — the same test
+      gap already accepted for `hasPinnedCrash`'s own failure path at the `MainActivity` layer in
+      round twenty-six, for the same reason (no seam to inject a controllably-failing-then-
+      succeeding `File.exists()` at this layer); the lower-level mechanism's own correctness is
+      covered by `DebugFileSinkTest`. **Declined:** a suggestion that a crash file evicted from
+      `cacheDir` between the banner showing and the user's Share tap should surface an explicit
+      "try again" warning instead of the share completing looking clean. `SPEC.md` §4.6 is explicit
+      that this exact race is anticipated and that silence is the *correct* behavior — "the banner
+      checks the file is still there and stays silent if it isn't — offering to share a log that no
+      longer exists is worse than saying nothing" — and unlike the earlier timeout/read-failure
+      omission cases (4, 5, 34), a genuinely evicted file cannot be recovered by a retry, so a "try
+      Share again" message here would be actively misleading rather than merely quiet. The banner
+      also isn't left stuck: `consumeCrashPin`'s no-op success on an already-gone file still fires
+      the crash-pin watch unconditionally (round 26), which re-reads `hasPinnedCrash` fresh and
+      correctly clears `crashPending` once the share completes. Replied quoting the spec and
+      resolved.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
