@@ -205,6 +205,28 @@ internal object GeofenceSignalBridge {
     }
 
     /**
+     * Retires a stale `CapabilityLoss` prompt specifically — never whatever
+     * else might occupy the slot (Codex, PR #95, third pass). Unlike
+     * [settleExit], which answers "the one confirmation this slot was
+     * tracking is now settled" and so may clear any retained occupant, a
+     * `CapabilityLoss` delivery that turns out to name nothing does not mean
+     * *the slot's* confirmation settled — `rank()` can already have kept a
+     * genuine, still-unconfirmed exit or due grace there instead, over the
+     * stale prompt, and clearing unconditionally would discard that real,
+     * otherwise-unrecoverable evidence for a prompt that meant nothing.
+     * Harmless to skip when the occupant has already moved on to a fresher
+     * `CapabilityLoss`: unlike an exit or a grace deadline, this one's own
+     * payload lives in `CapabilityLossStore`, not in the observation itself,
+     * so a redundant prompt left in the slot costs nothing a restore's own
+     * unconditional store read wouldn't already have caught.
+     */
+    fun settleCapabilityLoss() {
+        synchronized(lock) {
+            if (pending is GeofenceObservation.CapabilityLoss) pending = null
+        }
+    }
+
+    /**
      * Whether [observation] is a one-shot that starts or continues an
      * unfinished §6.6 confirmation and so must survive a detach: an exit or a
      * due grace deadline, neither of which the platform will report again on
@@ -212,7 +234,9 @@ internal object GeofenceSignalBridge {
      * recoverable news some other path restates.
      */
     private fun isRetained(observation: GeofenceObservation?): Boolean =
-        observation is GeofenceObservation.Exit || observation is GeofenceObservation.GraceElapsed
+        observation is GeofenceObservation.Exit ||
+            observation is GeofenceObservation.GraceElapsed ||
+            observation is GeofenceObservation.CapabilityLoss
 
     /**
      * Picks which of [candidate] and [existing] occupies the slot: an exit
@@ -227,6 +251,18 @@ internal object GeofenceSignalBridge {
      */
     private fun rank(candidate: GeofenceObservation, existing: GeofenceObservation?): GeofenceObservation =
         when {
+            // An exit or a due grace deadline outranks a capability-loss
+            // prompt, not the other way around (Codex, PR #95, second pass —
+            // an earlier version of this ranking let an unvalidated
+            // capability-loss prompt win the slot unconditionally, so a
+            // canceled alarm firing late could discard a real, otherwise-
+            // unrecoverable exit before any monitor ever saw it). An exit's
+            // or a due grace's evidence exists nowhere but this slot until a
+            // monitor consumes it; a capability loss's actual payload lives
+            // in `CapabilityLossStore`, re-checked unconditionally on every
+            // restore (`start()`), so losing this slot to genuine departure
+            // evidence costs it nothing — whatever wakes the process for
+            // that evidence runs the same restore-time check regardless.
             candidate is GeofenceObservation.Exit -> candidate
             existing is GeofenceObservation.Exit -> existing
             candidate is GeofenceObservation.GraceElapsed -> candidate

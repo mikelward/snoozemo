@@ -48,4 +48,20 @@ internal sealed interface GeofenceObservation {
      * cold restore registers on its own way through.
      */
     data class RepairPoke(override val atElapsedRealtimeMs: Long) : GeofenceObservation
+
+    /**
+     * [CapabilityLossAlarm] fired: a `CapabilityLost` ending was decided and
+     * durably recorded in [CapabilityLossStore], and this is the prompt to
+     * act on it — not the payload. No cause travels with it: the monitor
+     * re-reads the store keyed to whichever snooze is currently restoring, so
+     * a stale firing from an already-superseded snooze finds nothing and is
+     * a no-op, the same identity guard [GraceDeadlineStore] relies on.
+     * Retained like an exit or a due grace deadline — the alarm is one-shot
+     * and will not say this again — but ranked *below* both (Codex, PR #95,
+     * second pass): unlike them, this prompt might turn out to be stale
+     * before the store confirms anything, and their own evidence exists
+     * nowhere else, so an unvalidated capability-loss prompt must never
+     * discard a real exit or a due grace still waiting on a monitor.
+     */
+    data class CapabilityLoss(override val atElapsedRealtimeMs: Long) : GeofenceObservation
 }
