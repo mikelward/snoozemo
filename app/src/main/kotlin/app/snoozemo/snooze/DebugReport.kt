@@ -17,6 +17,7 @@ import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.tile.TilePresenceStore
+import app.snoozemo.ui.locationTrackingNeedsBackgroundPermission
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -167,8 +168,10 @@ internal object DebugReport {
             locale = Locale.getDefault(),
             policyAccessGranted = isPolicyAccessGranted(context),
             notificationsGranted = isPermissionGranted(context, Manifest.permission.POST_NOTIFICATIONS),
-            locationForegroundGranted = isPermissionGranted(context, Manifest.permission.ACCESS_FINE_LOCATION),
+            locationFineGranted = isPermissionGranted(context, Manifest.permission.ACCESS_FINE_LOCATION),
+            locationCoarseGranted = isPermissionGranted(context, Manifest.permission.ACCESS_COARSE_LOCATION),
             locationBackgroundGranted = isPermissionGranted(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION),
+            locationBackgroundRequired = locationTrackingNeedsBackgroundPermission,
             locationServicesEnabled = isLocationServicesEnabled(context),
             batterySaverOn = isBatterySaverOn(context),
             tileAdded = isTileAdded(context),
@@ -315,8 +318,10 @@ internal fun buildDebugReportPayload(
     locale: Locale,
     policyAccessGranted: Boolean,
     notificationsGranted: Boolean,
-    locationForegroundGranted: Boolean,
+    locationFineGranted: Boolean,
+    locationCoarseGranted: Boolean,
     locationBackgroundGranted: Boolean,
+    locationBackgroundRequired: Boolean,
     locationServicesEnabled: Boolean,
     batterySaverOn: Boolean,
     tileAdded: Boolean,
@@ -345,8 +350,11 @@ internal fun buildDebugReportPayload(
         appendLine("--- State ---")
         appendLine("Do Not Disturb access: ${grantLabel(policyAccessGranted)}")
         appendLine("Notifications: ${grantLabel(notificationsGranted)}")
-        appendLine("Location (foreground): ${grantLabel(locationForegroundGranted)}")
-        appendLine("Location (background): ${grantLabel(locationBackgroundGranted)}")
+        appendLine("Location (foreground): ${foregroundLocationLabel(locationFineGranted, locationCoarseGranted)}")
+        appendLine(
+            "Location (background): " +
+                backgroundLocationLabel(locationBackgroundGranted, locationBackgroundRequired),
+        )
         appendLine("Location services on: $locationServicesEnabled")
         appendLine("Battery saver on: $batterySaverOn")
         appendLine("Quick Settings tile added: $tileAdded")
@@ -392,6 +400,33 @@ private fun renderRecentLog(recentLog: List<String>, budgetChars: Int): String =
 }
 
 private fun grantLabel(granted: Boolean): String = if (granted) "granted" else "denied"
+
+/**
+ * The `direct` flavor never declares `ACCESS_BACKGROUND_LOCATION`
+ * (`AndroidManifest.xml`, `SPEC.md` §3.4) and its foreground-service
+ * tracking never needs the grant, so [grantLabel] alone would always read
+ * "denied" there — a false capability problem for anyone diagnosing a
+ * direct build, since nothing in that flavor ever requests or expects it
+ * (Codex, PR #89). Says "not required" instead whenever
+ * [required] is false, from the flavor-specific
+ * `locationTrackingNeedsBackgroundPermission`.
+ */
+private fun backgroundLocationLabel(granted: Boolean, required: Boolean): String =
+    if (!required) "not required for this build" else grantLabel(granted)
+
+/**
+ * A coarse-only foreground grant (`ACCESS_COARSE_LOCATION` held,
+ * `ACCESS_FINE_LOCATION` denied) reads as a plain "denied" through
+ * [grantLabel] alone — indistinguishable from no grant at all, even though
+ * the presence engine treats it as a real, if fatal, capability loss
+ * (`LocationPermission`'s own KDoc, Codex PR #79) rather than a simple
+ * missing permission (Codex, PR #89). This says which of the three it is.
+ */
+private fun foregroundLocationLabel(fineGranted: Boolean, coarseGranted: Boolean): String = when {
+    fineGranted -> "granted (fine)"
+    coarseGranted -> "granted (coarse only)"
+    else -> "denied"
+}
 
 /**
  * The newest lines of [lines] (oldest-first) whose combined length fits

@@ -240,6 +240,44 @@ class DebugFileSinkTest {
         assertFalse("a disabled sink writes nothing", file("current.log").exists())
     }
 
+    @Test
+    fun `turning the log off deletes a pinned crash and reports the delete's completion`() {
+        dir.mkdirs()
+        file("current.log").writeText("the run that crashed")
+        file("current.log.crash").writeText("1")
+        val sink = startAndAwait()
+        assertTrue(file("crash.log").exists())
+
+        var disabled = 0
+        sink.setEnabled(false) { disabled++ }
+        sink.awaitIdleForTest()
+
+        assertFalse("the pin is gone along with everything else", file("crash.log").exists())
+        assertEquals(1, disabled)
+    }
+
+    @Test
+    fun `onDisabled fires even when nothing was pinned`() {
+        val sink = startAndAwait()
+
+        var disabled = 0
+        sink.setEnabled(false) { disabled++ }
+        sink.awaitIdleForTest()
+
+        assertEquals(1, disabled)
+    }
+
+    @Test
+    fun `onDisabled never fires for an enable, which deletes nothing`() {
+        val sink = startAndAwait()
+
+        var disabled = 0
+        sink.setEnabled(true) { disabled++ }
+        sink.awaitIdleForTest()
+
+        assertEquals(0, disabled)
+    }
+
     // --- the crash handler ---
 
     @Test

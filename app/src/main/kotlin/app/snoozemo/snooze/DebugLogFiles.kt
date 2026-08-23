@@ -252,8 +252,14 @@ internal class DebugFileSink internal constructor(
      * would be a privacy control that doesn't do what its name promises, and
      * the leftover files would no longer rotate, outliving every log the
      * feature normally keeps.
+     *
+     * [onDisabled] fires once the delete has actually run — never for an
+     * enable, which deletes nothing — so a caller can resync anything that
+     * was reading a now-gone crash pin. The delete itself is queued onto
+     * this sink's own worker asynchronously, so a caller cannot infer
+     * "done" from this call merely returning (Codex, PR #89).
      */
-    fun setEnabled(enabled: Boolean) {
+    fun setEnabled(enabled: Boolean, onDisabled: () -> Unit = {}) {
         this.enabled = enabled
         if (enabled) return
         runCatching {
@@ -261,8 +267,9 @@ internal class DebugFileSink internal constructor(
                 runCatching { deleteEverything() }.onFailure {
                     runCatching { Log.w(TAG, "Deleting the debug log failed; files may remain until eviction.", it) }
                 }
+                runCatching { onDisabled() }
             }
-        }
+        }.onFailure { runCatching { onDisabled() } }
     }
 
     private fun deleteEverything() {
@@ -599,7 +606,18 @@ internal object DebugLogging {
                     // captured while off can be written to disk by a later
                     // re-enable (Codex, PR #62).
                     SnoozeDebugLog.setRecording(enabled)
-                    sink?.setEnabled(enabled)
+                    // Disabling deletes any pinned crash along with the rest
+                    // (SPEC.md §4.6), but that delete runs asynchronously on
+                    // the sink's own worker — without this, a crash banner
+                    // already on screen kept offering to share a crash file
+                    // that no longer existed, with nothing to notice the
+                    // pin was gone until the activity was recreated (Codex,
+                    // PR #89). The watch's own observer re-reads
+                    // hasPinnedCrash, so firing it after every disable is
+                    // safe even when nothing was actually pinned.
+                    if (enabled) sink?.setEnabled(true) else sink?.setEnabled(false) {
+                        runCatching { onCrashPinOutcome?.invoke() }
+                    }
                 }
                 // A re-enable's log starts from an emptied buffer — disabling
                 // dropped everything, the run-context line included — so the
