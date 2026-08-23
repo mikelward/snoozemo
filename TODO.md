@@ -1257,7 +1257,7 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty rounds of
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty-one rounds of
       Codex findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
@@ -1400,7 +1400,19 @@ the point is that every other line of the app is worthless if it isn't true.
       actually delivered. Fixed by applying the reused outcome through the same
       `synchronized(applyLock) { if (attempt >= attemptTicket) { ... } }` check before returning
       it, so the latest ticket still authoritatively updates visible state whether it delivered
-      itself or reused an overlapping delivery's result.
+      itself or reused an overlapping delivery's result. One more, round twenty-one: that fix
+      reused *any* overlapping outcome, success or failure — but reusing a failure means the
+      second tap's own clipboard write and chooser launch are never even attempted, so a user who
+      taps Share again while a failed first attempt is still resolving gets nothing for it: no
+      chooser opens, and they just see the same failure message reappear, indistinguishable from
+      the second tap having done nothing at all. Fixed by only reusing a *successful* overlapping
+      delivery; a failed one now falls through so the latest attempt gets a genuine retry with its
+      own clipboardWrite/chooserLaunch calls. (A second finding on the same head — sanitizing the
+      throwable passed to `Log.e` in these same catch blocks — was declined: the codebase's own
+      floor for logs is coordinates, SSIDs/BSSIDs, and place names, none of which a clipboard,
+      chooser, or file-I/O exception in this path can plausibly carry, and the exact
+      `Log.e(TAG, "<description>", it)` shape is already used consistently in dozens of
+      already-reviewed call sites throughout this file.)
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
