@@ -232,6 +232,24 @@ the point is that every other line of the app is worthless if it isn't true.
       first attempt left nothing to retry the bypass before the one alert meant to survive a stuck
       rule finally posts. `showStuckRule()` now makes its own `reapplyDndBypassOnce()` attempt
       immediately before posting; cheap and a no-op once it has already succeeded.
+- [x] **The `armWithCap()` reapply call was ahead of the record's save, not behind it** (Codex,
+      PR #92). It ran unconditionally right after `beginArming()` returned, whatever it returned —
+      including on a successful arm, where the `ARMED` transition had already run `showOngoing()`
+      (with its own `reapplyDndBypassOnce()`) synchronously *inside* `beginArming()`, before the
+      record is force-saved to disk a few lines later in `armWithCap()`. An extra, redundant call
+      sitting in front of that save widened the window between the zen rule going `STATE_TRUE` and
+      the one write that can find it again after a process death, for nothing the success path
+      needed. Moved inside the refused-arm branch only, where it is still the one place that
+      catches a `STATE_TRUE` left behind by a refused arm before `beginRelease()` and
+      `showStuckRule()`.
+- [x] **The fix above just moved the same problem to the other branch** (Codex, PR #92). Once
+      inside the refused-arm branch only, the reapply call now sat ahead of *that* branch's own
+      durable write — `beginRelease()` establishing the release obligation — the same class of
+      risk as before, just relocated. The actual fix: remove the `armWithCap()` call entirely.
+      `showStuckRule()`'s own attempt (two bullets up) already runs immediately before *it*
+      posts, however many release-escalation rungs later that turns out to be, so nothing
+      upstream needs to try on its behalf — the call in `armWithCap()` had become pure
+      redundancy with a durability cost, on both branches, once `showStuckRule()` covered itself.
 - [x] `SnoozeController` state machine (IDLE / ARMING / ARMED / CHECKING / RELEASED) as
       plain Kotlin over an injected clock — the unit-test surface for everything that
       follows. Covers the three invariants directly: the cap fires (and can't be made to
