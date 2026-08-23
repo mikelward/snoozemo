@@ -416,6 +416,26 @@ class MainActivity : ComponentActivity() {
     private var debugLogSaveFailed by mutableStateOf(false)
 
     /**
+     * Whether the most recent Off toggle left one or more debug-log files
+     * undeleted. Cleared by the next tap on this switch, same rule as
+     * [debugLogSaveFailed]. Every re-read is unconditional, not gated on
+     * whether the tap that triggered it was itself a disable: a requested
+     * *enable* that storage refused never reaches the persisted branch that
+     * would clear this field, so gating the read hid a real warning behind
+     * a switch that had actually snapped back to Off, and a config change
+     * mid-retry could leave a stale `true` nothing ever corrected, since
+     * the tap's own completion belongs to a dead instance (Codex, PR #89 —
+     * three separate rounds on this field: [debugLogWatch], [crashPinWatch]
+     * — for the same dead-instance reason [crashPending] is, both firing
+     * from the same disable completion — and `setDebugLog`'s own
+     * completion).
+     *
+     * Internal rather than private only so a test can pin it directly, the
+     * same test-only reason [shareFailed] and [dismissFailed] already are.
+     */
+    internal var debugLogCleanupFailed by mutableStateOf(false)
+
+    /**
      * Whether a crashed run is currently pinned (SPEC.md §4.6) — the post-crash
      * banner's own state. Defaults to **false** so the banner cannot flash on a
      * screen that has not finished reading yet, the same discipline
@@ -699,6 +719,7 @@ class MainActivity : ComponentActivity() {
                                 debugLogSaveFailed = debugLogSaveFailed,
                                 playUpdate = displayedPlayUpdate,
                                 playUpdateRestartFailed = playUpdateRestartFailed,
+                                debugLogCleanupFailed = debugLogCleanupFailed,
                                 shareFailed = shareFailed,
                                 onOpenPermissions = { openPermissions(Screen.SETTINGS) },
                                 onTileRow = ::addTile,
@@ -778,6 +799,15 @@ class MainActivity : ComponentActivity() {
                 if (debugLogWrites == 0) {
                     debugLogEnabled = DebugLogStore(this).isEnabled()
                     debugLogSaveFailed = DebugLogging.lastSaveRefused
+                    // A retry-enable tapped on a previous instance can still
+                    // be in flight when a configuration change hands off to
+                    // this one: onStart's own read above already ran, so it
+                    // can have copied the stale pre-completion
+                    // lastDisableCleanupFailed — and nothing before this
+                    // watch ever re-reads it for this instance, since the
+                    // tap's own completion callback belongs to the dead one
+                    // (Codex, PR #89).
+                    debugLogCleanupFailed = DebugLogging.lastDisableCleanupFailed
                 }
             }
         }
@@ -793,7 +823,13 @@ class MainActivity : ComponentActivity() {
         // so it is correct regardless of which instance's tap triggered it.
         crashPinWatch = DebugLogging.watchCrashPinOutcome {
             DebugLogging.hasPinnedCrash { pinned -> runOnUiThread { crashPending = pinned } }
+            runOnUiThread { debugLogCleanupFailed = DebugLogging.lastDisableCleanupFailed }
         }
+        // Same immediate-sync reason as shareFailed just below: a disable's
+        // delete that finished while this activity was stopped fired the
+        // watch above on a dead or not-yet-registered instance, so this can
+        // already hold an outcome nothing has shown yet.
+        debugLogCleanupFailed = DebugLogging.lastDisableCleanupFailed
         shareWatch = DebugReport.watchShareOutcome {
             runOnUiThread { shareFailed = DebugReport.lastShareFailed }
         }
@@ -910,6 +946,7 @@ class MainActivity : ComponentActivity() {
                 if (debugLogWrites == 0) {
                     debugLogEnabled = DebugLogStore(this).isEnabled()
                     debugLogSaveFailed = DebugLogging.lastSaveRefused
+                    debugLogCleanupFailed = DebugLogging.lastDisableCleanupFailed
                 }
                 // Its own one-key file too. `compareAndSet`-style guard isn't
                 // needed the way a coroutine version would need one: this is
@@ -1478,6 +1515,7 @@ class MainActivity : ComponentActivity() {
     private fun setDebugLog(enabled: Boolean) {
         if (debugLogEnabled == null) return
         debugLogSaveFailed = false
+        debugLogCleanupFailed = false
         debugLogWrites++
         debugLogEnabled = enabled
         DebugLogging.setEnabled(this, enabled) { _ ->
@@ -1492,6 +1530,18 @@ class MainActivity : ComponentActivity() {
                 if (debugLogWrites == 0) {
                     debugLogEnabled = DebugLogStore(this).isEnabled()
                     debugLogSaveFailed = DebugLogging.lastSaveRefused
+                    // Always reconciled, not only on a requested disable: a
+                    // requested *enable* that storage refused never reaches
+                    // DebugLogging.setEnabled's persisted branch at all, so
+                    // lastDisableCleanupFailed is left exactly as it was —
+                    // gating this read on the requested `enabled` value
+                    // read that untouched field as if the enable had
+                    // succeeded, hiding a real retained-files warning
+                    // behind a switch that had actually just snapped back
+                    // to Off (Codex, PR #89). Safe unconditionally: a
+                    // successful enable already clears the field itself,
+                    // synchronously, before this callback ever runs.
+                    debugLogCleanupFailed = DebugLogging.lastDisableCleanupFailed
                 }
             }
         }
