@@ -349,6 +349,12 @@ it only while it is missing — once the tile is there it is a statement, not an
 is nothing left to create. Its dismissal is not re-raised when the tile is later removed; the entry
 is the standing route, so the banner never has to ask twice.
 
+`SettingsScreen`'s foot carries the app version, a link to the hosted privacy policy, and the
+app's own mark beside every screen's title (landed 2026-08-23) — the same shape as the sibling
+Simmo repo's own Settings screen, so a user who has met one meets the same footer in the other.
+None of these are settings to change; they are where the app states what it is and points at its
+own policy, same as the tile row above states rather than offers once nothing is left to do.
+
 **The tile is the arm affordance; the notification is the status surface** (maintainer,
 2026-08-11). The maintainer runs the tile in its **1×1 form**, which shows the icon alone — no
 label, no subtitle — so icon-only is the *expected* presentation here, not a degraded edge case.
