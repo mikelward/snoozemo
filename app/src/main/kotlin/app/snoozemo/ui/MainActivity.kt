@@ -703,10 +703,15 @@ class MainActivity : ComponentActivity() {
                                 notificationsReachTheUser = notificationsReachTheUser,
                                 location = location,
                                 settingsFailure = settingsFailure,
+                                crashPending = crashPending,
+                                shareFailed = shareFailed,
+                                dismissFailed = dismissFailed,
                                 onAccessRow = ::openPolicyAccessSettings,
                                 onNotificationsRow = ::fixNotifications,
                                 onLocationRow = ::fixLocation,
                                 onDone = { screen = permissionsOrigin },
+                                onShareDebugLog = ::shareDebugLog,
+                                onDismissCrash = ::dismissCrash,
                             )
                         }
                         Screen.SETTINGS -> {

@@ -39,10 +39,25 @@ fun PermissionsScreen(
     notificationsReachTheUser: Boolean,
     location: LocationPermission?,
     settingsFailure: SetupRowId?,
+    /**
+     * Whether a crashed run is currently pinned (`SPEC.md` §4.6). On a cold
+     * start with Do Not Disturb access missing, `MainActivity.applyAccess`
+     * routes straight here — the actual first-landed screen in that case,
+     * not [MainScreen] — so the banner has to be reachable from here too or
+     * a crash from before that same cold start goes unseen until the user
+     * finishes this screen and navigates back on their own (Codex, PR #89).
+     */
+    crashPending: Boolean = false,
+    /** Whether the last debug-log share reached neither the clipboard nor the chooser. */
+    shareFailed: Boolean = false,
+    /** Whether the last Dismiss tap on the crash banner was refused by the file layer. */
+    dismissFailed: Boolean = false,
     onAccessRow: () -> Unit,
     onNotificationsRow: () -> Unit,
     onLocationRow: () -> Unit,
     onDone: () -> Unit,
+    onShareDebugLog: () -> Unit = {},
+    onDismissCrash: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -60,6 +75,17 @@ fun PermissionsScreen(
             text = stringResource(R.string.permissions_title),
             style = MaterialTheme.typography.headlineMedium,
         )
+        // Same placement and reasoning as MainScreen's own — above
+        // everything else, since this can be the actual first-landed screen
+        // (Codex, PR #89, fresh evidence).
+        if (crashPending) {
+            CrashBanner(
+                onShare = onShareDebugLog,
+                onDismiss = onDismissCrash,
+                shareFailed = shareFailed,
+                dismissFailed = dismissFailed,
+            )
+        }
         // Nothing at all until access has been read, rather than a guess in
         // either direction: the wrong guess either tells a user who granted
         // access that they haven't, or offers to arm something that can't.
