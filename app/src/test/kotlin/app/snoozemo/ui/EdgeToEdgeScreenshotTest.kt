@@ -39,7 +39,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * The app screen under system bars and a display cutout, light and dark.
+ * Every screen under system bars and a display cutout, light and dark.
  *
  * Every window in this app is drawn edge to edge whether it asks to be or not —
  * Android 15 made that the behavior for anything targeting SDK 35 and up, and
@@ -52,6 +52,12 @@ import org.robolectric.annotation.GraphicsMode
  * absence of inset handling *visible* to a test, which is the only way this
  * regresses quietly — with zero insets, a screen that ignores them and one that
  * respects them render identically.
+ *
+ * Most of the coverage runs against `PermissionsScreen` — the richest column,
+ * since `TODO.md` Phase 4 split what was one screen into three — with one test
+ * confirming `MainScreen` applies the same `safeDrawingPadding` placement,
+ * since that regression (a title under the status bar) is the one this screen
+ * would actually show first.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], qualifiers = "w411dp-h914dp-420dpi")
@@ -63,11 +69,11 @@ class EdgeToEdgeScreenshotTest {
 
     @Test
     fun `the screen starts below the status bar and cutout`() {
-        capture("edge-to-edge-insets.png") { GrantedScreen() }
+        capture("edge-to-edge-insets.png") { GrantedPermissionsScreen() }
 
         // The reported defect: the title drew under the status bar, so the one
-        // word identifying the app was behind the clock.
-        val top = composeRule.onNodeWithText("Snoozemo").getUnclippedBoundsInRoot().top
+        // word identifying the screen was behind the clock.
+        val top = composeRule.onNodeWithText("Permissions").getUnclippedBoundsInRoot().top
         assertTrue(
             "The title drew at $top, inside the ${statusBarInset()} status bar",
             top >= statusBarInset(),
@@ -76,12 +82,12 @@ class EdgeToEdgeScreenshotTest {
 
     @Test
     fun `every row clears the status bar and cutout`() {
-        capture { GrantedScreen() }
+        capture { GrantedPermissionsScreen() }
 
         // Not just the first child: `safeDrawingPadding` sits outside the
         // scroll for this reason, and moving it inside would pad the content
         // while letting each row slide under the bar as the user scrolls.
-        for (text in listOf("Snoozemo", "Do Not Disturb access", "Notifications", "Snooze")) {
+        for (text in listOf("Permissions", "Do Not Disturb access", "Notifications", "Location")) {
             val top = composeRule.onNodeWithText(text).getUnclippedBoundsInRoot().top
             assertTrue("`$text` drew at $top, inside the status bar", top >= statusBarInset())
         }
@@ -92,23 +98,22 @@ class EdgeToEdgeScreenshotTest {
         // A window short enough that the column overflows it with or without
         // the insets applied, so the last control only arrives by scrolling.
         // That is the case that catches an inset applied *inside* the scroll
-        // instead of around it: at rest both look right, and it is the
-        // scrolled-to-bottom position that slides under the gesture bar. That is the case that catches an
-        // inset applied *inside* the scroll instead of around it: the resting
-        // screen looks right either way, and it is the scrolled-to-bottom
-        // position that slides under the gesture bar.
+        // instead of around it: the resting screen looks right either way,
+        // and it is the scrolled-to-bottom position that slides under the
+        // gesture bar.
         RuntimeEnvironment.setQualifiers("w411dp-h320dp-420dpi")
 
-        capture { GrantedScreen() }
-        composeRule.onNodeWithText("End snooze").performScrollTo()
+        capture { GrantedPermissionsScreen() }
+        composeRule.onNodeWithText("Done").performScrollTo()
 
-        // Manual exit is "always available, always instant" (SPEC.md §7), and a
-        // gesture bar over the button is the same loss as a window too short to
-        // show it — the tap goes to the system, not to Snoozemo.
-        val bottom = composeRule.onNodeWithText("End snooze").getUnclippedBoundsInRoot().bottom
+        // Done is never conditional on every row being resolved (D7, "fail
+        // open"), so it has to be reachable whatever the window shape — a
+        // gesture bar over the button is the same loss as a window too short
+        // to show it — the tap goes to the system, not to Snoozemo.
+        val bottom = composeRule.onNodeWithText("Done").getUnclippedBoundsInRoot().bottom
         val safeBottom = composeRule.onRoot().getUnclippedBoundsInRoot().bottom - navigationBarInset()
         assertTrue(
-            "`End snooze` drew down to $bottom, under the navigation bar at $safeBottom",
+            "`Done` drew down to $bottom, under the navigation bar at $safeBottom",
             bottom <= safeBottom,
         )
     }
@@ -117,10 +122,24 @@ class EdgeToEdgeScreenshotTest {
     fun `the screen clears the bars in dark too`() {
         RuntimeEnvironment.setQualifiers("+night")
 
-        capture("edge-to-edge-insets-dark.png") { GrantedScreen() }
+        capture("edge-to-edge-insets-dark.png") { GrantedPermissionsScreen() }
+
+        val top = composeRule.onNodeWithText("Permissions").getUnclippedBoundsInRoot().top
+        assertTrue("The title drew at $top, inside the status bar", top >= statusBarInset())
+    }
+
+    @Test
+    fun `MainScreen starts below the status bar and cutout too`() {
+        // The regression that matters most on this screen specifically: it is
+        // the one the user actually lands on, so a title behind the status bar
+        // here is the first thing anyone would notice.
+        capture { GrantedMainScreen() }
 
         val top = composeRule.onNodeWithText("Snoozemo").getUnclippedBoundsInRoot().top
-        assertTrue("The title drew at $top, inside the status bar", top >= statusBarInset())
+        assertTrue(
+            "The title drew at $top, inside the ${statusBarInset()} status bar",
+            top >= statusBarInset(),
+        )
     }
 
     @Test
@@ -193,29 +212,37 @@ class EdgeToEdgeScreenshotTest {
 
     private fun Int.luminanceOfArgb(): Float = Color(this).luminance()
 
-    /** The screen with everything granted — the longest column it can show. */
+    /** `PermissionsScreen` with everything granted — the longest column it can show. */
     @Composable
-    private fun GrantedScreen() {
-        DebugScreen(
+    private fun GrantedPermissionsScreen() {
+        PermissionsScreen(
             access = PolicyAccess.GRANTED,
             notifications = NotificationPermission.GRANTED,
             notificationsReachTheUser = true,
             location = LocationPermission.GRANTED,
+            settingsFailure = null,
+            onAccessRow = {},
+            onNotificationsRow = {},
+            onLocationRow = {},
+            onDone = {},
+        )
+    }
+
+    /** `MainScreen` idle, with nothing missing and nothing to say. */
+    @Composable
+    private fun GrantedMainScreen() {
+        MainScreen(
+            access = PolicyAccess.GRANTED,
             tileAdded = true,
             tileBannerDismissed = true,
             snoozing = false,
             lastOutcome = null,
-            settingsFailure = null,
-            debugLogEnabled = true,
-            debugLogSaveFailed = false,
-            onAccessRow = {},
-            onNotificationsRow = {},
-            onLocationRow = {},
-            onTileRow = {},
+            onOpenPermissions = {},
+            onOpenSettings = {},
+            onAddTile = {},
             onDismissTileBanner = {},
             onArm = {},
             onRelease = {},
-            onDebugLog = {},
         )
     }
 

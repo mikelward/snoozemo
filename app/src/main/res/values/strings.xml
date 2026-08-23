@@ -9,6 +9,24 @@
       been through the propose-copy-in-chat step.
     -->
     <!--
+      Screen titles and navigation (TODO.md Phase 4's screen split): MainScreen,
+      PermissionsScreen (the interstitial) and SettingsScreen.
+    -->
+    <!-- TODO: translate -->
+    <string name="permissions_screen_title" tools:ignore="MissingTranslation">Permissions</string>
+    <!-- TODO: translate -->
+    <string name="permissions_done" tools:ignore="MissingTranslation">Done</string>
+    <!-- TODO: translate -->
+    <string name="settings_screen_title" tools:ignore="MissingTranslation">Settings</string>
+    <!--
+      MainScreen's Do Not Disturb banner. Reuses `setup_dnd_missing` for the body
+      and `setup_action_grant` for the button, so the wording matches the same
+      capability's row on PermissionsScreen exactly; only the title, which a row
+      does not need, is its own string.
+    -->
+    <!-- TODO: translate -->
+    <string name="main_dnd_banner_title" tools:ignore="MissingTranslation">Do Not Disturb access needed</string>
+    <!--
       The setup rows: a title, how the capability stands, and a button carrying
       the verb — but only while there is something left to do. A row whose
       capability is in place says so and offers nothing.
@@ -42,12 +60,16 @@
       The location row (SPEC.md §3.2). Reuses `setup_action_allow` rather than
       a location-specific verb — "Allow" already says what the user gets, and
       a different verb per permission would be a distinction without a
-      difference (AGENTS.md, *Concise copy*).
+      difference (AGENTS.md, *Concise copy*). `setup_location_granted` reuses
+      the same "Allowed" wording as notifications for the same reason
+      (AGENTS.md, standardize granted status text to "Granted" or "Allowed"
+      and nothing else): both pair with the `Allow` verb above, unlike DND
+      access's `Grant`/`Granted`, which is the one Settings-toggle permission.
     -->
     <!-- TODO: translate -->
     <string name="setup_location_title" tools:ignore="MissingTranslation">Location</string>
     <!-- TODO: translate -->
-    <string name="setup_location_granted" tools:ignore="MissingTranslation">Tracking your place</string>
+    <string name="setup_location_granted" tools:ignore="MissingTranslation">Allowed</string>
     <!-- TODO: translate -->
     <string name="setup_location_missing" tools:ignore="MissingTranslation">Snoozemo can\'t tell when you\'ve left</string>
     <!--

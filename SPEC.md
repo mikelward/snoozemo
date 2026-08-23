@@ -308,14 +308,30 @@ This **revises** the line below rather than sitting beside it: "the tile is the 
 written when the tile was the only one, and it stays true as a statement of which path the product
 leads with — it is no longer true as a statement that the tile is the *only* way to start a snooze.
 
+**The app is three screens, not one** (`TODO.md` Phase 4, landed 2026-08-23). `MainScreen` is the
+tile-equivalent Arm/Release control: the app's title, a banner for the one required-and-missing
+capability (Do Not Disturb access — nothing on this screen can arm without it), the tile banner
+below, and the Snooze/End snooze/Settings controls. `PermissionsScreen` is the interstitial that
+carries the DND, notification and location setup rows — reached automatically the first time DND
+access reads as missing (so a fresh install lands there rather than on a screen whose Arm button is
+disabled with nothing yet explaining why), and from `SettingsScreen`'s Permissions entry any time
+after. Only that first reading routes automatically; a later revocation mid-snooze surfaces on
+`MainScreen`'s banner instead (§8.2's own recovery path), so losing access never yanks the user off
+whatever they were doing. `SettingsScreen` holds everything touched rarely — usually never: the
+permanent tile row, the debug-log switch, and the Permissions entry. None of the three rows is
+gated behind another being resolved first — leaving any of them is always one tap, on the same "fail
+open" principle the duration cap itself follows (D7): a setup flow that cannot be left without
+finishing it is a trap, not onboarding.
+
 The screen leads with a **banner** urging the tile, dismissed **once and forever**, above a tile
-**entry that is permanent** (maintainer, 2026-08-13). Those go together: a banner that can be sent
-away for good is only safe because the entry outlives it, and an entry that were itself conditional
-would put the user back in the dead end where saying no once costs them the tile. The entry states
-the tile's state either way and offers to add it only while it is missing — once the tile is there
-it is a statement, not an offer, because there is nothing left to create. Its dismissal is not
-re-raised when the tile is later removed; the entry is the standing route, so the banner never has
-to ask twice.
+**entry that is permanent** (maintainer, 2026-08-13) — the banner lives on `MainScreen`, the entry
+on `SettingsScreen`, in different screens now that the split above landed, but the relationship is
+unchanged. Those go together: a banner that can be sent away for good is only safe because the entry
+outlives it, and an entry that were itself conditional would put the user back in the dead end where
+saying no once costs them the tile. The entry states the tile's state either way and offers to add
+it only while it is missing — once the tile is there it is a statement, not an offer, because there
+is nothing left to create. Its dismissal is not re-raised when the tile is later removed; the entry
+is the standing route, so the banner never has to ask twice.
 
 **The tile is the arm affordance; the notification is the status surface** (maintainer,
 2026-08-11). The maintainer runs the tile in its **1×1 form**, which shows the icon alone — no

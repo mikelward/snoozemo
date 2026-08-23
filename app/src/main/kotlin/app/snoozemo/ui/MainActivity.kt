@@ -16,40 +16,20 @@ import android.provider.Settings
 import android.util.Log
 import android.view.Choreographer
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import app.snoozemo.R
 import app.snoozemo.core.EndReason
@@ -76,13 +56,54 @@ import app.snoozemo.tile.R as TileR
 
 private const val TAG = "MainActivity"
 
+/** `onSaveInstanceState` keys for the navigation state a configuration change would otherwise lose. */
+private const val KEY_SCREEN = "screen"
+private const val KEY_PERMISSIONS_ORIGIN = "permissionsOrigin"
+private const val KEY_ROUTED_TO_PERMISSIONS_ONCE = "routedToPermissionsOnce"
+
 /**
- * Phase 1's screen: enough to prove the DND half works on a real device before
- * anything is built on top of it (`TODO.md`). The product's real entry point is
- * the Quick Settings tile, which arrives in Phase 2 — this screen becomes
- * onboarding and settings.
+ * The three screens this activity switches between; there is no back stack
+ * beyond one level. Internal rather than private only so a lifecycle test
+ * can assert on [MainActivity.screen] directly; nothing outside this file
+ * constructs one in production.
+ */
+internal enum class Screen { MAIN, PERMISSIONS, SETTINGS }
+
+/**
+ * Hosts the three screens the app is split into (`TODO.md` Phase 4): [MainScreen],
+ * [PermissionsScreen] and [SettingsScreen]. There is no navigation library —
+ * deliberately, per the same TODO entry — so this class holds the one piece of
+ * navigation state itself.
  */
 class MainActivity : ComponentActivity() {
+
+    /**
+     * Which of the three screens is on top.
+     *
+     * Internal rather than private, like [latestAccessRefresh] below, only so
+     * a test can pin it directly; nothing outside this class reads it in
+     * production.
+     */
+    internal var screen by mutableStateOf(Screen.MAIN)
+
+    /**
+     * Which screen [Screen.PERMISSIONS] returns to on Done or back — [MainScreen]
+     * when it was reached automatically or from its own banner, [SettingsScreen]
+     * when reached from there. Read only while [screen] is [Screen.PERMISSIONS].
+     * Internal for the same test-only reason as [screen].
+     */
+    internal var permissionsOrigin by mutableStateOf(Screen.MAIN)
+
+    /**
+     * Whether [applyAccess] has already made its one routing decision.
+     *
+     * Not `by mutableStateOf`: this gates a side effect on the *first* access
+     * reading, not something the screen renders, and every later reading must
+     * leave [screen] alone — a revocation mid-snooze must land the user on
+     * `MainScreen`'s banner (`SPEC.md` §8.2's own recovery path), not yank them
+     * into the interstitial out from under whatever they were doing.
+     */
+    private var routedToPermissionsOnce = false
 
     private lateinit var zen: ZenController
     private lateinit var store: ActiveSnoozeStore
@@ -345,6 +366,22 @@ class MainActivity : ComponentActivity() {
         // Cheap enough to sit in front of the record read below: it is window
         // flags and an insets-controller call, no disk and no binder.
         enableEdgeToEdge()
+        // Restored before anything reads `screen`: a configuration change
+        // recreates this activity from scratch, and without this a rotation
+        // while on Settings — or on Permissions reached from Settings — would
+        // silently land the user back on Main, with Permissions' own Done/back
+        // now returning to the wrong place (Codex, PR #82). Everything else
+        // this class tracks is re-derived from the platform or the record on
+        // every fresh instance; navigation position has no such source of
+        // truth to re-derive from, so it is the one thing here that needs
+        // actual persisting.
+        savedInstanceState?.let {
+            screen = Screen.entries.firstOrNull { s -> s.name == it.getString(KEY_SCREEN) } ?: screen
+            permissionsOrigin =
+                Screen.entries.firstOrNull { s -> s.name == it.getString(KEY_PERMISSIONS_ORIGIN) }
+                    ?: permissionsOrigin
+            routedToPermissionsOnce = it.getBoolean(KEY_ROUTED_TO_PERMISSIONS_ONCE, routedToPermissionsOnce)
+        }
         store = ActiveSnoozeStore(applicationContext)
         promptStore = NotificationPromptStore(applicationContext)
         locationPromptStore = LocationPromptStore(applicationContext)
@@ -353,27 +390,54 @@ class MainActivity : ComponentActivity() {
         setContent {
             SnoozemoTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    DebugScreen(
-                        access = access,
-                        notifications = notifications,
-                        location = location,
-                        snoozing = snoozing,
-                        lastOutcome = lastOutcome,
-                        notificationsReachTheUser = notificationsReachTheUser,
-                        tileAdded = tileAdded,
-                        tileBannerDismissed = tileBannerDismissed,
-                        settingsFailure = settingsFailure,
-                        debugLogEnabled = debugLogEnabled,
-                        debugLogSaveFailed = debugLogSaveFailed,
-                        onAccessRow = ::openPolicyAccessSettings,
-                        onNotificationsRow = ::fixNotifications,
-                        onLocationRow = ::fixLocation,
-                        onTileRow = ::addTile,
-                        onDismissTileBanner = { tileStore.dismissBanner() },
-                        onArm = ::armFromScreen,
-                        onRelease = ::endFromScreen,
-                        onDebugLog = ::setDebugLog,
-                    )
+                    when (screen) {
+                        Screen.MAIN -> MainScreen(
+                            access = access,
+                            tileAdded = tileAdded,
+                            tileBannerDismissed = tileBannerDismissed,
+                            snoozing = snoozing,
+                            lastOutcome = lastOutcome,
+                            settingsFailure = settingsFailure,
+                            onOpenPermissions = { openPermissions(Screen.MAIN) },
+                            onOpenSettings = { screen = Screen.SETTINGS },
+                            onAddTile = ::addTile,
+                            onDismissTileBanner = { tileStore.dismissBanner() },
+                            onArm = ::armFromScreen,
+                            onRelease = ::endFromScreen,
+                        )
+                        Screen.PERMISSIONS -> {
+                            // Falls back to whoever opened this screen —
+                            // `permissionsOrigin`, saved and restored across a
+                            // configuration change alongside `screen` itself
+                            // (see `onCreate`/`onSaveInstanceState`), so a
+                            // rotation here doesn't strand Done/back with
+                            // nowhere it remembers coming from.
+                            BackHandler { screen = permissionsOrigin }
+                            PermissionsScreen(
+                                access = access,
+                                notifications = notifications,
+                                notificationsReachTheUser = notificationsReachTheUser,
+                                location = location,
+                                settingsFailure = settingsFailure,
+                                onAccessRow = ::openPolicyAccessSettings,
+                                onNotificationsRow = ::fixNotifications,
+                                onLocationRow = ::fixLocation,
+                                onDone = { screen = permissionsOrigin },
+                            )
+                        }
+                        Screen.SETTINGS -> {
+                            BackHandler { screen = Screen.MAIN }
+                            SettingsScreen(
+                                tileAdded = tileAdded,
+                                settingsFailure = settingsFailure,
+                                debugLogEnabled = debugLogEnabled,
+                                debugLogSaveFailed = debugLogSaveFailed,
+                                onOpenPermissions = { openPermissions(Screen.SETTINGS) },
+                                onTileRow = ::addTile,
+                                onDebugLog = ::setDebugLog,
+                            )
+                        }
+                    }
                     // The one disclosure this app shows: SPEC.md §12 requires it
                     // precede the background-location prompt specifically (Play's
                     // restricted-permission declaration), so it appears as a
@@ -401,6 +465,14 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /** The counterpart to `onCreate`'s restore, saved on every stop — see its comment. */
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(KEY_SCREEN, screen.name)
+        outState.putString(KEY_PERMISSIONS_ORIGIN, permissionsOrigin.name)
+        outState.putBoolean(KEY_ROUTED_TO_PERMISSIONS_ONCE, routedToPermissionsOnce)
     }
 
     override fun onStart() {
@@ -846,6 +918,20 @@ class MainActivity : ComponentActivity() {
         if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return
         if (refresh != latestAccessRefresh) return
         access = current
+        // The one routing decision this screen makes on its own: land a user
+        // with no Do Not Disturb access straight on the interstitial the first
+        // time that becomes known, rather than on a Main screen whose Arm
+        // button is disabled with nothing else on it yet explaining why.
+        // Once only — every later reading follows MainScreen's banner instead
+        // (SPEC.md §8.2: access lost mid-snooze must not yank the user off
+        // whatever they were doing), and only if nothing has already
+        // navigated away from Main on its own.
+        if (!routedToPermissionsOnce) {
+            routedToPermissionsOnce = true
+            if (current != PolicyAccess.GRANTED && screen == Screen.MAIN) {
+                openPermissions(Screen.MAIN)
+            }
+        }
         // A failure describes a tap that could not reach Settings, and the row
         // carrying it loses its button the moment access is granted — so
         // nothing would clear it, and the row would read `Granted` above
@@ -1101,6 +1187,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Switches to the permissions interstitial, remembering where to return. */
+    private fun openPermissions(origin: Screen) {
+        permissionsOrigin = origin
+        screen = Screen.PERMISSIONS
+    }
+
     private fun openPolicyAccessSettings() {
         openSettings(SetupRowId.DND, Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
     }
@@ -1125,445 +1217,5 @@ class MainActivity : ComponentActivity() {
                 Log.e(TAG, "Opening a Settings screen was refused.", it)
                 settingsFailure = row
             }
-    }
-}
-
-@Composable
-fun SnoozemoTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme(),
-        content = content,
-    )
-}
-
-/** Which setup row a failure belongs beside. */
-enum class SetupRowId {
-    DND,
-    NOTIFICATIONS,
-    LOCATION,
-    TILE,
-}
-
-@Composable
-fun DebugScreen(
-    access: PolicyAccess?,
-    notifications: NotificationPermission?,
-    notificationsReachTheUser: Boolean,
-    location: LocationPermission?,
-    tileAdded: Boolean?,
-    tileBannerDismissed: Boolean,
-    snoozing: Boolean?,
-    lastOutcome: String?,
-    settingsFailure: SetupRowId?,
-    debugLogEnabled: Boolean?,
-    debugLogSaveFailed: Boolean,
-    onAccessRow: () -> Unit,
-    onNotificationsRow: () -> Unit,
-    onLocationRow: () -> Unit,
-    onTileRow: () -> Unit,
-    onDismissTileBanner: () -> Unit,
-    onArm: () -> Unit,
-    onRelease: () -> Unit,
-    onDebugLog: (Boolean) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            // Outside the scroll, so the whole column — not just its resting
-            // position — stays clear of the status bar, the navigation bar and
-            // any display cutout. `safeDrawing` rather than `systemBars`
-            // because a cutout on a rotated phone takes a side inset that the
-            // bars alone do not describe, and a title half under a cutout is
-            // the same defect as one under the status bar. Inside the scroll it
-            // would only pad the content, leaving a row to slide under the
-            // status bar as soon as the user scrolled.
-            .safeDrawingPadding()
-            // Scrolls, and this is not cosmetic. Two three-line rows, a title
-            // and two buttons overflow a landscape window or a large font
-            // scale, and an unscrolled `Column` clips its later children — the
-            // last of which is `End snooze` (flagged by Codex on PR #18).
-            // Manual exit is "always available, always instant" (SPEC.md §7),
-            // and a user who cannot reach it because their font is large has
-            // lost the exit from this screen entirely.
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(
-            text = stringResource(R.string.app_name),
-            style = MaterialTheme.typography.headlineMedium,
-        )
-        // Above everything, and louder than the rows, because the screen leads
-        // with the tile rather than offering a symmetrical choice (SPEC.md
-        // §4.2): the tile is easier and is where people already go to silence a
-        // phone. Dismissible — a banner that cannot be dismissed is an argument
-        // the user cannot end — and dismissed for good, which only works
-        // because the row below it is permanent.
-        if (tileAdded == false && !tileBannerDismissed) {
-            TileBanner(onAdd = onTileRow, onDismiss = onDismissTileBanner)
-        }
-        // Nothing at all until access has been read, rather than a guess in
-        // either direction: the wrong guess either tells a user who granted
-        // access that they haven't, or offers to arm something that can't.
-        access?.let {
-            val granted = it == PolicyAccess.GRANTED
-            SetupRow(
-                title = stringResource(R.string.setup_dnd_title),
-                status = stringResource(
-                    if (granted) R.string.setup_dnd_granted else R.string.setup_dnd_missing,
-                ),
-                // `Grant` rather than `Allow`: this one is a Settings toggle
-                // with no in-app dialog and no result callback (SPEC.md §5.2),
-                // and the pair of verbs is what is left of saying so now that
-                // the row no longer spends a line on the mechanism.
-                //
-                // Absent once it is granted, which is the whole of what the row
-                // then is: a statement that this is done. A button offering to
-                // grant what is already granted is a tap with nothing behind
-                // it, and turning access back off is Settings' job — the user
-                // goes there deliberately or not at all.
-                action = stringResource(R.string.setup_action_grant).takeUnless { granted },
-                onAction = onAccessRow,
-                failure = stringResource(R.string.failure_could_not_open_settings)
-                    .takeIf { settingsFailure == SetupRowId.DND },
-            )
-        }
-        // Same discipline, same reason: unread is not "denied". Read after the
-        // first frame like everything else here, so this is briefly absent
-        // rather than briefly wrong.
-        notifications?.let {
-            // Granted is necessary and not sufficient. The permission can be
-            // held while the app is switched off in Settings or either channel
-            // is blocked, and the system then drops every post — so the row may
-            // only say `Allowed`, and only drop its button, when a message
-            // would actually arrive (flagged by Codex on PR #18).
-            val working = it == NotificationPermission.GRANTED && notificationsReachTheUser
-            SetupRow(
-                title = stringResource(R.string.setup_notifications_title),
-                status = stringResource(
-                    if (working) {
-                        R.string.setup_notifications_granted
-                    } else {
-                        R.string.setup_notifications_missing
-                    },
-                ),
-                // One verb for all three broken states, deliberately. What the
-                // tap does differs — `ASKABLE` is a prompt in place, and the
-                // other two leave for Settings, because the system has stopped
-                // showing that prompt or the permission is held and something
-                // else is dropping the post — but what the user wants is the
-                // same in each, and naming the route was what made the old row
-                // read as a description instead of an offer.
-                action = stringResource(R.string.setup_action_allow).takeUnless { working },
-                onAction = onNotificationsRow,
-                failure = stringResource(R.string.failure_could_not_open_settings)
-                    .takeIf { settingsFailure == SetupRowId.NOTIFICATIONS },
-            )
-        }
-        // Same null-until-read discipline again. Missing this permission never
-        // blocks a snooze (SPEC.md §3.6's fallback ladder), so the row states a
-        // gap in what is tracked, not a broken product.
-        location?.let { state ->
-            val granted = state == LocationPermission.GRANTED
-            SetupRow(
-                title = stringResource(R.string.setup_location_title),
-                status = stringResource(
-                    if (granted) R.string.setup_location_granted else R.string.setup_location_missing,
-                ),
-                action = stringResource(R.string.setup_action_allow).takeUnless { granted },
-                onAction = onLocationRow,
-                failure = stringResource(R.string.failure_could_not_open_settings)
-                    .takeIf { settingsFailure == SetupRowId.LOCATION },
-            )
-        }
-        // Only while it is missing. The tile is the product (SPEC.md §4.2), so
-        // a user without it has an app whose whole interaction is out of reach
-        // — but once it is there this row is clutter on the one screen there
-        // is, and the platform's own answer to a redundant request is a dialog
-        // saying it is already added.
-        // Permanent, and null until the store has answered. Permanent because it
-        // is what makes the banner's forever-dismissal safe (SPEC.md §4.2) — the
-        // banner can be sent away for good precisely because this outlives it —
-        // and null-until-read because a permanent row with a default would
-        // assert `Added` on the first frame of a cold launch and then correct
-        // itself, which is the one lie this screen is least entitled to tell.
-        tileAdded?.let { added ->
-            SetupRow(
-                title = stringResource(R.string.setup_tile_title),
-                status = stringResource(
-                    if (added) R.string.setup_tile_added else R.string.setup_tile_missing,
-                ),
-                // Absent once the tile is there: nothing is left to create, and
-                // the platform's own answer to a redundant request is a dialog
-                // saying it is already added. The row becomes a statement.
-                action = stringResource(R.string.setup_action_add).takeUnless { added },
-                onAction = onTileRow,
-                failure = stringResource(R.string.failure_could_not_add_tile)
-                    .takeIf { settingsFailure == SetupRowId.TILE },
-            )
-        }
-
-        if (access == PolicyAccess.GRANTED) {
-            Button(
-                onClick = onArm,
-                // Disabled until the record has actually been read. Unknown
-                // is not "nothing is running": offering to arm over a snooze
-                // the screen hasn't read yet is how the user loses the
-                // deadline they were promised. A button that is briefly
-                // inert costs a tap; the other direction costs the cap.
-                enabled = snoozing == false,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(stringResource(R.string.debug_arm))
-            }
-            // Deliberately always enabled, even when we believe nothing is
-            // running. Manual exit is "always available, always instant"
-            // (SPEC.md §7), and endSnooze is idempotent — so a stale belief
-            // must never be what stops someone turning their phone back on.
-            OutlinedButton(
-                onClick = onRelease,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(stringResource(R.string.debug_release))
-            }
-        }
-
-        // Below the actions, deliberately: the rows above are first-run work
-        // and the buttons are the product, while this is a setting touched
-        // rarely — usually never. Same null-until-read discipline as the rows:
-        // a row that asserted the default and corrected itself a frame later
-        // would flash on the one launch where the user had turned it off.
-        debugLogEnabled?.let {
-            DebugLogRow(enabled = it, saveFailed = debugLogSaveFailed, onChange = onDebugLog)
-        }
-
-        lastOutcome?.let {
-            Text(text = it, style = MaterialTheme.typography.bodySmall)
-        }
-    }
-}
-
-/**
- * The debug log's on/off switch (SPEC.md §4.6): on by default, and turning it
- * off deletes what was kept.
- *
- * Not a [SetupRow]: those state a capability and offer its one repair, while
- * this is a choice with two valid states, so it carries a switch. The whole
- * card is the target and the switch is its indicator — one TalkBack target per
- * row, the same rule the rows above keep — which is why the switch itself
- * takes no `onCheckedChange` of its own.
- */
-@Composable
-private fun DebugLogRow(
-    enabled: Boolean,
-    saveFailed: Boolean,
-    onChange: (Boolean) -> Unit,
-) {
-    Surface(
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            // `toggleable` before the padding, so the whole card answers the
-            // tap; the Surface's shape clips the ripple to the card.
-            modifier = Modifier
-                .toggleable(
-                    value = enabled,
-                    role = Role.Switch,
-                    onValueChange = onChange,
-                )
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(
-                    text = stringResource(R.string.setup_debug_log_title),
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Text(
-                    text = stringResource(R.string.setup_debug_log_description),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                // Inside the row, like SetupRow's failure line and for the
-                // same reason: the message is about the tap, and the column
-                // scrolls. The switch has already snapped back to the stored
-                // truth by the time this shows; the line is what stops the
-                // snap-back reading as a missed tap.
-                if (saveFailed) {
-                    Text(
-                        text = stringResource(R.string.setup_debug_log_save_failed),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            }
-            Switch(checked = enabled, onCheckedChange = null)
-        }
-    }
-}
-
-/**
- * One capability: what it is, how it stands, and — only while something is
- * actually left to do — the button that fixes it.
- *
- * The trailing-button shape is the sibling Simmo repo's `GrantRow`, and the two
- * halves of it are load-bearing separately.
- *
- * **A verb, not a route.** The action line used to describe the mechanism —
- * `Opens Settings`, `Tap to add` — which reads as a note about what will happen
- * rather than an offer to do it, and made a granted row look like it still
- * wanted something. `Grant`, `Allow` and `Add` say what the user gets.
- *
- * **Nothing to tap once it is done.** [action] is null when the capability is
- * in place, and the row is then a statement: title and status, no control. A
- * button that only re-opens a screen the user has already finished with is a
- * tap with nothing behind it, and it keeps first-run urgency on a screen where
- * everything is already fine.
- *
- * That is a deliberate trade against the shape this row had before, where the
- * whole surface was clickable so the sentence naming the problem was itself the
- * target (`TODO.md` Phase 2). One target per row is what TalkBack can announce
- * unambiguously — a button nested inside a clickable row gives the same tap two
- * different names — so the row keeps the single target and moves it onto the
- * control that says what it does.
- */
-/**
- * The screen's one piece of advocacy: add the tile.
- *
- * Deliberately not a [SetupRow]. The rows state a fact about a capability and
- * offer the repair; this makes a case, and looking different is the point —
- * `SPEC.md` §4.2 asks the screen to push toward the tile rather than list it as
- * one option among equals. It is the only element here that says *why*.
- *
- * Two actions, weighted: adding is the filled button, dismissing is a text one.
- */
-@Composable
-private fun TileBanner(
-    onAdd: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    Surface(
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.primaryContainer,
-        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = stringResource(R.string.tile_banner_title),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = stringResource(R.string.tile_banner_body),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-            ) {
-                TextButton(onClick = onDismiss) {
-                    Text(stringResource(R.string.tile_banner_dismiss))
-                }
-                Button(onClick = onAdd) {
-                    Text(stringResource(R.string.tile_banner_add))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SetupRow(
-    title: String,
-    status: String,
-    action: String?,
-    onAction: () -> Unit,
-    failure: String? = null,
-) {
-    Surface(
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            // The same gap the sibling repo keeps between a label block and its
-            // trailing control: the text takes whatever width the button
-            // leaves, so a status long enough to wrap would otherwise end flush
-            // against the button and read as one object with it.
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(text = title, style = MaterialTheme.typography.titleMedium)
-                Text(text = status, style = MaterialTheme.typography.bodyMedium)
-                // Inside the row, not at the foot of the screen. A tap that
-                // could not open Settings has to say so where the tap was: the
-                // column scrolls, so a message appended below the buttons is
-                // off screen in landscape or at a large font scale, and the row
-                // would read as the dead tap this screen exists to remove
-                // (flagged by Codex on PR #18).
-                //
-                // And only beside an offer. The message is about a tap, so a
-                // row with nothing left to tap has nothing to report — showing
-                // it there would put `Couldn't open Settings` under `Granted`,
-                // which is the screen contradicting itself about the user's own
-                // phone. The state is cleared as well, in the two places that
-                // learn the capability recovered; this is what keeps the two
-                // from disagreeing in the frame between.
-                failure?.takeIf { action != null }?.let {
-                    Text(
-                        text = it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            }
-            action?.let {
-                Button(onClick = onAction) { Text(it) }
-            }
-        }
-    }
-}
-
-@Preview
-@Composable
-private fun DebugScreenPreview() {
-    SnoozemoTheme {
-        DebugScreen(
-            access = PolicyAccess.GRANTED,
-            notifications = NotificationPermission.GRANTED,
-            notificationsReachTheUser = true,
-            location = LocationPermission.GRANTED,
-            tileAdded = true,
-            tileBannerDismissed = true,
-            snoozing = false,
-            lastOutcome = null,
-            settingsFailure = null,
-            debugLogEnabled = true,
-            debugLogSaveFailed = false,
-            onAccessRow = {},
-            onNotificationsRow = {},
-            onLocationRow = {},
-            onTileRow = {},
-            onDismissTileBanner = {},
-            onArm = {},
-            onRelease = {},
-            onDebugLog = {},
-        )
     }
 }
