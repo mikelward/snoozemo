@@ -1257,7 +1257,7 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty-five rounds of
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty-six rounds of
       Codex findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
@@ -1476,7 +1476,24 @@ the point is that every other line of the app is worthless if it isn't true.
       rounds back, covered by a new `DebugReportShareTest` case that removes the app's own
       package from the shadow `PackageManager` (forcing the same `NameNotFoundException` a real
       lookup failure would throw) and confirms the share still completes with the documented
-      fallback rather than hanging.
+      fallback rather than hanging. One more, round twenty-six, fresh evidence after round 28's
+      earlier fix: that fix only *logged* a `hasPinnedCrash` metadata-check failure, but still
+      collapsed it into the same `false` a genuinely-absent pin reports — so the post-crash
+      banner would silently hide a crash that was still really sitting there, unread, on a
+      transient I/O failure, with nothing on screen telling the user it couldn't be checked.
+      Fixed by giving `hasPinnedCrash` a second `checkSucceeded` parameter, mirroring
+      `readPreviousOrCrash`'s existing `readSucceeded` idiom; `MainActivity`'s two call sites now
+      leave `crashPending` untouched on a failed check rather than downgrading it to "nothing
+      pinned" (the failure itself is already logged at the file layer). Covered by a new
+      `DebugFileSinkTest` case using the same throwing-`dirProvider` trick as the earlier
+      `readPreviousOrCrash` regression. **Declined**, same round: a suggestion that a Share whose
+      clipboard copy landed but whose crash-pin consume then failed should surface that failure
+      on the share outcome — this is the exact trade-off finding 6 above already made and tested
+      deliberately (`a share that fails to consume the pin still reports what it delivered`): the
+      copy genuinely landed, so the share genuinely succeeded, and the file-layer refusal is not
+      silent — `crashPending` is re-read (via `watchCrashPinOutcome`, unconditional since round
+      26) immediately after, so the banner stays visibly on screen with its own retry affordance
+      rather than a distinct message. Replied with the reasoning and resolved.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
