@@ -1609,7 +1609,32 @@ the point is that every other line of the app is worthless if it isn't true.
       onboarding route — that would strand a user with both a missing permission and a pending
       crash on the disabled Arm screen instead of the interstitial that actually fixes the missing
       permission. `SPEC.md` updated to describe the real landing-screen behavior; new
-      `PermissionsScreenScreenshotTest` coverage.
+      `PermissionsScreenScreenshotTest` coverage. A thirty-fourth round brought one more, fixed:
+      the mid-delivery reuse branch gated on `lastDeliveryResult.reachedUser` alone, but a
+      delivery can reach the clipboard or chooser while its payload never actually carried the
+      pinned crash (the previous-run read timed out, failed, or read back blank) — so an
+      overlapping retry, whose own payload collection might genuinely have captured the crash,
+      had its delivery skipped and its pin left unconsumed, making the explicit "try Share again"
+      silently do nothing. Fixed by tracking `lastDeliveryPinConsumeSafe` alongside
+      `lastDeliveryResult`, written under the same `applyLock` critical section so the pair stays
+      consistent, and requiring it for reuse; an incomplete delivery now falls through the same
+      way a failed one already does. Two existing mid-delivery tests were also corrected — they
+      used `pinConsumeSafe = false` for the delivery they expected to be *reused*, which no longer
+      qualifies.
+- [ ] **Simplify `DebugReport.share()`'s concurrency by coalescing at the tap** (flagged
+      2026-08-23, after PR #89's review). Twelve of that PR's forty-nine findings (10, 11, 12, 21,
+      27, 29, 30, 32, 40, 46, 49) are all in this one function's concurrency, and each fix has
+      added another field or condition to the same mechanism: `attemptTicket`,
+      `deliveriesCompleted`, `lastDeliveryResult`, `lastDeliveryPinConsumeSafe`, a
+      `deliveriesAtIssue` map, and two locks — all to answer one question, *what happens when the
+      user taps Share twice quickly*. **The proposal**: gate the Share affordance while a share is
+      in flight (disable or debounce it), so a second tap can't happen at all. That deletes the
+      entire overlapping-delivery reuse branch and four of those fields, since the machinery
+      exists only to retroactively decide that a second tap was a duplicate — the hard part, and
+      the part the user can't see. It is also better feedback: a disabled button that says
+      *sharing…* beats a tap that silently resolves into another attempt's outcome. **The cost**:
+      a real design change to a mechanism that is currently green and well covered, so it belongs
+      in its own PR rather than as more churn on #89. Reversible: the reuse branch is one block.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
