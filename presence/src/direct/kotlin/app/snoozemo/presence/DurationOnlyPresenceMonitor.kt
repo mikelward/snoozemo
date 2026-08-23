@@ -19,7 +19,7 @@ import kotlinx.coroutines.flow.emptyFlow
  */
 class DurationOnlyPresenceMonitor : PresenceMonitor {
 
-    override fun start(anchor: Anchor, sinceElapsedRealtimeMs: Long): Flow<PresenceUpdate> =
+    override fun start(anchor: Anchor, sinceElapsedRealtimeMs: Long, armedAtEpochMs: Long): Flow<PresenceUpdate> =
         emptyFlow()
 
     override fun stop() = Unit

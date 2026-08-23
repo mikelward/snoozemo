@@ -78,14 +78,16 @@ internal class FakePresenceMonitor : PresenceMonitor {
 
     val startedWith = mutableListOf<Anchor>()
     val startedSeeds = mutableListOf<Long>()
+    val startedArmedAtEpochMs = mutableListOf<Long>()
     var stops: Int = 0
 
     /** Emit into this to stand in for the sensors. */
     val updates = MutableSharedFlow<PresenceUpdate>(extraBufferCapacity = 16)
 
-    override fun start(anchor: Anchor, sinceElapsedRealtimeMs: Long): Flow<PresenceUpdate> {
+    override fun start(anchor: Anchor, sinceElapsedRealtimeMs: Long, armedAtEpochMs: Long): Flow<PresenceUpdate> {
         startedWith += anchor
         startedSeeds += sinceElapsedRealtimeMs
+        startedArmedAtEpochMs += armedAtEpochMs
         return updates
     }
 

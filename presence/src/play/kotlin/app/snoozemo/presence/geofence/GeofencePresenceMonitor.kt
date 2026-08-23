@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
 import app.snoozemo.core.Anchor
+import app.snoozemo.core.ClockReading
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.LocationDuty
 import app.snoozemo.core.PresenceEvent
@@ -73,7 +74,45 @@ class GeofencePresenceMonitor(
      */
     private val stopGeneration = java.util.concurrent.atomic.AtomicLong(0)
 
-    override fun start(anchor: Anchor, sinceElapsedRealtimeMs: Long): Flow<PresenceUpdate> {
+    /**
+     * The grace deadline's durable side effects — the store, the alarm — kept
+     * on the instance, not inside one `start()`'s `callbackFlow` (Codex, PR
+     * #91, eighth pass). A `deliver` call's own producer-local sequence
+     * ordered writes *within* one generation, but a rapid end-and-rearm can
+     * leave an old generation's `deliver` still in flight when a new one
+     * starts; the two shared no lock, so a stale write landing after a fresh
+     * one clobbers the current snooze's identity in the single
+     * [GraceDeadlineStore] file every generation writes to, and can rearm or
+     * cancel the wrong platform alarm. [persistenceGeneration] is the gate:
+     * only a call whose own captured `startGeneration` still matches may
+     * write, checked and claimed under the same [persistenceLock] so a claim
+     * and a stale write can never interleave.
+     */
+    private val persistenceLock = Any()
+    private var persistenceGeneration = -1L
+    private var persistedSequence = -1L
+    private var lastPersistedGraceDeadlineMs: Long? = null
+
+    /**
+     * Latched, not just checked per call (Codex, PR #91, eighth pass):
+     * `send` only queues a `Departed` update, so a signal arriving before the
+     * collector consumes it and calls [stop] would see the engine's own
+     * already-resolved, grace-cleared state and clear the durable deadline
+     * itself — stranding the bridge's retained `GraceElapsed` exactly as the
+     * second pass's fix was meant to prevent, just reachable from a *later*
+     * call instead of the one that actually produced `Departed`. Reset with
+     * [persistenceGeneration] on every claim, so a fresh generation starts
+     * unlatched.
+     */
+    private var departedObserved = false
+
+    /** Both clocks, read together — [GraceDeadlineStore] converts between them. */
+    private fun clockNow() = ClockReading(
+        wallMillis = System.currentTimeMillis(),
+        uptimeMillis = readElapsedRealtimeMs(),
+    )
+
+    override fun start(anchor: Anchor, sinceElapsedRealtimeMs: Long, armedAtEpochMs: Long): Flow<PresenceUpdate> {
         // Captured synchronously at the call, not inside the producer: the
         // whole point is telling a stop that happened after start() from one
         // that happened before the producer got to run.
@@ -100,12 +139,52 @@ class GeofencePresenceMonitor(
             }
         }
 
+        // A persisted grace deadline, restated into this process's — and,
+        // after a reboot, this boot's — elapsed-realtime frame (TODO.md,
+        // "the grace deadline has to survive process death"). Read before
+        // the feed exists so it can seed the state the bridge's mailbox
+        // replay and the Wi-Fi watch's restore-time redelivery both land
+        // against; either one landing on a fresh, un-seeded state is exactly
+        // what silently discarded the original deadline before.
+        val restoredGraceDeadlineMs =
+            GraceDeadlineStore.load(appContext, armedAtEpochMs, clockNow())
+
+        // Claims persistence ownership for this generation before anything
+        // can be delivered through the fresh flow (Codex, PR #91, eighth
+        // pass) — see `persistenceGeneration`'s own comment. Ordered against
+        // any still-in-flight old generation's write by sharing its lock:
+        // either this claim lands first, and the stale write's own generation
+        // check then rejects it, or the stale write lands first as the last
+        // word from a generation that had nothing newer yet, and this claim
+        // then correctly starts the new generation unlatched and seeded from
+        // what was actually just read above.
+        synchronized(persistenceLock) {
+            persistenceGeneration = startGeneration
+            persistedSequence = -1L
+            lastPersistedGraceDeadlineMs = restoredGraceDeadlineMs
+            departedObserved = false
+        }
+
         // The caller's arm-moment seed, never this monitor's own "now": a
         // restored monitor's now post-dates the held exit the restart was
         // woken to deliver, and seeding with it dropped that exit as stale —
         // the confirmation never ran and the phone stayed quiet until the
         // cap (flagged by Codex on PR #73).
-        val feed = PresenceFeed(anchor, seedElapsedRealtimeMs = sinceElapsedRealtimeMs)
+        val feed = PresenceFeed(
+            anchor,
+            seedElapsedRealtimeMs = sinceElapsedRealtimeMs,
+            seedGraceDeadlineMs = restoredGraceDeadlineMs,
+        )
+
+        // Re-armed explicitly rather than left to whatever signal happens to
+        // flow through `deliver` first: a reboot clears the platform alarm
+        // (only wall time survives one), and a restore that seeded the
+        // deadline into the engine but left no alarm behind it would silently
+        // wait out the rest of the cap instead of the five minutes it
+        // promised.
+        if (restoredGraceDeadlineMs != null) {
+            GraceAlarm.reconcile(appContext, restoredGraceDeadlineMs)
+        }
 
         // The platform-health level, held beside the feed because it is not
         // the engine's to know: the engine reasons about evidence, and "the
@@ -164,6 +243,21 @@ class GeofencePresenceMonitor(
         // Never held across anything slow: `accept` is pure arithmetic.
         val feedLock = Any()
 
+        // Orders the grace deadline's durable side effects (the store, the
+        // alarm) against each other, without widening `feedLock` to cover
+        // them (Codex, PR #91, second pass): those are a binder call and a
+        // disk write, not the pure arithmetic `feedLock` is scoped to. Two
+        // `deliver` calls on different platform callback threads can finish
+        // their feed transitions in one order — serialized correctly by
+        // `feedLock` — and their side effects in the other, since nothing
+        // orders *those* once the lock is released. Tagging each call with a
+        // sequence taken inside `feedLock` and only ever applying the
+        // highest one seen is what keeps a stale deadline from overwriting a
+        // fresher one that happened to finish first. `persistenceLock`,
+        // `persistedSequence` and `lastPersistedGraceDeadlineMs` itself now
+        // live on the instance, generation-gated — see their own comments.
+        val deliverySequence = java.util.concurrent.atomic.AtomicLong(0)
+
         fun deliver(signal: PresenceSignal) {
             // A delivered platform fix is the recovery proof the services-off
             // level waits for: the subsystem it indicts just answered. The
@@ -182,20 +276,160 @@ class GeofencePresenceMonitor(
             val update: PresenceUpdate
             val duty: LocationDuty
             val graceDeadlineMs: Long?
+            val sequence: Long
             synchronized(feedLock) {
                 update = feed.accept(signal)
                 duty = feed.duty
                 graceDeadlineMs = feed.graceDeadlineMs
+                sequence = deliverySequence.incrementAndGet()
             }
             send(update)
-            // The engine can set a grace deadline but cannot wake a phone;
-            // the alarm is what makes the §6.6 promise real. Reconciled per
-            // signal like the burst below — armed while a deadline stands,
-            // canceled the moment presence evidence clears it.
-            GraceAlarm.reconcile(appContext, graceDeadlineMs)
-            // Reconciled on every signal rather than on transitions, because
-            // both calls are idempotent and "did the transition get noticed"
-            // is exactly the kind of question idempotence deletes.
+            // Always entered, `Departed` included, so the generation check
+            // and the latch below are read and written under the same lock
+            // (Codex, PR #91, eighth pass) — see `persistenceGeneration` and
+            // `departedObserved`'s own comments.
+            synchronized(persistenceLock) {
+                if (persistenceGeneration != startGeneration) {
+                    // A newer `start()` has claimed persistence ownership
+                    // since this flow began — this generation is retired,
+                    // and writing now could clobber the current generation's
+                    // own state in the single store file both would share.
+                    return@synchronized
+                }
+                if (update.event == PresenceEvent.Departed) {
+                    // `send` above only *queued* the event — the collector
+                    // that actually ends the snooze and erases the record
+                    // hasn't necessarily run yet. The bridge already knows
+                    // this and keeps a `GraceElapsed` observation retained
+                    // rather than settling it here, for the same reason
+                    // (`settlesHeldExit`, below). Clearing the durable
+                    // deadline anyway, now or on any later signal this same
+                    // generation delivers before `stop()` runs, would strand
+                    // that retained observation: a process death before the
+                    // collector consumes the departure finds no deadline to
+                    // make sense of the eventual replay, reads it as stale,
+                    // and the snooze runs to the cap instead. `stop()` is
+                    // what actually clears this, once the end is confirmed.
+                    if (sequence > persistedSequence) persistedSequence = sequence
+                    departedObserved = true
+                    return@synchronized
+                }
+                if (departedObserved) {
+                    // Already resolved to `Departed` by an earlier call in
+                    // this generation. The engine ignores every signal after
+                    // that too (`PresenceState.resolved`), and this must
+                    // match — a later call finding a null event here is not
+                    // proof grace is genuinely still off, just that
+                    // `PresenceFeed` has nothing left to say.
+                    return@synchronized
+                }
+                // Ordered against every other `deliver` call's own attempt to
+                // persist, not just against this call's own alarm reconcile:
+                // only the highest sequence number seen may write, so a
+                // stale transition that finishes its side effects after a
+                // fresher one cannot overwrite it.
+                if (sequence > persistedSequence) {
+                    persistedSequence = sequence
+                    // Skipped when the deadline is exactly what the store
+                    // already confirmed holding (Codex, PR #91, seventh
+                    // pass): most signals through a multi-hour snooze —
+                    // every fix in a check burst included — leave grace
+                    // untouched, and a `commit()` on each of them anyway
+                    // was the real main-thread cost Codex's finding named,
+                    // not the synchronous write itself. Real transitions —
+                    // Wi-Fi lost, Wi-Fi back, a restore — are rare, and
+                    // those still write synchronously below.
+                    if (graceDeadlineMs != lastPersistedGraceDeadlineMs) {
+                        // Synchronous, on whichever thread delivered this
+                        // signal — several of those are the main thread
+                        // (`PlatformWifiWatch`'s callback is posted to it)
+                        // (Codex, PR #91, sixth pass, reverting the fifth
+                        // pass's off-thread dispatch). `producer.launch`
+                        // does not block its caller: the calling callback
+                        // could return, and the process could be
+                        // reclaimed, before the launched write ever
+                        // actually ran — reopening the exact gap the
+                        // third pass's switch to `commit()` closed.
+                        // `AGENTS.md`'s own principle order puts
+                        // never-fail-silently above don't-make-the-user-
+                        // wait when the two genuinely conflict, and
+                        // `ActiveSnoozeStore.save` already makes this
+                        // same trade on the arm and release paths for the
+                        // same reason. This write is two `Long`s, run only
+                        // on a real transition, not the kind of frequent,
+                        // unconditional cost principle 5 is guarding
+                        // against.
+                        //
+                        // Persisted *before* the alarm is armed (Codex, PR
+                        // #91), checking the result rather than trusting
+                        // `apply()` to have landed by the time this returns
+                        // (Codex, third pass): a `commit` that doesn't
+                        // actually reach disk before a kill is the same gap
+                        // as arming the alarm first, just moved — a process
+                        // death right after leaves a real armed alarm with
+                        // nothing durable behind it, and a restore reads the
+                        // eventual `GraceElapsed` as stale. Saved first and
+                        // confirmed, a death before the alarm is armed is
+                        // harmless the other way — restore already re-arms
+                        // the alarm itself from whatever it loads (above).
+                        val saved =
+                            GraceDeadlineStore.save(appContext, graceDeadlineMs, armedAtEpochMs, clockNow())
+                        if (saved) {
+                            // Confirmed only now, never optimistically —
+                            // see this var's own comment on why a failed
+                            // save must not update it.
+                            lastPersistedGraceDeadlineMs = graceDeadlineMs
+                            // The engine can set a grace deadline but cannot
+                            // wake a phone; the alarm is what makes the §6.6
+                            // promise real. Reconciled per signal like the
+                            // burst below — armed while a deadline stands,
+                            // canceled the moment presence evidence clears
+                            // it. Only once the store agrees, or the two
+                            // could disagree about which snooze — or
+                            // whether one — is actually being watched.
+                            GraceAlarm.reconcile(appContext, graceDeadlineMs)
+                        } else if (graceDeadlineMs != null) {
+                            // A failed *setting* write, not a failed clear
+                            // (Codex, PR #91, sixth pass): leaving this
+                            // signal merely "ungraced" relies on some later
+                            // signal's own save succeeding, but an anchor
+                            // already off its Wi-Fi with no usable fix
+                            // (location duty NONE) may never produce another
+                            // one — nothing would ever retry, and the snooze
+                            // would silently run to the multi-hour cap
+                            // instead of the five minutes it promised.
+                            // Ending it here is principle 1's fail-open, not
+                            // principle 3's data loss: nothing the user
+                            // configured is at risk, only whether this one
+                            // snooze ends on time.
+                            SnoozeDebugLog.warning(
+                                "grace deadline write failed; ending the snooze rather than risk it never ending",
+                            )
+                            trySend(
+                                PresenceUpdate(
+                                    event = PresenceEvent.CapabilityLost(
+                                        app.snoozemo.core.CapabilityLossCause.MONITORING_UNAVAILABLE,
+                                    ),
+                                    degradation = null,
+                                ),
+                            )
+                        } else {
+                            // A failed *clearing* write follows good news —
+                            // presence evidence already told the engine
+                            // grace is off — so ending the snooze over an
+                            // unrelated write failure would be a punitive
+                            // overreaction. The store can carry a stale
+                            // entry until the next successful write or
+                            // `stop()`'s own clear; worst case a future
+                            // restore over-trusts a deadline that no longer
+                            // applies, which the duration cap still bounds.
+                            SnoozeDebugLog.warning(
+                                "clearing the grace deadline failed; a stale entry may remain on disk",
+                            )
+                        }
+                    }
+                }
+            }
             // Pause, not close: the duty leaving ACTIVE is a state the engine
             // can re-enter, and only teardown (awaitClose) may end the burst
             // for good.
@@ -411,6 +645,28 @@ class GeofencePresenceMonitor(
         // resolves through the identity checks.
         synchronized(registrationLock) {
             if (!isClosedForSend) {
+                // Constructed *before* the bridge attaches (Codex, PR #91,
+                // fifth pass), and it matters specifically for a restore
+                // carrying a seeded grace deadline: this constructor
+                // synchronously checks the phone's *current* association and
+                // delivers it as a real signal (`PlatformWifiWatch`'s own
+                // `init` block), so if the user genuinely returned to the
+                // anchor's Wi-Fi while the process was dead, that positive
+                // evidence reaches the engine and clears the deadline before
+                // the bridge's mailbox gets a chance to replay a `GraceElapsed`
+                // held from the outage — which `Presence.graceElapsed` would
+                // otherwise act on as if nothing had changed, ending a snooze
+                // the user had already, if belatedly, been confirmed present
+                // for. The other order let a resolved `Departed` shut the
+                // engine down (`PresenceState.resolved` ignores every signal
+                // after) before this watch's own live check ever ran.
+                anchor.ssid?.let { ssid ->
+                    wifiWatch = PlatformWifiWatch(
+                        appContext,
+                        ssid,
+                        readElapsedRealtimeMs,
+                    ) { deliver(it) }
+                }
                 bridge = GeofenceSignalBridge.attach { observation ->
                     when (observation) {
                         is GeofenceObservation.Exit -> {
@@ -461,30 +717,19 @@ class GeofencePresenceMonitor(
                     sanityProbe()
                 } else {
                     // A Wi-Fi-only anchor has nothing to fence: the Wi-Fi
-                    // watch below is its whole coverage, and the engine's
-                    // grace period is what resolves a loss it cannot confirm.
-                    // Order with the watch below is safe either way: `Presence
-                    // .useless` — what this signal reaches — is a declared
-                    // no-op for an anchor with no usable fix (Codex raised a
-                    // same-millisecond staleness race between this and the
-                    // watch's initial report on PR #77; disproved by a
-                    // `PresenceTest` case added for the claim — the guard
-                    // means this can never advance `latestEvidenceMs` and so
-                    // can never make anything else look stale).
+                    // watch (constructed above, before the bridge attached)
+                    // is its whole coverage, and the engine's grace period is
+                    // what resolves a loss it cannot confirm. Order between
+                    // this and the watch's own initial report is safe either
+                    // way: `Presence.useless` — what this signal reaches — is
+                    // a declared no-op for an anchor with no usable fix
+                    // (Codex raised a same-millisecond staleness race between
+                    // the two on PR #77; disproved by a `PresenceTest` case
+                    // added for the claim — the guard means this can never
+                    // advance `latestEvidenceMs` and so can never make
+                    // anything else look stale).
                     SnoozeDebugLog.event("no usable fix on the anchor; geofence not registered")
                     deliver(PresenceSignal.FixUnavailable(readElapsedRealtimeMs()))
-                }
-                // D4's suppressor and §6.10's second wake-up source in one
-                // registration: association suppresses location work, loss
-                // escalates into the same confirmation everything else feeds.
-                // Event-driven and free, so it runs for every anchor that has
-                // an SSID, fenced or not.
-                anchor.ssid?.let { ssid ->
-                    wifiWatch = PlatformWifiWatch(
-                        appContext,
-                        ssid,
-                        readElapsedRealtimeMs,
-                    ) { deliver(it) }
                 }
             }
         }
@@ -543,6 +788,25 @@ class GeofencePresenceMonitor(
             // arms next. Only here — a routine service destroy must leave it
             // standing, or a running grace would never come due.
             GraceAlarm.reconcile(appContext, null)
+            // Retired before the clear, under the same lock every write
+            // checks (Codex, PR #91, eighth pass): a `deliver` call from
+            // this generation still in flight — dispatched before this stop
+            // but not yet at its own persistence check — must find no
+            // generation it can match and write nothing here, or its stale
+            // write could land right after this clear and leave a leftover
+            // entry the identity check alone would otherwise have to catch.
+            // `-1L` is never a real `startGeneration` (generations begin at
+            // `stopGeneration`'s initial `0`), so this unconditionally
+            // rejects every in-flight call regardless of which generation.
+            synchronized(persistenceLock) { persistenceGeneration = -1L }
+            // A failed clear is a leftover entry, not a lost one — logged
+            // rather than escalated, because the identity check `load`
+            // already does (Codex, PR #91) is exactly what makes a stale
+            // survivor harmless: the next arm's own `armedAtEpochMs` will not
+            // match it.
+            if (!GraceDeadlineStore.clear(appContext)) {
+                SnoozeDebugLog.warning("clearing the grace deadline failed; a stale entry may remain on disk")
+            }
             active.getAndSet(null)?.close()
             // Contained: removal is cleanup, and the fence dies with the
             // app's registrations anyway if this fails. A leftover fence is
