@@ -131,11 +131,12 @@ class SnoozeNotificationsChannelTest {
     }
 
     /**
-     * `armWithCap`'s one attempt is not the only place `showStuckRule()` can
-     * fire from — release escalation can retry across several alarm-scheduled
-     * rungs before giving up — so a failed first attempt would otherwise
-     * leave nothing to retry the bypass before the one alert meant to survive
-     * a stuck rule finally posts (Codex, PR #92).
+     * `showStuckRule()`'s own attempt is the *only* one on the failed-arm
+     * path — `armWithCap()` deliberately makes none, having twice been found
+     * to sit ahead of a durable write it couldn't afford to risk (Codex, PR
+     * #92). Without this, nothing would retry the bypass before the one
+     * alert meant to survive a stuck rule finally posts, however many
+     * alarm-scheduled release-escalation rungs later that turns out to be.
      */
     @Test
     fun `showStuckRule makes its own reapply attempt before posting`() {
