@@ -132,13 +132,24 @@ the point is that every other line of the app is worthless if it isn't true.
       `setStateDescription` for TalkBack, arm-on-tap and end-on-tap, long-press to settings
       via `QS_TILE_PREFERENCES` (`SPEC.md` §4.2). Arming works with the device locked — no
       `unlockAndRun()`.
-- [ ] **Tile latency: the shade takes a second or two to show the new active/inactive state**
-      (maintainer, 2026-08-22), rather than updating the instant the tap lands. `AGENTS.md`'s
-      arm-path rule wants the zen rule going `STATE_TRUE` within one frame with no policy IPC in
-      front of it — worth checking whether the tile's own `updateTile()` call is waiting on
-      something in that same path (the service round trip, a store read) rather than painting
-      optimistically from the tap and reconciling after. Not investigated yet; needs a device to
-      actually measure where the delay is before guessing at a fix.
+- [x] **Tile latency on the tap itself**: `onClick` now paints `qsTile` optimistically —
+      state, label and content description flip to the new value immediately, before
+      `startActivityAndCollapse` — rather than waiting on `SnoozeTileBridge.refresh()`'s round
+      trip through `SnoozeService` and `TileService.requestListeningState()` (maintainer,
+      2026-08-23; the fix this entry itself proposed). That request has no delivery guarantee
+      and is what was visibly lagging a tap by a second or two. The countdown subtitle is left
+      null rather than guessed — this tap has no duration to compute one from — and the later
+      `SnoozeTileBridge.refresh()` still corrects everything, including a refused arm/end,
+      once the service knows the real outcome. The action/render decision itself is `TileOptimisticPaint`
+      (Codex, PR #93), a plain Kotlin type with no `TileService`/`Tile`, covered by
+      `TileOptimisticPaintTest` for both starting states — `:tile` carried no test source set before
+      this, so that infrastructure is new too. **Still open and unverified on a device**: a state
+      change with no tap behind it — the cap firing, `+30 min` from the notification, a manual
+      release from `MainScreen` — has no live `TileService` instance to paint from and still depends
+      entirely on `requestListeningState()`'s own latency, which nothing here measures or bounds.
+      `TileService`/`qsTile` themselves aren't practically unit-testable under Robolectric, so
+      `onClick`'s actual `qsTile` writes (as opposed to the decision feeding them) are still verified
+      by inspection only — needs a real device.
 - [x] `ArmTrampolineActivity` (`SPEC.md` §6.9): transparent theme, starts the service in
       `onCreate` before any UI, launched via `startActivityAndCollapse(PendingIntent)`.
 - [x] Ongoing notification on channel `snooze_active`, `IMPORTANCE_LOW`, with `End now` and

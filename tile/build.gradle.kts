@@ -30,4 +30,6 @@ kotlin {
 dependencies {
     implementation(project(":core"))
     implementation(project(":dnd"))
+
+    testImplementation(libs.junit)
 }
