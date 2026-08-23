@@ -663,6 +663,23 @@ the point is that every other line of the app is worthless if it isn't true.
         There is no persisted "onboarding complete" flag: nothing forces the interstitial once DND
         access is granted, and there's no cost to asking again on a later cold start if it still
         isn't (D7, "fail open" — never trap, never nag past what the state actually requires).
+- [ ] **Screen-navigation lag: the previous screen visibly ghosts behind the new one for about a
+      second when switching between `MainScreen`/`SettingsScreen`/`PermissionsScreen`** (user
+      report, 2026-08-23). Not reproduced or root-caused — no emulator or device in this sandbox,
+      and static review found nothing in the code that should cause it: `MainActivity` switches
+      screens with a plain `when (screen)` inside one `Surface`, no `Crossfade`/`AnimatedContent`,
+      no cross-activity launch, and none of the three screens or `SnoozemoTheme` do I/O or a
+      blocking call in composition that would stall the main thread long enough to leave a stale
+      frame on screen. Ruled out by inspection: `BackHandler` (not the predictive-back-aware
+      `PredictiveBackHandler`) on `PermissionsScreen`/`SettingsScreen`; the notification's content
+      `PendingIntent` already uses `FLAG_ACTIVITY_CLEAR_TOP` so it can't be stacking a second
+      `MainActivity` instance; `SnoozemoTheme` builds a fresh `lightColorScheme()`/`darkColorScheme()`
+      on every recomposition rather than `remember`ing it, which is real but shouldn't fire on a
+      plain screen switch (its only input, `isSystemInDarkTheme()`, doesn't change then) — worth
+      fixing regardless, but not a fit for this symptom. Given targetSdk 36 (Android 16) makes
+      predictive back mandatory, the system's own predictive-back preview during an edge-swipe
+      back gesture is the leading unverified suspect. Needs a real device to actually see the
+      lag before guessing further at a fix.
 - [x] **`MainScreen` shows the current snooze's status** (maintainer, 2026-08-23) — the comment
       left on the screen split above suggested this needed presence tracking (Phase 3) first;
       it didn't, since `ActiveSnooze.mode`, `.placeName` and `.remaining()` are already populated on
