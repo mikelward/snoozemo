@@ -65,12 +65,15 @@ class MainScreenScreenshotTest {
                 trackingMode = null,
                 remaining = null,
                 lastOutcome = null,
+                crashPending = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
             )
         }
 
@@ -95,12 +98,15 @@ class MainScreenScreenshotTest {
                 trackingMode = null,
                 remaining = null,
                 lastOutcome = null,
+                crashPending = false,
                 onOpenPermissions = { opened++ },
                 onOpenSettings = {},
                 onAddTile = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
             )
         }
 
@@ -129,12 +135,15 @@ class MainScreenScreenshotTest {
                 trackingMode = null,
                 remaining = null,
                 lastOutcome = null,
+                crashPending = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
             )
         }
 
@@ -152,12 +161,15 @@ class MainScreenScreenshotTest {
                 trackingMode = null,
                 remaining = null,
                 lastOutcome = null,
+                crashPending = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
             )
         }
 
@@ -180,12 +192,15 @@ class MainScreenScreenshotTest {
                 trackingMode = null,
                 remaining = null,
                 lastOutcome = null,
+                crashPending = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
             )
         }
 
@@ -203,12 +218,15 @@ class MainScreenScreenshotTest {
                 trackingMode = TrackingMode.FULL,
                 remaining = Duration.ofHours(3).plusMinutes(40),
                 lastOutcome = null,
+                crashPending = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
             )
         }
 
@@ -281,12 +299,15 @@ class MainScreenScreenshotTest {
                 trackingMode = null,
                 remaining = null,
                 lastOutcome = null,
+                crashPending = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = { added++ },
                 onDismissTileBanner = { dismissed++ },
                 onArm = {},
                 onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
             )
         }
 
@@ -315,6 +336,7 @@ class MainScreenScreenshotTest {
                 trackingMode = null,
                 remaining = null,
                 lastOutcome = null,
+                crashPending = false,
                 settingsFailure = SetupRowId.TILE,
                 onOpenPermissions = {},
                 onOpenSettings = {},
@@ -322,6 +344,8 @@ class MainScreenScreenshotTest {
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
             )
         }
 
@@ -339,12 +363,15 @@ class MainScreenScreenshotTest {
                 trackingMode = null,
                 remaining = null,
                 lastOutcome = null,
+                crashPending = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
             )
         }
 
@@ -362,16 +389,73 @@ class MainScreenScreenshotTest {
                 trackingMode = null,
                 remaining = null,
                 lastOutcome = "Couldn't snooze",
+                crashPending = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
             )
         }
 
         composeRule.onNodeWithText("Couldn't snooze").assertExists()
+    }
+
+    @Test
+    fun `a pinned crash raises the banner here, above even the access banner`() {
+        var shared = 0
+        var dismissed = 0
+
+        capture("main-screen-crash-banner.png") {
+            MainScreen(
+                access = PolicyAccess.DENIED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                lastOutcome = null,
+                crashPending = true,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = { shared++ },
+                onDismissCrash = { dismissed++ },
+            )
+        }
+
+        composeRule.onNodeWithText("Snoozemo crashed").assertExists()
+        composeRule.onNodeWithText("Dismiss").performClick()
+        assertEquals(1, dismissed)
+        assertEquals(0, shared)
+    }
+
+    @Test
+    fun `no crash pinned, no banner`() {
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                lastOutcome = null,
+                crashPending = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Snoozemo crashed").assertDoesNotExist()
     }
 
     @Test
@@ -387,12 +471,15 @@ class MainScreenScreenshotTest {
                 trackingMode = null,
                 remaining = null,
                 lastOutcome = null,
+                crashPending = false,
                 onOpenPermissions = {},
                 onOpenSettings = { opened++ },
                 onAddTile = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
             )
         }
 
@@ -421,12 +508,15 @@ class MainScreenScreenshotTest {
                 trackingMode = TrackingMode.FULL,
                 remaining = Duration.ofHours(3).plusMinutes(40),
                 lastOutcome = null,
+                crashPending = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
                 onDismissTileBanner = {},
                 onArm = {},
                 onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
             )
         }
 

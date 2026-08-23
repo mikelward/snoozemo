@@ -26,7 +26,9 @@ import org.robolectric.annotation.GraphicsMode
 /**
  * Everything touched rarely — usually never — that moved off `MainScreen`
  * (`TODO.md` Phase 4): the Permissions entry point, the permanent tile row,
- * and the debug-log switch.
+ * and the debug-log switch. The post-crash banner lives on `MainScreen`
+ * instead (`SPEC.md` §4.6, maintainer, 2026-08-23) — see
+ * `MainScreenScreenshotTest` for its coverage.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], qualifiers = "w411dp-h914dp-420dpi")
@@ -47,14 +49,12 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
-                crashPending = false,
                 shareFailed = false,
                 onOpenPermissions = { opened++ },
                 onTileRow = {},
                 onFiltersRow = {},
                 onDebugLog = {},
                 onShareDebugLog = {},
-                onDismissCrash = {},
             )
         }
 
@@ -73,14 +73,12 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
-                crashPending = false,
                 shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = { tapped++ },
                 onFiltersRow = {},
                 onDebugLog = {},
                 onShareDebugLog = {},
-                onDismissCrash = {},
             )
         }
 
@@ -100,14 +98,12 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
-                crashPending = false,
                 shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
                 onFiltersRow = {},
                 onDebugLog = {},
                 onShareDebugLog = {},
-                onDismissCrash = {},
             )
         }
 
@@ -128,14 +124,12 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = SetupRowId.TILE,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
-                crashPending = false,
                 shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
                 onFiltersRow = {},
                 onDebugLog = {},
                 onShareDebugLog = {},
-                onDismissCrash = {},
             )
         }
 
@@ -151,10 +145,12 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
                 onFiltersRow = {},
                 onDebugLog = {},
+                onShareDebugLog = {},
             )
         }
 
@@ -174,10 +170,12 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
                 onFiltersRow = { opened++ },
                 onDebugLog = {},
+                onShareDebugLog = {},
             )
         }
 
@@ -195,10 +193,12 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = SetupRowId.FILTERS,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
+                shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
                 onFiltersRow = {},
                 onDebugLog = {},
+                onShareDebugLog = {},
             )
         }
 
@@ -216,14 +216,12 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
-                crashPending = false,
                 shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
                 onFiltersRow = {},
                 onDebugLog = { changed = it },
                 onShareDebugLog = {},
-                onDismissCrash = {},
             )
         }
 
@@ -240,14 +238,12 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = true,
-                crashPending = false,
                 shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
                 onFiltersRow = {},
                 onDebugLog = {},
                 onShareDebugLog = {},
-                onDismissCrash = {},
             )
         }
 
@@ -403,16 +399,16 @@ class SettingsScreenScreenshotTest {
         capture("settings-screen-share-failed.png") {
             SettingsScreen(
                 tileAdded = true,
+                filtersRuleId = null,
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
-                crashPending = false,
                 shareFailed = true,
                 onOpenPermissions = {},
                 onTileRow = {},
+                onFiltersRow = {},
                 onDebugLog = {},
                 onShareDebugLog = { shared++ },
-                onDismissCrash = {},
             )
         }
 
@@ -420,57 +416,6 @@ class SettingsScreenScreenshotTest {
         composeRule.onNodeWithText("Couldn't share the debug log").assertExists()
         composeRule.onNodeWithText("Share").performClick()
         assertEquals(1, shared)
-    }
-
-    @Test
-    fun `a pinned crash raises the banner, and only while one is pinned`() {
-        var shared = 0
-        var dismissed = 0
-
-        capture("settings-screen-crash-banner.png") {
-            SettingsScreen(
-                tileAdded = true,
-                settingsFailure = null,
-                debugLogEnabled = true,
-                debugLogSaveFailed = false,
-                crashPending = true,
-                shareFailed = false,
-                onOpenPermissions = {},
-                onTileRow = {},
-                onDebugLog = {},
-                onShareDebugLog = { shared++ },
-                onDismissCrash = { dismissed++ },
-            )
-        }
-
-        composeRule.onNodeWithText("Snoozemo crashed").assertExists()
-        // Two "Share" targets exist once the banner is up — its own and the
-        // permanent row's — so the banner's own dismiss is what disambiguates
-        // this test rather than a second tap on "Share".
-        composeRule.onNodeWithText("Dismiss").performClick()
-        assertEquals(1, dismissed)
-        assertEquals(0, shared)
-    }
-
-    @Test
-    fun `no crash pinned, no banner`() {
-        capture {
-            SettingsScreen(
-                tileAdded = true,
-                settingsFailure = null,
-                debugLogEnabled = true,
-                debugLogSaveFailed = false,
-                crashPending = false,
-                shareFailed = false,
-                onOpenPermissions = {},
-                onTileRow = {},
-                onDebugLog = {},
-                onShareDebugLog = {},
-                onDismissCrash = {},
-            )
-        }
-
-        composeRule.onNodeWithText("Snoozemo crashed").assertDoesNotExist()
     }
 
     @Test
@@ -484,14 +429,12 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
-                crashPending = false,
                 shareFailed = false,
                 onOpenPermissions = {},
                 onTileRow = {},
                 onFiltersRow = {},
                 onDebugLog = {},
                 onShareDebugLog = {},
-                onDismissCrash = {},
             )
         }
 

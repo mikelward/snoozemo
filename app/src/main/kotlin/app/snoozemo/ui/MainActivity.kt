@@ -419,21 +419,28 @@ class MainActivity : ComponentActivity() {
      * Whether a crashed run is currently pinned (SPEC.md §4.6) — the post-crash
      * banner's own state. Defaults to **false** so the banner cannot flash on a
      * screen that has not finished reading yet, the same discipline
-     * [tileBannerDismissed] follows for the same reason. Read once, at the
-     * first frame after this activity's own (re)start: nothing outside this
-     * activity's own Share/Dismiss taps can change the pin while it is alive
-     * (`docs/DEBUG.md` — the app is single-process, so there is no sibling
-     * process to poll for on resume the way the ClothesCast repo's banner does).
+     * [tileBannerDismissed] follows for the same reason. Read once at the
+     * first frame after this activity's own (re)start, and kept current after
+     * that by [crashPinWatch] — never written directly from a Share/Dismiss
+     * tap's own completion callback, which may by then belong to a dead
+     * instance (Codex, PR #89; see [crashPinWatch]'s own comment).
      */
     private var crashPending by mutableStateOf(false)
+
+    /** The handle for the crash-pin watch; see [onStart] and [DebugLogging.watchCrashPinOutcome]. */
+    private var crashPinWatch: AutoCloseable? = null
 
     /**
      * Whether the last debug-log share reached neither the clipboard nor the
      * chooser. Cleared by the next tap, like [debugLogSaveFailed] — the
      * message describes the previous attempt, and a new one supersedes it
-     * whatever it returns.
+     * whatever it returns. Applied through [shareWatch], for the same
+     * dead-instance reason [crashPending] is.
      */
     private var shareFailed by mutableStateOf(false)
+
+    /** The handle for the share-outcome watch; see [onStart] and [DebugReport.watchShareOutcome]. */
+    private var shareWatch: AutoCloseable? = null
 
     /**
      * Which row's Settings trip was refused, if either was.
@@ -628,6 +635,7 @@ class MainActivity : ComponentActivity() {
                             trackingMode = activeSnooze?.mode,
                             remaining = activeSnooze?.remaining(now),
                             lastOutcome = lastOutcome,
+                            crashPending = crashPending,
                             settingsFailure = settingsFailure,
                             onOpenPermissions = { openPermissions(Screen.MAIN) },
                             onOpenSettings = { screen = Screen.SETTINGS },
@@ -635,6 +643,8 @@ class MainActivity : ComponentActivity() {
                             onDismissTileBanner = { tileStore.dismissBanner() },
                             onArm = ::armFromScreen,
                             onRelease = ::endFromScreen,
+                            onShareDebugLog = ::shareDebugLog,
+                            onDismissCrash = ::dismissCrash,
                         )
                         Screen.PERMISSIONS -> {
                             // Falls back to whoever opened this screen —
@@ -666,7 +676,6 @@ class MainActivity : ComponentActivity() {
                                 debugLogSaveFailed = debugLogSaveFailed,
                                 playUpdate = displayedPlayUpdate,
                                 playUpdateRestartFailed = playUpdateRestartFailed,
-                                crashPending = crashPending,
                                 shareFailed = shareFailed,
                                 onOpenPermissions = { openPermissions(Screen.SETTINGS) },
                                 onTileRow = ::addTile,
@@ -676,7 +685,6 @@ class MainActivity : ComponentActivity() {
                                 onCompletePlayUpdate = ::completePlayUpdate,
                                 onDismissPlayUpdate = ::dismissPlayUpdate,
                                 onShareDebugLog = ::shareDebugLog,
-                                onDismissCrash = ::dismissCrash,
                             )
                         }
                     }
@@ -755,6 +763,17 @@ class MainActivity : ComponentActivity() {
         // the reading it had when it was last visible.
         now = SnoozeClock.read()
         tickHandler.postDelayed(tickRunnable, TICK_INTERVAL_MS)
+        // Same shape as debugLogWatch, and for the same reason: a Share or
+        // Dismiss tap's own completion runs on a worker thread and may not
+        // land until after a configuration change has replaced this
+        // instance. Re-reads the pin rather than trusting a captured value,
+        // so it is correct regardless of which instance's tap triggered it.
+        crashPinWatch = DebugLogging.watchCrashPinOutcome {
+            DebugLogging.hasPinnedCrash { pinned -> runOnUiThread { crashPending = pinned } }
+        }
+        shareWatch = DebugReport.watchShareOutcome {
+            runOnUiThread { shareFailed = DebugReport.lastShareFailed }
+        }
     }
 
     /**
@@ -1127,6 +1146,10 @@ class MainActivity : ComponentActivity() {
         // minute while visible is negligible, but only while visible. Left
         // running past `onStop` would tick a screen nobody can see.
         tickHandler.removeCallbacks(tickRunnable)
+        crashPinWatch?.close()
+        crashPinWatch = null
+        shareWatch?.close()
+        shareWatch = null
     }
 
     override fun onDestroy() {
@@ -1631,27 +1654,27 @@ class MainActivity : ComponentActivity() {
      * Runs off the main thread: [DebugReport.share] does binder and disk I/O
      * (policy access, permission checks, reading the previous run's file),
      * none of which belongs in front of a tap the user expects to be instant.
+     *
+     * Neither [crashPending] nor [shareFailed] is written from this
+     * function's own completion — [crashPinWatch] and [shareWatch] apply
+     * both, from whichever instance is live when the result actually lands,
+     * which a configuration change mid-share may make a different one than
+     * this (Codex, PR #89).
      */
     private fun shareDebugLog() {
         shareFailed = false
-        Thread {
-            val result = DebugReport.share(applicationContext)
-            runOnUiThread {
-                if (result.clipboardCopied) crashPending = false
-                if (!result.reachedUser) shareFailed = true
-            }
-        }.start()
+        Thread { DebugReport.share(applicationContext) }.start()
     }
 
     /**
      * Dismisses the crash banner without sharing — consumes the pin directly
      * (SPEC.md §4.6): afterward the run is an ordinary previous run, shareable
-     * from the permanent row and rotated away like any other.
+     * from the permanent row and rotated away like any other. [crashPinWatch]
+     * applies the result, for the same reason [shareDebugLog] leaves it to
+     * the watch rather than this call's own completion.
      */
     private fun dismissCrash() {
-        DebugLogging.consumeCrashPin { consumed ->
-            runOnUiThread { if (consumed) crashPending = false }
-        }
+        DebugLogging.consumeCrashPin {}
     }
 
     /**
