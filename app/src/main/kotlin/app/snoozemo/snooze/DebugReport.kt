@@ -52,6 +52,28 @@ internal object DebugReport {
     private const val CONSUME_PIN_TIMEOUT_MS = 2_000L
 
     /**
+     * Whether the most recently completed [share] reached neither delivery
+     * route. Process-level, mirroring [DebugLogging.lastSaveRefused] and for
+     * the identical reason: [share] runs on a caller-provided background
+     * thread whose completion callback closes over the activity that
+     * started it, and a configuration change mid-share hands the screen to
+     * a replacement that closure cannot reach (Codex, PR #89). Any instance
+     * reads this instead, via [watchShareOutcome].
+     */
+    @Volatile
+    var lastShareFailed: Boolean = false
+        private set
+
+    @Volatile
+    private var onShareOutcome: (() -> Unit)? = null
+
+    /** Mirrors [DebugLogging.watchSaveOutcome]; see [lastShareFailed]. */
+    fun watchShareOutcome(onChange: () -> Unit): AutoCloseable {
+        onShareOutcome = onChange
+        return AutoCloseable { if (onShareOutcome === onChange) onShareOutcome = null }
+    }
+
+    /**
      * Builds the payload, copies it to the clipboard, and fires the share
      * chooser. Both routes are attempted independently and best-effort — the
      * share sheet has no delivery callback, so [Result.clipboardCopied] is
@@ -62,7 +84,11 @@ internal object DebugReport {
      * chooser merely opening, which is not proof the user completed
      * anything. A share whose clipboard copy failed leaves the pin in place
      * for a retry, so the evidence a crash banner exists for is never lost
-     * to a share that didn't actually land.
+     * to a share that didn't actually land. The pin's own consumer already
+     * notifies its own watch ([DebugLogging.watchCrashPinOutcome]) with the
+     * *real* outcome, so a caller must not infer the pin is gone from
+     * [Result.clipboardCopied] alone — a landed copy only means consuming was
+     * *attempted*, not that the file layer actually let it happen.
      *
      * [payloadCollect], [clipboardWrite], [chooserLaunch], and
      * [consumeCrashPin] are injectable test seams; production uses the
@@ -95,7 +121,10 @@ internal object DebugReport {
                 Log.w(TAG, "Consuming the crash pin timed out.")
             }
         }
-        return Result(clipboardCopied = copied, reachedUser = copied || launched)
+        val result = Result(clipboardCopied = copied, reachedUser = copied || launched)
+        lastShareFailed = !result.reachedUser
+        runCatching { onShareOutcome?.invoke() }
+        return result
     }
 
     /** How long [collectPayload] waits on the debug-log worker for the previous run's file. */
