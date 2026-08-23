@@ -643,16 +643,17 @@ SSID or BSSID, never a user-typed place name. Distance and accuracy answer "did 
 correctly"; the position answers "where do you live", which no bug report needs. Anything above the floor is added only with a specific failure it makes diagnosable, and
 `docs/PRIVACY.md` describes what the log carries before it ships (AGENTS.md, *Privacy*).
 
-**A crashed run says so, and survives rotation.** When a previous run ended in an
-uncaught exception, the screen the user actually lands on — above even the
-Do-Not-Disturb-access banner — raises a banner offering to share that run or dismiss it, rather
-than relying on the user to remember a Settings action (maintainer, 2026-08-23). That is usually
-`MainScreen`, but not always: a cold start with Do Not Disturb access still missing routes
-straight to `PermissionsScreen` instead (§4.2), so the same banner renders there too, above
-everything else on that screen — otherwise a crash from before that same cold start would go
-unseen until the user finished onboarding and navigated back on their own (Codex, PR #89). Only a
-crash raises it — an ordinary process death, a force-stop, or an app update does not, since those
-runs' logs stay shareable without nagging.
+**A crashed run says so, and survives rotation.** When a previous run ended in an uncaught
+exception, **every screen** raises a banner — above everything else on it — offering to share that
+run or dismiss it, rather than relying on the user to remember a Settings action (maintainer,
+2026-08-23). Every screen, rather than "the one the user lands on", because which screen that is
+turns out not to be knowable from any one place: it is usually `MainScreen`, but a cold start with
+Do Not Disturb access still missing routes straight to `PermissionsScreen` (§4.2), and a process
+killed while the user was in Settings is restored *there* from saved state. Both of those were
+found as separate bugs against a rule phrased around the landing screen (Codex, PR #89), which is
+the argument for the exhaustive rule: there are three screens, all three show it, and no future
+routing change can reintroduce the gap. Only a crash raises it — an ordinary process death, a
+force-stop, or an app update does not, since those runs' logs stay shareable without nagging.
 
 A crashed run is **pinned, not rotated**: the crash handler leaves a marker, the next start moves
 that run to a distinct crash-suffixed name, and ordinary rotation does not overwrite it. Without

@@ -743,6 +743,8 @@ class MainActivity : ComponentActivity() {
                                 debugLogCleanupFailed = debugLogCleanupFailed,
                                 shareFailed = shareFailed,
                                 sharing = sharing,
+                                crashPending = crashPending,
+                                dismissFailed = dismissFailed,
                                 onOpenPermissions = { openPermissions(Screen.SETTINGS) },
                                 onTileRow = ::addTile,
                                 onFiltersRow = ::openFilters,
@@ -751,6 +753,7 @@ class MainActivity : ComponentActivity() {
                                 onCompletePlayUpdate = ::completePlayUpdate,
                                 onDismissPlayUpdate = ::dismissPlayUpdate,
                                 onShareDebugLog = ::shareDebugLog,
+                                onDismissCrash = ::dismissCrash,
                             )
                         }
                     }

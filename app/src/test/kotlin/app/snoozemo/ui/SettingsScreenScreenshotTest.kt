@@ -10,6 +10,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import app.snoozemo.PlayUpdateState
@@ -27,9 +28,10 @@ import org.robolectric.annotation.GraphicsMode
 /**
  * Everything touched rarely — usually never — that moved off `MainScreen`
  * (`TODO.md` Phase 4): the Permissions entry point, the permanent tile row,
- * and the debug-log switch. The post-crash banner lives on `MainScreen`
- * instead (`SPEC.md` §4.6, maintainer, 2026-08-23) — see
- * `MainScreenScreenshotTest` for its coverage.
+ * and the debug-log switch. The post-crash banner renders here too, as it
+ * does on every screen (`SPEC.md` §4.6): `onCreate` restores the screen from
+ * saved state, so a process killed on Settings comes back here rather than
+ * on `MainScreen`.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], qualifiers = "w411dp-h914dp-420dpi")
@@ -499,6 +501,40 @@ class SettingsScreenScreenshotTest {
         composeRule.onNodeWithText("Sharing…").assertIsNotEnabled()
         composeRule.onNodeWithText("Sharing…").performClick()
         assertEquals("a disabled button must not fire its action", 0, shared)
+    }
+
+    @Test
+    fun `a pinned crash raises the banner here too, since a restart can land on Settings`() {
+        // onCreate restores `screen` from saved state, so a process killed
+        // while the user was on Settings comes back here rather than on
+        // MainScreen — the banner has to be on every screen, not on
+        // whichever one the routing happens to pick (Codex, PR #89).
+        var shared = 0
+
+        capture("settings-screen-crash-banner.png") {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                debugLogCleanupFailed = false,
+                shareFailed = false,
+                crashPending = true,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onShareDebugLog = { shared++ },
+            )
+        }
+
+        // Two Share buttons on this screen now — the banner's and the
+        // permanent row's — which is fine (both are the same action), but
+        // means the selector has to be specific.
+        composeRule.onNodeWithText("Snoozemo crashed").assertExists()
+        composeRule.onAllNodesWithText("Share")[0].performClick()
+        assertEquals(1, shared)
     }
 
     @Test

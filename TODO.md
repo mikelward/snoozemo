@@ -1609,7 +1609,12 @@ the point is that every other line of the app is worthless if it isn't true.
       onboarding route — that would strand a user with both a missing permission and a pending
       crash on the disabled Arm screen instead of the interstitial that actually fixes the missing
       permission. `SPEC.md` updated to describe the real landing-screen behavior; new
-      `PermissionsScreenScreenshotTest` coverage. A thirty-fourth round brought one more, fixed:
+      `PermissionsScreenScreenshotTest` coverage. A later round found the *third* instance of the
+      same class — `onCreate` restores the screen from saved state, so a process killed while the
+      user was in Settings is restored there, which also had no banner — and rather than patch a
+      third screen, the rule itself was made exhaustive: **every screen renders the banner while a
+      crash is pinned**. There are exactly three, so no future routing change can reintroduce the
+      gap, and the spec no longer has to reason about which screen the user "lands on" at all. A thirty-fourth round brought one more, fixed:
       the mid-delivery reuse branch gated on `lastDeliveryResult.reachedUser` alone, but a
       delivery can reach the clipboard or chooser while its payload never actually carried the
       pinned crash (the previous-run read timed out, failed, or read back blank) — so an
