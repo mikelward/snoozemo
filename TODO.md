@@ -1257,7 +1257,7 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty-nine rounds of
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Thirty rounds of
       Codex findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
@@ -1544,7 +1544,28 @@ the point is that every other line of the app is worthless if it isn't true.
       self-healing startup race; a persistent installation failure is the one case genuinely left
       unable to self-heal, matching round 28's own accepted stopping point. Covered by updating the
       two existing "before install" `DebugLoggingTest` cases to assert the corrected (failed, not
-      clean) outcome.
+      clean) outcome. Round thirty brought two more, both fixed. `readPreviousOrCrash`'s own
+      `!fileExists`/`readText()` failure paths still carried the stale `wasCrash = true` from the
+      earlier crash-pin check forward even once the file was confirmed gone — reporting a vanished,
+      unrecoverable cache-evicted crash as a retry-worthy read failure (the exact case round 28
+      declined making loud, but reached this time through a different code path Codex found:
+      `readText()` throwing after the file vanished in the gap before it, or the plain existence
+      re-check finding it gone). Fixed by reporting confirmed absence (`wasCrash = false`,
+      `readSucceeded = true`) for both, distinguishing a genuinely vanished file from a real read
+      failure (a directory sitting where a file is expected, `DebugFileSinkTest`'s own fixture) by
+      re-checking existence after the failure rather than trusting the exception's type — the first
+      version of this fix used `FileNotFoundException`'s type alone and broke that existing test,
+      since the JVM throws the identical exception for both cases; caught by the full suite before
+      pushing. And `DebugReport`'s five capability-check helpers (`isPolicyAccessGranted`,
+      `isPermissionGranted`, `isLocationServicesEnabled`, `isBatterySaverOn`, `isTileAdded`)
+      substituted `false` on their own exception, so a transient system-service failure read in the
+      shared report exactly like a confirmed denial or a confirmed-off toggle, with the only trace
+      of the real cause sitting in logcat the report's recipient never sees. Fixed by returning
+      `null` instead, rendered as "unknown" through `grantLabel`/`foregroundLocationLabel`/a new
+      `boolLabel` helper. Origin/main moved during this round (an unrelated Play-update-banner PR
+      touching the same shared UI files); rebased with three real conflicts resolved by hand
+      (interleaved but non-overlapping additions each time) — full suite green throughout, and
+      Roborazzi's own screenshot comparisons would have caught any real merge mistake.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
