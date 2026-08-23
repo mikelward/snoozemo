@@ -31,7 +31,7 @@ class SnoozeNotifications(private val context: Context) {
     }
 
     /**
-     * Creates the two channels, once per process.
+     * Creates the three channels, once per process.
      *
      * `createNotificationChannel` is a synchronous binder call and this class is
      * constructed in the service's `onCreate` — which, on a cold tile tap, sits
@@ -79,20 +79,33 @@ class SnoozeNotifications(private val context: Context) {
             NotificationChannel(CHANNEL_ACTIVE, context.getString(R.string.channel_active), NotificationManager.IMPORTANCE_DEFAULT)
                 .apply { setBypassDnd(true) },
         )
+        // Deliberately does NOT bypass (maintainer, 2026-08-23; SPEC.md §5.7):
+        // `showEnded()` and the routine one-shot failures post here, and
+        // `setBypassDnd` is global to the channel — it would let them sound
+        // through a DND source that has nothing to do with Snoozemo, such as a
+        // Bedtime schedule, which is the user's own choice to be quiet and not
+        // this app's to override. Only the genuine emergency exit needs to
+        // survive that; it has its own channel below.
         manager.createNotificationChannel(
-            // Bypasses too: showFailure/showStuckRule post here, and both can
-            // fire while the rule Snoozemo just turned on is still active — the
-            // stuck-rule card is the only way back from a phone that may be
-            // silenced with nothing else able to un-silence it (SPEC.md §5.7),
-            // so it cannot be the one thing our own DND swallows.
-            NotificationChannel(CHANNEL_ENDED, context.getString(R.string.channel_ended), NotificationManager.IMPORTANCE_DEFAULT)
+            NotificationChannel(CHANNEL_ENDED, context.getString(R.string.channel_ended), NotificationManager.IMPORTANCE_DEFAULT),
+        )
+        manager.createNotificationChannel(
+            // Bypasses: showStuckRule() posts here, and it can fire while the
+            // rule Snoozemo just turned on is still active — it is the only way
+            // back from a phone that may be silenced with nothing else able to
+            // un-silence it (SPEC.md §5.7), so it cannot be the one thing our
+            // own DND swallows. Its own channel, separate from the routine
+            // notices above, precisely so only this one alert claims that
+            // exemption.
+            NotificationChannel(CHANNEL_URGENT, context.getString(R.string.channel_urgent), NotificationManager.IMPORTANCE_DEFAULT)
                 .apply { setBypassDnd(true) },
         )
     }
 
     /**
-     * Re-issues both channels so a `setBypassDnd(true)` the platform rejected
-     * before this app held `ACCESS_NOTIFICATION_POLICY` is honored once it does.
+     * Re-issues the two bypassing channels so a `setBypassDnd(true)` the
+     * platform rejected before this app held `ACCESS_NOTIFICATION_POLICY` is
+     * honored once it does.
      *
      * The platform only honors a channel's bypass flag from a caller that
      * currently holds policy access; a channel created without it keeps
@@ -120,21 +133,34 @@ class SnoozeNotifications(private val context: Context) {
      * never observed the change (Codex, PR #92). `ACTION_ARM` deliberately
      * skips `SnoozeService.reconcilePolicyAccess` — the arm-path rule bars
      * policy IPC ahead of the tap — so that reconciliation never runs before
-     * this notification does.
+     * these notifications do.
      *
-     * Safe to call from [showOngoing] precisely because it is not ahead of
-     * anything: every path there runs after `setAutomaticZenRuleState` has
-     * already returned `STATE_TRUE`, so a couple of binder round trips here
-     * cost nothing the tap-to-silence stretch depends on.
+     * Called from `SnoozeService.armWithCap()` right after `beginArming`
+     * returns, whatever it returns — not just from [showOngoing]. A refused
+     * arm can still have left `STATE_TRUE` on the rule (SPEC.md §7.1) and
+     * cascade straight to `showStuckRule()` without `showOngoing()` ever
+     * running (Codex, PR #92) — exactly the one alert that must not be the
+     * thing a stale, non-bypassing channel swallows. Both call sites are safe
+     * precisely because neither is ahead of anything: `beginArming` has
+     * already made its zen-state IPC by the time it returns, and every path
+     * into [showOngoing] runs after `setAutomaticZenRuleState` has already
+     * returned `STATE_TRUE` — so a couple of binder round trips here cost
+     * nothing the tap-to-silence stretch depends on.
      *
-     * Attempted once per process, like [ensureChannels]: after the first
-     * successful arm the service's own receiver is registered, and every later
-     * grant is caught by [reapplyDndBypass]'s regular call sites instead.
+     * Attempted once per process, like [ensureChannels], and only marked done
+     * on success — a refused write here must not skip the retry a later arm
+     * or reconciliation owes it. After the first successful arm the service's
+     * own receiver is registered anyway, and every later grant is caught by
+     * [reapplyDndBypass]'s regular call sites instead.
      */
-    private fun reapplyDndBypassOnce() {
+    fun reapplyDndBypassOnce() {
         if (bypassReapplyAttempted) return
-        bypassReapplyAttempted = true
-        reapplyDndBypass()
+        runCatching { createChannels() }.fold(
+            onSuccess = { bypassReapplyAttempted = true },
+            onFailure = {
+                Log.e(TAG, "Reapplying the DND-bypass channels failed; a later arm or reconciliation retries.", it)
+            },
+        )
     }
 
     /**
@@ -147,9 +173,10 @@ class SnoozeNotifications(private val context: Context) {
      * and failure messages were all going nowhere (flagged by Codex on PR #18)
      * — principle 2's failure on the screen that exists to prevent it.
      *
-     * Both channels count, and neither is optional: the ongoing one is the only
-     * visible state a 1×1 tile has (SPEC.md §4.2), and the ended one carries
-     * every reason a snooze stopped (§4.5).
+     * All three channels count, and none is optional: the ongoing one is the
+     * only visible state a 1×1 tile has (SPEC.md §4.2), the ended one carries
+     * every reason a snooze stopped (§4.5), and the urgent one is the sole way
+     * back from a phone that may still be silenced (§5.7).
      *
      * **A missing channel counts against us**, which is why this is an instance
      * method rather than a static read of the manager. Constructing this class
@@ -165,7 +192,7 @@ class SnoozeNotifications(private val context: Context) {
     fun canReachTheUser(): Boolean {
         val manager = manager ?: return false
         if (!manager.areNotificationsEnabled()) return false
-        return listOf(CHANNEL_ACTIVE, CHANNEL_ENDED).all { id ->
+        return listOf(CHANNEL_ACTIVE, CHANNEL_ENDED, CHANNEL_URGENT).all { id ->
             val channel = manager.getNotificationChannel(id)
             channel != null && channel.importance != NotificationManager.IMPORTANCE_NONE
         }
@@ -360,7 +387,7 @@ class SnoozeNotifications(private val context: Context) {
     fun showStuckRule(): Boolean =
         post(
             ID_STUCK,
-            android.app.Notification.Builder(context, CHANNEL_ENDED)
+            android.app.Notification.Builder(context, CHANNEL_URGENT)
                 .setSmallIcon(TileR.drawable.ic_tile_snooze)
                 .setContentTitle(context.getString(R.string.failure_rule_stuck))
                 .setContentText(context.getString(R.string.failure_rule_stuck_body))
@@ -583,6 +610,7 @@ class SnoozeNotifications(private val context: Context) {
 
         const val CHANNEL_ACTIVE = "snooze_active"
         const val CHANNEL_ENDED = "snooze_ended"
+        const val CHANNEL_URGENT = "snooze_urgent"
         const val ID_ONGOING = 1
         const val ID_ENDED = 2
         const val ID_FAILURE = 3
