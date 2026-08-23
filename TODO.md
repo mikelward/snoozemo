@@ -1257,7 +1257,7 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Fifteen rounds of
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Sixteen rounds of
       Codex findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
@@ -1341,7 +1341,16 @@ the point is that every other line of the app is worthless if it isn't true.
       lock, re-checking the ticket once that lock is actually held (not just at entry) so a
       superseded attempt found stale only once it reaches the front of the queue skips delivery
       entirely; kept as a separate lock from the one `nextAttempt()` uses, so issuing a ticket on
-      the tap thread never waits on a background attempt's binder/IPC work.
+      the tap thread never waits on a background attempt's binder/IPC work. One more, round
+      sixteen: `setEnabled`'s Off/On calls are ordered on `DebugLogging`'s own worker, but the
+      delete a disable triggers runs on the *sink's own separate* worker, asynchronously — so a
+      quick Off-then-On could have the re-enable clear `lastDisableCleanupFailed` first, only for
+      the disable's own still-in-flight delete callback to complete afterward and overwrite it
+      with `true`, showing a cleanup failure under a switch already back On. Fixed with a
+      `disableGeneration` counter, bumped by every toggle before dispatching to the sink; a
+      callback whose captured generation no longer matches was superseded by a later toggle and
+      discards its own outcome instead of applying it — also applied to `install()`'s own startup
+      retry, for the same race against an early manual toggle.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
