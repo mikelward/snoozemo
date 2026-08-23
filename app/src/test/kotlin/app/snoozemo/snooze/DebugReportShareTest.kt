@@ -3,6 +3,7 @@ package app.snoozemo.snooze
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import app.snoozemo.core.SnoozeDebugLog
+import java.io.File
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -33,11 +34,19 @@ class DebugReportShareTest {
     @Before
     fun setUp() {
         DebugReport.resetForTest()
+        DebugLogging.resetForTest()
+        SnoozeDebugLog.clearSinksForTest()
+        SnoozeDebugLog.clearForTest()
+        SnoozeDebugLog.setRecording(true)
     }
 
     @After
     fun tearDown() {
         DebugReport.resetForTest()
+        DebugLogging.resetForTest()
+        SnoozeDebugLog.clearSinksForTest()
+        SnoozeDebugLog.clearForTest()
+        SnoozeDebugLog.setRecording(true)
     }
 
     @Test
@@ -170,6 +179,40 @@ class DebugReportShareTest {
         // pinned — the real DebugLogging.consumeCrashPin behind the default
         // seam must still complete cleanly rather than hanging the share.
         assertTrue(text.contains("--- State ---"))
+    }
+
+    @Test
+    fun `a pinned crash that reads back blank is not consumed, and the report says so`() {
+        // A crash marker can land without its content ever reaching disk —
+        // process death between the marker write and the run's own content
+        // write. wasCrash reads true from the marker alone, so a blank
+        // crash.log must be treated the same as an omitted read, never as
+        // a clean empty previous run — otherwise a "successful" share
+        // consumes the only evidence a crash happened at all, having never
+        // actually carried it (Codex, PR #89, third round on this
+        // mechanism).
+        val dir = File(context.cacheDir, "debuglog")
+        dir.mkdirs()
+        File(dir, "current.log").writeText("")
+        File(dir, "current.log.crash").writeText("1")
+        DebugLogging.install(context)
+        DebugLogging.awaitIdleForTest()
+        assertTrue("precondition: the blank crash is genuinely pinned", File(dir, "crash.log").exists())
+
+        var sharedText: String? = null
+        val result = DebugReport.share(
+            context,
+            clipboardWrite = { _, text -> sharedText = text; true },
+            chooserLaunch = { _, _ -> true },
+        )
+        DebugLogging.awaitIdleForTest()
+
+        assertTrue(result.clipboardCopied)
+        assertTrue(
+            "a blank crash must not be silently consumed by a share that never actually carried it",
+            File(dir, "crash.log").exists(),
+        )
+        assertTrue(requireNotNull(sharedText).contains("could not be included in this report"))
     }
 
     @Test
