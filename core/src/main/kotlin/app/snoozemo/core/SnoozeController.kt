@@ -80,14 +80,27 @@ class SnoozeController(
     /**
      * [mode], or the nearest less capable mode the machinery actually runs.
      * [TrackingMode.DURATION_ONLY] is always honest: the cap needs no sensor.
+     *
+     * [TrackingMode.WIFI_GRACE] is never itself a rung — no monitor's
+     * [PresenceMonitor.supportedModes] ever names it, and it must not be
+     * walked past on that account. It stands or falls with [TrackingMode.WIFI_ONLY]:
+     * it is the same Wi-Fi watch reporting a worse answer, not a different
+     * capability, so treating it as unsupported here would degrade it all
+     * the way to [TrackingMode.DURATION_ONLY] — exactly the overstated-honesty
+     * bug this method exists to prevent, just relocated to a mode that names
+     * the failure this file was written to stop hiding.
      */
     private fun honest(mode: TrackingMode): TrackingMode {
         var candidate = mode
-        while (candidate != TrackingMode.DURATION_ONLY && candidate !in supportedModes) {
+        while (candidate != TrackingMode.DURATION_ONLY && !isSupported(candidate)) {
             candidate = TrackingMode.entries[candidate.ordinal + 1]
         }
         return candidate
     }
+
+    private fun isSupported(mode: TrackingMode): Boolean =
+        mode in supportedModes ||
+            (mode == TrackingMode.WIFI_GRACE && TrackingMode.WIFI_ONLY in supportedModes)
 
     /**
      * Starts arming: turns the zen rule on **now**, before any anchor exists.
@@ -335,7 +348,7 @@ class SnoozeController(
     fun onPresenceUpdate(update: PresenceUpdate) {
         val snooze = active ?: return
 
-        val mode = modeFor(update.degradation, snooze.anchor)
+        val mode = modeFor(update.degradation, update.graceActive, snooze.anchor)
         val moved = mode != snooze.mode
         if (moved) active = snooze.copy(mode = mode)
 
@@ -469,19 +482,30 @@ class SnoozeController(
     /**
      * The tracking mode a given level of health adds up to.
      *
-     * Two inputs and no memory, which is the whole point of reporting health as
-     * a level: there is nothing to restore, nothing owed, and no ordering to get
-     * right — the mode is a function of what the anchor could ever support and
-     * whether location is currently answering.
+     * Three inputs and no memory, which is the whole point of reporting health
+     * as a level: there is nothing to restore, nothing owed, and no ordering to
+     * get right — the mode is a function of what the anchor could ever support,
+     * whether location is currently answering, and whether the §6.6 grace
+     * period is running.
      *
      * The rule that used to need its own ceiling falls out of that. Rejoining
      * the anchor's network does not clear the engine's degradation, because
      * every cause is a *location* cause and Wi-Fi says nothing about location —
      * so the mode stays `WIFI_ONLY` without anyone having to remember not to
      * claim `FULL`.
+     *
+     * [graceActive] is checked first, ahead of [degradation] (Codex, PR #31,
+     * flagged as the *mode's* half of the same bug the missing signal was
+     * the cause's half of): grace can start the instant Wi-Fi is lost, for an
+     * anchor with no usable fix to confirm anything with, which is before
+     * enough failed observations have accumulated for [degradation] to have
+     * moved off null. Waiting for [degradation] there would report `WIFI_ONLY`
+     * — Wi-Fi is what's tracking this — for the first moments of a grace
+     * period that exists precisely because nothing is.
      */
-    private fun modeFor(degradation: DegradationCause?, anchor: Anchor): TrackingMode {
+    private fun modeFor(degradation: DegradationCause?, graceActive: Boolean, anchor: Anchor): TrackingMode {
         val computed = when {
+            graceActive && anchor.ssid != null -> TrackingMode.WIFI_GRACE
             degradation == null -> TrackingMode.from(anchor)
             // Losing location leaves Wi-Fi *only if there was an SSID*; claiming
             // `WIFI_ONLY` for an anchor with no network would tell the user tracking

@@ -125,6 +125,20 @@ class SnoozeServicePresenceTest {
     }
 
     @Test
+    fun `grace running records WIFI_GRACE through the real fixture's supportedModes`() {
+        // The fixture's supportedModes() above never lists WIFI_GRACE — same
+        // as the real GeofencePresenceMonitor — so this is what actually
+        // proves `honest()` doesn't walk it down to DURATION_ONLY for want
+        // of its own explicit entry (Codex, PR #31; the mode half of the bug
+        // the missing `graceActive` signal was the cause half of).
+        armWatched()
+
+        emit(PresenceUpdate(event = null, degradation = DegradationCause.NO_LOCATION_FIX, graceActive = true))
+
+        assertEquals(TrackingMode.WIFI_GRACE, ActiveSnoozeStore(appContext).load()?.mode)
+    }
+
+    @Test
     fun `ending the snooze stops the watch`() {
         val controller = startService(SnoozeService.ACTION_ARM)
         TestSnoozeService.captureRequests.single().invoke(captured)

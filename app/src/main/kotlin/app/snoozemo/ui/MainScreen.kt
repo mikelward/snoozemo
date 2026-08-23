@@ -167,7 +167,8 @@ fun MainScreen(
  * user doesn't already have.
  *
  * The mode line reuses the ongoing notification's own copy
- * (`ongoing_ends_when_you_leave` / `ongoing_wifi_only` / `ongoing_timer_only`)
+ * (`ongoing_ends_when_you_leave` / `ongoing_wifi_only` / `ongoing_wifi_grace` /
+ * `ongoing_timer_only`)
  * and the remaining-time line reuses the tile's (`tile_remaining_hours` /
  * `tile_remaining_minutes`, `:tile` module) — the same two facts stated the
  * same way everywhere they already appear, rather than a third phrasing.
@@ -179,6 +180,7 @@ private fun SnoozeStatus(mode: TrackingMode, remaining: Duration) {
             text = when (mode) {
                 TrackingMode.FULL -> stringResource(R.string.ongoing_ends_when_you_leave)
                 TrackingMode.WIFI_ONLY -> stringResource(R.string.ongoing_wifi_only)
+                TrackingMode.WIFI_GRACE -> stringResource(R.string.ongoing_wifi_grace)
                 TrackingMode.DURATION_ONLY -> stringResource(R.string.ongoing_timer_only)
             },
             style = MaterialTheme.typography.titleMedium,

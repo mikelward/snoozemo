@@ -324,8 +324,67 @@ class SnoozeControllerTest {
     }
 
     /** Healthy tracking, which is the common case and the boring one. */
-    private fun update(event: PresenceEvent? = null, degradation: DegradationCause? = null) =
-        PresenceUpdate(event, degradation)
+    private fun update(
+        event: PresenceEvent? = null,
+        degradation: DegradationCause? = null,
+        graceActive: Boolean = false,
+    ) = PresenceUpdate(event, degradation, graceActive)
+
+    @Test
+    fun `grace running reports WIFI_GRACE, not WIFI_ONLY, even with FULL machinery`() {
+        // The bug this mode exists to fix (Codex, PR #31): WIFI_ONLY means
+        // "Wi-Fi is what's tracking this", which stops being true the instant
+        // Wi-Fi is what was just lost — even for an anchor whose machinery
+        // could otherwise run FULL.
+        armFully()
+
+        controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX, graceActive = true))
+
+        assertEquals(TrackingMode.WIFI_GRACE, controller.active?.mode)
+    }
+
+    @Test
+    fun `grace is checked ahead of degradation, since it can start before degradation does`() {
+        // For a Wi-Fi-only anchor (no usable fix), grace starts the moment
+        // Wi-Fi is lost — before enough failed observations have accumulated
+        // for `degradation` to move off null. A caller that checked
+        // `degradation == null` first would still report WIFI_ONLY on this
+        // exact update.
+        armFully(Anchor(capturedAt = start, ssid = "ExampleWifi"))
+
+        controller.onPresenceUpdate(update(degradation = null, graceActive = true))
+
+        assertEquals(TrackingMode.WIFI_GRACE, controller.active?.mode)
+    }
+
+    @Test
+    fun `WIFI_GRACE is never degraded past WIFI_ONLY for want of its own explicit support`() {
+        // No real monitor's supportedModes() ever names WIFI_GRACE explicitly
+        // (GeofencePresenceMonitor answers FULL/WIFI_ONLY/DURATION_ONLY) — it
+        // is the same watch as WIFI_ONLY reporting a worse answer, not a
+        // capability of its own, so `honest()` must not walk it all the way
+        // down to DURATION_ONLY for that reason alone.
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.onAnchorCaptured(
+            Anchor(capturedAt = start, ssid = "ExampleWifi"),
+            setOf(TrackingMode.WIFI_ONLY, TrackingMode.DURATION_ONLY),
+        )
+
+        controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX, graceActive = true))
+
+        assertEquals(TrackingMode.WIFI_GRACE, controller.active?.mode)
+    }
+
+    @Test
+    fun `grace clearing reports WIFI_ONLY again`() {
+        armFully()
+        controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX, graceActive = true))
+        assertEquals(TrackingMode.WIFI_GRACE, controller.active?.mode)
+
+        controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX, graceActive = false))
+
+        assertEquals(TrackingMode.WIFI_ONLY, controller.active?.mode)
+    }
 
     @Test
     fun `probably-left escalates but never ends the snooze`() {

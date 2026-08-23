@@ -103,6 +103,10 @@ internal class PresenceFeed(
     fun accept(signal: PresenceSignal): PresenceUpdate {
         val step = Presence.advance(state, signal, anchor)
         state = step.state
-        return PresenceUpdate(event = step.event, degradation = step.state.degradation)
+        return PresenceUpdate(
+            event = step.event,
+            degradation = step.state.degradation,
+            graceActive = step.state.graceDeadlineMs != null,
+        )
     }
 }

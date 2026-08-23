@@ -172,6 +172,8 @@
     <!-- TODO: translate -->
     <string name="ongoing_wifi_only" tools:ignore="MissingTranslation">Wi-Fi only</string>
     <!-- TODO: translate -->
+    <string name="ongoing_wifi_grace" tools:ignore="MissingTranslation">Wi-Fi lost — ending soon</string>
+    <!-- TODO: translate -->
     <string name="ongoing_timer_only" tools:ignore="MissingTranslation">Timer only</string>
     <!-- TODO: translate -->
     <string name="action_end_now" tools:ignore="MissingTranslation">End now</string>

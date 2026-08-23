@@ -352,7 +352,7 @@ load-bearing. This is what principle 2 ("never fail silently") depends on in pra
 the fallback of folding the remaining time into the tile label (§10) is a nicety, not a fix.
 
 **`MainScreen` mirrors the same two facts while the app is open** (landed 2026-08-23): the mode
-(`Ends when you leave` / `Wi-Fi only` / `Timer only`) and the remaining time, reusing the exact
+(`Ends when you leave` / `Wi-Fi only` / `Wi-Fi lost — ending soon` / `Timer only`) and the remaining time, reusing the exact
 copy the notification and the tile already render rather than a third phrasing for the same state.
 Not a live per-second countdown, unlike the notification's own chronometer — it repaints on a
 record change and on a once-a-minute tick while the activity is visible, which matches the
@@ -411,7 +411,7 @@ rebuilt on a state change, so a remaining time written into the body is the valu
 snooze was armed — still reading `8h 0m left` seven hours later, which is worse than showing nothing
 because it looks current. `setUsesChronometer` against the absolute cap ticks by itself and cannot
 go stale. It also means the body says only what *kind* of snooze this is — `Ends when you leave`,
-`Wi-Fi only`, `Timer only` — which is the part that actually needs words.
+`Wi-Fi only`, `Wi-Fi lost — ending soon`, `Timer only` — which is the part that actually needs words.
 
 **This card only alerts once.** It is reposted on every ARMED/CHECKING transition while a snooze
 runs — routine presence re-checks, not events the user needs alerted to — and the channel bypasses
@@ -1192,6 +1192,18 @@ defense; the grace deadline is a softer mechanism the cap already bounds regardl
 wound back during an outage can make grace run longer than five minutes, but never longer than
 the cap itself.
 
+**The notification says so while grace runs, not just once it ends** (landed 2026-08-23, Codex, PR
+#31). `TrackingMode.WIFI_ONLY` means "Wi-Fi is what's tracking this" — but the grace period exists
+precisely because Wi-Fi just stopped being able to say that, and reusing the same label for both
+told a user mid-outage that something was watching when nothing was. `TrackingMode.WIFI_GRACE`
+(`Wi-Fi lost — ending soon`) is the distinct claim for exactly that window: unverifiable, and ending
+automatically unless Wi-Fi or location recovers first. It is not a new capability tier — nothing
+watches it that does not also watch `WIFI_ONLY` — so `SnoozeController.honest()` treats the two as
+standing or falling together rather than degrading the grace label to `DURATION_ONLY` for want of a
+monitor that names it explicitly. The engine reports whether grace is running as a level
+(`PresenceUpdate.graceActive`), restated on every update exactly like `degradation` and for the same
+PR #33 reason: an announced-once event is a race waiting to lose to whichever ordering swallows it.
+
 **A run of readings that place nobody is reported, not absorbed.** One vague fix is ordinary —
 walking past a lift shaft produces one. Several in a row means location has stopped answering, and
 the user is owed that in the notification (§8.1) rather than left with a snooze that looks tracked
@@ -1971,7 +1983,7 @@ data class ActiveSnooze(
     val startedAt: Instant,
     val capExpiresAt: Instant,
     val placeName: String,          // "Here" until saved/named
-    val mode: TrackingMode,         // FULL, WIFI_ONLY, DURATION_ONLY
+    val mode: TrackingMode,         // FULL, WIFI_ONLY, WIFI_GRACE, DURATION_ONLY
 )
 ```
 

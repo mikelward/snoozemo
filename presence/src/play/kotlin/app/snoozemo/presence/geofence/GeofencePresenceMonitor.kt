@@ -215,6 +215,20 @@ class GeofencePresenceMonitor(
         // setup, so the placeholder is never the one invoked.
         var repairOnRecovery: () -> Unit = {}
 
+        // A level like `registrationDegradation`/`servicesDegradation` above,
+        // for the same reason: `send` is called from restates that never
+        // touch the feed at all (a registration refusal, a recovery, a
+        // `GeofenceObservation.Unavailable`), and those always pass a bare
+        // `PresenceUpdate(event = null, degradation = ...)` with no opinion
+        // on grace — trusting that would report grace as over on the next
+        // unrelated restate while the deadline the feed still holds keeps
+        // counting down underneath it. Mirrored from `feed.graceDeadlineMs`
+        // inside `deliver`'s own `feedLock` section below, so a plain atomic
+        // read here needs no lock of its own; `false` until the first
+        // `deliver` call is always correct, since nothing before that can
+        // have started a grace period.
+        val graceActiveMirror = java.util.concurrent.atomic.AtomicBoolean(false)
+
         fun send(update: PresenceUpdate) {
             trySend(
                 PresenceUpdate(
@@ -228,6 +242,7 @@ class GeofencePresenceMonitor(
                     // by Codex on PR #72). Both lower the mode identically,
                     // so only the recorded cause differs.
                     degradation = platformLevel() ?: update.degradation,
+                    graceActive = graceActiveMirror.get(),
                 ),
             )
         }
@@ -283,6 +298,7 @@ class GeofencePresenceMonitor(
                 graceDeadlineMs = feed.graceDeadlineMs
                 sequence = deliverySequence.incrementAndGet()
             }
+            graceActiveMirror.set(graceDeadlineMs != null)
             send(update)
             // Always entered, `Departed` included, so the generation check
             // and the latch below are read and written under the same lock
