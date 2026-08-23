@@ -816,6 +816,17 @@ unconditionally, and is called wherever the app already reconciles a policy-acce
 `PolicyAccessAction.EnsureRule`, both off the arm path) rather than gated by the once-only flag, so
 access granted after the channels first existed still reaches them.
 
+One gap those two call sites don't reach: access granted *out-of-band* — directly from system
+Settings rather than through this app's own screens — while neither `MainActivity` nor
+`SnoozeService` is alive to notice, followed immediately by an arm in a process that has never
+observed the change. `ACTION_ARM` deliberately skips `reconcilePolicyAccess` (the arm-path rule
+bars policy IPC ahead of the tap), so that reconciliation cannot be what catches this one (Codex,
+PR #92). `SnoozeNotifications.showOngoing()` closes it instead, since every path into it runs
+*after* `setAutomaticZenRuleState` has already returned `STATE_TRUE` — a couple of binder round
+trips there cost nothing the tap-to-silence stretch depends on. Attempted once per process, same
+as channel creation itself: after the first successful arm the service's own receiver is
+registered, and a later grant is caught by the regular reconciliation paths above.
+
 It is a per-channel importance flag, not a zen-rule change, so it does not touch §5.6's "Snoozemo
 touches only its own rule" invariant. The user can still switch it off per-channel in Settings
 (`ACTION_CHANNEL_NOTIFICATION_SETTINGS` → "Override Do Not Disturb"); that is their explicit choice
