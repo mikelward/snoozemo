@@ -1,11 +1,12 @@
 name: Android CI
 
 # Adapted from the sibling Simmo and Type Launcher repos. The `deploy` job below
-# is the first slice of Phase 6's release plumbing (TODO.md,
-# `docs/play-store-internal-track.md`): a signed AAB built on every push to
-# `main` and published as a downloadable workflow artifact for the manual seed
-# upload Play requires. Automatically uploading it to the internal track is a
-# follow-up, deliberately not wired in here — see the file above.
+# is Phase 6's release plumbing (TODO.md, `docs/play-store-internal-track.md`):
+# a signed AAB built on every push to `main`, published as a downloadable
+# workflow artifact for the one-time manual seed upload Play requires, and —
+# once `PLAY_SERVICE_ACCOUNT_JSON` is configured — uploaded automatically to
+# the Play internal testing track with release notes built from the push's
+# own qualifying commit subjects.
 
 on:
   # No paths filter on pull_request, deliberately: the main ruleset requires
@@ -680,11 +681,11 @@ jobs:
             sync=${{ (needs.sync-screenshots.result == 'skipped' && needs.screenshot-tests.result == 'success') && 'success' || needs.sync-screenshots.result }}
 
   deploy:
-    name: Build the release AAB
+    name: Build and release
     # Production build job (TODO.md Phase 6, docs/play-store-internal-track.md).
     # Builds and publishes a signed AAB for the manual seed upload Play
-    # requires; it does not upload anywhere itself — that automation is a
-    # deliberate follow-up, not this PR's scope. Gated three ways:
+    # requires, and — once PLAY_SERVICE_ACCOUNT_JSON is configured — uploads
+    # it to the Play internal track automatically. Gated three ways:
     #   1. `if:` — a push to main, never a PR. `workflow_dispatch` on this
     #      workflow always carries a required `pr` input tied to the
     #      screenshot-refresh flow (see the trigger comment above), so it is
@@ -696,10 +697,25 @@ jobs:
     #   3. `needs:` — runs only once build and screenshot-tests both pass, so
     #      a failing test or a screenshot drift on main blocks the release.
     #
-    # The keystore secret is optional and every step below gates on its
+    # Both secrets below are optional and every step gates on its own
     # presence, so a fresh repo or fork still gets a green run with nothing
-    # built — an empty allow-list or a release with no signing config would
-    # only be a red check nobody reads.
+    # built or uploaded — an empty allow-list or a release with no signing
+    # config would only be a red check nobody reads.
+    #
+    # `concurrency` serializes every run of this job across the whole repo
+    # (Codex, PR #97): without it, two pushes to `main` landing close
+    # together — routine when merges happen back to back — could both reach
+    # "Build release notes" before either's own Play upload finishes, so
+    # both compute their range base from the same "nothing has published
+    # yet" snapshot. Worst case: the newer push's upload lands first and
+    # Play rejects the older push's now-lower `versionCode`; even in the
+    # right order, the newer release's notes repeat subjects the older one
+    # already published. `cancel-in-progress: false` queues the second run
+    # rather than canceling the first — canceling mid-upload is the one
+    # thing this must never do.
+    concurrency:
+      group: deploy-main-release
+      cancel-in-progress: false
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [build, screenshot-tests]
     runs-on: ubuntu-latest
@@ -707,8 +723,13 @@ jobs:
     environment: production
     env:
       HAS_RELEASE_KEYSTORE: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' }}
+      HAS_PLAY_SA: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
     permissions:
       contents: read
+      # "Build release notes" walks recent main runs of this workflow via
+      # the Actions API to find the last one that actually published, so the
+      # notes cover every commit since — not just the ones in this push.
+      actions: read
     steps:
       - name: Check out repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
@@ -724,6 +745,424 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2  # v5
+
+      - name: Build release notes
+        # Walks every commit in this push oldest-first and collects the
+        # subject line of each one worth shipping as a Play "What's new"
+        # entry (AGENTS.md, *Commit messages*):
+        #   - skip commits whose subject starts with a non-user-facing
+        #     prefix — `ci:`, `docs:`, `internal:`, `refactor:`, `test:` /
+        #     `tests:`. None describe a user-visible change worth
+        #     announcing.
+        #   - skip commits whose every changed path is repo housekeeping —
+        #     a `.md` file at any depth or any dotfile/dotdir at the repo
+        #     root (`.github/`, `.claude/`, `.gitignore`, …).
+        #     `docs/PRIVACY.md` is ordinary docs like the rest of `docs/`
+        #     here too (AGENTS.md), so it is not special-cased the way the
+        #     sibling repos' `PRIVACY.md` is — Play's "What's new" is a
+        #     store-listing field a user never sees at update time, so a
+        #     policy-wording change gains nothing from forcing its way in.
+        # The qualifying subjects are emitted as a "• "-bulleted list,
+        # oldest-first — always bulleted, even for a single qualifying
+        # commit, so the Play "What's new" card always renders the same
+        # shape. If no commit in the push qualifies, sets
+        # RELEASE_NOTES_SKIP=true and the upload step below skips — a push
+        # of only prefixed or housekeeping commits doesn't ship a redundant
+        # release with no user-facing notes.
+        #
+        # A manual workflow_dispatch is the one exception: it's an explicit
+        # "publish the current tip anyway" request, so it never sets
+        # RELEASE_NOTES_SKIP — falling back to a generic note instead of
+        # skipping when nothing qualifies. (This job's own `if:` only
+        # allows a push today; the dispatch exception is kept anyway so a
+        # future manual-release trigger doesn't need to touch this logic.)
+        #
+        # The range base is the head SHA of the most recent main run of
+        # this workflow whose deploy job actually published — queried from
+        # the Actions API. `github.event.before` is only a fallback: if a
+        # prior main push failed before publishing, `before` would be that
+        # failed push's tip and the next run's notes would silently omit
+        # the unreleased commits from the failed range. The base must be a
+        # run that actually published — its Play upload step concluded
+        # success — not merely a green deploy job: with PLAY_SERVICE_ACCOUNT_JSON
+        # missing, the upload step skips and the deploy job still concludes
+        # success, and counting such a run as released would drop its
+        # range's commits from the first real release after the secret is
+        # added.
+        #
+        # Engineering detail lives in the commit body, which the Play card
+        # never shows — see AGENTS.md's "Commit messages" section for the
+        # wording convention. Play's documented per-language cap is 500
+        # Unicode characters for the entered "What's new" text, so the
+        # truncation budget here is measured against the full formatted
+        # output — bullet ("• "), newline separators, and the "\n…"
+        # truncation marker all count toward MAX. If the budget overflows
+        # we drop trailing subjects (oldest-first preserved at the head)
+        # until it fits and append "\n…" so the reader knows the tail was
+        # cut. If a single subject alone exceeds the cap (unlikely —
+        # subjects are conventionally ≤ ~70 chars) we hard-truncate the
+        # bullet line to 499 chars and append "…".
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Guard against "Re-run all jobs" replaying an already-published
+          # commit (Codex, PR #97): if an earlier attempt of this exact run
+          # already got past the Play upload step successfully, a rerun
+          # would otherwise skip past its own head SHA in the walk below
+          # (see "The current run ... are skipped"), recompute the same
+          # notes, and try to upload the identical AAB again — Play rejects
+          # that outright on the reused versionCode, turning an
+          # idempotent-looking rerun red for no reason. GITHUB_RUN_ID and
+          # GITHUB_RUN_ATTEMPT are both default Actions env vars, present
+          # without declaring them above.
+          if [ "${GITHUB_RUN_ATTEMPT}" -gt 1 ]; then
+            attempt=1
+            while [ "$attempt" -lt "${GITHUB_RUN_ATTEMPT}" ]; do
+              published=$(gh api \
+                "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${attempt}/jobs?per_page=100" \
+                --jq '[.jobs[]
+                       | select(.name == "Build and release")
+                       | .steps[]
+                       | select(.name == "Upload to Play Store internal track")
+                       | .conclusion]
+                      | any(. == "success")' \
+                2>/dev/null || true)
+              if [ "$published" = "true" ]; then
+                echo "This commit already published successfully in attempt ${attempt} of this same run; skipping to avoid re-uploading an already-used versionCode."
+                echo "RELEASE_NOTES_SKIP=true" >> "$GITHUB_ENV"
+                exit 0
+              fi
+              attempt=$((attempt + 1))
+            done
+          fi
+
+          # Walk recent main runs of this workflow (newest first) and take
+          # as the range base the head SHA of the first one whose deploy
+          # job succeeded AND actually published — i.e. its Play upload
+          # *step* concluded success, not just the job. A deploy concludes
+          # green while publishing nothing whenever PLAY_SERVICE_ACCOUNT_JSON
+          # is missing (the upload step skips), and also when
+          # RELEASE_NOTES_SKIP suppressed a housekeeping-only push; treating
+          # such a run as "released" would permanently drop its range's
+          # commits from the next real release's notes. Skipped housekeeping
+          # runs are fine to re-walk: their commits re-enter the range and
+          # the prefix/path filter drops them again. The job and step names
+          # below must match the `name:` values in this workflow verbatim;
+          # rename them together. The current run and re-runs of the same
+          # head SHA are skipped.
+          prev_sha=""
+          # The head SHA of the oldest run this call sees — kept so that
+          # "no run has ever published" (as opposed to "the API call
+          # failed") has a fallback better than BEFORE_SHA: without it, the
+          # very first automated upload after any number of secretless
+          # pushes would only credit the single most recent push, silently
+          # dropping every commit queued during the secretless stretch
+          # (Codex, PR #97 — AGENTS.md's own promise is that those commits
+          # "stay queued and ship with the next real release instead of
+          # being lost").
+          oldest_head=""
+          while IFS=$'\t' read -r run_id run_head; do
+            [ -z "$run_id" ] && continue
+            [ "$run_head" = "$AFTER_SHA" ] && continue
+            oldest_head="$run_head"
+            # filter=all, not the default filter=latest (GitHub REST API
+            # docs: "List jobs for a workflow run") — without it, a run
+            # that was rerun only ever reports its most recent attempt's
+            # jobs here (Codex, PR #97: interacts with the rerun guard
+            # above — if attempt 1 published and attempt 2 correctly
+            # skipped re-uploading via that guard, this call would see
+            # only attempt 2's skip and conclude the whole run never
+            # published, missing the real last-published point and
+            # duplicating already-released subjects into the next
+            # release's notes).
+            published=$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?filter=all&per_page=100" \
+              --jq '[.jobs[]
+                     | select(.name == "Build and release")
+                     | select(.conclusion == "success")
+                     | .steps[]
+                     | select(.name == "Upload to Play Store internal track")
+                     | .conclusion]
+                    | any(. == "success")' \
+              2>/dev/null || true)
+            if [ "$published" = "true" ]; then
+              prev_sha="$run_head"
+              break
+            fi
+          done < <(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/android-ci.yml/runs?branch=main&per_page=100" \
+            --jq '.workflow_runs[]? | [.id, .head_sha] | @tsv' \
+            2>/dev/null || true)
+
+          # If a later push already published, this run is superseded —
+          # skip (Codex, PR #97, tenth and eleventh passes). `concurrency`
+          # (this job's own `concurrency:` block, below) stops two deploys
+          # from running *at once*, but GitHub's own docs say queued jobs
+          # still run in the order each one *starts waiting*, not push
+          # order, so an older push's deploy can reach this point after a
+          # newer push already published a higher versionCode — Play's API
+          # would reject the stale upload outright.
+          #
+          # This checks $prev_sha rather than main's raw current tip
+          # (an earlier version of this check did exactly that, and Codex
+          # correctly flagged it): main can advance past this run's SHA
+          # without anything ever actually publishing — a later push might
+          # be docs-only and start no workflow under this file's `paths`
+          # filter, or its own build/screenshot-tests might fail before
+          # `deploy` ever runs — and skipping in either case would strand
+          # this run's otherwise-releasable commits with nothing left to
+          # ship them. The only signal that this run's work is genuinely
+          # already covered is $prev_sha — the head of a run that actually
+          # published — descending from $AFTER_SHA.
+          if [ -n "$prev_sha" ] \
+             && git merge-base --is-ancestor "$AFTER_SHA" "$prev_sha" 2>/dev/null; then
+            echo "A later push already published (last published SHA ${prev_sha} already includes this run's ${AFTER_SHA}); skipping."
+            echo "RELEASE_NOTES_SKIP=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # per_page=100 (the API max) keeps this a single call while
+          # covering a 100-run red streak; --paginate would fetch the
+          # workflow's entire run history on every deploy. If the last
+          # success is somehow deeper than 100 runs, the BEFORE_SHA
+          # fallback below still applies — same accepted trade as the
+          # oldest_head fallback just below it.
+
+          # Fallbacks, in order: the last run that actually published;
+          # else the oldest run this call saw (see oldest_head's own
+          # comment) — covers "no run has ever published" without
+          # silently narrowing to one push; else BEFORE_SHA (API yielded
+          # nothing at all — a fresh adoption run, or an API hiccup),
+          # except when it's all-zeros or unreachable (first push to a
+          # branch, force-reset orphaning the old tip); then HEAD alone —
+          # walking the entire history would be both slow and meaningless.
+          # The range walk itself is deliberately uncapped: `git log
+          # --max-count` limits commits BEFORE `--reverse` applies (git
+          # documents --reverse as reversing the commits already chosen),
+          # so a pre-walk cap would keep the newest N and silently drop
+          # the oldest — the exact commits the oldest-first notes must
+          # preserve. The cap lives on qualifying subjects inside the
+          # filter loop below instead; the per-commit diff-tree cost on a
+          # pathologically long range (release outage) is the accepted
+          # trade.
+          base_sha=""
+          if [ -n "$prev_sha" ] && git cat-file -e "$prev_sha" 2>/dev/null; then
+            base_sha="$prev_sha"
+          elif [ -n "$oldest_head" ] \
+             && git rev-parse --quiet --verify "${oldest_head}^{commit}" >/dev/null; then
+            # oldest_head's own commit was already scanned by a run and
+            # never published, so it belongs in this release too — its
+            # parent is the exclusive base the range walk below needs.
+            # Falls through to oldest_head itself (dropping only that one
+            # commit from the range) on the rare repo where it has no
+            # parent at all.
+            #
+            # Known residual gap, not fixed here (Codex, PR #97, fourth
+            # pass; checked against GitHub's actual workflow-run schema —
+            # no `before`/range field exists anywhere on it, only the
+            # single `head_sha`, so a historical run's own push boundary
+            # genuinely isn't recoverable from this API): if the run that
+            # produced oldest_head was itself triggered by a multi-commit
+            # push, this only walks back one commit, not the whole push,
+            # so earlier commits from that same push stay excluded. Bounded
+            # to at most one release, one time (the first automated
+            # upload), which is the same "not chasing perfection at the
+            # extreme edge" trade this file already accepts for a
+            # published run more than 100 runs back (see the comment
+            # above this fallback chain).
+            base_sha=$(git rev-parse --quiet --verify "${oldest_head}^{commit}^" 2>/dev/null || echo "$oldest_head")
+          elif [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ] \
+             && git rev-parse --quiet --verify "$BEFORE_SHA^{commit}" >/dev/null; then
+            base_sha="$BEFORE_SHA"
+          fi
+
+          if [ -n "$base_sha" ]; then
+            shas=$(git log --reverse --no-merges --format=%H "$base_sha..$AFTER_SHA")
+          else
+            shas=""
+          fi
+          if [ -z "$shas" ]; then
+            shas=$(git log -1 --format=%H "$AFTER_SHA")
+          fi
+
+          subjects=()
+          # Set only once a genuinely qualifying 51st+ commit is actually
+          # found (below) — never merely on reaching the cap — independent
+          # of whether the 500-char budget loop further down ever finds a
+          # reason of its own to truncate: if the first 50 subjects happen
+          # to fit under the char cap, that loop would otherwise never
+          # learn a 51st commit existed and the published notes would read
+          # as complete when they aren't (Codex, PR #97).
+          cap_truncated=false
+          while IFS= read -r sha; do
+            [ -z "$sha" ] && continue
+            s=$(git log -1 --format=%s "$sha")
+            case "$s" in
+              ci:*)       continue ;;
+              docs:*)     continue ;;
+              internal:*) continue ;;
+              refactor:*) continue ;;
+              test:*)     continue ;;
+              tests:*)    continue ;;
+            esac
+            relevant=false
+            while IFS= read -r f; do
+              [ -z "$f" ] && continue
+              # `case` patterns match `*` against `/` too, so `.*` skips
+              # any path whose first component starts with `.` — covers
+              # `.github/`, `.claude/`, `.gitignore`, `.editorconfig` etc.
+              # in one pattern. Every `.md` file is housekeeping here
+              # (AGENTS.md) — no PRIVACY.md exception, unlike the sibling
+              # repos.
+              case "$f" in
+                .*)   ;;
+                *.md) ;;
+                *)    relevant=true; break ;;
+              esac
+            done < <(git diff-tree --no-commit-id --name-only -r "$sha")
+            if [ "$relevant" = "false" ]; then
+              continue
+            fi
+            # Reached only for a commit that has already cleared every
+            # prefix and path filter above — so a cap hit here means a
+            # real qualifying commit is being discarded, not merely that
+            # 50 slots filled with housekeeping still ahead in the range
+            # (Codex, PR #97, second pass: the first version's check ran
+            # before qualification, so a 51st sha that happened to be
+            # `ci:`-prefixed or housekeeping-only still set this flag and
+            # produced a false "…" even though nothing was actually cut).
+            # Safety net for unusually long ranges, applied AFTER
+            # oldest-first ordering so the head of the list is never
+            # dropped; in practice the 500-char Play cap truncates far
+            # sooner.
+            if [ "${#subjects[@]}" -ge 50 ]; then
+              echo "More than 50 qualifying commits in range; marking the notes truncated."
+              cap_truncated=true
+              break
+            fi
+            subjects+=("$s")
+          done <<< "$shas"
+
+          if [ "${#subjects[@]}" -eq 0 ]; then
+            if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+              echo "No release-worthy commits, but this is a manual workflow_dispatch — publishing the current tip anyway with a generic note."
+              subjects+=("Internal test build")
+            else
+              echo "No release-worthy commits in this push (all ci: / docs: / internal: / refactor: / test: / tests: prefixed or docs / dotfile housekeeping); skipping the Play upload."
+              echo "RELEASE_NOTES_SKIP=true" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          fi
+
+          MAX=500
+          TRUNC_MARK=$'\n…'
+
+          # `wc -m` counts characters under a UTF-8 locale; pin it so the
+          # bullet ("• ", 1 visible char) and the ellipsis ("…", 1 char)
+          # are scored as Play sees them, not as raw bytes.
+          export LC_ALL=C.UTF-8
+
+          # Always emit a "• "-bulleted line per subject — even for a
+          # single qualifying commit — so the Play "What's new" card
+          # always renders as a list.
+          format_notes() {
+            local first=1
+            for s in "$@"; do
+              if [ "$first" -eq 1 ]; then
+                printf '%s' "• $s"
+                first=0
+              else
+                printf '\n• %s' "$s"
+              fi
+            done
+          }
+
+          char_len() {
+            printf '%s' "$1" | wc -m
+          }
+
+          # GNU cut -c on ubuntu-latest splits multibyte UTF-8 characters
+          # mid-byte even under a UTF-8 locale (verified directly: coreutils
+          # 9.4's -c is byte-indexed, not character-indexed, despite the
+          # locale) — the hard-truncate fallback below needs a genuinely
+          # Unicode-aware cut so it can never write invalid UTF-8 into
+          # whatsnew-en-US (Codex, PR #97). Python's string indexing is by
+          # Unicode code point, so this slices on character boundaries.
+          truncate_chars() {
+            printf '%s' "$1" | python3 -c 'import sys; sys.stdout.write(sys.stdin.read()[:int(sys.argv[1])])' "$2"
+          }
+
+          # Truncate against the full formatted output — bullet ("• "),
+          # newline separator, and the "\n…" truncation marker all count
+          # toward MAX. Play's documented per-language cap is 500 Unicode
+          # characters for the *entered* "What's new" text, so measuring
+          # anything less risks writing whatsnew-en-US over the cap and
+          # having the Play upload reject the release.
+          #
+          # Two-phase: (1) greedy-add subjects until the formatted output
+          # (no marker yet) would exceed MAX, then (2) if any subject was
+          # dropped, append the "\n…" marker so the reader can tell the
+          # list was cut. The marker is load-bearing — a truncated list
+          # must always end in it — so if the marker pushes us back over
+          # MAX we drop trailing subjects until there is room. In the rare
+          # edge case where the very first subject is 499-500 chars
+          # formatted and cannot coexist with the marker, hard-truncate it.
+          kept=()
+          # Seeded from the 50-subject cap, not always false: if that cap
+          # already discarded real commits, the marker must still appear
+          # even when every kept subject happens to fit under MAX on its
+          # own (Codex, PR #97) — the loop below only ever adds to this,
+          # never clears it.
+          truncated=$cap_truncated
+          for s in "${subjects[@]}"; do
+            candidate=$(format_notes "${kept[@]}" "$s")
+            if [ "$(char_len "$candidate")" -gt "$MAX" ]; then
+              truncated=true
+              break
+            fi
+            kept+=("$s")
+          done
+
+          if [ "${#kept[@]}" -eq 0 ]; then
+            # First subject alone exceeds the cap; hard-truncate the
+            # bullet line to 499 chars and append "…".
+            notes=$(truncate_chars "• ${subjects[0]}" 499)
+            notes="${notes}…"
+          else
+            notes=$(format_notes "${kept[@]}")
+            if [ "$truncated" = true ]; then
+              # Drop trailing subjects until the marker fits.
+              while [ "$(char_len "${notes}${TRUNC_MARK}")" -gt "$MAX" ] \
+                && [ "${#kept[@]}" -gt 0 ]; do
+                unset 'kept[${#kept[@]}-1]'
+                notes=$(format_notes "${kept[@]}")
+              done
+              if [ "${#kept[@]}" -eq 0 ]; then
+                # Subject 0 was 499-500 chars formatted on its own — it fit
+                # in the greedy phase but couldn't coexist with the marker.
+                # Hard-truncate the bullet line so the marker still has
+                # room.
+                notes=$(truncate_chars "• ${subjects[0]}" 498)
+              fi
+              notes="${notes}${TRUNC_MARK}"
+            fi
+          fi
+
+          # Use a random heredoc terminator so a crafted commit subject
+          # can't include the literal terminator on a line of its own and
+          # inject arbitrary entries into $GITHUB_ENV.
+          # https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#understanding-the-risk-of-script-injections
+          delim="RELEASE_NOTES_EOF_$(openssl rand -hex 16)"
+          {
+            printf 'RELEASE_NOTES<<%s\n' "$delim"
+            printf '%s\n' "$notes"
+            printf '%s\n' "$delim"
+          } >> "$GITHUB_ENV"
 
       - name: Materialize release keystore
         # Decoded whenever the keystore secret is present, so the signed AAB
@@ -781,3 +1220,44 @@ jobs:
           path: app/build/outputs/bundle/playRelease/app-play-release.aab
           if-no-files-found: error
           retention-days: 30
+
+      - name: Compose Play Store release notes
+        # The upload-google-play action takes a directory of whatsnew-<locale>
+        # files. The bulleted list of qualifying commit subjects was already
+        # built upstream by "Build release notes" (and truncated to Play's
+        # 500-character per-locale cap); this step just writes it to disk in
+        # the layout the action expects. When that earlier step set
+        # RELEASE_NOTES_SKIP=true (every commit in the push was housekeeping)
+        # the gate below skips this and the upload step.
+        if: |
+          env.RELEASE_KEYSTORE_FILE != '' &&
+          env.HAS_PLAY_SA == 'true' &&
+          env.RELEASE_NOTES_SKIP != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/whatsnew"
+          printf '%s' "${RELEASE_NOTES}" \
+            > "${RUNNER_TEMP}/whatsnew/whatsnew-en-US"
+          echo "PLAY_WHATSNEW_DIR=${RUNNER_TEMP}/whatsnew" >> "${GITHUB_ENV}"
+
+      - name: Upload to Play Store internal track
+        # Gated so it only runs with both the upload key and service account
+        # configured. Also skipped when "Build release notes" set
+        # RELEASE_NOTES_SKIP=true — no Play-worthy "What's new" entry exists,
+        # so shipping a release would be redundant. See
+        # docs/play-store-internal-track.md for the Play Console / service
+        # account setup this depends on, and this PR's own note about not
+        # merging until the declarations and the service account's granted
+        # permissions are checked.
+        if: |
+          env.RELEASE_KEYSTORE_FILE != '' &&
+          env.HAS_PLAY_SA == 'true' &&
+          env.RELEASE_NOTES_SKIP != 'true'
+        uses: r0adkll/upload-google-play@a80b0bcdcfdfcc2d026f2bc73f726760b2cbc967  # post-v1.1.5: fixes DEP0040/DEP0169 Node.js deprecation warnings
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: app.snoozemo
+          releaseFiles: app/build/outputs/bundle/playRelease/app-play-release.aab
+          tracks: internal
+          status: completed
+          whatsNewDirectory: ${{ env.PLAY_WHATSNEW_DIR }}
