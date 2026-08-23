@@ -1257,7 +1257,7 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty-four rounds of
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twenty-five rounds of
       Codex findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
@@ -1453,7 +1453,30 @@ the point is that every other line of the app is worthless if it isn't true.
       sit under an enabled switch indefinitely. Fixed by refreshing it there too. Also corrected
       that field's own doc comment, which still claimed the read was gated on the requested
       value being a disable — a claim the earlier unconditional-read fix (25) had already made
-      false without the comment being updated to match.
+      false without the comment being updated to match. Three more, round twenty-five: the
+      shared report's "Location (background)" line read `grantLabel` on
+      `ACCESS_BACKGROUND_LOCATION` even in the `direct` flavor, which never declares that
+      permission and never needs it for its foreground-service tracking (`SPEC.md` §3.4) — so a
+      direct build always reported "denied", a false capability problem for anyone diagnosing it.
+      Fixed with a `backgroundLocationLabel` helper that reads "not required for this build"
+      whenever the flavor-specific `locationTrackingNeedsBackgroundPermission` is false, covered
+      by a new `DebugReportTest` case across all three (required-and-granted,
+      required-and-denied, not-required). `consumeCrashPin`'s copy+delete fallback wrapped
+      `crash.exists()`/`renameTo`/`copyTo`/`delete` in a single `runCatching` whose
+      `getOrDefault(false)` discarded any exception among them the same way it discarded an
+      honest refused-delete `false` — losing the diagnostic a genuine storage failure needs.
+      Fixed by logging the exception before falling back; the existing "a crash pin that cannot
+      move stays pinned for a retry" fixture already forces `copyTo` to throw (a same-name
+      occupied-directory destination) and continues to assert the fallback still resolves
+      cleanly, so no new test was needed to cover the throw path itself — only the fix's log
+      line is new, and (per this file's established practice for logging-only additions
+      elsewhere in this same feature) isn't independently asserted. And `appVersionName`/
+      `appVersionCode` silently substituted "unknown"/-1 on a `PackageManager` exception with no
+      log line — fixed the same way as `startShare`/`copyToClipboard`'s own logging a few
+      rounds back, covered by a new `DebugReportShareTest` case that removes the app's own
+      package from the shadow `PackageManager` (forcing the same `NameNotFoundException` a real
+      lookup failure would throw) and confirms the share still completes with the documented
+      fallback rather than hanging.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
