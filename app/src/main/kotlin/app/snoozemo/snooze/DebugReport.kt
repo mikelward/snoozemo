@@ -110,6 +110,79 @@ internal object DebugReport {
     private val applyLock = Any()
 
     /**
+     * Serializes the actual delivery (clipboard write, chooser launch, pin
+     * consume) across concurrently-running [share] calls — separate from
+     * [applyLock], which stays fast and non-blocking since [nextAttempt] is
+     * called synchronously on the tap thread and must never wait on a
+     * background attempt's binder/IPC work (Codex, PR #89, fourth round on
+     * this mechanism: the ticket only ever guarded [lastShareFailed], never
+     * these side effects, so two taps close together could still both write
+     * the clipboard and open a chooser, unordered).
+     */
+    private val deliveryLock = Any()
+
+    /**
+     * How many deliveries have actually completed so far — a monotonic
+     * counter bumped once per real clipboard-write/chooser-launch attempt,
+     * touched only from inside [deliveryLock]. Snapshotted at each ticket's
+     * issuance (see [deliveriesAtIssue]), and compared in [share] against
+     * the current value to detect whether *another* attempt delivered while
+     * this one was still collecting its payload or waiting on
+     * [deliveryLock]. The ticket check above only catches an
+     * attempt superseded *before* it starts delivering; it can't catch a
+     * tap that lands while an earlier, still-current attempt is already
+     * mid-delivery — that earlier attempt can't be interrupted once its
+     * clipboard write or chooser launch has started, so without this check
+     * the later tap would still go on to open a second chooser and copy a
+     * second time once it finally reached the front of the queue (Codex,
+     * PR #89, nineteenth round on this mechanism).
+     */
+    @Volatile
+    private var deliveriesCompleted: Int = 0
+
+    /**
+     * The most recently completed delivery's own outcome. An attempt that
+     * finds [deliveriesCompleted] moved since it started reuses this
+     * instead of delivering again, so its own outcome-application below
+     * reports what genuinely reached the user rather than fabricating a
+     * false failure for a tap that was really just a duplicate of a
+     * delivery that had already happened.
+     */
+    @Volatile
+    private var lastDeliveryResult: Result = Result(clipboardCopied = false, reachedUser = false)
+
+    /**
+     * Whether [lastDeliveryResult]'s own payload safely included a pinned
+     * crash — [Payload.pinConsumeSafe] as of that delivery, independent of
+     * which channel actually reached the user. A delivery that reached the
+     * user without this being true is *incomplete*, not merely successful:
+     * the previous-run read that produces the crash text may have timed out
+     * or failed, so what actually landed on the clipboard or in the chooser
+     * might not carry the crash at all. Reuse must not treat that as
+     * equivalent to a delivery that genuinely carried it (Codex, PR #89,
+     * fresh evidence) — a retry tapped mid-delivery deserves its own real
+     * attempt at including the crash, not a report that the first,
+     * incomplete one already "reached" someone.
+     */
+    @Volatile
+    private var lastDeliveryPinConsumeSafe: Boolean = false
+
+    /**
+     * [deliveriesCompleted]'s value at the moment each ticket was issued,
+     * keyed by the ticket — read (and removed) by [share] instead of
+     * re-sampling [deliveriesCompleted] itself on its own background thread.
+     * A retry tapped while an earlier attempt is delivering, but whose
+     * background thread isn't actually scheduled until after that delivery
+     * finishes, would otherwise sample [deliveriesCompleted] *after* it had
+     * already been bumped — missing the overlap the tap genuinely occurred
+     * during, and delivering a second time regardless (Codex, PR #89,
+     * twenty-second round on this mechanism). [nextAttempt] captures this
+     * synchronously on the tap thread, where thread-scheduling delay can't
+     * reach it.
+     */
+    private val deliveriesAtIssue = java.util.concurrent.ConcurrentHashMap<Int, Int>()
+
+    /**
      * Issues the next share attempt ticket, for a caller that can fire more
      * than one concurrently-running share (the repeatable Share button) and
      * wants the *visible* outcome to track the latest tap — see [share]'s
@@ -130,7 +203,9 @@ internal object DebugReport {
      */
     fun nextAttempt(): Int = synchronized(applyLock) {
         lastShareFailed = false
-        ++attemptTicket
+        val ticket = ++attemptTicket
+        deliveriesAtIssue[ticket] = deliveriesCompleted
+        ticket
     }
 
     /** Test-only: resets the process-level outcome state so tests don't leak into each other. */
@@ -138,6 +213,10 @@ internal object DebugReport {
         lastShareFailed = false
         onShareOutcome = null
         synchronized(applyLock) { attemptTicket = 0 }
+        deliveriesCompleted = 0
+        lastDeliveryResult = Result(clipboardCopied = false, reachedUser = false)
+        lastDeliveryPinConsumeSafe = false
+        deliveriesAtIssue.clear()
     }
 
     /** Mirrors [DebugLogging.watchSaveOutcome]; see [lastShareFailed]. */
@@ -191,20 +270,123 @@ internal object DebugReport {
         chooserLaunch: (Context, String) -> Boolean = ::startShare,
         consumeCrashPin: (onResult: (Boolean) -> Unit) -> Unit = DebugLogging::consumeCrashPin,
     ): Result {
+        // Looked up from what nextAttempt() captured on the tap thread,
+        // not re-sampled here: this call runs on a caller-provided
+        // background thread whose actual scheduling can lag the tap by an
+        // unpredictable amount, and deliveriesCompleted can move in that
+        // gap (Codex, PR #89, twenty-second round). Falls back to a fresh
+        // read only for the untracked default attempt (0), which never
+        // went through nextAttempt() and has no concurrent attempt to
+        // guard against anyway.
+        val deliveriesAtEntry = deliveriesAtIssue.remove(attempt) ?: deliveriesCompleted
         val payload = runCatching { payloadCollect(context) }
             .onFailure { Log.e(TAG, "Building the debug report failed; sharing a minimal fallback.", it) }
             .getOrElse { Payload(fallbackPayload(it), pinConsumeSafe = false) }
         val text = payload.text
-        val copied = runCatching { clipboardWrite(context, text) }
-            .onFailure { Log.e(TAG, "Copying the debug report to the clipboard failed.", it) }
-            .getOrDefault(false)
-        val launched = runCatching { chooserLaunch(context, text) }
-            .onFailure { Log.e(TAG, "Launching the share chooser failed.", it) }
-            .getOrDefault(false)
-        if (!copied && !launched) {
-            Log.e(TAG, "Sharing the debug report reached neither the clipboard nor the chooser.")
+        // Delivery itself is serialized on deliveryLock, not just the
+        // outcome it produces: two taps close together previously started
+        // two independent threads that both wrote the clipboard and opened
+        // a chooser, unordered, so a slower first attempt could overwrite
+        // a retry's report on the clipboard or open a second chooser after
+        // the user had already seen the retry resolve (Codex, PR #89,
+        // fourth round on this mechanism). The ticket is re-checked here,
+        // against a fresh snapshot, rather than only at entry — entry can
+        // pass before a concurrent tap issues a newer ticket while this
+        // attempt is still mid-flight (collecting its payload, above, or
+        // waiting for this very lock); an attempt found stale only once it
+        // finally reaches the front of the queue skips delivery entirely
+        // rather than clobbering what a newer attempt already delivered.
+        val result = synchronized(deliveryLock) {
+            if (attempt < synchronized(applyLock) { attemptTicket }) {
+                return@synchronized Result(clipboardCopied = false, reachedUser = false) to false
+            }
+            if (
+                deliveriesCompleted != deliveriesAtEntry &&
+                lastDeliveryResult.reachedUser &&
+                lastDeliveryPinConsumeSafe
+            ) {
+                // Another attempt delivered — successfully, and completely
+                // — while this one was collecting its payload or waiting on
+                // this very lock; reuse that outcome rather than writing the
+                // clipboard or opening the chooser a second time for what
+                // already reached the user (Codex, PR #89). A *failed*
+                // overlapping delivery is deliberately not reused here:
+                // nothing has reached the user yet, so falling through lets
+                // the latest attempt make a genuine retry instead of just
+                // re-reporting the same failure it never actually attempted
+                // itself (Codex, PR #89, twenty-first round on this
+                // mechanism). Neither is a delivery that reached the user
+                // without safely including a pinned crash — reusing it would
+                // silently swallow a retry's own chance to include the crash
+                // this attempt's own payload collection might actually
+                // capture (Codex, PR #89, fresh evidence).
+                // Still apply the reused outcome as this attempt's own: the
+                // earlier attempt's ticket is stale by now, so its own
+                // outcome-application below never runs — without doing it
+                // here too, a reused outcome would never reach
+                // lastShareFailed or onShareOutcome at all (Codex, PR #89,
+                // twentieth round).
+                synchronized(applyLock) {
+                    if (attempt >= attemptTicket) {
+                        lastShareFailed = false
+                        runCatching { onShareOutcome?.invoke() }
+                    }
+                }
+                return@synchronized lastDeliveryResult to false
+            }
+            val copied = runCatching { clipboardWrite(context, text) }
+                .onFailure { Log.e(TAG, "Copying the debug report to the clipboard failed.", it) }
+                .getOrDefault(false)
+            val launched = runCatching { chooserLaunch(context, text) }
+                .onFailure { Log.e(TAG, "Launching the share chooser failed.", it) }
+                .getOrDefault(false)
+            if (!copied && !launched) {
+                Log.e(TAG, "Sharing the debug report reached neither the clipboard nor the chooser.")
+            }
+            val delivered = Result(clipboardCopied = copied, reachedUser = copied || launched)
+            // Recorded — and deliveryLock released, below — before the pin
+            // consume even starts, not after it finishes: that wait can run
+            // up to CONSUME_PIN_TIMEOUT_MS, but the clipboard/chooser
+            // delivery this attempt performs is already fully done by this
+            // point. A concurrent attempt tapped while only that cleanup
+            // step is still outstanding previously blocked on deliveryLock
+            // for the same duration before it could even see this outcome
+            // waiting for it — reading as the retry silently doing nothing
+            // for however long the cleanup took (Codex, PR #89, twenty-
+            // seventh round on this mechanism).
+            // Both writes go under applyLock as well as deliveryLock:
+            // nextAttempt() reads deliveriesCompleted under applyLock, not
+            // deliveryLock (deliberately — it must never block a tap on an
+            // in-progress delivery), so without a shared lock that read has
+            // no happens-before relationship with this write and could
+            // observe the counter bumped before lastDeliveryResult is,
+            // taking an inconsistent baseline (Codex, PR #89, thirty-first
+            // round). Cheap: applyLock's critical sections are already brief
+            // field writes, and the lock is reentrant, so nesting it here
+            // costs nothing extra.
+            synchronized(applyLock) {
+                deliveriesCompleted++
+                lastDeliveryResult = delivered
+                lastDeliveryPinConsumeSafe = payload.pinConsumeSafe
+            }
+            // Only the single most-recently-issued attempt may update the
+            // visible state — an attempt superseded by a later tap discards
+            // its own outcome here regardless of whether that later tap has
+            // completed yet, so a stale failure (or success) is never shown
+            // over a retry the user is still waiting on (Codex, PR #89,
+            // third round on this narrower point). applyLock's own critical
+            // section here is brief — a field compare, assign, and a
+            // callback invocation — so this never holds up nextAttempt.
+            synchronized(applyLock) {
+                if (attempt >= attemptTicket) {
+                    lastShareFailed = !delivered.reachedUser
+                    runCatching { onShareOutcome?.invoke() }
+                }
+            }
+            delivered to (copied && payload.pinConsumeSafe)
         }
-        if (copied && payload.pinConsumeSafe) {
+        val (delivered, shouldConsumePin) = result
+        if (shouldConsumePin) {
             val latch = CountDownLatch(1)
             runCatching { consumeCrashPin { latch.countDown() } }
                 .onFailure { Log.e(TAG, "Consuming the crash pin failed.", it) }
@@ -212,21 +394,7 @@ internal object DebugReport {
                 Log.w(TAG, "Consuming the crash pin timed out.")
             }
         }
-        val result = Result(clipboardCopied = copied, reachedUser = copied || launched)
-        // Only the single most-recently-issued attempt may update the
-        // visible state — an attempt superseded by a later tap discards its
-        // own outcome here regardless of whether that later tap has
-        // completed yet, so a stale failure (or success) is never shown
-        // over a retry the user is still waiting on (Codex, PR #89, third
-        // round on this mechanism). The Result returned below is still this
-        // attempt's own truth; only the shared, visible state is guarded.
-        synchronized(applyLock) {
-            if (attempt >= attemptTicket) {
-                lastShareFailed = !result.reachedUser
-                runCatching { onShareOutcome?.invoke() }
-            }
-        }
-        return result
+        return delivered
     }
 
     /** How long [collectPayload] waits on the debug-log worker for the previous run's file. */
