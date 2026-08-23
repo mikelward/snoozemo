@@ -1257,7 +1257,7 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Thirteen rounds of
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Fourteen rounds of
       Codex findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
@@ -1316,7 +1316,15 @@ the point is that every other line of the app is worthless if it isn't true.
       their delete request only partly landed — fixed by threading the delete's actual result
       through `DebugFileSink.setEnabled`'s `onDisabled` callback to a new
       `DebugLogging.lastDisableCleanupFailed`, surfaced on the Settings row distinct from a
-      refused setting save.
+      refused setting save. Two more, on that same round's own fixes, folded back into the
+      commits that introduced them since each finding was on already-unmerged work: the
+      cleanup-failure fix covered the interactive toggle path but not a process restart under an
+      already-Off setting, where `DebugFileSink.start(false)` retries the delete but never
+      reported its result — fixed by giving `start()` the same `onDisabled` callback
+      `setEnabled` has, wired to the same field and watch; and the privacy-floor test's own
+      fixture coordinate, meant to look banned, was an actual real-world address (Google's own
+      Mountain View headquarters) rather than a plainly fictional pair as `AGENTS.md` requires —
+      fixed by replacing both occurrences with `0.000000,0.000000`.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
