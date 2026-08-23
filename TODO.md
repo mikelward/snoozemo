@@ -1118,6 +1118,15 @@ that can only be settled on a real device, ordered by risk.
 Nothing here is scheduled; each is a sequel that follows from something already built
 (`SPEC.md` §14).
 
+- [ ] **Screenshot-diff PR comment: prioritize which screenshots survive truncation.**
+      (maintainer, 2026-08-23) Suggested dropping dark-mode variants before light ones if
+      the comment ever needs to drop entries, on the theory that a dark capture is usually
+      the same state as its light counterpart and carries less unique signal. Not built —
+      the truncation cap was instead switched to a character budget against GitHub's
+      comment-size limit (`.github/workflows/android-ci.yml`, "Post screenshot diffs as a
+      PR comment" step), so in practice this never triggers for the current screenshot
+      count. Worth revisiting if the comment ever does truncate in the field.
+
 - [ ] **Not v1 — let a snooze choose its zen policy, or which of several rules to use.**
       Ruled out for v1 by the ownership constraint below (maintainer, 2026-08-12).
       Today Snoozemo owns exactly one `AutomaticZenRule` with one `ZenPolicy` (`SPEC.md`
