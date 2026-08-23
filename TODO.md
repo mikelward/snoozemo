@@ -1118,6 +1118,18 @@ that can only be settled on a real device, ordered by risk.
 Nothing here is scheduled; each is a sequel that follows from something already built
 (`SPEC.md` §14).
 
+- [ ] **Screenshot job: surface a missing `--tests` class clearly instead of Gradle's raw
+      output.** (maintainer, 2026-08-23) When a screenshot job step's `--tests` filter
+      matches no class — branch behind `main`, a renamed test, a step added without its
+      class — Gradle's actual "No tests found for given includes: [...]" line is buried
+      after a page of unrelated `NO-SOURCE`/compile noise from other modules
+      (`android-ci.yml`'s screenshot-tests job, one step per class). A quick look at the
+      log shows only the `NO-SOURCE` lines and no clear signal that the whole job is about
+      to fail. Worth a step that checks the named class exists before invoking Gradle, or
+      an explicit failure message that names the missing class up front. Not built; ran into
+      this while chasing a stale-merge-ref failure on PR #83 that turned out to be a
+      behind-`main` branch, not a real bug.
+
 - [ ] **Screenshot-diff PR comment: prioritize which screenshots survive truncation.**
       (maintainer, 2026-08-23) Suggested dropping dark-mode variants before light ones if
       the comment ever needs to drop entries, on the theory that a dark capture is usually
