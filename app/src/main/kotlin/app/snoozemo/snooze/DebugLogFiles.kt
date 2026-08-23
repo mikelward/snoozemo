@@ -406,14 +406,23 @@ internal class DebugFileSink internal constructor(
      * (SPEC.md §4.6, "the pin holds the previous slot"), so reading whichever
      * exists is exactly the file the sharing surface should offer.
      *
-     * [readSucceeded] is false only when the file exists but `readText()`
-     * itself threw — never when there was simply nothing to read. A caller
-     * deciding whether it is safe to consume a crash pin needs this
-     * distinction: a `null` text because the file didn't exist means there
-     * was nothing to lose, but a `null` text because a real, still-pinned
-     * crash file couldn't be read means the shared report silently omitted
-     * it (Codex, PR #89) — collapsing both into one signal is what let a
-     * read failure look identical to an empty read.
+     * [readSucceeded] is false only when the file existed a moment ago but
+     * `readText()` genuinely couldn't read it for some retry-worthy reason
+     * — never when there was simply nothing to read, and never when the
+     * file has vanished entirely (checked missing, or gone by the time
+     * `readText()` runs — confirmed by re-checking existence after the
+     * failure, not by the exception's type, since the JVM throws the same
+     * `FileNotFoundException` for a path that exists but isn't an ordinary
+     * readable file): a cache file reclaimed under storage pressure
+     * between two checks is gone for good, so `SPEC.md` §4.6 says that
+     * must read as confirmed absence (`wasCrash = false`,
+     * `readSucceeded = true`), not a failure a retry could ever fix
+     * (Codex, PR #89, several rounds). A caller deciding whether it is
+     * safe to consume a crash pin needs the surviving distinction: a
+     * `null` text because there was nothing there (ever, or not anymore)
+     * means there was nothing to lose, but a `null` text because a real,
+     * still-pinned crash file couldn't be read for some other reason means
+     * the shared report silently omitted it.
      */
     fun readPreviousOrCrash(onResult: (text: String?, wasCrash: Boolean, readSucceeded: Boolean) -> Unit) {
         runCatching {
@@ -443,14 +452,41 @@ internal class DebugFileSink internal constructor(
                     onResult(null, wasCrash, false)
                     return@execute
                 }
-                val text = if (fileExists) {
-                    runCatching { file.readText() }
-                        .onFailure { runCatching { Log.w(TAG, "Reading the previous run's debug log failed.", it) } }
-                        .getOrNull()
-                } else {
-                    null
+                if (!fileExists) {
+                    // The file was pinned a moment ago (the check above)
+                    // but is gone now — reclaimed from cacheDir under
+                    // storage pressure in the gap between the two checks
+                    // (SPEC.md §4.6). wasCrash reports false here, not the
+                    // stale true from the check that no longer holds: a
+                    // vanished cache file is confirmed absence, not a
+                    // pinned crash whose report should say so (Codex,
+                    // PR #89, fresh evidence).
+                    onResult(null, false, true)
+                    return@execute
                 }
-                onResult(text, wasCrash, !fileExists || text != null)
+                val readResult = runCatching { file.readText() }
+                // The same race can land here instead — the file existed
+                // at the check just above but is gone by the time this
+                // read actually runs, the same permanent, non-retry-worthy
+                // eviction as the !fileExists branch above. Confirmed by
+                // re-checking existence rather than trusting the
+                // exception's type: a `FileNotFoundException` isn't a
+                // reliable signal for "gone" on its own — the JVM throws
+                // the identical exception for a path that exists but isn't
+                // an ordinary readable file (a directory sitting where a
+                // file is expected, covered by the sibling test just
+                // above), which is a genuinely different, retry-irrelevant
+                // failure that must keep the loud "try again" this file's
+                // other read failures still get (Codex, PR #89, fresh
+                // evidence, and the test regression that first version of
+                // this fix introduced).
+                val vanished = readResult.isFailure && runCatching { !file.exists() }
+                    .onFailure { runCatching { Log.w(TAG, "Re-checking the previous run's debug log after a failed read also failed.", it) } }
+                    .getOrDefault(false)
+                if (readResult.isFailure && !vanished) {
+                    runCatching { Log.w(TAG, "Reading the previous run's debug log failed.", readResult.exceptionOrNull()) }
+                }
+                onResult(readResult.getOrNull(), wasCrash && !vanished, vanished || readResult.isSuccess)
             }
             // The task itself couldn't even be submitted (worker rejected
             // it) — unlike a plain empty read, this means we truly don't
