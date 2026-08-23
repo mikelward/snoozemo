@@ -135,17 +135,19 @@ class SnoozeNotifications(private val context: Context) {
      * policy IPC ahead of the tap — so that reconciliation never runs before
      * these notifications do.
      *
-     * Called from `SnoozeService.armWithCap()` right after `beginArming`
-     * returns, whatever it returns — not just from [showOngoing]. A refused
-     * arm can still have left `STATE_TRUE` on the rule (SPEC.md §7.1) and
-     * cascade straight to `showStuckRule()` without `showOngoing()` ever
-     * running (Codex, PR #92) — exactly the one alert that must not be the
-     * thing a stale, non-bypassing channel swallows. Both call sites are safe
-     * precisely because neither is ahead of anything: `beginArming` has
-     * already made its zen-state IPC by the time it returns, and every path
-     * into [showOngoing] runs after `setAutomaticZenRuleState` has already
-     * returned `STATE_TRUE` — so a couple of binder round trips here cost
-     * nothing the tap-to-silence stretch depends on.
+     * Called only from [showOngoing] and `showStuckRule()`, each immediately
+     * before it posts — never from `SnoozeService.armWithCap()`, which tried
+     * that and twice found the same durability problem: a refused arm can
+     * still have left `STATE_TRUE` on the rule (SPEC.md §7.1) and cascade
+     * straight into `beginRelease()`, and an attempt placed ahead of either
+     * that call's own durable write or the arm's record save (Codex, PR #92,
+     * both rounds) risked losing exactly the write meant to survive a process
+     * death. Calling from the two posting sites instead means the attempt
+     * never sits ahead of anything durable — only ahead of the post it is
+     * fixing up for — and is still safe for the arm-path rule: `beginArming`
+     * has already made its zen-state IPC by the time either site's post-path
+     * reaches this, so a couple of binder round trips here cost nothing the
+     * tap-to-silence stretch depends on.
      *
      * Attempted once per process, like [ensureChannels], and only marked done
      * once access is actually held — checked directly, because a caught
@@ -153,25 +155,23 @@ class SnoozeNotifications(private val context: Context) {
      * throw for a caller lacking `ACCESS_NOTIFICATION_POLICY`; it returns
      * normally while the platform silently keeps `bypassDnd = false` (that is
      * the whole reason this method exists). A tile tap before the user has
-     * ever granted access reaches `armWithCap`'s call to this just as surely
-     * as a granted one does, and treating that "success" as done would leave
-     * the guard permanently satisfied over channels that were never actually
-     * fixed (Codex, PR #92). Checked before attempting, too, so a no-access
-     * arm doesn't spend binder calls achieving nothing. After the first
-     * *access-holding* attempt the service's own receiver is registered
-     * anyway, and every later grant is caught by [reapplyDndBypass]'s regular
-     * call sites instead.
+     * ever granted access reaches this just as surely as a granted one does,
+     * and treating that "success" as done would leave the guard permanently
+     * satisfied over channels that were never actually fixed (Codex, PR #92).
+     * Checked before attempting, too, so a no-access arm doesn't spend binder
+     * calls achieving nothing. After the first *access-holding* attempt the
+     * service's own receiver is registered anyway, and every later grant is
+     * caught by [reapplyDndBypass]'s regular call sites instead.
      */
     fun reapplyDndBypassOnce() {
         if (bypassReapplyAttempted) return
         // Contained like every other read here, and with more at stake than
-        // most: called from `armWithCap()` right after the zen rule has
+        // most: called from a posting method right after the zen rule has
         // already gone STATE_TRUE, so an escaping exception here would not
-        // just skip a convenience — it would unwind the caller before the
-        // record is written and the ongoing notification posted, over a
-        // phone DND has already silenced (Codex, PR #92). Treated the same as
-        // "not granted": the guard stays false, so a later arm or
-        // reconciliation retries.
+        // just skip a convenience — it would unwind the caller before it
+        // posts, over a phone DND has already silenced (Codex, PR #92).
+        // Treated the same as "not granted": the guard stays false, so a
+        // later arm or reconciliation retries.
         val granted = runCatching { manager?.isNotificationPolicyAccessGranted }.getOrElse {
             Log.e(TAG, "Reading policy access failed while reapplying the DND bypass; a later attempt retries.", it)
             null
@@ -416,14 +416,14 @@ class SnoozeNotifications(private val context: Context) {
      * refused; whether the rule is actually silencing the phone is exactly what
      * could not be determined.
      *
-     * One more [reapplyDndBypassOnce] attempt first, deliberately, even though
-     * `armWithCap` already tried once on the way in: this can post well after
-     * that — release escalation can retry across several alarm-scheduled
-     * rungs before giving up — and if that one attempt failed, nothing else
-     * on the failed-arm path would ever retry it before the one alert meant
-     * to survive a stuck rule posts on a channel that still doesn't bypass
-     * (Codex, PR #92). Cheap and self-limiting: a no-op once it has already
-     * succeeded.
+     * A [reapplyDndBypassOnce] attempt first, deliberately, since this is the
+     * *only* place on the failed-arm path that makes one: this can post well
+     * after the arm that led here — release escalation can retry across
+     * several alarm-scheduled rungs before giving up — and without this
+     * nothing on that path would ever retry the bypass before the one alert
+     * meant to survive a stuck rule posts on a channel that still doesn't
+     * bypass (Codex, PR #92). Cheap and self-limiting: a no-op once it has
+     * already succeeded.
      */
     fun showStuckRule(): Boolean {
         reapplyDndBypassOnce()
