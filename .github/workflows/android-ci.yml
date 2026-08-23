@@ -475,32 +475,45 @@ jobs:
             body="<!-- screenshot-diff -->"$'\n'"## Screenshot diffs"$'\n\n'"No screenshot changes on this PR as of \`${HEAD_SHA:0:7}\`."
           else
           body="<!-- screenshot-diff -->"$'\n'"## Screenshot diffs"$'\n\n'"Auto-posted by CI. Images pinned to \`${HEAD_SHA:0:7}\`; each caption opens the diff."$'\n'
-          count=0
+          # A fixed item count either truncates real changes well below
+          # GitHub's actual comment limit or, picked generously, still lets a
+          # handful of oversized entries blow past it — the limit that
+          # matters is GitHub's, not a headcount. So budget characters
+          # instead: keep adding entries until the next one would push the
+          # comment past 60000 (the same margin below GitHub's 65536-char
+          # cap this file already uses for the failing-tests comment above),
+          # and only then say so.
+          shown=0
+          truncated=0
           for entry in "${entries[@]}"; do
             status="${entry%%$'\t'*}"
             path="${entry#*$'\t'}"
             name=$(basename "$path")
             # GitHub anchors a file in the Files changed tab by the sha256 of its path.
             anchor=$(printf '%s' "$path" | sha256sum | cut -d' ' -f1)
-            count=$((count+1))
-            if [ "$count" -gt 20 ]; then
-              body+=$'\n'"_…truncated: more than 20 changed screenshots._"
-              break
-            fi
             case "$status" in
               A)
-                body+=$'\n'"**Added — [\`${name}\`](${files}#diff-${anchor})**"$'\n\n'"<img src=\"${raw}/${HEAD_SHA}/${path}\" width=\"320\">"$'\n'
+                chunk=$'\n'"**Added — [\`${name}\`](${files}#diff-${anchor})**"$'\n\n'"<img src=\"${raw}/${HEAD_SHA}/${path}\" width=\"320\">"$'\n'
                 ;;
               D)
                 # Before-image only: there is no after. Pinned to the merge
                 # base, which is the last commit that still had the file.
-                body+=$'\n'"**Removed — [\`${name}\`](${files}#diff-${anchor})**"$'\n\n'"<img src=\"${raw}/${BASE_SHA}/${path}\" width=\"320\">"$'\n'
+                chunk=$'\n'"**Removed — [\`${name}\`](${files}#diff-${anchor})**"$'\n\n'"<img src=\"${raw}/${BASE_SHA}/${path}\" width=\"320\">"$'\n'
                 ;;
               *)
-                body+=$'\n'"**Changed — [\`${name}\`](${files}#diff-${anchor})**"$'\n\n'"| Before | After |"$'\n'"| --- | --- |"$'\n'"| <img src=\"${raw}/${BASE_SHA}/${path}\" width=\"320\"> | <img src=\"${raw}/${HEAD_SHA}/${path}\" width=\"320\"> |"$'\n'
+                chunk=$'\n'"**Changed — [\`${name}\`](${files}#diff-${anchor})**"$'\n\n'"| Before | After |"$'\n'"| --- | --- |"$'\n'"| <img src=\"${raw}/${BASE_SHA}/${path}\" width=\"320\"> | <img src=\"${raw}/${HEAD_SHA}/${path}\" width=\"320\"> |"$'\n'
                 ;;
             esac
+            if [ $(( ${#body} + ${#chunk} )) -gt 60000 ]; then
+              truncated=1
+              break
+            fi
+            body+="$chunk"
+            shown=$((shown+1))
           done
+          if [ "$truncated" -eq 1 ]; then
+            body+=$'\n'"_…truncated: showing $shown of ${#entries[@]} changed screenshots (comment near GitHub's size limit)._"
+          fi
           fi
           # The lookup must skip rather than guess. Its result picks
           # update-vs-create, so an error swallowed into an empty id doesn't
