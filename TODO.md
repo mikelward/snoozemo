@@ -804,21 +804,100 @@ the point is that every other line of the app is worthless if it isn't true.
         isn't (D7, "fail open" — never trap, never nag past what the state actually requires).
 - [ ] **Screen-navigation lag: the previous screen visibly ghosts behind the new one for about a
       second when switching between `MainScreen`/`SettingsScreen`/`PermissionsScreen`** (user
-      report, 2026-08-23). Not reproduced or root-caused — no emulator or device in this sandbox,
-      and static review found nothing in the code that should cause it: `MainActivity` switches
-      screens with a plain `when (screen)` inside one `Surface`, no `Crossfade`/`AnimatedContent`,
-      no cross-activity launch, and none of the three screens or `SnoozemoTheme` do I/O or a
-      blocking call in composition that would stall the main thread long enough to leave a stale
-      frame on screen. Ruled out by inspection: `BackHandler` (not the predictive-back-aware
-      `PredictiveBackHandler`) on `PermissionsScreen`/`SettingsScreen`; the notification's content
-      `PendingIntent` already uses `FLAG_ACTIVITY_CLEAR_TOP` so it can't be stacking a second
-      `MainActivity` instance; `SnoozemoTheme` builds a fresh `lightColorScheme()`/`darkColorScheme()`
-      on every recomposition rather than `remember`ing it, which is real but shouldn't fire on a
-      plain screen switch (its only input, `isSystemInDarkTheme()`, doesn't change then) — worth
-      fixing regardless, but not a fit for this symptom. Given targetSdk 36 (Android 16) makes
-      predictive back mandatory, the system's own predictive-back preview during an edge-swipe
-      back gesture is the leading unverified suspect. Needs a real device to actually see the
-      lag before guessing further at a fix.
+      report, 2026-08-23). Still not reproduced — no emulator or device in this sandbox. Two rounds
+      of investigation have ruled out several *specific* mechanisms (Codex, PR #94: this is a
+      correction, not a claim that every software cause is closed — recomposition cost, layout
+      cost, cold-JIT paths, and in-budget wrong-pixel rendering are all still open below):
+      - No animation or layer-caching API is used anywhere in the app at all —
+        `Crossfade`/`AnimatedContent`/`AnimatedVisibility`/`updateTransition`/`animate*AsState`/
+        `graphicsLayer`/`drawWithCache`/`RenderEffect` all return zero matches repo-wide (checked
+        by grep across every `.kt` file, not just `:app`'s `ui` package). `MainActivity` switches
+        screens with a plain, unanimated `when (screen)` inside one `Surface`; none of the three
+        screens or `SnoozemoTheme` do I/O or a blocking call in composition that could stall the
+        main thread long enough to leave a stale frame on screen — `SnoozemoTheme`'s own
+        `remember`-less `ColorScheme` rebuild (real, but only fires when dark mode itself changes,
+        never on a screen switch) was found and fixed in PR #93 regardless.
+      - **Predictive back is not the cause, and this is no longer a guess.** Read the actual
+        `androidx.activity:activity-compose:1.13.0` sources (`BackHandler.kt`,
+        `internal/BackHandlerCompat.kt`, `internal/BackHandlerDispatcherCompat.kt`, pulled from
+        `maven.google.com` rather than assumed): `BackHandler` *does* register through the new
+        `NavigationEventDispatcher`, which does participate in the platform's predictive-back
+        protocol — but `BackHandlerCompat.onBackStarted`/`onBackProgressed` are no-ops unless a
+        subclass overrides them, and `ComposeBackHandler` (what `BackHandler` actually
+        instantiates) only overrides `onBackCompleted`. A callback that intercepts back this way
+        keeps the current `Activity` from ever finishing, and the system draws no preview of its
+        own for a back press an app callback fully owns — the predictive-back *scale-and-reveal*
+        chrome is a courtesy the app opts into by implementing the progress callbacks itself, not
+        something the platform imposes on an intercepting callback that ignores them. So this
+        rules out predictive back for the back-gesture direction, and a forward tap
+        (`onOpenSettings`/`onOpenPermissions`) never touches the back dispatcher at all. The
+        `PredictiveBackHandler` alternative API this file previously suggested trying would change
+        nothing here for the same reason.
+      - `androidx.compose.ui:ui:1.12.0`'s release notes (fetched from
+        `developer.android.com/jetpack/androidx/releases/compose-ui`) carry no bug fix or known
+        issue about stale frames, ghosting, or `AndroidComposeView` layer invalidation anywhere
+        near this version.
+      - The notification's content `PendingIntent` already uses `FLAG_ACTIVITY_CLEAR_TOP`, so it
+        can't be stacking a second `MainActivity` instance either.
+
+      An OLED-panel or OEM-chrome explanation was floated here and then dropped (maintainer,
+      2026-08-23: "I haven't seen this in any other app") — a fair challenge, since a real
+      hardware or system-skin effect would show up across every app on the phone, not just this
+      one, and it doesn't. **What actually is different about this app is the build it's tested
+      as**: `app/build.gradle.kts`'s `release` block turns R8 off outright ("R8 stays off for now
+      — a separate follow-up once there is a device to verify a shrunk build against", Phase 6
+      below), so *every* build this pipeline can currently produce — debug or release, Firebase or
+      local — is unminified and unshrunk, and carries no *app-specific* baseline profile of its
+      own (Codex, PR #94: Compose's own library code ships with a default profile baked into its
+      AARs regardless — the gap here is app code, `MainScreen`/`SettingsScreen`/`PermissionsScreen`
+      and their hot paths, never being AOT-hinted, not Compose itself running fully uncompiled).
+      That is a real, well-documented source of visibly slower recomposition/layout than a typical
+      installed app ever shows a user, because a normal Play-Store app on the same phone is
+      R8-shrunk and often ships its own profile too — a different performance class entirely,
+      unrelated to Compose itself being at fault. This fits "not in any other app" far better than
+      a hardware artifact would: most other apps on the phone are either not Compose, or are optimized release builds
+      from the store, or both, while every Snoozemo build tested so far is neither. **Still needs a
+      device to confirm**, and profiling is still the way in — but now pointed at a sharper
+      question than "is this a real frame or a display artifact": `adb shell dumpsys gfxinfo
+      <package> reset` immediately before reproducing one tap, then `adb shell dumpsys gfxinfo
+      <package> framestats` right after — `framestats` is a ring buffer of the last ~120 frames,
+      not a live capture of "the exact tap" (Codex, PR #94), so without resetting first an
+      unrelated earlier miss can be mistaken for this one. A miss there would show one of these
+      screens actually missing its
+      frame deadline on an unoptimized build — that's the timing question, and timing is all it
+      answers: `framestats` reports per-stage pipeline timestamps (input, animation, layout/measure,
+      draw, sync, GPU work), not which stage or which composable is responsible (Codex, PR #94:
+      `framestats` alone can't attribute a miss to Compose/layout specifically). Attributing a miss
+      to a stage needs a Compose-aware system trace (Android Studio's System Trace/Perfetto with
+      composition tracing enabled); Layout Inspector's Recomposition Counts is neither of these —
+      it reports recompose/skip *frequency*, not cost, so a cheap composable recomposing often can
+      outrank an expensive one that recomposes rarely (Codex, PR #94, twice now on this same tool:
+      it doesn't measure elapsed time and doesn't attribute cost either) — it's for spotting
+      excessive recomposition as a candidate cause, never for confirming or localizing a slow one;
+      only a trace's own per-composable timing does that. `<package>`
+      is `app.snoozemo.debug` for a locally-built `assembleDebug` install (Codex, PR #94:
+      `app/build.gradle.kts`'s debug block adds the `.debug` suffix, so plain `app.snoozemo` reads
+      an uninstalled or co-installed-release package and returns no relevant frames) — `app.snoozemo`
+      itself only for a `play`/`direct` release build. And if the reading comes back slow,
+      **that makes R8 an experiment to run, not yet a fix to declare** (Codex, PR #94): a slow
+      frame shows only that something missed its budget, not that shrinking is what would have
+      saved it — plenty of slow-frame causes (excessive recomposition from unstable parameters, a
+      genuinely expensive layout pass, a cold-JIT code path) can persist despite R8 rather than
+      being resolved by it (Codex, PR #94: R8's inlining and simplification can still touch these
+      paths, so "unaffected" overclaims what a slow `framestats` reading alone would show — the
+      point is that a slow reading doesn't confirm shrinking *would* fix it, not that shrinking
+      *can't*). Confirm with an R8-on/R8-off comparison, or a trace that actually attributes the
+      delay to code shrinking changes, before pulling the Phase 6 follow-up forward on the
+      strength of a slow `framestats` reading alone. A fast result there narrows the field a different way — it rules out a slow
+      composition/layout pass, but `framestats` and HWUI's profile bars measure frame *duration*,
+      not frame *contents*, so they cannot on their own clear a defect that renders wrong pixels
+      within budget. A fast result still needs actual pixel-level evidence — a screen recording
+      (`adb shell screenrecord`) slowed down around the tap — before concluding the cause sits
+      outside this codebase. Every timing or hierarchy tool this entry considered (`framestats`,
+      HWUI's profile bars, a Perfetto/system trace, Android Studio's Layout Inspector) records
+      duration, events, or a view/recomposition snapshot, never a replayable sequence of rendered
+      pixels (Codex, PR #94, across three rounds catching each one in turn) — a recording is the
+      only one of these that can actually show the ghost after it's gone.
 - [x] **`MainScreen` shows the current snooze's status** (maintainer, 2026-08-23) — the comment
       left on the screen split above suggested this needed presence tracking (Phase 3) first;
       it didn't, since `ActiveSnooze.mode`, `.placeName` and `.remaining()` are already populated on
