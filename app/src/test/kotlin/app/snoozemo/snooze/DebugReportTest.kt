@@ -142,24 +142,54 @@ class DebugReportTest {
     // --- the privacy floor (docs/PRIVACY.md, "The debug log") ---
 
     @Test
-    fun `never carries a raw coordinate, a full SSID, or a place name`() {
-        // Realistic-looking fixture values for everything the floor bans —
-        // none of these are parameters buildDebugReportPayload even accepts,
-        // which is the structural guarantee this test exists to pin: there
-        // is no field here for the previous-run/recent-log text to smuggle
-        // one through undetected either.
-        val bannedCoordinate = "37.422476,-122.084250"
+    fun `the structured header has no field for a coordinate, SSID, or place name`() {
+        // The genuinely structural guarantee: every parameter this section
+        // is built from is a typed grant/boolean/enum-ish value (SPEC.md
+        // §4.6's build/device/state facts) — there is no string parameter
+        // here a coordinate, an SSID, or a typed place name could ever be
+        // passed through as. This says nothing about previousRun/recentLog,
+        // which is a different channel with a different guarantee — see the
+        // test below (Codex, PR #89: the previous version of this test
+        // asserted against fixtures that never contained a banned value in
+        // the first place, so it passed regardless of whether the code was
+        // right).
+        val bannedCoordinate = "0.000000,0.000000"
         val bannedSsid = "TheSmithFamilyHomeWiFi"
         val bannedPlaceName = "123 Fictional Street Apartment 4B"
 
-        val payload = payload(
-            previousRun = "distance=12m accuracy=8m fix=captured",
-            recentLog = listOf("departure test: distance=40m accuracy=15m"),
-        )
+        val payload = payload(previousRun = null, recentLog = emptyList())
 
         assertFalse(payload.contains(bannedCoordinate))
         assertFalse(payload.contains(bannedSsid))
         assertFalse(payload.contains(bannedPlaceName))
+    }
+
+    @Test
+    fun `previousRun and recentLog are forwarded verbatim — their floor is a call-site discipline, not this function's`() {
+        // Unlike the structured header above, buildDebugReportPayload does
+        // no filtering of these two: whatever SnoozeDebugLog's own call
+        // sites throughout the app choose to record is what a share
+        // includes, unredacted. That is by design — this is a formatter,
+        // not a sanitizer — but it means the coordinate/SSID/place-name
+        // floor for these two channels is held entirely upstream, by every
+        // SnoozeDebugLog.event(...) call site never writing one, not by
+        // anything checked here. Exercising a realistic banned-looking
+        // value and asserting it *does* survive is what actually pins that
+        // contract, rather than a fixture that never contained one testing
+        // nothing (Codex, PR #89).
+        val previousRunLeak = "left previous run at 0.000000,0.000000"
+        val recentLogLeak = "connected to TheSmithFamilyHomeWiFi"
+
+        val payload = payload(previousRun = previousRunLeak, recentLog = listOf(recentLogLeak))
+
+        assertTrue(
+            "previousRun is forwarded verbatim — this function performs no redaction",
+            payload.contains(previousRunLeak),
+        )
+        assertTrue(
+            "recentLog is forwarded verbatim — this function performs no redaction",
+            payload.contains(recentLogLeak),
+        )
     }
 
     private fun payload(
