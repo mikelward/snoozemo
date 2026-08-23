@@ -18,6 +18,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import app.snoozemo.core.PolicyAccess
+import app.snoozemo.core.TrackingMode
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -27,6 +28,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import java.time.Duration
 
 /**
  * The home screen in each state it can actually be in, light and dark.
@@ -60,6 +62,8 @@ class MainScreenScreenshotTest {
                 tileAdded = null,
                 tileBannerDismissed = true,
                 snoozing = null,
+                trackingMode = null,
+                remaining = null,
                 lastOutcome = null,
                 onOpenPermissions = {},
                 onOpenSettings = {},
@@ -88,6 +92,8 @@ class MainScreenScreenshotTest {
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = false,
+                trackingMode = null,
+                remaining = null,
                 lastOutcome = null,
                 onOpenPermissions = { opened++ },
                 onOpenSettings = {},
@@ -120,6 +126,8 @@ class MainScreenScreenshotTest {
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = false,
+                trackingMode = null,
+                remaining = null,
                 lastOutcome = null,
                 onOpenPermissions = {},
                 onOpenSettings = {},
@@ -141,6 +149,8 @@ class MainScreenScreenshotTest {
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = false,
+                trackingMode = null,
+                remaining = null,
                 lastOutcome = null,
                 onOpenPermissions = {},
                 onOpenSettings = {},
@@ -167,6 +177,8 @@ class MainScreenScreenshotTest {
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = false,
+                trackingMode = null,
+                remaining = null,
                 lastOutcome = null,
                 onOpenPermissions = {},
                 onOpenSettings = {},
@@ -188,6 +200,8 @@ class MainScreenScreenshotTest {
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = true,
+                trackingMode = TrackingMode.FULL,
+                remaining = Duration.ofHours(3).plusMinutes(40),
                 lastOutcome = null,
                 onOpenPermissions = {},
                 onOpenSettings = {},
@@ -200,6 +214,57 @@ class MainScreenScreenshotTest {
 
         composeRule.onNodeWithText("Snooze").assertIsNotEnabled()
         composeRule.onNodeWithText("End snooze").assertIsEnabled()
+        composeRule.onNodeWithText("Ends when you leave").assertExists()
+        composeRule.onNodeWithText("3h 40m left").assertExists()
+    }
+
+    @Test
+    fun `a Wi-Fi-only snooze says so`() {
+        capture("main-screen-snoozing-wifi-only.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.WIFI_ONLY,
+                remaining = Duration.ofMinutes(45),
+                lastOutcome = null,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Wi-Fi only").assertExists()
+        // Under an hour left, so the minutes-only form — no "0h" leaking in.
+        composeRule.onNodeWithText("45m left").assertExists()
+    }
+
+    @Test
+    fun `a duration-only snooze says so`() {
+        capture("main-screen-snoozing-timer-only.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.DURATION_ONLY,
+                remaining = Duration.ofHours(8),
+                lastOutcome = null,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Timer only").assertExists()
+        composeRule.onNodeWithText("8h 0m left").assertExists()
     }
 
     @Test
@@ -213,6 +278,8 @@ class MainScreenScreenshotTest {
                 tileAdded = false,
                 tileBannerDismissed = false,
                 snoozing = false,
+                trackingMode = null,
+                remaining = null,
                 lastOutcome = null,
                 onOpenPermissions = {},
                 onOpenSettings = {},
@@ -245,6 +312,8 @@ class MainScreenScreenshotTest {
                 tileAdded = false,
                 tileBannerDismissed = false,
                 snoozing = false,
+                trackingMode = null,
+                remaining = null,
                 lastOutcome = null,
                 settingsFailure = SetupRowId.TILE,
                 onOpenPermissions = {},
@@ -267,6 +336,8 @@ class MainScreenScreenshotTest {
                 tileAdded = false,
                 tileBannerDismissed = true,
                 snoozing = false,
+                trackingMode = null,
+                remaining = null,
                 lastOutcome = null,
                 onOpenPermissions = {},
                 onOpenSettings = {},
@@ -288,6 +359,8 @@ class MainScreenScreenshotTest {
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = false,
+                trackingMode = null,
+                remaining = null,
                 lastOutcome = "Couldn't snooze",
                 onOpenPermissions = {},
                 onOpenSettings = {},
@@ -311,6 +384,8 @@ class MainScreenScreenshotTest {
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = false,
+                trackingMode = null,
+                remaining = null,
                 lastOutcome = null,
                 onOpenPermissions = {},
                 onOpenSettings = { opened++ },
@@ -327,11 +402,14 @@ class MainScreenScreenshotTest {
 
     @Test
     fun `a short window still reaches the way out`() {
-        // Landscape, which is the constrained case: title, banner and three
-        // controls do not fit, and an unscrolled column clips whatever is
-        // last — which is `End snooze`. Manual exit is "always available,
-        // always instant" (SPEC.md §7), so losing it to a window shape is the
-        // one failure this screen may not have.
+        // Landscape, which is the constrained case: title, banner, the status
+        // line and three controls do not fit, and an unscrolled column clips
+        // whatever is last — which is `End snooze`. Manual exit is "always
+        // available, always instant" (SPEC.md §7), so losing it to a window
+        // shape is the one failure this screen may not have. The status line
+        // is included (not null) so this covers the worst case honestly —
+        // real content, not an empty stand-in that scrolls easier than the
+        // real screen ever will.
         RuntimeEnvironment.setQualifiers("w914dp-h411dp-420dpi")
 
         capture("main-screen-short-window.png", widthPx = 2400, heightPx = 1080) {
@@ -340,6 +418,8 @@ class MainScreenScreenshotTest {
                 tileAdded = true,
                 tileBannerDismissed = true,
                 snoozing = true,
+                trackingMode = TrackingMode.FULL,
+                remaining = Duration.ofHours(3).plusMinutes(40),
                 lastOutcome = null,
                 onOpenPermissions = {},
                 onOpenSettings = {},

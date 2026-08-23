@@ -20,6 +20,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.snoozemo.R
 import app.snoozemo.core.PolicyAccess
+import app.snoozemo.core.TrackingMode
+import app.snoozemo.tile.R as TileR
+import java.time.Duration
 
 /**
  * The home screen: the Arm/Release control the tile mirrors, plus whatever
@@ -37,6 +40,13 @@ fun MainScreen(
     tileAdded: Boolean?,
     tileBannerDismissed: Boolean,
     snoozing: Boolean?,
+    // Both null unless a snooze is actually running and its record has been
+    // read — the same "unread is not zero" discipline every other field on
+    // this screen follows. Passed as the raw values rather than the whole
+    // `ActiveSnooze`, so a screenshot test can supply them without a store or
+    // a clock reading behind them.
+    trackingMode: TrackingMode?,
+    remaining: Duration?,
     lastOutcome: String?,
     // Only SetupRowId.TILE is ever relevant here — this banner has no other
     // capability to fail — but the type is shared with the other screens'
@@ -94,10 +104,14 @@ fun MainScreen(
                     .takeIf { settingsFailure == SetupRowId.TILE },
             )
         }
-        // TODO(TODO.md Phase 3/4): show the current snooze's place and
-        // countdown here once presence tracking lands — today the ongoing
-        // notification is the only place that state renders.
-        //
+        // The record's own place name is left out on purpose: it is always
+        // literally "Here" today (`ActiveSnooze.DEFAULT_PLACE_NAME`) since
+        // saved/named places are unbuilt (`TODO.md`, "Saved places"), and the
+        // ongoing notification doesn't show it either, so surfacing it here
+        // first would only read as filler.
+        if (snoozing == true && trackingMode != null && remaining != null) {
+            SnoozeStatus(trackingMode, remaining)
+        }
         // Gated behind access being granted, same as the old DebugScreen —
         // not a design call this PR makes. TODO.md still tracks "how and when
         // to show Snooze/End snooze" as open (maintainer, 2026-08-23): both
@@ -136,6 +150,52 @@ fun MainScreen(
         lastOutcome?.let {
             Text(text = it, style = MaterialTheme.typography.bodySmall)
         }
+    }
+}
+
+/**
+ * What the running snooze is doing right now: what would end it, and how
+ * long until the cap does regardless.
+ *
+ * Not a live per-second countdown — [remaining] is recomputed once a minute
+ * while `MainActivity` is visible ([MainActivity.now], Codex, PR #87), which
+ * matches this line's own display granularity (`Xh Ym left`) rather than a
+ * timer that would repaint faster than the text can change. The ongoing
+ * notification already owns the true live countdown
+ * (`SnoozeNotifications.showOngoing`'s chronometer); a per-second clock here
+ * too would just be a second one to keep in sync with it for no benefit the
+ * user doesn't already have.
+ *
+ * The mode line reuses the ongoing notification's own copy
+ * (`ongoing_ends_when_you_leave` / `ongoing_wifi_only` / `ongoing_timer_only`)
+ * and the remaining-time line reuses the tile's (`tile_remaining_hours` /
+ * `tile_remaining_minutes`, `:tile` module) — the same two facts stated the
+ * same way everywhere they already appear, rather than a third phrasing.
+ */
+@Composable
+private fun SnoozeStatus(mode: TrackingMode, remaining: Duration) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = when (mode) {
+                TrackingMode.FULL -> stringResource(R.string.ongoing_ends_when_you_leave)
+                TrackingMode.WIFI_ONLY -> stringResource(R.string.ongoing_wifi_only)
+                TrackingMode.DURATION_ONLY -> stringResource(R.string.ongoing_timer_only)
+            },
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(text = remainingText(remaining), style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+/** The same hours/minutes split and copy [app.snoozemo.tile.TileSnapshot] formats the tile's countdown from. */
+@Composable
+private fun remainingText(remaining: Duration): String {
+    val minutes = remaining.toMinutes().coerceAtLeast(1)
+    val hours = minutes / 60
+    return if (hours > 0) {
+        stringResource(TileR.string.tile_remaining_hours, hours, minutes % 60)
+    } else {
+        stringResource(TileR.string.tile_remaining_minutes, minutes)
     }
 }
 

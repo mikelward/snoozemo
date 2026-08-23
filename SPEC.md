@@ -346,6 +346,18 @@ The tile still sets its label and subtitle for the presentations that show them;
 load-bearing. This is what principle 2 ("never fail silently") depends on in practice, and it means
 the fallback of folding the remaining time into the tile label (§10) is a nicety, not a fix.
 
+**`MainScreen` mirrors the same two facts while the app is open** (landed 2026-08-23): the mode
+(`Ends when you leave` / `Wi-Fi only` / `Timer only`) and the remaining time, reusing the exact
+copy the notification and the tile already render rather than a third phrasing for the same state.
+Not a live per-second countdown, unlike the notification's own chronometer — it repaints on a
+record change and on a once-a-minute tick while the activity is visible, which matches the
+display's own granularity (`Xh Ym left`) rather than repainting faster than the text can change. A
+per-second clock here too would just be one more thing to keep in sync with the notification's for
+no benefit the user doesn't already have. The record's own place name is left out of it, on
+purpose: it is always literally `"Here"` today (saved/named places are unbuilt — `TODO.md`, "Saved
+places"), and the notification doesn't show it either, so surfacing it here first would only read
+as filler.
+
 **The active tile inverts, and that is the platform's doing, not ours.** A Quick Settings tile
 cannot specify a background: the system draws it from `Tile.state`, so `STATE_ACTIVE` while a
 snooze runs gives the same light-when-off / dark-when-on treatment as the system's own Do Not
@@ -358,9 +370,13 @@ light-on-dark, and it has to hold up both ways.
 Two consequences for the icon itself. It carries the armed/inactive distinction alone, so the
 tinted-silhouette treatment (§4.2's icon note) has to read at a glance in both states with no text
 beside it — and in both tints, which is the sharper half of that requirement, since a mark can
-survive one and fill in on the other. And the countdown is *only* in the notification, so a snooze whose notification the user
-has never granted permission for has no visible status at all — which is why `POST_NOTIFICATIONS`
-is requested rather than merely declared (§5.2).
+survive one and fill in on the other. And the countdown is *only* in the notification **as ambient
+status** — visible without the user doing anything, which is what a status bar icon and an ongoing
+card both are. `MainScreen` mirrors the same two facts now (landed 2026-08-23, above), but only
+while the user has already opened the app to look; a snooze whose notification the user has never
+granted permission for still has no *ambient* status at all — nothing on screen, nothing in the
+status bar — until they think to check. That gap is why `POST_NOTIFICATIONS` is requested rather
+than merely declared (§5.2), not the mere existence of a countdown somewhere in the app.
 
 ### 4.3 Notification (while armed)
 

@@ -647,6 +647,43 @@ the point is that every other line of the app is worthless if it isn't true.
         There is no persisted "onboarding complete" flag: nothing forces the interstitial once DND
         access is granted, and there's no cost to asking again on a later cold start if it still
         isn't (D7, "fail open" — never trap, never nag past what the state actually requires).
+- [x] **`MainScreen` shows the current snooze's status** (maintainer, 2026-08-23) — the comment
+      left on the screen split above suggested this needed presence tracking (Phase 3) first;
+      it didn't, since `ActiveSnooze.mode`, `.placeName` and `.remaining()` are already populated on
+      every record today, duration-only snoozes included. **Landed**: `MainScreen` shows the mode
+      line (`Ends when you leave` / `Wi-Fi only` / `Timer only`) and the remaining time whenever a
+      snooze is running, reusing the exact copy the ongoing notification and the tile already use
+      (`SPEC.md` §4.3) rather than inventing a third phrasing. Not a live per-second countdown — it
+      repaints on a record change and on a once-a-minute tick while the activity is visible
+      (Codex, PR #87), matching the display's own granularity rather than the notification's own
+      chronometer, which stays the one live countdown. Place name is deliberately left out: it is
+      always literally `"Here"` today (saved/named places are unbuilt — "Saved places" below), and
+      the notification doesn't show it either, so surfacing it here first would only read as
+      filler — it will render for free once saved places land, no `MainScreen` change needed then.
+      - **To-do (maintainer, 2026-08-23): reconsider ticking every second instead of once a minute.**
+        Not a correctness question — a faster tick is fine either way — purely whether the display
+        should ever show seconds, motivated by matching the ongoing notification's own chronometer
+        rather than reading coarser than it. Minutes-only stands until that's revisited (maintainer,
+        same day: "minutes is fine").
+      - **To-do (maintainer, 2026-08-23): reconsider the `Wi-Fi only` copy itself.** Maybe
+        `Ends when disconnected from {network}` reads better than the generic mode label — it
+        names the actual condition rather than the mechanism. Raised alongside a further idea
+        worth exploring together: **stating every end condition at once as a list**, rather than
+        one mode label standing in for whichever single condition currently governs. Maintainer's
+        sketch:
+        ```
+        Ends
+        * when you leave
+        * when {network} disconnects
+        * when {event name} ends
+        * in 1 hour
+        ```
+        Interacts with two things already tracked separately: `FULL`/`WIFI_ONLY`/`DURATION_ONLY`
+        are today an internal capability ceiling that collapses to one label, not necessarily the
+        shape user-facing copy should take, and the "{event name} ends" line is **calendar-seeded
+        end times** above — unbuilt, waiting on the Play declarations. Not started: needs new copy
+        (proposed in chat, approved, then translated — *Translations*) and touches the
+        notification/tile too if adopted there, not just `MainScreen`.
 - [ ] **Only one of `Snooze` / `End snooze` should show at a time** (maintainer, 2026-08-22;
       still open 2026-08-23 — the screen split above deliberately didn't touch this). Today both
       buttons render together whenever DND access is granted (`MainScreen.kt`, after the split) —
