@@ -221,6 +221,17 @@ the point is that every other line of the app is worthless if it isn't true.
       with `setOnlyAlertOnce(true)` — only the first post of the card alerts, later ones update
       quietly — and covered by `SnoozeNotificationsChannelTest` asserting
       `Notification.FLAG_ONLY_ALERT_ONCE`.
+- [x] **Two more gaps in the reapply logic** (Codex, PR #92). (1) `reapplyDndBypassOnce()`'s
+      `isNotificationPolicyAccessGranted` read was itself unguarded — called from `armWithCap()`
+      right after the zen rule has already gone `STATE_TRUE`, so an escaping exception there would
+      unwind the caller before the record was written or the notification posted, over a phone
+      DND had already silenced. Wrapped the same way every other binder call in this class is,
+      treating a failed read as "not granted" so a later attempt retries. (2) the one
+      `armWithCap()` attempt is not the only place `showStuckRule()` can fire from — release
+      escalation can retry across several alarm-scheduled rungs before giving up — so a failed
+      first attempt left nothing to retry the bypass before the one alert meant to survive a stuck
+      rule finally posts. `showStuckRule()` now makes its own `reapplyDndBypassOnce()` attempt
+      immediately before posting; cheap and a no-op once it has already succeeded.
 - [x] `SnoozeController` state machine (IDLE / ARMING / ARMED / CHECKING / RELEASED) as
       plain Kotlin over an injected clock — the unit-test surface for everything that
       follows. Covers the three invariants directly: the cap fires (and can't be made to

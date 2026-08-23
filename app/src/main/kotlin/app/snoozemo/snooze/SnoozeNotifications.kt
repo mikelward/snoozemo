@@ -164,7 +164,19 @@ class SnoozeNotifications(private val context: Context) {
      */
     fun reapplyDndBypassOnce() {
         if (bypassReapplyAttempted) return
-        if (manager?.isNotificationPolicyAccessGranted != true) return
+        // Contained like every other read here, and with more at stake than
+        // most: called from `armWithCap()` right after the zen rule has
+        // already gone STATE_TRUE, so an escaping exception here would not
+        // just skip a convenience — it would unwind the caller before the
+        // record is written and the ongoing notification posted, over a
+        // phone DND has already silenced (Codex, PR #92). Treated the same as
+        // "not granted": the guard stays false, so a later arm or
+        // reconciliation retries.
+        val granted = runCatching { manager?.isNotificationPolicyAccessGranted }.getOrElse {
+            Log.e(TAG, "Reading policy access failed while reapplying the DND bypass; a later attempt retries.", it)
+            null
+        }
+        if (granted != true) return
         runCatching { createChannels() }.fold(
             onSuccess = { bypassReapplyAttempted = true },
             onFailure = {
@@ -403,9 +415,19 @@ class SnoozeNotifications(private val context: Context) {
      * The copy says *may* deliberately. All that is known is that a write was
      * refused; whether the rule is actually silencing the phone is exactly what
      * could not be determined.
+     *
+     * One more [reapplyDndBypassOnce] attempt first, deliberately, even though
+     * `armWithCap` already tried once on the way in: this can post well after
+     * that — release escalation can retry across several alarm-scheduled
+     * rungs before giving up — and if that one attempt failed, nothing else
+     * on the failed-arm path would ever retry it before the one alert meant
+     * to survive a stuck rule posts on a channel that still doesn't bypass
+     * (Codex, PR #92). Cheap and self-limiting: a no-op once it has already
+     * succeeded.
      */
-    fun showStuckRule(): Boolean =
-        post(
+    fun showStuckRule(): Boolean {
+        reapplyDndBypassOnce()
+        return post(
             ID_STUCK,
             android.app.Notification.Builder(context, CHANNEL_URGENT)
                 .setSmallIcon(TileR.drawable.ic_tile_snooze)
@@ -472,6 +494,7 @@ class SnoozeNotifications(private val context: Context) {
                 )
                 .build(),
         )
+    }
 
     /** Takes the stuck-rule card down; it has its own id, so this is separate. */
     fun cancelStuckRule() {

@@ -129,4 +129,25 @@ class SnoozeNotificationsChannelTest {
         notifications.reapplyDndBypassOnce()
         assertTrue(SnoozeNotifications.bypassReapplyAttemptedForTest())
     }
+
+    /**
+     * `armWithCap`'s one attempt is not the only place `showStuckRule()` can
+     * fire from — release escalation can retry across several alarm-scheduled
+     * rungs before giving up — so a failed first attempt would otherwise
+     * leave nothing to retry the bypass before the one alert meant to survive
+     * a stuck rule finally posts (Codex, PR #92).
+     */
+    @Test
+    fun `showStuckRule makes its own reapply attempt before posting`() {
+        val notifications = SnoozeNotifications(appContext)
+        // Explicit, not assumed: the guard only ever advances while access is
+        // actually held, so this test states its precondition rather than
+        // relying on whatever a fresh shadow's default happens to be.
+        shadowOf(manager).setNotificationPolicyAccessGranted(true)
+        assertFalse(SnoozeNotifications.bypassReapplyAttemptedForTest())
+
+        notifications.showStuckRule()
+
+        assertTrue(SnoozeNotifications.bypassReapplyAttemptedForTest())
+    }
 }
