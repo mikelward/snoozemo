@@ -1593,7 +1593,23 @@ the point is that every other line of the app is worthless if it isn't true.
       lock's critical sections are already brief field writes and it's reentrant; `nextAttempt()`
       itself still never touches `deliveryLock`. No dedicated regression test: the race needs a
       window between two statements with no injectable seam, and now that both writes are atomic
-      under one lock, that window no longer exists to construct a test against.
+      under one lock, that window no longer exists to construct a test against. A thirty-third
+      round brought two more, both fixed. `foregroundLocationLabel` checked a confirmed coarse
+      grant before checking whether the fine check had itself failed, so a failed fine check next
+      to a confirmed coarse grant read as "granted (coarse only)" — a label that asserts fine is
+      confirmed absent, which a failed check never confirmed; fixed with a distinct branch ahead of
+      it ("granted (coarse); fine check failed"), leaving "coarse only" for a genuinely confirmed
+      fine denial. And a cold start with Do Not Disturb access still missing routes straight to
+      `PermissionsScreen` (`applyAccess`'s one-time onboarding routing) — the actual first-landed
+      screen in that case, not `MainScreen` — so a crash from before that same cold start went
+      unseen until the user finished onboarding and navigated back on their own, contradicting
+      `SPEC.md` §4.6's own justification for the banner's placement ("the screen the user actually
+      lands on"). Fixed by rendering the same `CrashBanner` on `PermissionsScreen` too, wired to the
+      same `crashPending`/`shareFailed`/`dismissFailed` state, rather than suppressing the
+      onboarding route — that would strand a user with both a missing permission and a pending
+      crash on the disabled Arm screen instead of the interstitial that actually fixes the missing
+      permission. `SPEC.md` updated to describe the real landing-screen behavior; new
+      `PermissionsScreenScreenshotTest` coverage.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
