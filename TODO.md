@@ -201,6 +201,17 @@ the point is that every other line of the app is worthless if it isn't true.
       actually succeeded, so a transient IPC failure on the first attempt would have skipped
       every later retry for the rest of that process; `reapplyDndBypassOnce()` now marks itself
       done only inside the success branch.
+- [x] **"Didn't throw" was still the wrong signal for success** (Codex, PR #92). The fix above
+      marked the guard done whenever `createNotificationChannel` didn't throw — but a caller
+      lacking `ACCESS_NOTIFICATION_POLICY` gets a normal return with `bypassDnd` silently kept
+      false, which is exactly the platform behavior this whole feature exists to work around. An
+      arm attempted before the user has ever granted access reaches `armWithCap`'s call to
+      `reapplyDndBypassOnce()` just as surely as a granted one does, and the old check would have
+      marked that "done" too — permanently, since nothing else clears the guard.
+      `reapplyDndBypassOnce()` now checks `NotificationManager.isNotificationPolicyAccessGranted`
+      directly before attempting, and only marks itself done when that's true. Covered by
+      `SnoozeNotificationsChannelTest`, using Robolectric's `setNotificationPolicyAccessGranted`
+      to simulate the denied case the shadow otherwise can't reach on its own.
 - [x] `SnoozeController` state machine (IDLE / ARMING / ARMED / CHECKING / RELEASED) as
       plain Kotlin over an injected clock — the unit-test surface for everything that
       follows. Covers the three invariants directly: the cap fires (and can't be made to

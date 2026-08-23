@@ -83,4 +83,28 @@ class SnoozeNotificationsChannelTest {
         assertTrue(manager.getNotificationChannel(SnoozeNotifications.CHANNEL_URGENT).canBypassDnd())
         assertFalse(manager.getNotificationChannel(SnoozeNotifications.CHANNEL_ENDED).canBypassDnd())
     }
+
+    /**
+     * `createNotificationChannel` not throwing is not the same as the
+     * platform having actually honored `bypassDnd` — a caller lacking
+     * `ACCESS_NOTIFICATION_POLICY` gets a normal return with the flag
+     * silently kept false, which an arm attempted before the user ever
+     * granted access reaches just as surely as a granted one does (Codex,
+     * PR #92). Robolectric's shadow does not simulate that gating (see the
+     * class doc), so what this asserts is the guard itself: a no-access
+     * attempt must not consume it, or a later, access-holding attempt would
+     * never run.
+     */
+    @Test
+    fun `reapplyDndBypassOnce does not consume its guard while access is denied`() {
+        val notifications = SnoozeNotifications(appContext)
+        shadowOf(manager).setNotificationPolicyAccessGranted(false)
+
+        notifications.reapplyDndBypassOnce()
+        assertFalse(SnoozeNotifications.bypassReapplyAttemptedForTest())
+
+        shadowOf(manager).setNotificationPolicyAccessGranted(true)
+        notifications.reapplyDndBypassOnce()
+        assertTrue(SnoozeNotifications.bypassReapplyAttemptedForTest())
+    }
 }
