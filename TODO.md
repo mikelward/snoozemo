@@ -1257,7 +1257,7 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Sixteen rounds of
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Seventeen rounds of
       Codex findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
@@ -1350,7 +1350,20 @@ the point is that every other line of the app is worthless if it isn't true.
       `disableGeneration` counter, bumped by every toggle before dispatching to the sink; a
       callback whose captured generation no longer matches was superseded by a later toggle and
       discards its own outcome instead of applying it — also applied to `install()`'s own startup
-      retry, for the same race against an early manual toggle.
+      retry, for the same race against an early manual toggle. Two more, round seventeen: a crash
+      marker can land without its content ever reaching disk (process death between the marker
+      write and the run's own content write), so a pinned `crash.log` could read back blank —
+      `wasCrash` reads true from the marker alone, but the old blank check treated it the same as
+      a genuinely empty previous run, letting a successful share consume the only evidence a crash
+      happened at all without ever having carried it — fixed by folding "a pinned crash whose file
+      exists but reads back blank" into the same omission check `pinConsumeSafe` and the payload's
+      own warning line already used (the wording was also generalized from "could not be read in
+      time" to "could not be included in this report", since it no longer names a single cause);
+      and `startShare`/`copyToClipboard` each already catch their own exception internally and
+      return false normally, so `share()`'s outer `runCatching` around each seam never actually
+      saw it — leaving a landed clipboard copy with a chooser that silently never opened, or a
+      failed copy, with no diagnostic explanation anywhere — fixed by logging inside each
+      function's own `runCatching`, where the exception is still visible.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
