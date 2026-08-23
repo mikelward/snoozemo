@@ -1,10 +1,12 @@
 package app.snoozemo.snooze
 
+import android.app.NotificationManager
 import android.content.Intent
 import app.snoozemo.R
 import app.snoozemo.core.Anchor
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenOutcome
+import app.snoozemo.ui.MainActivity
 import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -13,6 +15,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 
 /**
  * The arm path's half of anchor capture: what the service starts, what it does
@@ -63,6 +66,17 @@ class SnoozeServiceArmCaptureTest {
         // notification is up while the anchor is still being captured.
         assertTrue(shadeShows(stringOf(R.string.ongoing_title)))
         assertEquals(TrackingMode.DURATION_ONLY, ActiveSnoozeStore(appContext).load()?.mode)
+    }
+
+    @Test
+    fun `tapping the ongoing notification opens the app`() {
+        startService(SnoozeService.ACTION_ARM)
+
+        val ongoing = shadowOf(appContext.getSystemService(NotificationManager::class.java))
+            .allNotifications
+            .last { shadowOf(it).contentTitle?.toString() == stringOf(R.string.ongoing_title) }
+        val opens = shadowOf(ongoing.contentIntent).savedIntent
+        assertEquals(MainActivity::class.java.name, opens?.component?.className)
     }
 
     @Test
