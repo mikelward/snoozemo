@@ -1952,11 +1952,15 @@ class MainActivity : ComponentActivity() {
      * same row as the sibling Simmo repo's own Settings screen). Not routed
      * through [openSettings]: that reports a failure under a `SetupRowId` row
      * this link isn't one of, and a missing browser is the same "nothing to
-     * crash Settings over" case Simmo's own equivalent swallows silently.
+     * crash Settings over" case Simmo's own equivalent swallows silently — a
+     * genuinely ignored failure, so it still gets a debug-level log rather
+     * than a silent fall-through (AGENTS.md, *Error handling*).
      */
     private fun openPrivacyPolicy() {
         runCatching {
             startActivity(Intent(Intent.ACTION_VIEW, getString(R.string.settings_privacy_url).toUri()))
+        }.onFailure {
+            Log.d(TAG, "No activity resolved the privacy policy link.", it)
         }
     }
 
