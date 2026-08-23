@@ -627,34 +627,53 @@ the point is that every other line of the app is worthless if it isn't true.
 
 `SPEC.md` §4.4 is explicitly provisional — treat its mockups as a starting point.
 
-- [ ] **Rename `DebugScreen`** (maintainer, 2026-08-22). It stopped being a debug-only screen
-      once the tile arrived in Phase 2 — `MainActivity`'s own KDoc already calls it "onboarding
-      and settings" — but the composable, its file, and every `debug_*` string ID (`debug_arm`,
-      `debug_release`, …) still carry the old name. Low-risk, mechanical, and touches a lot of
-      call sites (every `*ScreenshotTest`), so it's its own PR rather than folded into
-      unrelated work.
-- [ ] **Split the permission-setup rows from the Arm/Release view** (maintainer, 2026-08-22):
-      right now the DND, notification, and location setup rows and the `Snooze`/`End snooze`
-      buttons all live on the one screen, so a user who is only part-way through granting
-      permissions still sees the arm control sitting right there — confusing, and arguably
-      inviting a tap into a state that isn't fully set up. Related to the rename above (both are
-      about this screen no longer being the single undifferentiated thing it was in Phase 1):
-      worth deciding together whether setup becomes a real one-time onboarding flow shown only
-      until every row is resolved, or a permanently reachable settings screen separate from a
-      leaner main view that's just the tile-equivalent Arm/Release control. Not designed yet —
-      this is a placeholder for that design work, not a decision.
-- [ ] **Only one of `Snooze` / `End snooze` should show at a time** (maintainer, 2026-08-22):
-      today both buttons render together whenever DND access is granted (`MainActivity.kt`'s
-      `DebugScreen`) — `Snooze` merely disables itself while a snooze is running, but
-      `End snooze` is *always* shown and enabled, even when `snoozing == false`. That's not an
-      oversight: the comment above it cites `SPEC.md` §7 — manual exit is "always available,
-      always instant," and `endSnooze` is idempotent, so a stale or unread `snoozing` value must
-      never be what blocks the one guaranteed way to un-silence the phone. Hiding `End snooze`
-      whenever `snoozing == false` would reintroduce exactly that risk if the reading is ever
-      wrong. Needs a real design answer, not a blind toggle — options include showing `End
-      snooze` only when `snoozing` is `true` **or** still `null` (unknown defaults to showing the
-      safety net, confidently-false hides it), or a single button that relabels itself by state.
-      Whatever's chosen has to preserve the idempotent-and-always-reachable guarantee.
+- [x] **Split the permission-setup rows from the Arm/Release view** (maintainer, 2026-08-22).
+      **Landed** (maintainer, 2026-08-23) as three screens rather than the two the placeholder
+      above weighed: `MainScreen` (the tile-equivalent Arm/Release control, a banner for the one
+      required-and-missing permission, the tile banner, Settings entry), `PermissionsScreen` (the
+      interstitial — the DND/notification/location setup rows, reached automatically the first
+      time DND access reads as missing, or from Settings any time after), and `SettingsScreen`
+      (the permanent tile row, the debug-log switch, the Permissions entry). Resolves the rename
+      below as a side effect — the `DebugScreen` composable and file are gone, replaced by these
+      three named ones and a shared `SharedComponents.kt` — but the `debug_*` string IDs still
+      carry the old name; see below. **Does not** resolve "only one of `Snooze`/`End snooze`
+      should show at a time" below — deliberately: `MainScreen`'s buttons keep the exact gating
+      the old `DebugScreen` had (both render only once `access == PolicyAccess.GRANTED`), so this
+      split stays scoped to moving the screens apart and doesn't also make that design call.
+      - **The routing decision**: `MainActivity` auto-navigates to `PermissionsScreen` once, the
+        first time a fresh DND-access reading comes back missing — not on every later revocation,
+        which lands on `MainScreen`'s banner instead (`SPEC.md` §8.2's own recovery path, so a
+        snooze that loses access mid-run doesn't yank the user off whatever they were doing).
+        There is no persisted "onboarding complete" flag: nothing forces the interstitial once DND
+        access is granted, and there's no cost to asking again on a later cold start if it still
+        isn't (D7, "fail open" — never trap, never nag past what the state actually requires).
+- [ ] **Only one of `Snooze` / `End snooze` should show at a time** (maintainer, 2026-08-22;
+      still open 2026-08-23 — the screen split above deliberately didn't touch this). Today both
+      buttons render together whenever DND access is granted (`MainScreen.kt`, after the split) —
+      `Snooze` merely disables itself while a snooze is running, but `End snooze` is *always* shown
+      and enabled, even when `snoozing == false`. That's not an oversight: the comment above it
+      cites `SPEC.md` §7 — manual exit is "always available, always instant," and `endSnooze` is
+      idempotent, so a stale or unread `snoozing` value must never be what blocks the one
+      guaranteed way to un-silence the phone. Hiding `End snooze` whenever `snoozing == false`
+      would reintroduce exactly that risk if the reading is ever wrong. Needs a real design
+      answer, not a blind toggle — options include showing `End snooze` only when `snoozing` is
+      `true` **or** still `null` (unknown defaults to showing the safety net, confidently-false
+      hides it), a single button that relabels itself by state, or leaving both gated behind
+      `access == GRANTED` as they are today. Whatever's chosen has to preserve the
+      idempotent-and-always-reachable guarantee.
+- [ ] **Reconsider granted-status text as a single word app-wide** (maintainer, 2026-08-23).
+      `PermissionsScreen` currently uses two — `Granted` for Do Not Disturb access (paired with its
+      `Grant` action, since that one is a Settings toggle, not a runtime prompt) and `Allowed` for
+      notifications and location (paired with `Allow`). The maintainer asked whether this should
+      instead be one word everywhere; checked the sibling Simmo repo for a precedent and found none
+      to follow — Simmo's `GrantRow` (`AGENTS.md`'s citation for this row's shape) says `Done`, not
+      `Granted` or `Allowed`, and Simmo has no permissions *settings* screen of its own to compare
+      against, only its one-time onboarding flow. Deferred rather than guessed at; needs a real
+      answer, not a coin flip between two similarly-defensible options.
+- [ ] **Rename `debug_arm`, `debug_release` and the other `debug_*` string IDs**
+      (maintainer, 2026-08-22; narrowed 2026-08-23 now the composable rename above has landed).
+      Low-risk and mechanical, but its own PR rather than folded into unrelated work, per the
+      original note.
 - [ ] The two rows (`until <time>` seeded at now + 1 h rounded to the half hour, and
       `until I leave`), with `−` / `+` in 30-minute steps, floored at 30 min from now and
       ceilinged at the 8 h backstop.

@@ -317,8 +317,14 @@ jobs:
       # The `play` flavor only. The screens are flavor-agnostic — the split is
       # below `PresenceMonitor` (SPEC.md §3.4) — so recording both would render
       # identical pixels twice and race to write the same files.
-      - name: Run app screen screenshot tests
-        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.DebugScreenScreenshotTest" -Proborazzi.test.record=true
+      - name: Run main screen screenshot tests
+        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.MainScreenScreenshotTest" -Proborazzi.test.record=true
+
+      - name: Run permissions screen screenshot tests
+        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.PermissionsScreenScreenshotTest" -Proborazzi.test.record=true
+
+      - name: Run settings screen screenshot tests
+        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.SettingsScreenScreenshotTest" -Proborazzi.test.record=true
 
       - name: Run edge-to-edge screenshot tests
         run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.EdgeToEdgeScreenshotTest" -Proborazzi.test.record=true
