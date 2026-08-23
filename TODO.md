@@ -800,13 +800,36 @@ the point is that every other line of the app is worthless if it isn't true.
         smaller shift is undetectable. The direct-boot record fixes both at once.
 - [ ] Pre-existing DND: Snoozemo arms on top and, on release, turns off only its own rule
       (`SPEC.md` §5.6).
+- [ ] **Bug: turning off system Bedtime Mode while a Snoozemo snooze is still armed shows every
+      notification** (maintainer, 2026-08-23), when it should stay silenced — Snoozemo's own zen
+      rule is still `STATE_TRUE`, so the platform's composed interruption filter should still be
+      restrictive regardless of what any other rule just did. Needs investigating on a real device
+      (`android.app.AutomaticZenRule`/`NotificationManager` compose multiple active rules by their
+      own logic, not this app's, and the sandbox has no DND-capable emulator) before guessing at a
+      fix — candidates include a stale `policyAccess()`/rule-state read after the Bedtime toggle,
+      Bedtime's own rule taking exclusive ownership of the interruption filter instead of union-ing
+      with Snoozemo's, or a One UI-specific composition quirk (`SPEC.md` §10). Not touched by the
+      screen-split PR that logged this.
 - [ ] **Sharing the debug log** (`SPEC.md` §4.6) — the user-facing half of the Phase 3 log,
       matching the sibling repos: a `Share debug logs` action through the system share sheet with a
       copy-to-clipboard fallback (no `INTERNET`, so the share sheet *is* the transport), and a
       post-crash banner offering to share the crashed run or dismiss it. Only a crash raises the
       banner — an ordinary process death, force-stop, or app update leaves the run shareable without
       nagging. Sizing matters: the payload crosses a Binder transaction twice, and an over-large one
-      fails both silently, so bound it per section and in total.
+      fails both silently, so bound it per section and in total. **Home is `SettingsScreen`**
+      (maintainer, 2026-08-23, once the screen split below landed) — beside the debug-log toggle
+      it already carries, not a new screen of its own.
+- [ ] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
+      (maintainer, 2026-08-23), tentatively labeled `Filters` — lets the user edit which calls,
+      messages, alarms and apps break through Snoozemo's rule, which today is only reachable by
+      finding the rule in system DND settings by hand. Distinct from the DND-access row's
+      `ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS` (that grants the *permission*; this opens the
+      *rule's own* configuration): the real target looks like
+      `NotificationManager.ACTION_AUTOMATIC_ZEN_RULE_SETTINGS` with `EXTRA_AUTOMATIC_ZEN_RULE_ID`
+      (API 30+, no fallback needed — minSdk is 34) and needs `ZenController` to expose the rule id
+      it already holds from `ensureRule()`. Still needs a disabled/hidden state for whenever DND
+      access isn't granted and no rule exists yet. Not touched by the screen-split PR that logged
+      this.
 - [ ] `docs/PRIVACY.md` must describe what the log carries **before** the sharing surface ships —
       that ordering is the rule, not a preference (AGENTS.md, *Privacy*).
 
