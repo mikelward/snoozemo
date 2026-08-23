@@ -1257,8 +1257,8 @@ the point is that every other line of the app is worthless if it isn't true.
       so a share that didn't land keeps the crash log for a retry. Covered by `DebugFileSinkTest`,
       `DebugLoggingTest`, `DebugReportTest` (payload assembly, bounds, and the privacy-floor
       regression `docs/PRIVACY.md` promises), `DebugReportShareTest`, `MainScreenScreenshotTest`
-      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Twelve rounds of Codex
-      findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
+      (the crash banner), and `SettingsScreenScreenshotTest` (the share row). Thirteen rounds of
+      Codex findings on PR #89 landed in the same PR. Six on the crash-pin/dismiss mechanism: a config
       change mid-Share/Dismiss could strand the outcome on the now-dead activity instance — fixed
       with `DebugLogging.watchCrashPinOutcome`/`DebugReport.watchShareOutcome`, mirroring
       `watchSaveOutcome`'s existing single-slot, re-read-the-truth shape, with `crashPending`
@@ -1303,7 +1303,20 @@ the point is that every other line of the app is worthless if it isn't true.
       fixed by splitting it into a genuinely structural test (the header has no string field a
       coordinate/SSID/place name could pass through) and a test that exercises realistic
       banned-looking values in `previousRun`/`recentLog` and documents that those two channels are
-      forwarded verbatim, with the real floor held by `SnoozeDebugLog` call-site discipline.
+      forwarded verbatim, with the real floor held by `SnoozeDebugLog` call-site discipline. Two
+      more, both about a "successful" outcome that quietly wasn't the whole story: a share whose
+      previous-run read timed out or failed left the shared text silently missing whatever it
+      would have shown — a pinned crash included — while still reporting the share as fully
+      successful, indistinguishable from a genuinely empty previous run — fixed by having the
+      payload say so explicitly (`--- Previous run --- (could not be read in time — try Share
+      again)`) instead of rendering the same blank section either way; and turning debug logging
+      off could have storage refuse to delete one or more files, which `deleteEverything()` only
+      logged before still reporting the disable as a clean success — the pinned crash and its
+      banner correctly stayed (`hasPinnedCrash` re-reads the real file), but nothing told the user
+      their delete request only partly landed — fixed by threading the delete's actual result
+      through `DebugFileSink.setEnabled`'s `onDisabled` callback to a new
+      `DebugLogging.lastDisableCleanupFailed`, surfaced on the Settings row distinct from a
+      refused setting save.
 - [x] **A `SettingsScreen` button to the system zen rule's own interruption-filter screen**
       (maintainer, 2026-08-23), labeled `Filters` — lets the user edit which calls, messages,
       alarms and apps break through Snoozemo's rule, which used to be reachable only by finding
