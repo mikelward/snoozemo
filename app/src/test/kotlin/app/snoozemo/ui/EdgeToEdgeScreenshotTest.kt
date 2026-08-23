@@ -241,6 +241,7 @@ class EdgeToEdgeScreenshotTest {
             lastOutcome = null,
             crashPending = false,
                 shareFailed = false,
+                dismissFailed = false,
             onOpenPermissions = {},
             onOpenSettings = {},
             onAddTile = {},

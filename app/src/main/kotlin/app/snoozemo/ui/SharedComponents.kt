@@ -314,6 +314,7 @@ internal fun CrashBanner(
     onShare: () -> Unit,
     onDismiss: () -> Unit,
     shareFailed: Boolean = false,
+    dismissFailed: Boolean = false,
 ) {
     Surface(
         shape = MaterialTheme.shapes.medium,
@@ -342,6 +343,16 @@ internal fun CrashBanner(
             if (shareFailed) {
                 Text(
                     text = stringResource(R.string.setup_debug_log_share_failed),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            // Same reasoning as shareFailed above, for a Dismiss tap the
+            // file layer refused (Codex, PR #89): the pin really is still
+            // there, so the banner staying up is correct — but silently,
+            // which reads as the tap having done nothing at all.
+            if (dismissFailed) {
+                Text(
+                    text = stringResource(R.string.crash_banner_dismiss_failed),
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

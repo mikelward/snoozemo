@@ -301,11 +301,13 @@ class DebugFileSinkTest {
 
         var text: String? = null
         var wasCrash: Boolean? = null
-        sink.readPreviousOrCrash { t, c -> text = t; wasCrash = c }
+        var readSucceeded: Boolean? = null
+        sink.readPreviousOrCrash { t, c, s -> text = t; wasCrash = c; readSucceeded = s }
         sink.awaitIdleForTest()
 
         assertEquals("the crashed run", text)
         assertEquals(true, wasCrash)
+        assertEquals(true, readSucceeded)
     }
 
     @Test
@@ -316,7 +318,7 @@ class DebugFileSinkTest {
 
         var text: String? = null
         var wasCrash: Boolean? = null
-        sink.readPreviousOrCrash { t, c -> text = t; wasCrash = c }
+        sink.readPreviousOrCrash { t, c, _ -> text = t; wasCrash = c }
         sink.awaitIdleForTest()
 
         assertEquals("an ordinary earlier run", text)
@@ -332,7 +334,7 @@ class DebugFileSinkTest {
 
         var text: String? = null
         var wasCrash: Boolean? = null
-        sink.readPreviousOrCrash { t, c -> text = t; wasCrash = c }
+        sink.readPreviousOrCrash { t, c, _ -> text = t; wasCrash = c }
         sink.awaitIdleForTest()
 
         assertEquals("the run that crashed", text)
@@ -344,10 +346,35 @@ class DebugFileSinkTest {
         val sink = startAndAwait()
 
         var text: String? = "not yet read"
-        sink.readPreviousOrCrash { t, _ -> text = t }
+        var readSucceeded: Boolean? = null
+        sink.readPreviousOrCrash { t, _, s -> text = t; readSucceeded = s }
         sink.awaitIdleForTest()
 
         assertEquals(null, text)
+        // Nothing to read is a successful empty read, not a failure — there
+        // was no pinned crash to lose (Codex, PR #89).
+        assertEquals(true, readSucceeded)
+    }
+
+    @Test
+    fun `readPreviousOrCrash reports a failed read of a real pinned crash as unsuccessful`() {
+        // A directory where a file is expected makes readText() throw
+        // without the file having to actually vanish mid-read.
+        dir.mkdirs()
+        file("crash.log").mkdirs()
+        val sink = sink()
+
+        var readSucceeded: Boolean? = null
+        var wasCrash: Boolean? = null
+        sink.readPreviousOrCrash { _, c, s -> wasCrash = c; readSucceeded = s }
+        sink.awaitIdleForTest()
+
+        assertEquals(true, wasCrash)
+        // The pin genuinely exists but couldn't be read — this must not
+        // read the same as an empty file, or a caller would think it's
+        // safe to consume a pin whose crash was never actually included
+        // anywhere (Codex, PR #89).
+        assertEquals(false, readSucceeded)
     }
 
     @Test

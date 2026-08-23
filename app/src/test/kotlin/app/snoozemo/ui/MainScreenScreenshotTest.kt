@@ -67,6 +67,7 @@ class MainScreenScreenshotTest {
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
+                dismissFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -101,6 +102,7 @@ class MainScreenScreenshotTest {
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
+                dismissFailed = false,
                 onOpenPermissions = { opened++ },
                 onOpenSettings = {},
                 onAddTile = {},
@@ -139,6 +141,7 @@ class MainScreenScreenshotTest {
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
+                dismissFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -166,6 +169,7 @@ class MainScreenScreenshotTest {
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
+                dismissFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -198,6 +202,7 @@ class MainScreenScreenshotTest {
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
+                dismissFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -225,6 +230,7 @@ class MainScreenScreenshotTest {
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
+                dismissFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -255,6 +261,7 @@ class MainScreenScreenshotTest {
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
+                dismissFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -284,6 +291,7 @@ class MainScreenScreenshotTest {
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
+                dismissFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -315,6 +323,7 @@ class MainScreenScreenshotTest {
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
+                dismissFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = { added++ },
@@ -353,6 +362,7 @@ class MainScreenScreenshotTest {
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
+                dismissFailed = false,
                 settingsFailure = SetupRowId.TILE,
                 onOpenPermissions = {},
                 onOpenSettings = {},
@@ -381,6 +391,7 @@ class MainScreenScreenshotTest {
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
+                dismissFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -408,6 +419,7 @@ class MainScreenScreenshotTest {
                 lastOutcome = "Couldn't snooze",
                 crashPending = false,
                 shareFailed = false,
+                dismissFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -438,6 +450,7 @@ class MainScreenScreenshotTest {
                 lastOutcome = null,
                 crashPending = true,
                 shareFailed = false,
+                dismissFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -472,6 +485,7 @@ class MainScreenScreenshotTest {
                 lastOutcome = null,
                 crashPending = true,
                 shareFailed = true,
+                dismissFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -488,6 +502,38 @@ class MainScreenScreenshotTest {
     }
 
     @Test
+    fun `a dismiss that fails from the crash banner says so on the banner itself`() {
+        // A refused consume leaves crashPending correctly true (the pin
+        // really is still there) — but silently, which reads as the tap
+        // having done nothing at all (Codex, PR #89).
+        capture("main-screen-crash-banner-dismiss-failed.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                lastOutcome = null,
+                crashPending = true,
+                shareFailed = false,
+                dismissFailed = true,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Snoozemo crashed").assertExists()
+        composeRule.onNodeWithText("Couldn't dismiss — try again").assertExists()
+    }
+
+    @Test
     fun `no crash pinned, no banner`() {
         capture {
             MainScreen(
@@ -500,6 +546,7 @@ class MainScreenScreenshotTest {
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
+                dismissFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},
@@ -529,6 +576,7 @@ class MainScreenScreenshotTest {
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
+                dismissFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = { opened++ },
                 onAddTile = {},
@@ -567,6 +615,7 @@ class MainScreenScreenshotTest {
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
+                dismissFailed = false,
                 onOpenPermissions = {},
                 onOpenSettings = {},
                 onAddTile = {},

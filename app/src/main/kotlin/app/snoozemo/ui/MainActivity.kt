@@ -446,6 +446,24 @@ class MainActivity : ComponentActivity() {
     private var shareWatch: AutoCloseable? = null
 
     /**
+     * Whether the last Dismiss tap on the crash banner was refused by the
+     * file layer. [crashPending] alone already re-syncs correctly on a
+     * refused dismiss (the pin really is still there), but that leaves the
+     * tap looking like it did nothing — this is the explanation (Codex, PR
+     * #89). Applied through [dismissWatch], for the same dead-instance
+     * reason [crashPending] and [shareFailed] are; deliberately distinct
+     * from [shareFailed], since a Share's own refused consume is not
+     * surfaced the same way (`DebugLogging.lastDismissFailed`'s own doc).
+     *
+     * Internal rather than private only so a test can pin it directly, the
+     * same test-only reason [shareFailed] already is.
+     */
+    internal var dismissFailed by mutableStateOf(false)
+
+    /** The handle for the dismiss-outcome watch; see [onStart] and [DebugLogging.watchDismissOutcome]. */
+    private var dismissWatch: AutoCloseable? = null
+
+    /**
      * Which row's Settings trip was refused, if either was.
      *
      * Held per row rather than as one message at the foot of the screen: the
@@ -640,6 +658,7 @@ class MainActivity : ComponentActivity() {
                             lastOutcome = lastOutcome,
                             crashPending = crashPending,
                             shareFailed = shareFailed,
+                            dismissFailed = dismissFailed,
                             settingsFailure = settingsFailure,
                             onOpenPermissions = { openPermissions(Screen.MAIN) },
                             onOpenSettings = { screen = Screen.SETTINGS },
@@ -787,6 +806,12 @@ class MainActivity : ComponentActivity() {
         // (Codex, PR #89). A plain volatile read, not file I/O, so this costs
         // nothing in front of the first frame.
         shareFailed = DebugReport.lastShareFailed
+        // Same shape and same reason as shareWatch/shareFailed just above,
+        // for a Dismiss tap's own refused consume (Codex, PR #89).
+        dismissWatch = DebugLogging.watchDismissOutcome {
+            runOnUiThread { dismissFailed = DebugLogging.lastDismissFailed }
+        }
+        dismissFailed = DebugLogging.lastDismissFailed
     }
 
     /**
@@ -1163,6 +1188,8 @@ class MainActivity : ComponentActivity() {
         crashPinWatch = null
         shareWatch?.close()
         shareWatch = null
+        dismissWatch?.close()
+        dismissWatch = null
     }
 
     override fun onDestroy() {
@@ -1683,11 +1710,15 @@ class MainActivity : ComponentActivity() {
      * Dismisses the crash banner without sharing — consumes the pin directly
      * (SPEC.md §4.6): afterward the run is an ordinary previous run, shareable
      * from the permanent row and rotated away like any other. [crashPinWatch]
-     * applies the result, for the same reason [shareDebugLog] leaves it to
-     * the watch rather than this call's own completion.
+     * and [dismissWatch] apply the result, for the same reason [shareDebugLog]
+     * leaves it to a watch rather than this call's own completion. A refused
+     * consume leaves the pin in place — [crashPinWatch] alone would already
+     * show that correctly, but silently: [dismissFailed] is what tells the
+     * user the tap did something and it didn't work (Codex, PR #89).
      */
     private fun dismissCrash() {
-        DebugLogging.consumeCrashPin {}
+        dismissFailed = false
+        DebugLogging.dismissCrashPin()
     }
 
     /**

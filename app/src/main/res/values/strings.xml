@@ -177,6 +177,13 @@
     <!-- TODO: translate -->
     <string name="crash_banner_dismiss" tools:ignore="MissingTranslation">Dismiss</string>
     <!--
+      A refused Dismiss (Codex, PR #89): the file layer couldn't consume the
+      pin, so the banner stays and the tap needs an explanation rather than
+      looking like it did nothing.
+    -->
+    <!-- TODO: translate -->
+    <string name="crash_banner_dismiss_failed" tools:ignore="MissingTranslation">Couldn\'t dismiss — try again</string>
+    <!--
       The tile banner. The app screen keeps its own snooze button, but the tile
       is the way in (SPEC.md §4.2) — easier, and where people already go to
       silence a phone — so the screen leads with it rather than listing it as

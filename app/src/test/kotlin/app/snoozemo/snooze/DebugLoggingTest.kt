@@ -3,6 +3,7 @@ package app.snoozemo.snooze
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import app.snoozemo.core.SnoozeDebugLog
+import java.io.File
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -120,11 +121,15 @@ class DebugLoggingTest {
     fun `readPreviousOrCrash reads nothing before install`() {
         var text: String? = "not yet read"
         var wasCrash: Boolean? = null
-        DebugLogging.readPreviousOrCrash { t, c -> text = t; wasCrash = c }
+        var readSucceeded: Boolean? = null
+        DebugLogging.readPreviousOrCrash { t, c, s -> text = t; wasCrash = c; readSucceeded = s }
         DebugLogging.awaitIdleForTest()
 
         assertEquals(null, text)
         assertEquals(false, wasCrash)
+        // Nothing before install has run means there is nothing pinned to
+        // miss — reported as a successful (empty) read, not a failed one.
+        assertEquals(true, readSucceeded)
     }
 
     @Test
@@ -214,5 +219,62 @@ class DebugLoggingTest {
 
         assertEquals("the old instance's deferred close must not evict the replacement", 0, firstHeard)
         assertEquals(1, secondHeard)
+    }
+
+    // --- dismissCrashPin / watchDismissOutcome / lastDismissFailed (Codex,
+    // PR #89: a refused Dismiss tap must not look like it did nothing) ---
+
+    @Test
+    fun `dismissCrashPin succeeds when nothing is pinned, before install`() {
+        DebugLogging.dismissCrashPin()
+        DebugLogging.awaitIdleForTest()
+
+        assertFalse(DebugLogging.lastDismissFailed)
+    }
+
+    @Test
+    fun `dismissCrashPin sets lastDismissFailed when the file layer refuses to consume`() {
+        val dir = File(context.cacheDir, "debuglog")
+        dir.mkdirs()
+        File(dir, "current.log").writeText("the run that crashed")
+        File(dir, "current.log.crash").writeText("1")
+        DebugLogging.install(context)
+        DebugLogging.awaitIdleForTest()
+        assertTrue("precondition: rotation pinned the crash", File(dir, "crash.log").exists())
+        // Make both the rename and the copy fallback refuse, the same
+        // fixture DebugFileSinkTest's own refusal test uses.
+        File(File(dir, "previous.log"), "occupied").apply { parentFile!!.mkdirs() }.writeText("x")
+
+        DebugLogging.dismissCrashPin()
+        DebugLogging.awaitIdleForTest()
+
+        assertTrue(DebugLogging.lastDismissFailed)
+        assertTrue("the crash log survives a failed consume", File(dir, "crash.log").exists())
+    }
+
+    @Test
+    fun `watchDismissOutcome fires after dismissCrashPin completes`() {
+        var fired = 0
+        val watch = DebugLogging.watchDismissOutcome { fired++ }
+
+        try {
+            DebugLogging.dismissCrashPin()
+            DebugLogging.awaitIdleForTest()
+        } finally {
+            watch.close()
+        }
+
+        assertEquals(1, fired)
+    }
+
+    @Test
+    fun `closing watchDismissOutcome stops it from hearing later completions`() {
+        var fired = 0
+        DebugLogging.watchDismissOutcome { fired++ }.close()
+
+        DebugLogging.dismissCrashPin()
+        DebugLogging.awaitIdleForTest()
+
+        assertEquals(0, fired)
     }
 }
