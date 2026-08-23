@@ -35,7 +35,8 @@ DND back off.
 - Scheduled DND. The OS already does this well; Snoozemo is the *ad-hoc, place-scoped* case it does
   badly. The calendar is read once, at arm time, only to seed a suggested end time (§4.4) — the app
   never triggers itself from your calendar.
-- Cross-device sync, accounts, or any network I/O. The app declares no `INTERNET` permission.
+- Cross-device sync or accounts. The app declares no `INTERNET` permission today — see §12's
+  correction for why that is not read as a permanent architectural constraint.
 - Wear OS, tablets, foldable-specific UI.
 - Automatic *arming* on arrival at a place (geofence enter). Deliberately deferred — see §14.
 
@@ -2009,8 +2010,21 @@ Play links to. It is written from the manifests and the stores rather than from 
 is a check on the section as much as a restatement of it: a store that keeps something this list
 doesn't mention shows up as a row with no rationale behind it.
 
-- **No `INTERNET` permission.** Nothing can be exfiltrated, and the Play Data Safety declaration is
-  "no data collected, no data shared" — trivially true and trivially auditable.
+- **No `INTERNET` permission, today.** Nothing can be exfiltrated, and the Play Data Safety
+  declaration is "no data collected, no data shared" — trivially true and trivially auditable.
+- **Correction: this is not read as a permanent architectural constraint** (maintainer,
+  2026-08-23). The original framing treated the absence of `INTERNET` as a standing guarantee
+  this app defends — AGENTS.md required any proposal to add it be brought to the user as a
+  distribution decision before landing "in passing". That guarantee is retired: a crash
+  reporter (Crashlytics or similar) is expected in a later change, gated by a user-facing
+  opt-out so a user who wants zero network activity still gets it, on by default so the common
+  case gets reliable crash visibility without an extra step. What does not change is the floor
+  the rest of this section states: location data and the user's own configuration stay off any
+  channel that leaves the device unless the user has been told plainly and agreed — a crash
+  reporter answers "did Snoozemo crash and why", not "where is this person and what did they
+  configure". When it lands, the Play Data Safety declaration, `docs/PRIVACY.md`, and the
+  `AndroidManifest.xml` comment above the (then-present) `INTERNET` permission all need to
+  change together, not just the code.
 - Coordinates never leave the device. The v1 anchor is discarded when the snooze ends.
 - Snooze history (if added) is local, off by default, and clearable.
 - **The debug log (§4.6) is the one sanctioned exception, and a narrow one.** It is on by default
