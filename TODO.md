@@ -372,7 +372,8 @@ the point is that every other line of the app is worthless if it isn't true.
       - **The rows now carry `Grant` / `Allow` / `Add`, and nothing once the capability is in
         place.** Reverses two entries under *Decisions needing review* below — the granted rows
         stay tappable, and the `Opens Settings` / `Tap to allow` copy — both of which the
-        maintainer asked for directly.
+        maintainer asked for directly. (Superseded 2026-08-24: `Grant` is gone too — see
+        `SPEC.md` §5.2.)
       - **Robolectric reports no insets**, so the tests dispatch a set onto the content view: with
         zero insets, a screen that handles them and one that ignores them render identically, and
         the snapshots would have kept passing through the reported bug. `EdgeToEdgeScreenshotTest`
@@ -1079,15 +1080,14 @@ the point is that every other line of the app is worthless if it isn't true.
       hides it), a single button that relabels itself by state, or leaving both gated behind
       `access == GRANTED` as they are today. Whatever's chosen has to preserve the
       idempotent-and-always-reachable guarantee.
-- [ ] **Reconsider granted-status text as a single word app-wide** (maintainer, 2026-08-23).
-      `PermissionsScreen` currently uses two — `Granted` for Do Not Disturb access (paired with its
-      `Grant` action, since that one is a Settings toggle, not a runtime prompt) and `Allowed` for
-      notifications and location (paired with `Allow`). The maintainer asked whether this should
-      instead be one word everywhere; checked the sibling Simmo repo for a precedent and found none
-      to follow — Simmo's `GrantRow` (`AGENTS.md`'s citation for this row's shape) says `Done`, not
-      `Granted` or `Allowed`, and Simmo has no permissions *settings* screen of its own to compare
-      against, only its one-time onboarding flow. Deferred rather than guessed at; needs a real
-      answer, not a coin flip between two similarly-defensible options.
+- [x] **Resolved 2026-08-24 (maintainer) — granted-status text is one word app-wide: `Allow` /
+      `Allowed`.** `PermissionsScreen` used to carry two — `Granted` for Do Not Disturb access
+      (paired with its own `Grant` action, since that one is a Settings toggle, not a runtime
+      prompt) and `Allowed` for notifications and location (paired with `Allow`). The distinction
+      cost the user two words to track and told them nothing they needed to act on the row, so
+      `setup_action_grant` and `setup_dnd_granted` are gone — every row now says `Allow` while
+      something is left to do and `Allowed` once it's in place, whichever mechanism gets it there
+      (`SPEC.md` §5.2).
 - [x] **Rename `debug_arm`, `debug_release` and the other `debug_*` string IDs**
       (maintainer, 2026-08-22; narrowed 2026-08-23 now the composable rename above has landed).
       **Landed** (2026-08-23) as `arm`, `release`, `rule_failed`, `rule_disabled` — topic-named
@@ -1821,18 +1821,13 @@ the point is that every other line of the app is worthless if it isn't true.
           but this is still a real, unverified risk, not a confirmed-safe path. Still worth a
           direct check (or asking in the Play Console Help community) before relying on it for
           the actual submission — a rejected declaration costs a real review cycle.
-- [ ] **Copy candidates for `setup_location_granted`**, in place of "Tracking your place":
-      "Unsnooze when you leave a location", or simply "Allowed" to match the DND and notification
-      rows' granted state. Not applied yet — changing it would churn the screenshot snapshots for
-      a cosmetic tweak; revisit next time this row's copy is touched for another reason, and
-      settle between the two then.
-      - **Also flagged by Codex: on `direct`, this string can render while
-        `DurationOnlyPresenceMonitor` (`presence/src/direct/`) is the only monitor wired up** —
-        `direct` supports only `DURATION_ONLY` until Phase 7's foreground-service monitor lands,
-        so "Tracking your place" claims a capability the build cannot currently provide. Settle
-        together with the copy candidates above: "Allowed" reads true regardless of what the
-        permission is *for*, so switching to it would fix both the `direct` accuracy problem and
-        the copy candidates in one change, without a `direct`-specific special case.
+- [x] **Resolved 2026-08-24 — `setup_location_allowed` (renamed from `setup_location_granted`)
+      reads "Allowed"**, not "Tracking your place": settled by the same app-wide `Allow`/`Allowed`
+      standardization above, not as a standalone copy change. This also closed the `direct`-flavor
+      concern Codex flagged — "Tracking your place" claimed a capability `DurationOnlyPresenceMonitor`
+      (`presence/src/direct/`) cannot provide until Phase 7's foreground-service monitor lands,
+      and "Allowed" reads true regardless of what the permission is *for*, so no `direct`-specific
+      special case was needed.
 - [x] **Stop a transferred snooze from silencing a new phone** (Codex, PR #23) — a
       principle 1 bug and a prerequisite for shipping below. If an OEM transfers
       app-private data despite `allowBackup="false"`, an unexpired `active_snooze` lands on
@@ -2902,7 +2897,8 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
   an open question; they still belong to that later wording pass like the rest of the screen's
   copy. **The action lines were replaced on 2026-08-13** at the maintainer's request: `Opens
   Settings` and `Tap to allow` and `Tap to add` are now the buttons `Grant`, `Allow` and `Add`,
-  and they are absent entirely once the capability is in place.
+  and they are absent entirely once the capability is in place. (Superseded 2026-08-24: `Grant`
+  is gone too — every row now says `Allow`/`Allowed`, `SPEC.md` §5.2.)
 - ~~**The rows stay tappable once granted**~~ — **reversed** (maintainer, 2026-08-13: "if it's
   allowed i'm not sure we need a button at all"). A granted row now shows its state and no control,
   which is the sibling Simmo repo's `GrantRow` shape. The objection recorded here still stands and

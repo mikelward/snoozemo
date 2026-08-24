@@ -133,10 +133,10 @@ fun MainScreen(
         if (snoozing == true && trackingMode != null && remaining != null) {
             SnoozeStatus(trackingMode, remaining)
         }
-        // Gated behind access being granted, same as the old DebugScreen —
+        // Gated behind access being allowed, same as the old DebugScreen —
         // not a design call this PR makes. TODO.md still tracks "how and when
         // to show Snooze/End snooze" as open (maintainer, 2026-08-23): both
-        // buttons rendering only once access is granted keeps this screen's
+        // buttons rendering only once access is allowed keeps this screen's
         // change scoped to the split itself.
         if (access == PolicyAccess.GRANTED) {
             Button(
@@ -259,7 +259,7 @@ private fun RequiredPermissionBanner(onFix: () -> Unit) {
                 horizontalArrangement = Arrangement.End,
             ) {
                 Button(onClick = onFix) {
-                    Text(stringResource(R.string.setup_action_grant))
+                    Text(stringResource(R.string.setup_action_allow))
                 }
             }
         }

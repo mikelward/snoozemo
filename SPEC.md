@@ -736,8 +736,8 @@ sequence is described there rather than repeated here. They sit next to each oth
 screen, so the same rules apply to all three:
 
 - **The action is the target, and it is a verb.** Each capability is one row carrying its name, its
-  state, and — while something is actually left to do — a button that does it: `Grant`, `Allow`,
-  `Add`. Two earlier shapes are ruled out by that sentence. A status line that names a problem and
+  state, and — while something is actually left to do — a button that does it: `Allow`, `Add`. Two
+  earlier shapes are ruled out by that sentence. A status line that names a problem and
   does nothing when tapped is the original defect. Making the *whole row* the target fixed it but
   spent the fix on a second problem: the action then had to be described rather than offered
   (`Opens Settings`, `Tap to add`), which reads as a note about what is going to happen, and a row
@@ -765,16 +765,17 @@ screen, so the same rules apply to all three:
   predates the flag, and closing it needs a device to choose between the candidate signals
   (`TODO.md`) rather than a guess. An unverifiable inference was tried and withdrawn.
 - **A capability that is in place offers nothing.** The button is absent once the row has nothing to
-  fix, so the row is then a statement — `Granted`, `Allowed` — and the screen's remaining controls
-  are the ones that snooze. Turning either capability back *off* is Settings' job, reached
-  deliberately, not a button that looks like setup on a screen where setup is finished. The cost is
-  real and accepted: there is no longer a route from this screen to the Do Not Disturb access
-  toggle for a user who wants to revoke it.
-- **The difference between the two kinds is carried by the verb.** `Grant` for the Settings toggle
-  and `Allow` for a runtime prompt, in the same position on every row. It says less than the old
-  action lines did — the row no longer states that one of them leaves the app — and that is the
-  trade: naming the route is what made the offer read as a description. Whether the shorter form
-  loses something a first-run user needed is a device question (`TODO.md`).
+  fix, so the row is then a statement — `Allowed` — and the screen's remaining controls are the ones
+  that snooze. Turning either capability back *off* is Settings' job, reached deliberately, not a
+  button that looks like setup on a screen where setup is finished. The cost is real and accepted:
+  there is no longer a route from this screen to the Do Not Disturb access toggle for a user who
+  wants to revoke it.
+- **Every row uses the same verb, regardless of mechanism.** `Allow` while something is left to do,
+  `Allowed` once it's in place — for the Settings toggle and a runtime prompt alike. An earlier
+  revision split them (`Grant`/`Granted` for the toggle, `Allow`/`Allowed` for a prompt) to flag
+  which was which; that distinction cost the user two words to track and told them nothing they
+  needed to act on the row, so it was dropped in favor of one consistent pair (revised 2026-08-24,
+  maintainer).
 
 ### 5.3 Rule lifecycle
 

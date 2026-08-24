@@ -107,13 +107,13 @@ enum class SetupRowId {
  * One capability: what it is, how it stands, and — only while something is
  * actually left to do — the button that fixes it.
  *
- * The trailing-button shape is the sibling Simmo repo's `GrantRow`, and the two
+ * The trailing-button shape is the sibling Simmo repo's `AllowRow`, and the two
  * halves of it are load-bearing separately.
  *
  * **A verb, not a route.** The action line used to describe the mechanism —
  * `Opens Settings`, `Tap to add` — which reads as a note about what will happen
- * rather than an offer to do it, and made a granted row look like it still
- * wanted something. `Grant`, `Allow` and `Add` say what the user gets.
+ * rather than an offer to do it, and made an allowed row look like it still
+ * wanted something. `Allow` and `Add` say what the user gets.
  *
  * **Nothing to tap once it is done.** [action] is null when the capability is
  * in place, and the row is then a statement: title and status, no control. A
@@ -175,7 +175,7 @@ internal fun SetupRow(
                 //
                 // And only beside an offer. The message is about a tap, so a
                 // row with nothing left to tap has nothing to report — showing
-                // it there would put `Couldn't open Settings` under `Granted`,
+                // it there would put `Couldn't open Settings` under `Allowed`,
                 // which is the screen contradicting itself about the user's own
                 // phone. The state is cleared as well, in the two places that
                 // learn the capability recovered; this is what keeps the two

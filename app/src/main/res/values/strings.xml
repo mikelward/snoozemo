@@ -20,7 +20,7 @@
     <string name="settings_title" tools:ignore="MissingTranslation">Settings</string>
     <!--
       MainScreen's Do Not Disturb banner. Reuses `setup_dnd_missing` for the body
-      and `setup_action_grant` for the button, so the wording matches the same
+      and `setup_action_allow` for the button, so the wording matches the same
       capability's row on PermissionsScreen exactly; only the title, which a row
       does not need, is its own string.
     -->
@@ -34,42 +34,39 @@
       Each action is a verb the user wants, not the route the tap takes. The old
       copy named the mechanism — `Opens Settings`, `Tap to allow`, `Tap to add`
       — which reads as a description of what is about to happen rather than an
-      offer, and left a granted row still looking like it wanted something.
-      `Grant` and `Allow` keep the one distinction worth carrying: Do Not
-      Disturb access is a Settings toggle the user goes and flips (SPEC.md
-      §5.2), while `POST_NOTIFICATIONS` is a runtime prompt that appears in
-      place.
+      offer, and left an allowed row still looking like it wanted something.
+      Every row says `Allow` and `Allowed`, whether the capability is a runtime
+      prompt or, like Do Not Disturb access, a Settings toggle the user goes
+      and flips (SPEC.md §5.2) — the mechanism differs but the wording doesn't
+      need to.
     -->
     <!-- TODO: translate -->
     <string name="setup_dnd_title" tools:ignore="MissingTranslation">Do Not Disturb access</string>
     <!-- TODO: translate -->
-    <string name="setup_dnd_granted" tools:ignore="MissingTranslation">Granted</string>
+    <string name="setup_dnd_allowed" tools:ignore="MissingTranslation">Allowed</string>
     <!-- TODO: translate -->
     <string name="setup_dnd_missing" tools:ignore="MissingTranslation">Snoozemo can\'t snooze without it</string>
     <!-- TODO: translate -->
     <string name="setup_notifications_title" tools:ignore="MissingTranslation">Notifications</string>
     <!-- TODO: translate -->
-    <string name="setup_notifications_granted" tools:ignore="MissingTranslation">Allowed</string>
+    <string name="setup_notifications_allowed" tools:ignore="MissingTranslation">Allowed</string>
     <!-- TODO: translate -->
     <string name="setup_notifications_missing" tools:ignore="MissingTranslation">Snoozemo can\'t show what a snooze is doing</string>
-    <!-- TODO: translate -->
-    <string name="setup_action_grant" tools:ignore="MissingTranslation">Grant</string>
     <!-- TODO: translate -->
     <string name="setup_action_allow" tools:ignore="MissingTranslation">Allow</string>
     <!--
       The location row (SPEC.md §3.2). Reuses `setup_action_allow` rather than
       a location-specific verb — "Allow" already says what the user gets, and
       a different verb per permission would be a distinction without a
-      difference (AGENTS.md, *Concise copy*). `setup_location_granted` reuses
-      the same "Allowed" wording as notifications for the same reason
-      (AGENTS.md, standardize granted status text to "Granted" or "Allowed"
-      and nothing else): both pair with the `Allow` verb above, unlike DND
-      access's `Grant`/`Granted`, which is the one Settings-toggle permission.
+      difference (AGENTS.md, *Concise copy*). `setup_location_allowed` reuses
+      the same "Allowed" wording as notifications and Do Not Disturb access,
+      for the same reason: every row pairs the `Allow` verb with the `Allowed`
+      status, so the wording never depends on which mechanism grants it.
     -->
     <!-- TODO: translate -->
     <string name="setup_location_title" tools:ignore="MissingTranslation">Location</string>
     <!-- TODO: translate -->
-    <string name="setup_location_granted" tools:ignore="MissingTranslation">Allowed</string>
+    <string name="setup_location_allowed" tools:ignore="MissingTranslation">Allowed</string>
     <!-- TODO: translate -->
     <string name="setup_location_missing" tools:ignore="MissingTranslation">Snoozemo can\'t tell when you\'ve left</string>
     <!--
@@ -98,11 +95,11 @@
       The Filters row (TODO.md Phase 4): a shortcut to the system's own screen
       for editing Snoozemo's rule's interruption filter — which calls,
       messages, alarms and apps still break through. Distinct from
-      `setup_dnd_title`, which grants the *permission* to change zen state at
-      all; this opens the *rule's own* configuration, previously reachable
-      only by finding it in system DND settings by hand. Hidden entirely
-      rather than shown disabled while DND access isn't granted or no rule
-      exists yet (`SettingsScreen`), so there is never a button that opens to
+      `setup_dnd_title`, which allows changing zen state at all; this opens
+      the *rule's own* configuration, previously reachable only by finding it
+      in system DND settings by hand. Hidden entirely rather than shown
+      disabled while DND access isn't allowed or no rule exists yet
+      (`SettingsScreen`), so there is never a button that opens to
       nothing. `setup_action_add` isn't reused here — "Add" describes
       creating something, and this row edits a rule that already exists.
     -->
