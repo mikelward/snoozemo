@@ -55,6 +55,16 @@
     <!-- TODO: translate -->
     <string name="setup_action_allow" tools:ignore="MissingTranslation">Allow</string>
     <!--
+      Every setup row's button says the same visible "Allow" (SPEC.md §5.2), so a
+      screen reader announcing just that word can't tell a user which permission a
+      given button opens once more than one row needs attention at once. This backs
+      the accessible name instead — a formatted resource rather than Kotlin string
+      concatenation, so a translation can reorder the action and the capability name
+      independently of English word order (flagged by Codex on PR #103).
+    -->
+    <!-- TODO: translate -->
+    <string name="setup_row_action_description" tools:ignore="MissingTranslation">%1$s %2$s</string>
+    <!--
       The location row (SPEC.md §3.2). Reuses `setup_action_allow` rather than
       a location-specific verb — "Allow" already says what the user gets, and
       a different verb per permission would be a distinction without a
