@@ -1,8 +1,10 @@
 package app.snoozemo.presence.geofence
 
+import app.snoozemo.core.Anchor
 import app.snoozemo.core.CapabilityLossCause
 import app.snoozemo.core.LocationDuty
 import app.snoozemo.core.PresenceEvent
+import java.time.Instant
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -26,6 +28,43 @@ class GeofencePresenceMonitorTest {
     @Test
     fun `an active check keeps the exit held`() {
         assertFalse(GeofencePresenceMonitor.settlesHeldExit(LocationDuty.ACTIVE, null))
+    }
+
+    @Test
+    fun `a Wi-Fi-only anchor needs the durable recheck alarm`() {
+        // No usable fix, but an SSID to re-read: the watch dies with the
+        // service and there is no fence, so the alarm is the only durable
+        // thing left.
+        assertTrue(
+            GeofencePresenceMonitor.needsWifiRecheck(
+                Anchor(capturedAt = Instant.EPOCH, ssid = "ExampleWifi"),
+            ),
+        )
+    }
+
+    @Test
+    fun `a duration-only anchor never arms the recheck alarm`() {
+        // No fix and no SSID: nothing was ever watching Wi-Fi, so arming a
+        // repeating restore would drain battery for a snooze with nothing to
+        // check — the regression Codex caught on PR #105.
+        assertFalse(GeofencePresenceMonitor.needsWifiRecheck(Anchor(capturedAt = Instant.EPOCH)))
+    }
+
+    @Test
+    fun `an anchor with a usable fix never arms the recheck alarm`() {
+        // A fix means a fence, and the fence is the durable watch — the
+        // recheck alarm is only the no-fence stand-in.
+        assertFalse(
+            GeofencePresenceMonitor.needsWifiRecheck(
+                Anchor(
+                    capturedAt = Instant.EPOCH,
+                    ssid = "ExampleWifi",
+                    lat = 0.0,
+                    lon = 0.0,
+                    fixAccuracyM = 20f,
+                ),
+            ),
+        )
     }
 
     @Test

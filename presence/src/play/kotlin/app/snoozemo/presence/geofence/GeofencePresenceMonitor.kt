@@ -747,6 +747,14 @@ class GeofencePresenceMonitor(
                         // fix — the warm half of §6.10's probe; the cold half
                         // is the starting probe below, taken by the monitor a
                         // backstop restore creates.
+                        // The recheck found a monitor after all, so the
+                        // Wi-Fi watch is already running and already knows
+                        // the association — nothing to read. All this
+                        // firing has left to do is keep the chain alive:
+                        // the alarm is one-shot, and only a monitor arms
+                        // the next one.
+                        is GeofenceObservation.WifiRecheck ->
+                            WifiRecheckAlarm.reconcile(appContext, needsWifiRecheck(anchor))
                         is GeofenceObservation.SanityPoke -> sanityProbe()
                         // A warm wake asking for the fence to be re-attempted
                         // — repair without replacing the collection, so the
@@ -842,6 +850,19 @@ class GeofencePresenceMonitor(
                     // advance `latestEvidenceMs` and so can never make
                     // anything else look stale).
                     SnoozeDebugLog.event("no usable fix on the anchor; geofence not registered")
+                    // And so nothing durable is watching a *Wi-Fi-only*
+                    // snooze: the Wi-Fi watch above dies with the service,
+                    // which Android stops routinely, and there is no fence to
+                    // take over. The recheck alarm is what the fence would
+                    // have been — registered with the platform, outliving the
+                    // process, and restoring a reader on its own schedule.
+                    //
+                    // Gated on an actual Wi-Fi anchor, not merely the
+                    // missing fix (Codex, PR #105; see `needsWifiRecheck`):
+                    // this same no-fix branch also covers a duration-only
+                    // anchor with no SSID, where no `PlatformWifiWatch` was
+                    // built and nothing could ever be re-read.
+                    WifiRecheckAlarm.reconcile(appContext, needsWifiRecheck(anchor))
                     deliver(PresenceSignal.FixUnavailable(readElapsedRealtimeMs()))
                 }
             }
@@ -854,6 +875,14 @@ class GeofencePresenceMonitor(
         // (flagged by Codex on PR #70; the first version released resources
         // but left the collector suspended past the snooze).
         awaitClose {
+            // The teardown that ends this snooze's live watching, said out
+            // loud (AGENTS.md, principle 2). Without it the debug log's
+            // account of a Wi-Fi-only snooze simply stopped — the last entry
+            // was the arm, minutes of silence followed, and nothing recorded
+            // that the Wi-Fi watch had closed with the service or when. That
+            // silence is the log failing to explain the gap it was there to
+            // explain.
+            SnoozeDebugLog.event("presence watch closed; a wake-up restores it")
             active.compareAndSet(handle, null)
             checkingFixes?.close()
             bridge?.close()
@@ -925,6 +954,12 @@ class GeofencePresenceMonitor(
             // it belonged to would misfire over whatever the user arms next
             // — the `persistenceGeneration` retirement above already stops
             // any further write, this is what erases what already landed.
+            // The recheck goes the same way as the fence and the grace
+            // alarm, and only here: a routine service destroy must leave it
+            // standing — it is the one thing that will bring the watch back
+            // — while a snooze that has actually ended must not keep waking
+            // the phone every quarter hour.
+            WifiRecheckAlarm.reconcile(appContext, needed = false)
             CapabilityLossAlarm.cancel(appContext)
             if (!CapabilityLossStore.clear(appContext)) {
                 SnoozeDebugLog.warning("clearing the capability-loss record failed; a stale entry may remain on disk")
@@ -986,6 +1021,24 @@ class GeofencePresenceMonitor(
             duty != LocationDuty.ACTIVE &&
                 event != PresenceEvent.Departed &&
                 event !is PresenceEvent.CapabilityLost
+
+        /**
+         * Whether this snooze needs the durable Wi-Fi recheck alarm
+         * ([WifiRecheckAlarm]) — the platform-registered stand-in for the
+         * geofence a no-fix anchor cannot have.
+         *
+         * Both conditions, not the missing fix alone (Codex, PR #105). The
+         * no-fix branch that skips fence registration also covers a
+         * duration-only anchor with no SSID, where no `PlatformWifiWatch` was
+         * built and there is no association to re-read: arming there would
+         * wake and restore the service every period for a snooze with nothing
+         * to check, each firing re-arming the next — a standing drain with no
+         * departure it could detect. The same `ssid != null` that gates the
+         * watch (D4) and the grace period (`Presence.graceFrom`) gates its
+         * alarm.
+         */
+        internal fun needsWifiRecheck(anchor: Anchor): Boolean =
+            !anchor.hasUsableFix && anchor.ssid != null
 
         /** Serializes claim-and-register with owner-checked removal. */
         private val registrationLock = Any()

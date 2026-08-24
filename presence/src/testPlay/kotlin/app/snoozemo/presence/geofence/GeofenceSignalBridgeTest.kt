@@ -393,4 +393,46 @@ class GeofenceSignalBridgeTest {
         )
     }
 
+    @Test
+    fun `a Wi-Fi recheck with no monitor wakes the service`() {
+        // The whole point of the alarm: no monitor is the state it was armed
+        // against. A Wi-Fi-only snooze whose service Android stopped has
+        // nothing listening for its network going away, so this firing has
+        // to bring a reader back — dropping it the way a poke is dropped
+        // would leave the snooze running to the cap after the user left.
+        var woken = 0
+        GeofenceSignalBridge.installWakeup { woken++ }
+
+        GeofenceSignalBridge.deliver(GeofenceObservation.WifiRecheck(atElapsedRealtimeMs = 7_000))
+
+        assertEquals(1, woken)
+    }
+
+    @Test
+    fun `a Wi-Fi recheck is never replayed to a later attach`() {
+        // It is a wake, not evidence: the restored monitor's own watch reads
+        // the association fresh, so there is nothing here worth holding.
+        GeofenceSignalBridge.installWakeup { }
+        GeofenceSignalBridge.deliver(GeofenceObservation.WifiRecheck(atElapsedRealtimeMs = 8_000))
+
+        val seen = mutableListOf<GeofenceObservation>()
+        GeofenceSignalBridge.attach { seen += it }.close()
+
+        assertTrue("a recheck is a wake, not news to replay", seen.isEmpty())
+    }
+
+    @Test
+    fun `a Wi-Fi recheck never displaces a held exit`() {
+        // An exit's evidence exists nowhere but this slot until a monitor
+        // consumes it, and a recheck's "evidence" is nothing at all — so a
+        // recheck arriving on top of one must leave it exactly where it is.
+        GeofenceSignalBridge.installWakeup { }
+        GeofenceSignalBridge.deliver(GeofenceObservation.Exit(atElapsedRealtimeMs = 9_000))
+        GeofenceSignalBridge.deliver(GeofenceObservation.WifiRecheck(atElapsedRealtimeMs = 9_100))
+
+        val seen = mutableListOf<GeofenceObservation>()
+        GeofenceSignalBridge.attach { seen += it }.close()
+
+        assertEquals(listOf<GeofenceObservation>(GeofenceObservation.Exit(9_000)), seen)
+    }
 }

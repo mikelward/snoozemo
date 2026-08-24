@@ -29,6 +29,16 @@
         <receiver
             android:name="app.snoozemo.presence.geofence.CapabilityLossAlarmReceiver"
             android:exported="false" />
+        <!--
+          The Wi-Fi recheck alarm's target (SPEC.md 6.6): the durable
+          stand-in for a geofence on an anchor that has none. Not exported
+          for the same reason as the receivers above — it restores the
+          service, and nothing outside this app has any business doing that
+          on a schedule it chooses.
+        -->
+        <receiver
+            android:name="app.snoozemo.presence.geofence.WifiRecheckAlarmReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>

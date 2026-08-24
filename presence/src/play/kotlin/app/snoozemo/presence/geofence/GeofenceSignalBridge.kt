@@ -146,6 +146,28 @@ internal object GeofenceSignalBridge {
                 // (SPEC.md §6.10).
                 if (observation is GeofenceObservation.SanityPoke) return
                 if (observation is GeofenceObservation.RepairPoke) return
+                // The one question that must still wake, because no monitor
+                // is the state it was armed against: a Wi-Fi-only snooze
+                // whose service Android stopped has nothing listening for
+                // the anchor's network going away, and this alarm is what
+                // gets a reader running again. Deliberately not put in the
+                // slot on the way past — it is a wake, not evidence, and
+                // the restored monitor's own watch reads the association
+                // fresh — so it can neither be replayed at a later attach
+                // nor displace a held exit that is the only record of a
+                // real departure.
+                if (observation is GeofenceObservation.WifiRecheck) {
+                    val recheckWake = onPending
+                    if (recheckWake == null) {
+                        SnoozeDebugLog.warning(
+                            "Wi-Fi recheck arrived with no monitor and no wake-up installed; dropped",
+                        )
+                    } else {
+                        SnoozeDebugLog.event("Wi-Fi recheck arrived with no monitor; waking the service")
+                        recheckWake()
+                    }
+                    return
+                }
                 // Coalesced by rank, not by recency alone: an Exit starts a
                 // confirmation, an Unavailable only lowers the tracking mode,
                 // and letting a later availability report erase a held exit

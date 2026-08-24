@@ -1407,6 +1407,26 @@ and they fail independently:
    holding a snooze on an unwatched claim — the fail-open direction. `WIFI_ONLY` is therefore
    a *watched* mode at last: an SSID-only anchor gets a real watch, and a fenced anchor that
    loses location degrades to Wi-Fi rather than to the bare timer.
+   **The watch is in-process, and that needed a durable half** (landed 2026-08-24, from a field
+   report). A `NetworkCallback` lives in a process; this flavor runs no foreground service (§3.4),
+   and Android stops the snooze's ordinary service within about a minute of the app going to the
+   background — so the watch closes with it. A fenced anchor loses nothing, because the fence is
+   registered with the system and outlives the process. An anchor with **no usable fix has no
+   fence**, so its snooze was left with nothing listening at all: the user walked out, the phone
+   moved to mobile data, and nobody noticed until the 30-minute backstop happened to wake — or,
+   deferred in Doze, until the duration cap. Nothing event-driven closes this. Android delivers no
+   implicit Wi-Fi or connectivity broadcast to a manifest receiver, and the `PendingIntent` form of
+   `registerNetworkCallback` corresponds to `onAvailable` only, so there is no durable "this network
+   went away" to subscribe to. The stand-in is therefore a repeating alarm (15 minutes,
+   `setAndAllowWhileIdle`, which tends to fire sooner than the `WorkManager` period Doze defers to
+   a maintenance window) that restores the service and rebuilds the watch to re-read the
+   association — armed only where there is no fence, canceled when the snooze ends, and
+   self-retiring, since only a running monitor arms the next one. For these snoozes §6.6's promise
+   becomes *typically noticed within about 15 minutes, ended 5 minutes later*, where a live watch
+   ends them 5 minutes after the loss itself. **Typically, not guaranteed**: a while-idle alarm's
+   cadence is best-effort like the backstop's — deep Doze, a restricted standby bucket, or OEM
+   battery management can push a firing well past the period — so the duration cap stays the only
+   hard bound, and this shortens the common-case latency rather than bounding the worst case.
 3. **A periodic backstop** — a coarse `WorkManager` check on the order of 15–30 minutes while armed,
    purely to catch a geofence that never fired. Cheap, and it keeps typical staleness to its
    cadence — best-effort, not a hard bound (see below); the duration cap remains the only
@@ -1829,7 +1849,12 @@ not measurements — `TODO.md`'s hardware-verification list says to measure them
 is monitored by a system process using **network location only**, never GPS (§6.10), so an idle
 geofence rides on location work the device is already doing. Our additions are a Wi-Fi network
 callback (event-driven, free) and a 15–30 minute `WorkManager` backstop (a handful of wakeups over a
-4-hour snooze). There is no foreground service and no process of ours running between events — the
+4-hour snooze). **A Wi-Fi-only anchor costs more, and knowingly**: with no fence to outlive the
+process, its snooze also carries the §6.10 recheck alarm at 15 minutes — 16 extra wakeups over a
+4-hour snooze, each a service start and a network-state read, no location request and no radio. That
+is the price of the alternative being a snooze that never ends (principle 1), and it is paid only by
+the degraded anchor: a snooze with a usable fix arms no such alarm. There is no foreground service
+and no process of ours running between events — the
 ongoing notification this flavor does post (§3.4) costs nothing, since a posted notification holds
 no process up and wakes nothing.
 
