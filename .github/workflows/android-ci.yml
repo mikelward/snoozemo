@@ -308,6 +308,13 @@ jobs:
         run: |
           rm -rf app/src/test/snapshots/images
           mkdir -p app/src/test/snapshots/images
+          # The store graphics record outside the snapshot tree, so they need
+          # clearing too -- otherwise a renamed or dropped output stays
+          # committed and the staleness check below reads it as clean. By name
+          # rather than a glob: the store screenshots will live in that
+          # directory too (TODO.md) and are authored assets nothing here
+          # regenerates, as is the README beside them.
+          rm -f docs/play-store/icon-512.png docs/play-store/feature-graphic.png
 
       # One step per screenshot class, and the allow-list is deliberate: a new
       # *ScreenshotTest that isn't listed here records nothing in CI even though
@@ -334,6 +341,12 @@ jobs:
       - name: Run launcher icon screenshot tests
         run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.LauncherIconScreenshotTest" -Proborazzi.test.record=true
 
+      # The Play Store graphics are recorded like a screenshot, into
+      # docs/play-store/ rather than the snapshot tree, so this step is what
+      # keeps them from going stale after a launcher-drawable edit.
+      - name: Run Play Store graphics tests
+        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.PlayStoreGraphicsScreenshotTest" -Proborazzi.test.record=true
+
       - name: Print failing test details
         if: failure()
         run: |
@@ -355,6 +368,22 @@ jobs:
           if [ -n "$(git status --porcelain -- app/src/test/snapshots/images)" ]; then
             git status --porcelain -- app/src/test/snapshots/images
             echo "::error::Recorded screenshots differ from the committed ones; re-record and commit them."
+            exit 1
+          fi
+
+      - name: Fail on stale Play Store graphics
+        # Unlike the UI snapshots above, these are not covered by
+        # `sync-screenshots`: it commits one artifact into one dest-path, and
+        # widening that is a change to a shared, deliberately narrow fork-safe
+        # mechanism rather than a change to this repo. So drift here fails on
+        # every event, including a same-repo PR, and is re-recorded by hand:
+        #   ./gradlew :app:testPlayDebugUnitTest \
+        #     --tests "app.snoozemo.ui.PlayStoreGraphicsScreenshotTest" \
+        #     -Proborazzi.test.record=true
+        run: |
+          if [ -n "$(git status --porcelain -- docs/play-store)" ]; then
+            git status --porcelain -- docs/play-store
+            echo "::error::The Play Store graphics are stale — re-record and commit them."
             exit 1
           fi
 
