@@ -70,4 +70,56 @@ class DeclaredPermissionsTest {
             Manifest.permission.INTERNET in declared,
         )
     }
+
+    @Test
+    fun `nothing can read the advertising ID`() {
+        // Play's Advertising ID declaration is answered "not used"
+        // (docs/play-store-declarations.md). A dependency merging this in makes
+        // that answer false without anyone deciding it — the same failure shape
+        // INTERNET has above, and the same reason to assert it here.
+        assertFalse(
+            "AD_ID would falsify the Advertising ID declaration",
+            "com.google.android.gms.permission.AD_ID" in declared,
+        )
+    }
+
+    @Test
+    fun `the play flavor declares no foreground service type`() {
+        // What Play actually reviews is the *type* — the location type's
+        // approved use cases are the ones SPEC.md §3.3 walks through failing,
+        // and the April 2026 update named geofencing as a non-approved use of
+        // it. So the invariant worth pinning is that no service declares a
+        // type at all, which is why the play build owes no foreground-service
+        // declaration in Play Console.
+        //
+        // Deliberately not asserted: the bare android.permission
+        // .FOREGROUND_SERVICE, which WorkManager merges in and which the app's
+        // own manifests never request. It grants nothing on its own — a
+        // service still needs a declared type to start in the foreground — but
+        // it does mean "the play build declares no foreground service" is true
+        // of Snoozemo's code rather than of the merged manifest.
+        //
+        // Scoped to play: direct is option A (SPEC.md §3.4) and gains a typed
+        // service at Phase 7, where none of this review applies.
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val packageManager = context.packageManager
+        val versionName = packageManager
+            .getPackageInfo(context.packageName, 0).versionName.orEmpty()
+        if (versionName.endsWith("-direct")) return
+
+        val typed = declared.filter {
+            it.startsWith("android.permission.FOREGROUND_SERVICE_")
+        }
+        assertTrue("play must request no typed foreground-service permission, found: $typed", typed.isEmpty())
+
+        val services = packageManager
+            .getPackageInfo(context.packageName, PackageManager.GET_SERVICES)
+            .services
+            .orEmpty()
+        val withType = services.filter { it.foregroundServiceType != 0 }.map { it.name }
+        assertTrue(
+            "play must declare no foregroundServiceType (SPEC.md §3.3), found: $withType",
+            withType.isEmpty(),
+        )
+    }
 }
