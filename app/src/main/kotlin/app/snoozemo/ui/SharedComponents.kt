@@ -26,6 +26,8 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.snoozemo.R
@@ -189,7 +191,20 @@ internal fun SetupRow(
                 }
             }
             action?.let {
-                Button(onClick = onAction, enabled = !actionRunning) { Text(it) }
+                // The visible label is the same "Allow" on every row (SPEC.md
+                // §5.2) — a screen reader announcing that word alone can't
+                // tell a user which permission a given button opens once more
+                // than one row is missing at once (flagged by Codex on PR
+                // #103). The content description carries the capability's own
+                // name instead, without changing what's drawn — from a formatted
+                // string resource, not Kotlin concatenation, so a translation can
+                // reorder the two parts independently of English word order.
+                val actionDescription = stringResource(R.string.setup_row_action_description, it, title)
+                Button(
+                    onClick = onAction,
+                    enabled = !actionRunning,
+                    modifier = Modifier.semantics { contentDescription = actionDescription },
+                ) { Text(it) }
             }
         }
     }

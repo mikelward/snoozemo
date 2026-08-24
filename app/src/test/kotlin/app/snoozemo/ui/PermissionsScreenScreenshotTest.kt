@@ -13,6 +13,7 @@ import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import app.snoozemo.core.LocationPermission
@@ -96,6 +97,35 @@ class PermissionsScreenScreenshotTest {
         composeRule.onNodeWithText("Snoozemo can't snooze without it").assertExists()
         composeRule.onNodeWithText("Allow").performClick()
         assertEquals(1, opened)
+    }
+
+    @Test
+    fun `two rows both offering Allow still announce which permission each opens`() {
+        // Same visible word on every row (SPEC.md §5.2), so a screen reader
+        // needs a capability-specific accessible name to tell the buttons
+        // apart — flagged by Codex on PR #103.
+        var openedAccess = 0
+        var openedLocation = 0
+
+        capture {
+            PermissionsScreen(
+                access = PolicyAccess.DENIED,
+                notifications = null,
+                notificationsReachTheUser = true,
+                location = LocationPermission.ASKABLE,
+                settingsFailure = null,
+                onAccessRow = { openedAccess++ },
+                onNotificationsRow = {},
+                onLocationRow = { openedLocation++ },
+                onDone = {},
+            )
+        }
+
+        composeRule.onAllNodesWithText("Allow").assertCountEquals(2)
+        composeRule.onNodeWithContentDescription("Allow Do Not Disturb access").performClick()
+        assertEquals(1, openedAccess)
+        composeRule.onNodeWithContentDescription("Allow Location").performClick()
+        assertEquals(1, openedLocation)
     }
 
     @Test
