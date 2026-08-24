@@ -1924,6 +1924,99 @@ the point is that every other line of the app is worthless if it isn't true.
         (`escalateWithoutService`) *is* covered. Fixing this properly means giving the
         receiver paths in `CapAlarm.kt` an injectable controller the way the service has
         one — worth doing, and larger than this PR.
+- [x] **Store graphics under version control, drawn by Android.** Landed as
+      `docs/play-store/` — the 512 px app icon and the 1,024 × 500 feature graphic,
+      recorded by `PlayStoreGraphicsScreenshotTest`, a Robolectric test with native
+      graphics that draws the adaptive icon's own layers through
+      `Drawable.draw(Canvas)`. That is Skia, the same rasterizer the launcher uses, so
+      the store icon cannot disagree with the launcher icon — it is not an
+      interpretation of the same file, it is the same drawing code. The layers come
+      from `ic_launcher` itself, so repointing the adaptive icon carries the store
+      graphics with it. Both still go up by hand — no API upload path is wired for
+      listing graphics.
+      **Two earlier attempts went the other way and are worth not repeating.** The
+      first transcribed the mark into HTML and screenshotted it with headless Chromium,
+      and the copy then needed policing — allowlists for path, group and root
+      attributes, for CSS selectors and properties, plus rules for quoting, whitespace,
+      comments, multiline and uppercase tags, `!important`, and media queries. Nine
+      rounds of Codex review, roughly three real holes each, no sign of converging.
+      The second removed the copy and wrote a Pillow renderer that parsed the drawables
+      and rasterized them directly; that moved the problem one level down and failed the
+      same way — ten more rounds, every finding genuine, each one a piece of 2D
+      rasterization it had got wrong (fill rules, caps, joins, closed-contour seams,
+      flattening tolerance, gradient projection). Measured against Android on the same
+      drawable it still differed in 1.8% of the icon's pixels, by up to 107/255.
+      **The lesson generalizes:** reading a file is not knowing what a browser will draw
+      from it, and writing a renderer is not knowing whether it matches Android — that
+      is not a question a renderer can answer about itself. Use the platform's, which
+      runs in a JVM unit test and costs no new dependency.
+- [x] **CI notices when the committed store graphics go stale.** The graphics are
+      recorded screenshots now, so the screenshot job regenerates them on every PR that
+      touches the app and a `Fail on stale Play Store graphics` step fails the build if
+      the committed PNGs differ. The font objection that made this awkward is gone with
+      the Pillow renderer — type is drawn by Android from the android-all jar, which is
+      identical on a runner and locally, where "whatever Liberation Sans the machine
+      has" was not.
+      Unlike the UI snapshots, drift here is **not** auto-committed: `sync-screenshots`
+      delegates to `mikelward/ci-commit-artifact`, which commits one artifact into one
+      `dest-path`, and widening that means changing a deliberately narrow fork-safe
+      mechanism shared with other repos rather than changing this one. So a stale
+      graphic fails and is re-recorded by hand. Worth revisiting if the reusable
+      workflow ever takes more than one path. (Simmo auto-commits its own, since it
+      still does that inline.)
+- [ ] **Record the store graphics from the shipping variant, and retire the source-set
+      guard** (Codex, PR #101 — eight findings). The graphics are recorded from
+      `playDebug` while Play ships `playRelease`, so a variant-specific icon override
+      would leave CI green on artwork nobody installs. `no build type redefines the
+      launcher icon` guards that by scanning source sets, and it is a *proxy*: it went
+      through nine reshapings (manifest icon, build-type source sets, transitive
+      resource names, configuration qualifiers, values parsing, namespace parsing,
+      non-`ic_launcher` dependency names, qualifiers beyond `night`, and configuration
+      overrides under `main`) and two of those were only closable structurally — parsing
+      by using a real XML parser, and configuration by rendering in `+night` and
+      comparing plus `no configuration variant redefines the launcher icon`, which
+      refuses a qualified alternative outright rather than enumerating what to render.
+      The transitive-name one was then closed too, by inverting it: rather than
+      following what the icon references, `the icon is built only out of resources named
+      after it` asserts that every reference inside a prefix-named icon resource is
+      itself prefix-named, so the set the scans cover is closed under reference.
+      What remains known-open is two coverage gaps, both recorded rather than patched.
+      Density-qualified alternatives: Android does not require
+      `drawable-hdpi/ic_launcher_foreground.xml` to hold equivalent artwork, and neither
+      rejecting density variants (which breaks the legacy mipmap layout) nor comparing
+      them (image similarity across sizes) is a decision a name scan can make. And the
+      round-icon comparison renders the two icons and compares pixels, which is the color
+      icon only — a round icon aliased to an adaptive icon differing *just* in its
+      `monochrome` layer would compare equal, so a themed launcher could show something
+      the store does not.
+      **The guard has stopped converging** — nine reshapings, each fix drawing the next —
+      so further findings against it belong here rather than in another scan.
+      The real fix is to record from the variant that ships, which makes the whole class
+      moot. It needs release unit tests enabled and `androidx.compose.ui.test.manifest`
+      moved to `testImplementation` first — `app/build.gradle.kts` carries a comment
+      warning that doing it wrong breaks every screenshot test on a variant with no
+      activity to launch. That is a test-configuration change for the whole suite, so it
+      wants doing deliberately rather than inside a store-graphics PR.
+- [ ] **Screenshots are recorded against the PR head, not the merge ref** (Codex,
+      PR #101). The `screenshot-tests` job deliberately checks out the head branch on a
+      same-repo PR, so that what it renders matches what `sync-screenshots` would commit
+      to. The cost is that a change landing on `main` after the branch was cut is not
+      reflected: the PR's recordings — UI snapshots and store graphics alike — can pass
+      while the merged result would differ, and `main`'s own run is then the first thing
+      to fail. Pre-existing and not specific to the store graphics; closing it means
+      rendering against `refs/pull/N/merge` and reconciling that with where the refresh
+      commit lands, which is a change to the fork-safe CI design rather than to any one
+      test. Simmo has the same shape.
+- [x] **The Play icon is cropped to the 72dp a launcher shows.** An adaptive icon's
+      layers are a 108dp canvas of which only the central 72dp is visible, so rendering
+      the whole canvas made the store mark read a third smaller than the installed one.
+      It now crops the way a launcher does, and the mark matches on-device size.
+      typelauncher's renderer does the same. Play still applies its own rounded corners,
+      so the file stays a full opaque square with no mask baked in. Simmo matches.
+- [ ] Approve the store listing copy, then adopt the fastlane metadata layout for it
+      (this doc's "Store listing" section). The feature graphic currently carries
+      `README.md`'s line as a stand-in and follows the approved short description once
+      there is one.
 - [ ] Ship to the internal track — the point at which the declaration outcome becomes
       known.
 

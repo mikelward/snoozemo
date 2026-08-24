@@ -2142,6 +2142,22 @@ recorded the same way and for a sharper reason: the system tints it per tile sta
 be checked in both directions, at its real size, or the failure only appears on a device
 (§4.2).
 
+**Store graphics** — the Play listing's app icon and feature graphic are *recorded*, by the same
+Robolectric-with-native-graphics machinery, drawing the launcher drawables through Android's own
+renderer. They are deliverables rather than assertions, and they live under `docs/play-store/`
+rather than in the snapshot tree, but the reason they are tests is the invariant they enforce: the
+store icon must be *drawn the way a launcher draws it*, by the platform's own rasterizer, so it
+cannot disagree with the installed icon about shapes, strokes or color. Any transcription — an exported PNG, an HTML facsimile, a renderer of our own
+— can be reviewed indefinitely and still differ, because "does this match Android" is not a
+question it can answer about itself; this repo tried the first two and measured the third still
+differing inside the mark. Framing follows from the same principle: the icon is cropped to the part
+of the adaptive layers a launcher actually shows rather than to the whole layer canvas, so the mark
+is the size a person sees on their home screen — the store listing sits beside the installed icon in a user's mind, and
+a mark a third smaller in one than the other reads as carelessness. Recording them in CI is also
+what keeps them fresh: a launcher-drawable
+change with no re-render fails the build rather than leaving artwork that quietly stopped matching
+the app.
+
 Insets are dispatched by the test rather than assumed: Robolectric reports none of its own, so a
 screen that ignores the status bar and one that pads for it render identically, and the defect that
 prompted the edge-to-edge work would have been invisible to every snapshot in the suite. The

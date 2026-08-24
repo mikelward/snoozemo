@@ -72,7 +72,9 @@ drawn faithfully. A curve, a `<clip-path>`, an `evenOdd` cut-out and a nested
 gradient all simply work, because Android supports them; the old renderer refused
 every one. The mark's painted extent, which the feature graphic crops to, is
 *measured* by rendering the layer and finding the non-transparent pixels rather
-than predicted from the geometry.
+than predicted from the geometry — and measured over the launcher-visible region
+only, the same crop the icon takes, so artwork in the bleed cannot reach the
+feature graphic when no launcher would show it.
 
 ## App icon
 
