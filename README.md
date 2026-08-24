@@ -4,7 +4,7 @@ Snoozemo puts your Android phone into Do Not Disturb **until you leave where you
 now**. One tap on a Quick Settings tile arms it; walking away disarms it. No timers to
 guess at, no remembering to turn DND back off.
 
-> Tap Zz. The phone goes quiet. It comes back when you do.
+> Silence your phone until you leave or your meeting ends.
 
 - **What it does and why**: [SPEC.md](SPEC.md)
 - **Plan**: [TODO.md](TODO.md)

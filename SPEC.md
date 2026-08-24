@@ -42,7 +42,7 @@ DND back off.
 
 ### The one-sentence product
 
-> Tap Zz. The phone goes quiet. It comes back when you do.
+> Silence your phone until you leave or your meeting ends.
 
 ---
 

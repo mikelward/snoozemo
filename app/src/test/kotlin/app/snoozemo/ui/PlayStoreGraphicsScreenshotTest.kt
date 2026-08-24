@@ -782,8 +782,8 @@ class PlayStoreGraphicsScreenshotTest {
         val BUILD_TYPE_SOURCE_SETS = listOf("debug", "release", "playDebug", "playRelease")
 
         val TAGLINE = listOf(
-            "Tap Zz. The phone goes quiet.",
-            "It comes back when you do.",
+            "Silence your phone",
+            "until you leave or your meeting ends.",
         )
     }
 }
