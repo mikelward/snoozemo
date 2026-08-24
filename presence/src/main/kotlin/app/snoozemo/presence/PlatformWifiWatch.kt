@@ -116,8 +116,10 @@ internal class PlatformWifiWatch(
             // five-minute grace deadline armed against a snooze in no
             // trouble at all, cleared only if the async callback won the
             // race to correct it. So a Wi-Fi network being present here
-            // means "wait for the callback", and only its *absence* — which
-            // needs no SSID to establish — is reported.
+            // reports `AnchorWifiPresentUnconfirmed` — "wait for the
+            // callback", which makes a due grace deadline defer rather than
+            // resolve — and only its *absence*, which needs no SSID to
+            // establish, is reported as a loss.
             //
             // A separate `runCatching` from the registration above, so a
             // failure here — registered fine, but the read itself refused —

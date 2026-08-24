@@ -50,15 +50,24 @@ internal class AnchorWifiTracker(private val anchorSsid: String) {
      * So it may answer only the question it can actually answer — is there
      * any Wi-Fi at all — and the two answers are not symmetric. *No* Wi-Fi
      * settles the anchor's association on its own: nothing is associated to
-     * anything. Wi-Fi *present* settles nothing, because which network it is
-     * decides everything and this read cannot see it; the callback that owns
-     * every transition is along momentarily, and waiting for it is free.
+     * anything, so it reports a loss. Wi-Fi *present* settles nothing about
+     * *which* network, so it reports [PresenceSignal.AnchorWifiPresentUnconfirmed]
+     * — not an association (it cannot claim the anchor) and not a loss (it
+     * would spuriously escalate a phone sitting on its own network). That
+     * signal only asks a due grace deadline to wait for the callback that
+     * owns every real transition, which is along momentarily.
      *
      * Reading the redacted SSID anyway is what put a five-minute grace
      * deadline on every arm and every restore of a Wi-Fi-only snooze — a
      * loss reported against a phone sitting on its own anchor, cleared only
      * if the callback won the race to correct it, and ending the snooze if
-     * it did not.
+     * it did not. Reporting *nothing* instead left the grace-restore replay
+     * to resolve `Departed` before the callback could speak; the unconfirmed
+     * signal is what makes that replay defer.
+     *
+     * Deliberately does not touch the tracker's own association state: it
+     * makes no claim about the network, so the async callback that follows
+     * is still the first real transition.
      *
      * [readSucceeded] false is a refused read, which fails open to a loss
      * like every other unanswerable question here (D7).
@@ -68,7 +77,11 @@ internal class AnchorWifiTracker(private val anchorSsid: String) {
         anyWifiConnected: Boolean,
         atElapsedRealtimeMs: Long,
     ): PresenceSignal? =
-        if (readSucceeded && anyWifiConnected) null else onWifiSsid(null, atElapsedRealtimeMs)
+        if (readSucceeded && anyWifiConnected) {
+            PresenceSignal.AnchorWifiPresentUnconfirmed(atElapsedRealtimeMs)
+        } else {
+            onWifiSsid(null, atElapsedRealtimeMs)
+        }
 
     fun onWifiSsid(raw: String?, atElapsedRealtimeMs: Long): PresenceSignal? {
         val now = AnchorCapture.sanitizeSsid(raw) == anchorSsid

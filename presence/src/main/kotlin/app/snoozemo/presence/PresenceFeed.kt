@@ -42,6 +42,16 @@ internal class PresenceFeed(
      * already-tested engine behavior with no new branching.
      */
     seedGraceDeadlineMs: Long? = null,
+    /**
+     * Whether the restored deadline has already spent its confirmation
+     * deferral (SPEC.md §6.6; Codex, PR #106). Restored alongside the
+     * deadline so the "defer at most once" bound survives a process death
+     * inside the confirmation window — without it the seed re-grants a
+     * deferral on every restart and the deadline extends indefinitely.
+     * Meaningless without a deadline, so it is ignored when
+     * [seedGraceDeadlineMs] is null.
+     */
+    seedConfirmationDeferralUsed: Boolean = false,
 ) {
 
     /**
@@ -71,6 +81,8 @@ internal class PresenceFeed(
         atAnchorWifi = seedGraceDeadlineMs == null && anchor.ssid != null,
         latestEvidenceMs = seedElapsedRealtimeMs,
         graceDeadlineMs = seedGraceDeadlineMs,
+        // Only meaningful with a deadline to bound; a fresh arm has neither.
+        confirmationDeferralUsed = seedGraceDeadlineMs != null && seedConfirmationDeferralUsed,
     )
 
     /** What the engine currently wants from location (SPEC.md §6.7). */
@@ -94,6 +106,14 @@ internal class PresenceFeed(
      */
     val graceDeadlineMs: Long?
         get() = state.graceDeadlineMs
+
+    /**
+     * Whether the current grace deadline has already spent its one
+     * confirmation deferral (SPEC.md §6.6). The monitor persists this beside
+     * the deadline so the bound survives process death (Codex, PR #106).
+     */
+    val confirmationDeferralUsed: Boolean
+        get() = state.confirmationDeferralUsed
 
     /**
      * Feeds one signal through and returns what to report: the event (usually

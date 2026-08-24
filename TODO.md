@@ -2307,29 +2307,6 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     against this question in the meantime; the engine work already landed stands either way, since
     a snooze that ends on a duration cap needs the same controller.
 
-## Flagged for maintainer decision
-
-- **A grace deadline restored by the grace alarm can end a Wi-Fi-only snooze the user
-  returned to** (Codex, PR #105; open). Sequence: Wi-Fi-only snooze loses its network (grace
-  starts), the process dies during the 5-minute grace, the user rejoins the anchor's Wi-Fi,
-  and the *grace alarm* — not the recheck alarm — is what restores the service. On restore
-  `PlatformWifiWatch`'s synchronous seed runs before the bridge replays the held
-  `GraceElapsed`, and PR #91's ordering assumes that seed delivers a positive association to
-  clear the deadline first. It can't: `ConnectivityManager.getNetworkCapabilities()` redacts
-  the SSID (only a `NetworkCallback` with `FLAG_INCLUDE_LOCATION_INFO` sees it), so the seed
-  can only report Wi-Fi present/absent, never *which* network. The replayed `GraceElapsed`
-  then resolves `Departed` and the async association callback is ignored (`resolved` state).
-  - **Pre-existing, not introduced by this PR**: the old seed returned `AnchorWifiLost` on
-    this path, so it resolved `Departed` on replay too. This PR's redaction-aware seed is
-    neutral on the race, and its new recheck alarm makes the race *less* likely (a recheck
-    firing during the outage while the user is back on Wi-Fi clears the deadline first).
-  - **Direction is fail-open** — it ends a snooze the user returned to, principle 1's safe
-    side, not the never-ends failure.
-  - **The fix is architectural**: defer the `GraceElapsed` replay until the async Wi-Fi
-    callback has reported, and correct the now-false PR #91 ordering comment in
-    `GeofencePresenceMonitor`. That reworks carefully-reasoned restore ordering, so it wants
-    a deliberate call rather than a patch folded into this PR.
-
 ## Decisions needing review
 
 - **The Wi-Fi recheck alarm's period is 15 minutes** (2026-08-24): a Wi-Fi-only anchor has no
@@ -2342,6 +2319,14 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   (`SPEC.md` §9), each a service start and a network-state read, paid only by anchors with no
   usable fix. **The alternative** was leaving it at the backstop's 30 minutes for no extra
   wakeups, or going to 10 for a tighter bound and half again the wakes. Reversible: one constant.
+- **The grace-restore confirmation window is 30 seconds** (`Presence.WIFI_CONFIRM`, 2026-08-24):
+  when the grace alarm restores a Wi-Fi-only snooze, a due deadline defers this long for the async
+  Wi-Fi callback to confirm a return before the snooze ends (`SPEC.md` §6.6). The callback for an
+  already-connected network arrives in well under a second, so 30 s is generous headroom; its only
+  cost is that a user who genuinely left and joined a *different* Wi-Fi waits this much longer for
+  the snooze to end (fail-open, so a small over-hold, never an under-hold). **The alternative** was
+  a tighter 5–10 s (less slack if the restore is slow) or reusing the §6.6 two-fix 30 s gap for
+  symmetry. Reversible: one constant.
 - **Consider an in-app banner (or similar Settings-surfaced cue) for a
   changed hosted privacy policy.** `docs/PRIVACY.md` now rides the docs lane
   and is never forced into release notes (2026-08-22 — see AGENTS.md

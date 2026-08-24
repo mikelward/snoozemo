@@ -66,14 +66,19 @@ class AnchorWifiTrackerTest {
     }
 
     @Test
-    fun `a seed read finding Wi-Fi present concludes nothing`() {
+    fun `a seed read finding Wi-Fi present is unconfirmed, not a loss`() {
         // The regression this pins: the seed read cannot name the network it
         // found, because a direct capabilities read hands back a redacted
         // SSID. Consulting it anyway reported a loss on every arm of a
         // Wi-Fi-only snooze — a five-minute grace deadline against a phone
-        // sitting on its own anchor. Wi-Fi present means "wait for the
-        // callback", which owns every transition and is along momentarily.
-        assertNull(tracker.onSeedRead(readSucceeded = true, anyWifiConnected = true, 1_000))
+        // sitting on its own anchor. Wi-Fi present is `Unconfirmed`: not a
+        // loss (which would spuriously escalate) and not an association (it
+        // cannot claim the anchor), only a note to a due grace deadline to
+        // wait for the callback that owns every transition.
+        assertEquals(
+            PresenceSignal.AnchorWifiPresentUnconfirmed(1_000),
+            tracker.onSeedRead(readSucceeded = true, anyWifiConnected = true, 1_000),
+        )
     }
 
     @Test
@@ -97,15 +102,34 @@ class AnchorWifiTrackerTest {
     }
 
     @Test
-    fun `a seed read that concluded nothing leaves the callback free to associate`() {
-        // The seed staying silent must not cost the association its
-        // transition: the callback's first report is still the first thing
-        // the tracker has been told.
-        assertNull(tracker.onSeedRead(readSucceeded = true, anyWifiConnected = true, 1_000))
+    fun `an unconfirmed seed read leaves the callback free to associate`() {
+        // The unconfirmed seed must not touch the tracker's association
+        // state: it makes no claim about the network, so the callback's first
+        // report is still the first real transition the tracker has been told.
+        assertEquals(
+            PresenceSignal.AnchorWifiPresentUnconfirmed(1_000),
+            tracker.onSeedRead(readSucceeded = true, anyWifiConnected = true, 1_000),
+        )
 
         assertEquals(
             PresenceSignal.AnchorWifiAssociated(2_000),
             tracker.onWifiSsid("\"ExampleWifi\"", 2_000),
+        )
+    }
+
+    @Test
+    fun `an unconfirmed seed read leaves the callback free to report a different network`() {
+        // The other branch of the same guarantee: an unconfirmed seed on a
+        // phone that is on some *other* Wi-Fi must let the callback deliver
+        // the loss that names it, so a due grace deadline resolves.
+        assertEquals(
+            PresenceSignal.AnchorWifiPresentUnconfirmed(1_000),
+            tracker.onSeedRead(readSucceeded = true, anyWifiConnected = true, 1_000),
+        )
+
+        assertEquals(
+            PresenceSignal.AnchorWifiLost(2_000),
+            tracker.onWifiSsid("\"OtherWifi\"", 2_000),
         )
     }
 
