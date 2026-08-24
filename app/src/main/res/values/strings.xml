@@ -12,20 +12,16 @@
       Screen titles and navigation (TODO.md Phase 4's screen split): MainScreen,
       PermissionsScreen (the interstitial) and SettingsScreen.
     -->
-    <!-- TODO: translate -->
-    <string name="permissions_title" tools:ignore="MissingTranslation">Permissions</string>
-    <!-- TODO: translate -->
-    <string name="permissions_done" tools:ignore="MissingTranslation">Done</string>
-    <!-- TODO: translate -->
-    <string name="settings_title" tools:ignore="MissingTranslation">Settings</string>
+    <string name="permissions_title">Permissions</string>
+    <string name="permissions_done">Done</string>
+    <string name="settings_title">Settings</string>
     <!--
       MainScreen's Do Not Disturb banner. Reuses `setup_dnd_missing` for the body
       and `setup_action_allow` for the button, so the wording matches the same
       capability's row on PermissionsScreen exactly; only the title, which a row
       does not need, is its own string.
     -->
-    <!-- TODO: translate -->
-    <string name="dnd_banner_title" tools:ignore="MissingTranslation">Do Not Disturb access needed</string>
+    <string name="dnd_banner_title">Do Not Disturb access needed</string>
     <!--
       The setup rows: a title, how the capability stands, and a button carrying
       the verb — but only while there is something left to do. A row whose
@@ -40,20 +36,13 @@
       and flips (SPEC.md §5.2) — the mechanism differs but the wording doesn't
       need to.
     -->
-    <!-- TODO: translate -->
-    <string name="setup_dnd_title" tools:ignore="MissingTranslation">Do Not Disturb access</string>
-    <!-- TODO: translate -->
-    <string name="setup_dnd_allowed" tools:ignore="MissingTranslation">Allowed</string>
-    <!-- TODO: translate -->
-    <string name="setup_dnd_missing" tools:ignore="MissingTranslation">Snoozemo can\'t snooze without it</string>
-    <!-- TODO: translate -->
-    <string name="setup_notifications_title" tools:ignore="MissingTranslation">Notifications</string>
-    <!-- TODO: translate -->
-    <string name="setup_notifications_allowed" tools:ignore="MissingTranslation">Allowed</string>
-    <!-- TODO: translate -->
-    <string name="setup_notifications_missing" tools:ignore="MissingTranslation">Snoozemo can\'t show what a snooze is doing</string>
-    <!-- TODO: translate -->
-    <string name="setup_action_allow" tools:ignore="MissingTranslation">Allow</string>
+    <string name="setup_dnd_title">Do Not Disturb access</string>
+    <string name="setup_dnd_allowed">Allowed</string>
+    <string name="setup_dnd_missing">Snoozemo can\'t snooze without it</string>
+    <string name="setup_notifications_title">Notifications</string>
+    <string name="setup_notifications_allowed">Allowed</string>
+    <string name="setup_notifications_missing">Snoozemo can\'t show what a snooze is doing</string>
+    <string name="setup_action_allow">Allow</string>
     <!--
       Every setup row's button says the same visible "Allow" (SPEC.md §5.2), so a
       screen reader announcing just that word can't tell a user which permission a
@@ -62,8 +51,7 @@
       concatenation, so a translation can reorder the action and the capability name
       independently of English word order (flagged by Codex on PR #103).
     -->
-    <!-- TODO: translate -->
-    <string name="setup_row_action_description" tools:ignore="MissingTranslation">%1$s %2$s</string>
+    <string name="setup_row_action_description">%1$s %2$s</string>
     <!--
       The location row (SPEC.md §3.2). Reuses `setup_action_allow` rather than
       a location-specific verb — "Allow" already says what the user gets, and
@@ -73,12 +61,9 @@
       for the same reason: every row pairs the `Allow` verb with the `Allowed`
       status, so the wording never depends on which mechanism grants it.
     -->
-    <!-- TODO: translate -->
-    <string name="setup_location_title" tools:ignore="MissingTranslation">Location</string>
-    <!-- TODO: translate -->
-    <string name="setup_location_allowed" tools:ignore="MissingTranslation">Allowed</string>
-    <!-- TODO: translate -->
-    <string name="setup_location_missing" tools:ignore="MissingTranslation">Snoozemo can\'t tell when you\'ve left</string>
+    <string name="setup_location_title">Location</string>
+    <string name="setup_location_allowed">Allowed</string>
+    <string name="setup_location_missing">Snoozemo can\'t tell when you\'ve left</string>
     <!--
       The one disclosure this app shows (SPEC.md §12): a small dialog before
       the background-location prompt specifically, since that is the
@@ -87,20 +72,13 @@
       used for, that it only runs while a snooze is active, and that it never
       leaves the phone.
     -->
-    <!-- TODO: translate -->
-    <string name="location_background_rationale_title" tools:ignore="MissingTranslation">Allow all the time</string>
-    <!-- TODO: translate -->
-    <string name="location_background_rationale_body" tools:ignore="MissingTranslation">Snoozemo uses this to notice you\'ve left even while it\'s closed, so Do Not Disturb turns off on its own. It only runs while a snooze is active, and stays on your phone — nothing is collected or shared.</string>
-    <!-- TODO: translate -->
-    <string name="location_background_rationale_continue" tools:ignore="MissingTranslation">Continue</string>
-    <!-- TODO: translate -->
-    <string name="location_background_rationale_dismiss" tools:ignore="MissingTranslation">Not now</string>
-    <!-- TODO: translate -->
-    <string name="setup_tile_title" tools:ignore="MissingTranslation">Quick Settings tile</string>
-    <!-- TODO: translate -->
-    <string name="setup_tile_missing" tools:ignore="MissingTranslation">The one-tap way to snooze</string>
-    <!-- TODO: translate -->
-    <string name="setup_tile_added" tools:ignore="MissingTranslation">Added</string>
+    <string name="location_background_rationale_title">Allow all the time</string>
+    <string name="location_background_rationale_body">Snoozemo uses this to notice you\'ve left even while it\'s closed, so Do Not Disturb turns off on its own. It only runs while a snooze is active, and stays on your phone — nothing is collected or shared.</string>
+    <string name="location_background_rationale_continue">Continue</string>
+    <string name="location_background_rationale_dismiss">Not now</string>
+    <string name="setup_tile_title">Quick Settings tile</string>
+    <string name="setup_tile_missing">The one-tap way to snooze</string>
+    <string name="setup_tile_added">Added</string>
     <!--
       The Filters row (TODO.md Phase 4): a shortcut to the system's own screen
       for editing Snoozemo's rule's interruption filter — which calls,
@@ -113,70 +91,48 @@
       nothing. `setup_action_add` isn't reused here — "Add" describes
       creating something, and this row edits a rule that already exists.
     -->
-    <!-- TODO: translate -->
-    <string name="setup_filters_title" tools:ignore="MissingTranslation">Filters</string>
-    <!-- TODO: translate -->
-    <string name="setup_filters_status" tools:ignore="MissingTranslation">What still gets through</string>
-    <!-- TODO: translate -->
-    <string name="setup_action_edit" tools:ignore="MissingTranslation">Edit</string>
+    <string name="setup_filters_title">Filters</string>
+    <string name="setup_filters_status">What still gets through</string>
+    <string name="setup_action_edit">Edit</string>
     <!--
       The debug log's switch (SPEC.md §4.6): on by default, and turning it off
       deletes what was kept. Copy is the maintainer's own wording (2026-08-22).
     -->
-    <!-- TODO: translate -->
-    <string name="setup_debug_log_title" tools:ignore="MissingTranslation">Debug log</string>
-    <!-- TODO: translate -->
-    <string name="setup_debug_log_description" tools:ignore="MissingTranslation">Save snooze details to help fix issues</string>
-    <!-- TODO: translate -->
-    <string name="setup_debug_log_save_failed" tools:ignore="MissingTranslation">Couldn\'t save this setting</string>
-    <!-- TODO: translate -->
-    <string name="setup_debug_log_cleanup_failed" tools:ignore="MissingTranslation">Off, but some saved files couldn\'t be deleted</string>
+    <string name="setup_debug_log_title">Debug log</string>
+    <string name="setup_debug_log_description">Save snooze details to help fix issues</string>
+    <string name="setup_debug_log_save_failed">Couldn\'t save this setting</string>
+    <string name="setup_debug_log_cleanup_failed">Off, but some saved files couldn\'t be deleted</string>
     <!--
       The Play update banner (SettingsScreen, `play` flavor only — SPEC.md
       §3.4). Copy mirrors the sibling Simmo and Type Launcher repos' own
       banner wording, adapted for this app's name.
     -->
-    <!-- TODO: translate -->
-    <string name="play_update_banner_title" tools:ignore="MissingTranslation">Update available</string>
-    <!-- TODO: translate -->
-    <string name="play_update_banner_body" tools:ignore="MissingTranslation">Get the latest Snoozemo from Google Play</string>
-    <!-- TODO: translate -->
-    <string name="play_update_banner_update_button" tools:ignore="MissingTranslation">Update</string>
-    <!-- TODO: translate -->
-    <string name="play_update_banner_updating_title" tools:ignore="MissingTranslation">Updating…</string>
-    <!-- TODO: translate -->
-    <string name="play_update_banner_updating_body" tools:ignore="MissingTranslation">Downloading from Google Play</string>
-    <!-- TODO: translate -->
-    <string name="play_update_banner_downloaded_title" tools:ignore="MissingTranslation">Update ready</string>
-    <!-- TODO: translate -->
-    <string name="play_update_banner_downloaded_body" tools:ignore="MissingTranslation">Restart Snoozemo to finish installing</string>
-    <!-- TODO: translate -->
-    <string name="play_update_banner_restart_button" tools:ignore="MissingTranslation">Restart</string>
-    <!-- TODO: translate -->
-    <string name="play_update_banner_restart_failed" tools:ignore="MissingTranslation">Couldn\'t restart to install</string>
-    <!-- TODO: translate -->
-    <string name="play_update_banner_dismiss" tools:ignore="MissingTranslation">Dismiss</string>
+    <string name="play_update_banner_title">Update available</string>
+    <string name="play_update_banner_body">Get the latest Snoozemo from Google Play</string>
+    <string name="play_update_banner_update_button">Update</string>
+    <string name="play_update_banner_updating_title">Updating…</string>
+    <string name="play_update_banner_updating_body">Downloading from Google Play</string>
+    <string name="play_update_banner_downloaded_title">Update ready</string>
+    <string name="play_update_banner_downloaded_body">Restart Snoozemo to finish installing</string>
+    <string name="play_update_banner_restart_button">Restart</string>
+    <string name="play_update_banner_restart_failed">Couldn\'t restart to install</string>
+    <string name="play_update_banner_dismiss">Dismiss</string>
     <!--
       The debug log's share action (SPEC.md §4.6): the share sheet plus a
       clipboard fallback, so a snooze that ended early or never ended can be
       reported. Reuses SetupRow's shape — title, status, a verb button — even
       though sharing is repeatable rather than a capability to fix once.
     -->
-    <!-- TODO: translate -->
-    <string name="setup_debug_log_share_title" tools:ignore="MissingTranslation">Share debug logs</string>
-    <!-- TODO: translate -->
-    <string name="setup_debug_log_share_status" tools:ignore="MissingTranslation">Recent snooze activity, to help fix a bug</string>
-    <!-- TODO: translate -->
-    <string name="setup_debug_log_share_action" tools:ignore="MissingTranslation">Share</string>
+    <string name="setup_debug_log_share_title">Share debug logs</string>
+    <string name="setup_debug_log_share_status">Recent snooze activity, to help fix a bug</string>
+    <string name="setup_debug_log_share_action">Share</string>
     <!--
       Replaces the Share label on both Share affordances while one is
       actually running, so the disabled button says why it is disabled
       rather than just refusing the tap.
     -->
-    <!-- TODO: translate -->
-    <string name="share_in_progress" tools:ignore="MissingTranslation">Sharing…</string>
-    <!-- TODO: translate -->
-    <string name="setup_debug_log_share_failed" tools:ignore="MissingTranslation">Couldn\'t share the debug log</string>
+    <string name="share_in_progress">Sharing…</string>
+    <string name="setup_debug_log_share_failed">Couldn\'t share the debug log</string>
     <!--
       The post-crash banner (SPEC.md §4.6): shown on SettingsScreen only while
       an uncaught-exception run is pinned. Share hands it to DebugReport, which
@@ -184,21 +140,16 @@
       sharing. Either way the pin is gone afterward — SPEC.md §4.6, "sharing
       consumes the pin".
     -->
-    <!-- TODO: translate -->
-    <string name="crash_banner_title" tools:ignore="MissingTranslation">Snoozemo crashed</string>
-    <!-- TODO: translate -->
-    <string name="crash_banner_body" tools:ignore="MissingTranslation">A debug log was saved on your device. Share it to help fix the bug? Nothing is sent until you choose where.</string>
-    <!-- TODO: translate -->
-    <string name="crash_banner_share" tools:ignore="MissingTranslation">Share</string>
-    <!-- TODO: translate -->
-    <string name="crash_banner_dismiss" tools:ignore="MissingTranslation">Dismiss</string>
+    <string name="crash_banner_title">Snoozemo crashed</string>
+    <string name="crash_banner_body">A debug log was saved on your device. Share it to help fix the bug? Nothing is sent until you choose where.</string>
+    <string name="crash_banner_share">Share</string>
+    <string name="crash_banner_dismiss">Dismiss</string>
     <!--
       A refused Dismiss (Codex, PR #89): the file layer couldn't consume the
       pin, so the banner stays and the tap needs an explanation rather than
       looking like it did nothing.
     -->
-    <!-- TODO: translate -->
-    <string name="crash_banner_dismiss_failed" tools:ignore="MissingTranslation">Couldn\'t dismiss — try again</string>
+    <string name="crash_banner_dismiss_failed">Couldn\'t dismiss — try again</string>
     <!--
       The tile banner. The app screen keeps its own snooze button, but the tile
       is the way in (SPEC.md §4.2) — easier, and where people already go to
@@ -212,93 +163,55 @@
       capability. Shorter than the "Don't show again" it replaces, and the more
       common idiom for a dismissal that sticks.
     -->
-    <!-- TODO: translate -->
-    <string name="tile_banner_title" tools:ignore="MissingTranslation">Snooze from the shade</string>
-    <!-- TODO: translate -->
-    <string name="tile_banner_body" tools:ignore="MissingTranslation">One tap, without unlocking. It\'s how Snoozemo is meant to be used.</string>
-    <!-- TODO: translate -->
-    <string name="tile_banner_add" tools:ignore="MissingTranslation">Add tile</string>
-    <!-- TODO: translate -->
-    <string name="tile_banner_dismiss" tools:ignore="MissingTranslation">Don\'t ask again</string>
-    <!-- TODO: translate -->
-    <string name="setup_action_add" tools:ignore="MissingTranslation">Add</string>
-    <!-- TODO: translate -->
-    <string name="failure_could_not_add_tile" tools:ignore="MissingTranslation">Couldn\'t add the tile</string>
-    <!-- TODO: translate -->
-    <string name="failure_could_not_open_settings" tools:ignore="MissingTranslation">Couldn\'t open Settings</string>
-    <!-- TODO: translate -->
-    <string name="arm" tools:ignore="MissingTranslation">Snooze</string>
-    <!-- TODO: translate -->
-    <string name="release" tools:ignore="MissingTranslation">End snooze</string>
-    <!-- TODO: translate -->
-    <string name="rule_failed" tools:ignore="MissingTranslation">Do Not Disturb access is on, but Snoozemo could not create its rule</string>
-    <!-- TODO: translate -->
-    <string name="rule_disabled" tools:ignore="MissingTranslation">Snoozemo\'s rule is switched off in Settings</string>
+    <string name="tile_banner_title">Snooze from the shade</string>
+    <string name="tile_banner_body">One tap, without unlocking. It\'s how Snoozemo is meant to be used.</string>
+    <string name="tile_banner_add">Add tile</string>
+    <string name="tile_banner_dismiss">Don\'t ask again</string>
+    <string name="setup_action_add">Add</string>
+    <string name="failure_could_not_add_tile">Couldn\'t add the tile</string>
+    <string name="failure_could_not_open_settings">Couldn\'t open Settings</string>
+    <string name="arm">Snooze</string>
+    <string name="release">End snooze</string>
+    <string name="rule_failed">Do Not Disturb access is on, but Snoozemo could not create its rule</string>
+    <string name="rule_disabled">Snoozemo\'s rule is switched off in Settings</string>
 
     <!-- Ongoing notification and endings (SPEC.md §4.3, §4.5). -->
-    <!-- TODO: translate -->
-    <string name="channel_active" tools:ignore="MissingTranslation">Snoozing</string>
-    <!-- TODO: translate -->
-    <string name="channel_ended" tools:ignore="MissingTranslation">Snooze ended</string>
-    <!-- TODO: translate -->
-    <string name="channel_urgent" tools:ignore="MissingTranslation">Do Not Disturb stuck</string>
-    <!-- TODO: translate -->
-    <string name="ongoing_title" tools:ignore="MissingTranslation">Snoozing</string>
-    <!-- TODO: translate -->
-    <string name="ongoing_ends_when_you_leave" tools:ignore="MissingTranslation">Ends when you leave</string>
-    <!-- TODO: translate -->
-    <string name="ongoing_wifi_only" tools:ignore="MissingTranslation">Wi-Fi only</string>
-    <!-- TODO: translate -->
-    <string name="ongoing_wifi_grace" tools:ignore="MissingTranslation">Wi-Fi lost — ending soon</string>
-    <!-- TODO: translate -->
-    <string name="ongoing_timer_only" tools:ignore="MissingTranslation">Timer only</string>
-    <!-- TODO: translate -->
-    <string name="action_end_now" tools:ignore="MissingTranslation">End now</string>
-    <!-- TODO: translate -->
-    <string name="action_extend" tools:ignore="MissingTranslation">+30 min</string>
-    <!-- TODO: translate -->
-    <string name="ended_departure" tools:ignore="MissingTranslation">Snooze ended — you left</string>
-    <!-- TODO: translate -->
-    <string name="ended_cap" tools:ignore="MissingTranslation">Snooze ended — time limit reached</string>
-    <!-- TODO: translate -->
+    <string name="channel_active">Snoozing</string>
+    <string name="channel_ended">Snooze ended</string>
+    <string name="channel_urgent">Do Not Disturb stuck</string>
+    <string name="ongoing_title">Snoozing</string>
+    <string name="ongoing_ends_when_you_leave">Ends when you leave</string>
+    <string name="ongoing_wifi_only">Wi-Fi only</string>
+    <string name="ongoing_wifi_grace">Wi-Fi lost — ending soon</string>
+    <string name="ongoing_timer_only">Timer only</string>
+    <string name="action_end_now">End now</string>
+    <string name="action_extend">+30 min</string>
+    <string name="ended_departure">Snooze ended — you left</string>
+    <string name="ended_cap">Snooze ended — time limit reached</string>
     <!-- Deliberately not "lost access": this covers every capability loss, and
          the specific reason is carried by its own one-shot alongside it. -->
-    <string name="ended_lost_capability" tools:ignore="MissingTranslation">Snooze ended — Snoozemo can\'t keep it going</string>
-    <!-- TODO: translate -->
-    <string name="failure_no_access" tools:ignore="MissingTranslation">Snoozemo needs Do Not Disturb access</string>
-    <!-- TODO: translate -->
-    <string name="failure_rule_disabled" tools:ignore="MissingTranslation">Snoozemo\'s rule is switched off in Settings</string>
-    <!-- TODO: translate -->
-    <string name="failure_could_not_start" tools:ignore="MissingTranslation">Couldn\'t snooze</string>
-    <!-- TODO: translate -->
-    <string name="failure_could_not_end" tools:ignore="MissingTranslation">Couldn\'t end the snooze — trying again</string>
-    <!-- TODO: translate -->
-    <string name="failure_rule_stuck" tools:ignore="MissingTranslation">Do Not Disturb may still be on</string>
-    <!-- TODO: translate -->
-    <string name="failure_rule_stuck_body" tools:ignore="MissingTranslation">Snoozemo couldn\'t turn it off.</string>
-    <!-- TODO: translate -->
-    <string name="action_unsnooze" tools:ignore="MissingTranslation">Unsnooze</string>
-    <!-- TODO: translate -->
-    <string name="action_dismiss" tools:ignore="MissingTranslation">Dismiss</string>
-    <!-- TODO: translate -->
-    <string name="failure_could_not_resume" tools:ignore="MissingTranslation">Couldn\'t resume snoozing</string>
-    <!-- TODO: translate -->
-    <string name="failure_not_forgotten" tools:ignore="MissingTranslation">Snooze ended, but it may come back</string>
-    <!-- TODO: translate -->
-    <string name="failure_could_not_extend" tools:ignore="MissingTranslation">Couldn\'t add 30 minutes</string>
-    <!-- TODO: translate -->
-    <string name="extend_at_max" tools:ignore="MissingTranslation">Already at the time limit</string>
+    <string name="ended_lost_capability">Snooze ended — Snoozemo can\'t keep it going</string>
+    <string name="failure_no_access">Snoozemo needs Do Not Disturb access</string>
+    <string name="failure_rule_disabled">Snoozemo\'s rule is switched off in Settings</string>
+    <string name="failure_could_not_start">Couldn\'t snooze</string>
+    <string name="failure_could_not_end">Couldn\'t end the snooze — trying again</string>
+    <string name="failure_rule_stuck">Do Not Disturb may still be on</string>
+    <string name="failure_rule_stuck_body">Snoozemo couldn\'t turn it off.</string>
+    <string name="action_unsnooze">Unsnooze</string>
+    <string name="action_dismiss">Dismiss</string>
+    <string name="failure_could_not_resume">Couldn\'t resume snoozing</string>
+    <string name="failure_not_forgotten">Snooze ended, but it may come back</string>
+    <string name="failure_could_not_extend">Couldn\'t add 30 minutes</string>
+    <string name="extend_at_max">Already at the time limit</string>
 
     <!-- The app version, at the foot of Settings — same format as the sibling Simmo repo. -->
-    <!-- TODO: translate -->
-    <string name="settings_version" tools:ignore="MissingTranslation">Version %1$s</string>
+    <string name="settings_version">Version %1$s</string>
 
     <!--
       The privacy policy link, same row and position as the sibling Simmo repo's
       Settings foot. `settings_privacy_url` is a build-time constant, not
       user-facing text, so it is never translated — same as Simmo's own copy.
     -->
-    <!-- TODO: translate -->
-    <string name="settings_privacy_policy" tools:ignore="MissingTranslation">Privacy policy</string>
+    <string name="settings_privacy_policy">Privacy policy</string>
     <string name="settings_privacy_url" translatable="false">https://mikelward.github.io/snoozemo/PRIVACY.html</string>
 </resources>
