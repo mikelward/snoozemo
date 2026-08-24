@@ -42,6 +42,12 @@ class DebugReportShareTest {
         SnoozeDebugLog.clearSinksForTest()
         SnoozeDebugLog.clearForTest()
         SnoozeDebugLog.setRecording(true)
+        // Stated, not inherited. Every test here installs the file sink and
+        // expects it to rotate; a sink installed under a *stored* setting of
+        // off deletes the directory instead, and the tests that turn the log
+        // off live in other classes, so nothing in this one would say why.
+        // `resetForTest` clears the singleton but not the persisted choice.
+        DebugLogStore(context).setEnabled(true)
     }
 
     @After
@@ -227,7 +233,12 @@ class DebugReportShareTest {
         File(dir, "current.log.crash").writeText("1")
         DebugLogging.install(context)
         DebugLogging.awaitIdleForTest()
-        assertTrue("precondition: the blank crash is genuinely pinned", File(dir, "crash.log").exists())
+        assertTrue(
+            "precondition: the blank crash is genuinely pinned — install left " +
+                "${dir.list()?.sorted()} with the log " +
+                "${if (DebugLogStore(context).isEnabled()) "on" else "off"}",
+            File(dir, "crash.log").exists(),
+        )
 
         var sharedText: String? = null
         val result = DebugReport.share(

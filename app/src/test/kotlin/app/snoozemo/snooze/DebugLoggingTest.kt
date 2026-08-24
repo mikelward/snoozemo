@@ -29,7 +29,24 @@ class DebugLoggingTest {
         SnoozeDebugLog.clearSinksForTest()
         SnoozeDebugLog.clearForTest()
         SnoozeDebugLog.setRecording(true)
+        // Stated, not inherited — and this class is where the setting gets
+        // written off, by the very first test, which never puts it back.
+        // `resetForTest` forgets the installed singleton, not the persisted
+        // choice, so a later test's `install` can start *disabled*, delete the
+        // directory instead of rotating it, and fail a precondition about a
+        // pinned crash that nothing in the test body explains.
+        DebugLogStore(context).setEnabled(true)
     }
+
+    /**
+     * What `install` actually left behind, for a precondition that expects a
+     * pinned crash. "crash.log is missing" does not say whether install never
+     * ran, ran *disabled* and deleted the directory, or ran and failed to pin —
+     * which is exactly what made one CI failure here unactionable.
+     */
+    private fun afterInstall(dir: File): String =
+        "install left ${dir.list()?.sorted()} with the log " +
+            if (DebugLogStore(context).isEnabled()) "on" else "off"
 
     @After
     fun tearDown() {
@@ -269,7 +286,10 @@ class DebugLoggingTest {
         File(dir, "current.log.crash").writeText("1")
         DebugLogging.install(context)
         DebugLogging.awaitIdleForTest()
-        assertTrue("precondition: rotation pinned the crash", File(dir, "crash.log").exists())
+        assertTrue(
+            "precondition: rotation pinned the crash — ${afterInstall(dir)}",
+            File(dir, "crash.log").exists(),
+        )
 
         var pinned: Boolean? = null
         val watch = DebugLogging.watchCrashPinOutcome {
@@ -393,7 +413,10 @@ class DebugLoggingTest {
         File(dir, "current.log.crash").writeText("1")
         DebugLogging.install(context)
         DebugLogging.awaitIdleForTest()
-        assertTrue("precondition: the crash is pinned", File(dir, "crash.log").exists())
+        assertTrue(
+            "precondition: the crash is pinned — ${afterInstall(dir)}",
+            File(dir, "crash.log").exists(),
+        )
 
         var fired = 0
         val watch = DebugLogging.watchCrashPinOutcome { fired++ }
@@ -436,7 +459,10 @@ class DebugLoggingTest {
         File(dir, "current.log.crash").writeText("1")
         DebugLogging.install(context)
         DebugLogging.awaitIdleForTest()
-        assertTrue("precondition: rotation pinned the crash", File(dir, "crash.log").exists())
+        assertTrue(
+            "precondition: rotation pinned the crash — ${afterInstall(dir)}",
+            File(dir, "crash.log").exists(),
+        )
         // Make both the rename and the copy fallback refuse, the same
         // fixture DebugFileSinkTest's own refusal test uses.
         File(File(dir, "previous.log"), "occupied").apply { parentFile!!.mkdirs() }.writeText("x")
@@ -469,7 +495,10 @@ class DebugLoggingTest {
         File(blocker, "occupied").apply { parentFile!!.mkdirs() }.writeText("x")
         DebugLogging.dismissCrashPin()
         DebugLogging.awaitIdleForTest()
-        assertTrue("precondition: the first dismiss genuinely failed", DebugLogging.lastDismissFailed)
+        assertTrue(
+            "precondition: the first dismiss genuinely failed — ${afterInstall(dir)}",
+            DebugLogging.lastDismissFailed,
+        )
 
         // Fix the fixture so the retry can actually succeed this time.
         blocker.deleteRecursively()
