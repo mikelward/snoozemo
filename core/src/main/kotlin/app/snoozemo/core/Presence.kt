@@ -26,6 +26,28 @@ sealed interface PresenceSignal {
     /** The anchor's SSID went away. Weak evidence of leaving — escalates only (D4). */
     data class AnchorWifiLost(override val atElapsedRealtimeMs: Long) : PresenceSignal
 
+    /**
+     * Wi-Fi is connected, but the watch cannot yet say *which* network
+     * (SPEC.md §6.6). The synchronous seed read that runs when the watch is
+     * built can only see whether any Wi-Fi is present — a direct
+     * capabilities read has the SSID redacted, and only the async callback
+     * (with `FLAG_INCLUDE_LOCATION_INFO`) can name it. So this is the seed's
+     * way of saying "hold on: a real association result is coming."
+     *
+     * It settles nothing about presence on its own — it is neither
+     * association nor loss — and its whole job is one narrow ordering case:
+     * a snooze restored *by the grace alarm* with a due deadline replays a
+     * held [GraceElapsed] the instant the bridge attaches, before the async
+     * callback can report that the user is back on the anchor's network. On
+     * that path this signal makes the due deadline defer *once* for a short
+     * confirmation window ([Presence.WIFI_CONFIRM]) instead of resolving
+     * [PresenceEvent.Departed], so the callback that follows can clear it. If
+     * the callback says the user really left (a different network, or none),
+     * the window elapses and the snooze ends then — fail-open, delayed by
+     * the window, never lost (D7).
+     */
+    data class AnchorWifiPresentUnconfirmed(override val atElapsedRealtimeMs: Long) : PresenceSignal
+
     /** The registered geofence reported an exit (SPEC.md §6.10, source 1). */
     data class GeofenceExit(override val atElapsedRealtimeMs: Long) : PresenceSignal
 
@@ -195,6 +217,34 @@ data class PresenceState(
      */
     val graceDeadlineMs: Long? = null,
     /**
+     * Whether a Wi-Fi association result is still pending and a due grace
+     * deadline should defer once rather than resolve
+     * ([PresenceSignal.AnchorWifiPresentUnconfirmed]).
+     *
+     * Set by the seed read finding Wi-Fi connected but unnameable; cleared by
+     * the first definitive association signal (associated or lost), by a fix
+     * that confirms presence, and by the one deferral it grants — so a
+     * `GraceElapsed` can be held back at most once, and a callback that never
+     * comes still ends the snooze after the window (fail-open, D7).
+     */
+    val awaitingAssociationConfirmation: Boolean = false,
+    /**
+     * Whether *this* grace deadline has already spent its one confirmation
+     * deferral (SPEC.md §6.6).
+     *
+     * The bound has to be a property of the deadline, not of the process,
+     * because [awaitingAssociationConfirmation] is transient — a restart
+     * loses it and the seed re-sets it — so without a durable record a
+     * process death inside the confirmation window would let the restored
+     * seed grant a *fresh* deferral, extending the deadline again and again
+     * under repeated background reclamation until the duration cap (Codex,
+     * PR #106). So the monitor persists this alongside the deadline, and it
+     * resets whenever the deadline itself is cleared — a genuine recovery
+     * ends the episode, and any later outage is a new one that earns its own
+     * single deferral.
+     */
+    val confirmationDeferralUsed: Boolean = false,
+    /**
      * Whether this engine has already concluded the snooze is over.
      *
      * Terminal by construction: every later signal is ignored and re-reports
@@ -265,6 +315,24 @@ object Presence {
      * a phone that never comes back.
      */
     val WIFI_GRACE: Duration = Duration.ofMinutes(5)
+
+    /**
+     * How long a due grace deadline defers when a Wi-Fi association result is
+     * still pending ([PresenceSignal.AnchorWifiPresentUnconfirmed], SPEC.md
+     * §6.6).
+     *
+     * The one case it covers: a snooze restored *by the grace alarm* replays
+     * a held [PresenceSignal.GraceElapsed] the instant the bridge attaches,
+     * before the watch's async callback can report that the user is back on
+     * the anchor's network — so a due deadline would end a snooze the user
+     * returned to. This is the margin the callback runs in. Short, because
+     * the callback for an already-connected network arrives in well under a
+     * second; long enough to ride out the restore. Spent at most once per
+     * pending result, and only on the grace-restore path — a snooze whose
+     * user genuinely left has no Wi-Fi, so its seed reports a loss and never
+     * reaches here.
+     */
+    val WIFI_CONFIRM: Duration = Duration.ofSeconds(30)
 
     /** What the caller should currently be asking of location (SPEC.md §6.7). */
     fun duty(state: PresenceState, anchor: Anchor): LocationDuty = when {
@@ -345,7 +413,26 @@ object Presence {
                 }
 
             is PresenceSignal.GraceElapsed -> graceElapsed(state, signal.atElapsedRealtimeMs, anchor)
+            is PresenceSignal.AnchorWifiPresentUnconfirmed ->
+                anchorWifiPresentUnconfirmed(state, anchor)
         }
+    }
+
+    /**
+     * Records that a real association result is still coming, so the next due
+     * [PresenceSignal.GraceElapsed] defers once (see
+     * [PresenceState.awaitingAssociationConfirmation]).
+     *
+     * Deliberately touches nothing else — not the phase, not the evidence
+     * bar, not the deadline. It is not evidence of presence (it cannot name
+     * the network) and not evidence of absence, so it must not de-escalate,
+     * advance staleness, or arm anything. Off the grace-restore path it is
+     * inert: with no deadline pending, no `GraceElapsed` will come to read the
+     * flag, and the first association callback clears it regardless.
+     */
+    private fun anchorWifiPresentUnconfirmed(state: PresenceState, anchor: Anchor): PresenceStep {
+        if (state.awaitingAssociationConfirmation) return step(state, null, anchor)
+        return step(state.copy(awaitingAssociationConfirmation = true), null, anchor)
     }
 
     private fun associated(state: PresenceState, atMs: Long, anchor: Anchor): PresenceStep {
@@ -358,7 +445,17 @@ object Presence {
         // next repeat would have called that off without anything having
         // answered, which is the stale-association case the escalation exists
         // for.
-        if (state.atAnchorWifi) return step(state, null, anchor)
+        if (state.atAnchorWifi) {
+            // Still clear a pending confirmation even on a repeat: this *is*
+            // the definitive association result the seed's
+            // `AnchorWifiPresentUnconfirmed` was waiting on, so a due grace
+            // deadline must resolve normally from here, not defer again.
+            return if (state.awaitingAssociationConfirmation) {
+                step(state.copy(awaitingAssociationConfirmation = false), null, anchor)
+            } else {
+                step(state, null, anchor)
+            }
+        }
 
         // And the same staleness rule as every other observation, which this one
         // was the last to skip (Codex, PR #31). A queued association delivered
@@ -385,6 +482,13 @@ object Presence {
             wifiLostAtMs = null,
             graceDeadlineMs = null,
             checkingSinceMs = null,
+            // The definitive result the pending-confirmation flag was waiting
+            // on: the user is back on the anchor's network, and the deadline
+            // just cleared, so there is nothing left to defer — and the
+            // deferral bound resets with the deadline, so a later outage is a
+            // new episode that earns its own single deferral.
+            awaitingAssociationConfirmation = false,
+            confirmationDeferralUsed = false,
             // Joining the anchor's network is evidence, so it moves the bar with
             // it: a reading captured before this moment answers an older
             // question and must not override it (Codex, PR #31).
@@ -404,6 +508,11 @@ object Presence {
             wifiLostAtMs = atMs,
             graceDeadlineMs = state.graceDeadlineMs ?: graceFrom(atMs, state, anchor),
             checkingSinceMs = state.checkingSinceMs ?: atMs,
+            // A definitive Wi-Fi result — the network is a different one, or
+            // gone — so the pending confirmation is answered: the user did not
+            // return to the anchor. The existing deadline stands and its next
+            // firing resolves normally rather than deferring again.
+            awaitingAssociationConfirmation = false,
         )
         return step(next, escalationEvent(state), anchor)
     }
@@ -466,6 +575,10 @@ object Presence {
                     // was actually running (Codex, PR #31). A later run of
                     // unusable readings arms a fresh one.
                     graceDeadlineMs = null,
+                    // The deadline is gone, so its one-shot deferral bound
+                    // resets with it (Codex, PR #106): a fresh grace episode
+                    // earns its own deferral.
+                    confirmationDeferralUsed = false,
                     checkingSinceMs = state.checkingSinceMs ?: fix.elapsedRealtimeMs,
                 )
                 step(next, escalationEvent(state), anchor)
@@ -482,6 +595,11 @@ object Presence {
                     degradation = null,
                     graceDeadlineMs = null,
                     checkingSinceMs = null,
+                    // Presence is confirmed and the deadline cleared, so a
+                    // pending Wi-Fi confirmation has nothing left to defer, and
+                    // the deferral bound resets with the deadline.
+                    awaitingAssociationConfirmation = false,
+                    confirmationDeferralUsed = false,
                 )
                 val settlesACheck = state.phase == PresencePhase.CHECKING
                 step(next, if (settlesACheck) PresenceEvent.StillHere else null, anchor)
@@ -612,6 +730,24 @@ object Presence {
         // deadline was cleared underneath it. Nothing to do — an alarm that
         // outlives its reason must not end a snooze.
         if (deadline == null || atMs < deadline) return step(state, null, anchor)
+        // A restore woke this deadline before the watch's async callback could
+        // report an association that is still pending (SPEC.md §6.6): defer
+        // once for the confirmation window rather than end a snooze the user
+        // may have returned to. `confirmationDeferralUsed` is the *durable*
+        // half of the bound — the transient flag alone would re-grant a
+        // deferral on every restart inside the window (Codex, PR #106) — so a
+        // deadline that has already deferred once resolves now, and a callback
+        // that never comes lets this firing end the snooze after the window,
+        // never never (D7). The window extends from this firing, not the
+        // original deadline, so the callback gets the full margin.
+        if (state.awaitingAssociationConfirmation && !state.confirmationDeferralUsed) {
+            val next = state.copy(
+                awaitingAssociationConfirmation = false,
+                confirmationDeferralUsed = true,
+                graceDeadlineMs = atMs + WIFI_CONFIRM.toMillis(),
+            )
+            return step(next, null, anchor)
+        }
         return departed(state, anchor)
     }
 

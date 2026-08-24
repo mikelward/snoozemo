@@ -1238,6 +1238,27 @@ defense; the grace deadline is a softer mechanism the cap already bounds regardl
 wound back during an outage can make grace run longer than five minutes, but never longer than
 the cap itself.
 
+**A grace alarm that restores the snooze must not end it before the Wi-Fi watch can say the user
+came back** (landed 2026-08-24). When the grace alarm is what wakes a dead process, the restored
+monitor rebuilds the Wi-Fi watch and replays the due deadline in the same breath — but the watch's
+synchronous seed cannot name the network (`getNetworkCapabilities` redacts the SSID; only the async
+callback sees it), so a user who returned to the anchor's Wi-Fi during the outage is not yet known
+to be back at the instant the deadline resolves. Left alone, the replay ends a snooze the user
+returned to. So the seed reports a third state beside present/absent — *Wi-Fi is up but unnamed* —
+and a due deadline meeting it **defers once** for a short confirmation window (30 s, measured from
+when the restored monitor actually handles the firing — not the alarm's fire time, which a slow
+restore can leave tens of seconds stale) rather than ending, giving the async callback time to
+confirm the return and call the deadline off. If the
+callback instead names a different network, or none comes, the window's own firing ends the snooze:
+fail-open is preserved (D7), delayed by the window, never lost. This closes a race that predated
+the durable Wi-Fi watch — the phone rejoining its own network mid-outage silently ended the
+snooze — surfaced when that watch made the redaction limit explicit. **"Once" is durable, not
+per-process:** whether the deferral has been spent is persisted beside the deadline, because a
+process death inside the window would otherwise let the restored seed grant a fresh deferral and
+extend the deadline again on every reclamation — holding DND to the cap, the opposite failure. The
+bound resets only when the deadline itself clears (a genuine recovery), so a later outage is a new
+episode that earns its own single deferral.
+
 **The notification says so while grace runs, not just once it ends** (landed 2026-08-23, Codex, PR
 #31). `TrackingMode.WIFI_ONLY` means "Wi-Fi is what's tracking this" — but the grace period exists
 precisely because Wi-Fi just stopped being able to say that, and reusing the same label for both

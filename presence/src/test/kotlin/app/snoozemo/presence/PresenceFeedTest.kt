@@ -126,6 +126,48 @@ class PresenceFeedTest {
     }
 
     @Test
+    fun `a restore inside the confirmation window does not re-grant the deferral`() {
+        // The persisted half of "defer at most once" (Codex, PR #106): a
+        // process death inside the confirmation window restores the extended
+        // deadline *and* the spent flag, and the cold Wi-Fi re-check reports
+        // `PresentUnconfirmed`. The due deadline must resolve now, not defer a
+        // second time — the failure this pins is a deadline that extends on
+        // every reclamation and holds DND to the cap.
+        val restoredDeadlineMs = armedAtMs + 30_000
+        val feed = PresenceFeed(
+            Anchor(ssid = "AnchorNet", capturedAt = Instant.EPOCH),
+            seedElapsedRealtimeMs = armedAtMs,
+            seedGraceDeadlineMs = restoredDeadlineMs,
+            seedConfirmationDeferralUsed = true,
+        )
+
+        feed.accept(PresenceSignal.AnchorWifiPresentUnconfirmed(armedAtMs + 1_000))
+        val update = feed.accept(PresenceSignal.GraceElapsed(restoredDeadlineMs))
+
+        assertEquals(PresenceEvent.Departed, update.event)
+    }
+
+    @Test
+    fun `a restore with an unspent deferral still defers once`() {
+        // The complement: a restart *before* the window was ever entered
+        // carries the flag false, so the first due firing after a
+        // `PresentUnconfirmed` still gets its single deferral.
+        val restoredDeadlineMs = armedAtMs + 60_000
+        val feed = PresenceFeed(
+            Anchor(ssid = "AnchorNet", capturedAt = Instant.EPOCH),
+            seedElapsedRealtimeMs = armedAtMs,
+            seedGraceDeadlineMs = restoredDeadlineMs,
+            seedConfirmationDeferralUsed = false,
+        )
+
+        feed.accept(PresenceSignal.AnchorWifiPresentUnconfirmed(armedAtMs + 1_000))
+        val update = feed.accept(PresenceSignal.GraceElapsed(restoredDeadlineMs))
+
+        assertNull("the first firing defers rather than ending", update.event)
+        assertTrue("grace still runs on the extended deadline", update.graceActive)
+    }
+
+    @Test
     fun `graceActive is true the instant a Wi-Fi-only anchor loses its network`() {
         // TrackingMode.WIFI_GRACE's whole reason to exist: an anchor with no
         // usable fix has grace start the moment Wi-Fi is lost, before enough

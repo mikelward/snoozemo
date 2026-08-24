@@ -48,12 +48,24 @@ internal object GraceDeadlineStore {
     private const val PREFS_NAME = "presence_grace"
     private const val KEY_DEADLINE_WALL_MS = "deadline_wall_ms"
     private const val KEY_ARMED_AT_EPOCH_MS = "armed_at_epoch_ms"
+    private const val KEY_CONFIRMATION_DEFERRAL_USED = "confirmation_deferral_used"
+
+    /** A restored deadline and whether it has already spent its confirmation deferral. */
+    data class Restored(val deadlineElapsedMs: Long, val confirmationDeferralUsed: Boolean)
 
     /**
      * Records [deadlineElapsedMs] (or clears it, if null) as read at [now],
      * identified by [armedAtEpochMs] — the snooze's wall-clock arm moment —
      * so a later [load] for a *different* snooze cannot mistake this for its
      * own. Returns whether the write actually reached disk.
+     *
+     * [confirmationDeferralUsed] rides along because the "defer at most once"
+     * bound (SPEC.md §6.6) has to survive process death: without it, a restart
+     * inside the confirmation window would re-grant the deferral and extend
+     * the deadline again on every reclamation (Codex, PR #106). It changes
+     * only when the deadline itself does — the defer both sets it and extends
+     * the deadline; a recovery clears both — so persisting it under the same
+     * gate the deadline uses is exact.
      *
      * `commit`, not `apply` (Codex, third pass on PR #91) — the same choice
      * `ActiveSnoozeStore.save` makes and for the same reason. `apply` returns
@@ -63,7 +75,13 @@ internal object GraceDeadlineStore {
      * gap that ordering was meant to close. The caller only arms the alarm
      * on a confirmed `true`.
      */
-    fun save(context: Context, deadlineElapsedMs: Long?, armedAtEpochMs: Long, now: ClockReading): Boolean {
+    fun save(
+        context: Context,
+        deadlineElapsedMs: Long?,
+        confirmationDeferralUsed: Boolean,
+        armedAtEpochMs: Long,
+        now: ClockReading,
+    ): Boolean {
         val prefs = prefs(context)
         if (deadlineElapsedMs == null) {
             return prefs.edit().clear().commit()
@@ -71,21 +89,27 @@ internal object GraceDeadlineStore {
         return prefs.edit()
             .putLong(KEY_DEADLINE_WALL_MS, wallMsFor(deadlineElapsedMs, now))
             .putLong(KEY_ARMED_AT_EPOCH_MS, armedAtEpochMs)
+            .putBoolean(KEY_CONFIRMATION_DEFERRAL_USED, confirmationDeferralUsed)
             .commit()
     }
 
     /**
      * The persisted deadline restated into [now]'s elapsed-realtime frame —
-     * the current boot's, whichever boot [now] belongs to — or null if
-     * nothing is persisted **for this snooze**: [armedAtEpochMs] must equal
-     * the arm moment [save] recorded the entry under, or the entry belongs
-     * to a snooze that has since ended and is not this one's to resume.
+     * the current boot's, whichever boot [now] belongs to — paired with
+     * whether that deadline has already spent its confirmation deferral, or
+     * null if nothing is persisted **for this snooze**: [armedAtEpochMs] must
+     * equal the arm moment [save] recorded the entry under, or the entry
+     * belongs to a snooze that has since ended and is not this one's to
+     * resume.
      */
-    fun load(context: Context, armedAtEpochMs: Long, now: ClockReading): Long? {
+    fun load(context: Context, armedAtEpochMs: Long, now: ClockReading): Restored? {
         val prefs = prefs(context)
         if (!prefs.contains(KEY_DEADLINE_WALL_MS) || !prefs.contains(KEY_ARMED_AT_EPOCH_MS)) return null
         if (prefs.getLong(KEY_ARMED_AT_EPOCH_MS, 0L) != armedAtEpochMs) return null
-        return elapsedMsFor(prefs.getLong(KEY_DEADLINE_WALL_MS, 0L), now)
+        return Restored(
+            deadlineElapsedMs = elapsedMsFor(prefs.getLong(KEY_DEADLINE_WALL_MS, 0L), now),
+            confirmationDeferralUsed = prefs.getBoolean(KEY_CONFIRMATION_DEFERRAL_USED, false),
+        )
     }
 
     /** Returns whether the clear actually reached disk — see [save]'s own comment on why that matters. */

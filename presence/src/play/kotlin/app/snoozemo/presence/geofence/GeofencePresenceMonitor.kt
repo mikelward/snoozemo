@@ -147,8 +147,8 @@ class GeofencePresenceMonitor(
         // replay and the Wi-Fi watch's restore-time redelivery both land
         // against; either one landing on a fresh, un-seeded state is exactly
         // what silently discarded the original deadline before.
-        val restoredGraceDeadlineMs =
-            GraceDeadlineStore.load(appContext, armedAtEpochMs, clockNow())
+        val restoredGrace = GraceDeadlineStore.load(appContext, armedAtEpochMs, clockNow())
+        val restoredGraceDeadlineMs = restoredGrace?.deadlineElapsedMs
 
         // Claims persistence ownership for this generation before anything
         // can be delivered through the fresh flow (Codex, PR #91, eighth
@@ -175,6 +175,11 @@ class GeofencePresenceMonitor(
             anchor,
             seedElapsedRealtimeMs = sinceElapsedRealtimeMs,
             seedGraceDeadlineMs = restoredGraceDeadlineMs,
+            // The "defer at most once" bound has to survive the restart that
+            // this restore *is* (Codex, PR #106): without it, a process death
+            // inside the confirmation window would let the seed re-grant the
+            // deferral and extend the deadline again.
+            seedConfirmationDeferralUsed = restoredGrace?.confirmationDeferralUsed ?: false,
         )
 
         // Re-armed explicitly rather than left to whatever signal happens to
@@ -352,11 +357,13 @@ class GeofencePresenceMonitor(
             val update: PresenceUpdate
             val duty: LocationDuty
             val graceDeadlineMs: Long?
+            val confirmationDeferralUsed: Boolean
             val sequence: Long
             synchronized(feedLock) {
                 update = feed.accept(signal)
                 duty = feed.duty
                 graceDeadlineMs = feed.graceDeadlineMs
+                confirmationDeferralUsed = feed.confirmationDeferralUsed
                 sequence = deliverySequence.incrementAndGet()
             }
             graceActiveMirror.set(graceDeadlineMs != null)
@@ -450,7 +457,13 @@ class GeofencePresenceMonitor(
                         // harmless the other way — restore already re-arms
                         // the alarm itself from whatever it loads (above).
                         val saved =
-                            GraceDeadlineStore.save(appContext, graceDeadlineMs, armedAtEpochMs, clockNow())
+                            GraceDeadlineStore.save(
+                                appContext,
+                                graceDeadlineMs,
+                                confirmationDeferralUsed,
+                                armedAtEpochMs,
+                                clockNow(),
+                            )
                         if (saved) {
                             // Confirmed only now, never optimistically —
                             // see this var's own comment on why a failed
@@ -712,19 +725,22 @@ class GeofencePresenceMonitor(
             if (!isClosedForSend) {
                 // Constructed *before* the bridge attaches (Codex, PR #91,
                 // fifth pass), and it matters specifically for a restore
-                // carrying a seeded grace deadline: this constructor
-                // synchronously checks the phone's *current* association and
-                // delivers it as a real signal (`PlatformWifiWatch`'s own
-                // `init` block), so if the user genuinely returned to the
-                // anchor's Wi-Fi while the process was dead, that positive
-                // evidence reaches the engine and clears the deadline before
-                // the bridge's mailbox gets a chance to replay a `GraceElapsed`
-                // held from the outage — which `Presence.graceElapsed` would
-                // otherwise act on as if nothing had changed, ending a snooze
-                // the user had already, if belatedly, been confirmed present
-                // for. The other order let a resolved `Departed` shut the
-                // engine down (`PresenceState.resolved` ignores every signal
-                // after) before this watch's own live check ever ran.
+                // carrying a seeded grace deadline. The subtlety the earlier
+                // form of this comment got wrong (Codex, PR #105): the watch's
+                // synchronous seed *cannot* confirm the anchor is back —
+                // `getNetworkCapabilities` redacts the SSID, so only the async
+                // callback can name the network. What the seed can do is
+                // deliver `AnchorWifiPresentUnconfirmed` when any Wi-Fi is up,
+                // and constructing before the attach is what gets that signal
+                // into the engine before the bridge replays a `GraceElapsed`
+                // held from the outage. On that flag `Presence.graceElapsed`
+                // defers the due deadline for one short confirmation window
+                // (`Presence.WIFI_CONFIRM`) instead of resolving `Departed`, so
+                // the async callback that follows can clear it if the user
+                // genuinely returned. Without the pre-attach order the replay
+                // would resolve `Departed` and shut the engine down
+                // (`PresenceState.resolved` ignores every later signal) before
+                // the seed — let alone the callback — was ever heard.
                 anchor.ssid?.let { ssid ->
                     wifiWatch = PlatformWifiWatch(
                         appContext,
@@ -772,8 +788,21 @@ class GeofencePresenceMonitor(
                         // The grace alarm's firing, as a signal like any
                         // other: the engine re-checks the deadline against
                         // its own state, so a stale firing is a no-op.
+                        //
+                        // Stamped with the *handling* time, not the receiver's
+                        // fire time (Codex, PR #106). A firing held in the
+                        // bridge's mailbox while a dead process restores can be
+                        // delivered here tens of seconds after it fired, and
+                        // the confirmation deferral extends the deadline from
+                        // this signal's own timestamp — off the stale fire
+                        // time, the "30-second" window could already be in the
+                        // past, giving the async association callback no room
+                        // to confirm a return before the re-armed alarm ends
+                        // the snooze. The due check is unaffected: handling
+                        // time is never earlier than the fire time, so a
+                        // genuinely due deadline still resolves.
                         is GeofenceObservation.GraceElapsed ->
-                            deliver(PresenceSignal.GraceElapsed(observation.atElapsedRealtimeMs))
+                            deliver(PresenceSignal.GraceElapsed(readElapsedRealtimeMs()))
                         // The alarm's own prompt, not its payload — the
                         // decision lives in `CapabilityLossStore`, keyed to
                         // *this* monitor's own `armedAtEpochMs`, so a firing

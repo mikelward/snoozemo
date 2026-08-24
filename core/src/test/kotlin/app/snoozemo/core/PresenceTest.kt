@@ -1,6 +1,7 @@
 package app.snoozemo.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -90,6 +91,20 @@ class PresenceTest {
     private fun noFix(atSeconds: Long) = PresenceSignal.FixUnavailable(atSeconds * 1_000L)
 
     private fun graceElapsed(atSeconds: Long) = PresenceSignal.GraceElapsed(atSeconds * 1_000L)
+
+    private fun presentUnconfirmed(atSeconds: Long) =
+        PresenceSignal.AnchorWifiPresentUnconfirmed(atSeconds * 1_000L)
+
+    /**
+     * The state a monitor rebuilds when the grace alarm restores a Wi-Fi-only
+     * snooze mid-outage: the seeded deadline is loaded, the suppressor starts
+     * off (`PresenceFeed`), and the seed's own evidence is the arm moment.
+     */
+    private fun restoredWithGrace(deadlineSeconds: Long) = PresenceState(
+        atAnchorWifi = false,
+        latestEvidenceMs = 0L,
+        graceDeadlineMs = deadlineSeconds * 1_000L,
+    )
 
     private fun arrived(northM: Double, accuracyM: Float, atSeconds: Long) =
         PresenceSignal.FixArrived(fix(northM, accuracyM, atSeconds))
@@ -673,6 +688,180 @@ class PresenceTest {
 
         val expiry = Presence.advance(state, graceElapsed(600), tracked)
         assertEquals(PresenceEvent.Departed, expiry.event)
+    }
+
+    @Test
+    fun `a returning user beats the grace alarm that restored the snooze`() {
+        // The race this whole change exists for (SPEC.md §6.6): the grace alarm
+        // restores a Wi-Fi-only snooze mid-outage and replays a due
+        // `GraceElapsed` before the watch's async callback can report that the
+        // user is back on the anchor's network. The seed's `PresentUnconfirmed`
+        // makes that firing defer for the confirmation window instead of
+        // ending the snooze, and the association that follows calls it off.
+        val (events, state) = replay(
+            wifiOnly,
+            from = restoredWithGrace(300),
+            signals = arrayOf(presentUnconfirmed(310), graceElapsed(300)),
+        )
+
+        assertEquals("the due deadline must defer, not end the snooze", listOf(null, null), events)
+        assertEquals(
+            "deferred by exactly the confirmation window",
+            300_000L + Presence.WIFI_CONFIRM.toMillis(),
+            state.graceDeadlineMs,
+        )
+
+        val back = Presence.advance(state, associated(315), wifiOnly)
+        assertNull("the returning user clears the deadline", back.state.graceDeadlineMs)
+
+        val stale = Presence.advance(back.state, graceElapsed(330), wifiOnly)
+        assertNull("nothing left to fire on", stale.event)
+    }
+
+    @Test
+    fun `the confirmation window extends from the firing, not the original deadline`() {
+        // A slow restore (Codex, PR #106): the grace alarm fired at the
+        // deadline but a dead process took ~40 s to restore and replay the
+        // held firing, so the monitor stamps it with the *handling* time
+        // (340 s here) rather than the stale fire time (300 s). The window
+        // must run a full `WIFI_CONFIRM` from when it is actually handled, or
+        // the async callback gets no room to confirm a return. A deadline
+        // extended off the stale 300 s would already be in the past.
+        val (_, state) = replay(
+            wifiOnly,
+            from = restoredWithGrace(300),
+            signals = arrayOf(presentUnconfirmed(340), graceElapsed(340)),
+        )
+
+        assertEquals(
+            "a full window from the handling time, not the stale deadline",
+            340_000L + Presence.WIFI_CONFIRM.toMillis(),
+            state.graceDeadlineMs,
+        )
+
+        // And the callback lands inside that real window.
+        val back = Presence.advance(state, associated(360), wifiOnly)
+        assertNull("the return within the fresh window is honored", back.state.graceDeadlineMs)
+    }
+
+    @Test
+    fun `a user who really left still ends after the deferred window`() {
+        // Fail-open is preserved (D7): the defer buys one confirmation window,
+        // and a callback naming a *different* network — the user left and
+        // joined some other Wi-Fi — lets the window's own firing end the
+        // snooze rather than deferring again.
+        val (_, deferred) = replay(
+            wifiOnly,
+            from = restoredWithGrace(300),
+            signals = arrayOf(presentUnconfirmed(310), graceElapsed(300)),
+        )
+
+        val elsewhere = Presence.advance(deferred, wifiLost(315), wifiOnly)
+        assertEquals(
+            "a different network does not re-arm a fresh grace",
+            300_000L + Presence.WIFI_CONFIRM.toMillis(),
+            elsewhere.state.graceDeadlineMs,
+        )
+
+        val end = Presence.advance(elsewhere.state, graceElapsed(330), wifiOnly)
+        assertEquals(PresenceEvent.Departed, end.event)
+    }
+
+    @Test
+    fun `the grace deadline defers at most once when no callback comes`() {
+        // The bound on the defer: if the async callback never arrives at all,
+        // the confirmation flag is spent by the first firing, so the window's
+        // own firing ends the snooze. One extra window, never a stall.
+        val (_, deferred) = replay(
+            wifiOnly,
+            from = restoredWithGrace(300),
+            signals = arrayOf(presentUnconfirmed(310), graceElapsed(300)),
+        )
+
+        val end = Presence.advance(deferred, graceElapsed(330), wifiOnly)
+        assertEquals(PresenceEvent.Departed, end.event)
+    }
+
+    @Test
+    fun `a deferral already spent is not granted again after a restart`() {
+        // The durability bound (Codex, PR #106): a process death inside the
+        // confirmation window restores the *extended* deadline and the spent
+        // flag, and the new seed re-sets `awaiting` — but the deadline must
+        // resolve now, not defer a second time. Without the persisted flag,
+        // repeated reclamation inside the window would extend the deadline
+        // over and over and hold DND to the cap.
+        val restored = PresenceState(
+            atAnchorWifi = false,
+            latestEvidenceMs = 0L,
+            graceDeadlineMs = 330_000L,
+            confirmationDeferralUsed = true,
+        )
+        val (_, state) = replay(
+            wifiOnly,
+            from = restored,
+            signals = arrayOf(presentUnconfirmed(340)),
+        )
+
+        val end = Presence.advance(state, graceElapsed(330), wifiOnly)
+        assertEquals(PresenceEvent.Departed, end.event)
+    }
+
+    @Test
+    fun `a new outage after recovery earns a fresh deferral`() {
+        // The bound is per-episode, not once forever: it resets when the
+        // deadline clears, so a user who returns and later leaves again gets a
+        // fresh confirmation window rather than an instant end.
+        val (_, deferred) = replay(
+            wifiOnly,
+            from = restoredWithGrace(300),
+            signals = arrayOf(presentUnconfirmed(310), graceElapsed(300)),
+        )
+
+        val back = Presence.advance(deferred, associated(315), wifiOnly)
+        assertNull("recovery clears the deadline", back.state.graceDeadlineMs)
+        assertFalse("and resets the deferral bound with it", back.state.confirmationDeferralUsed)
+
+        // A later outage arms a new grace episode, and its first due firing
+        // may defer once again.
+        val lostAgain = Presence.advance(back.state, wifiLost(400), wifiOnly)
+        val deadline2 = lostAgain.state.graceDeadlineMs
+        assertNotNull("a fresh outage arms a fresh deadline", deadline2)
+
+        val unconfirmed = Presence.advance(lostAgain.state, presentUnconfirmed(410), wifiOnly)
+        val elapsed = Presence.advance(unconfirmed.state, PresenceSignal.GraceElapsed(deadline2!!), wifiOnly)
+        assertNull("the fresh episode defers again rather than ending", elapsed.event)
+    }
+
+    @Test
+    fun `a restore that finds no wifi ends without deferring`() {
+        // The genuine-departure restore: the seed found no Wi-Fi (the user
+        // left), so it reports a loss, not `PresentUnconfirmed`. A due deadline
+        // must resolve immediately — nothing to wait for.
+        val (_, state) = replay(
+            wifiOnly,
+            from = restoredWithGrace(300),
+            signals = arrayOf(wifiLost(310)),
+        )
+
+        val end = Presence.advance(state, graceElapsed(300), wifiOnly)
+        assertEquals(PresenceEvent.Departed, end.event)
+    }
+
+    @Test
+    fun `an unconfirmed seed does nothing off the grace-restore path`() {
+        // On an ordinary arm there is no deadline for the flag to touch: it
+        // arms nothing, changes no phase, and leaves the association callback
+        // that follows to behave exactly as it always does.
+        val (events, state) = replay(
+            wifiOnly,
+            from = PresenceState(atAnchorWifi = false),
+            signals = arrayOf(presentUnconfirmed(10), associated(20)),
+        )
+
+        assertEquals(listOf(null, null), events)
+        assertNull("nothing armed a grace period", state.graceDeadlineMs)
+        assertEquals(PresencePhase.RESTING, state.phase)
+        assertEquals(LocationDuty.NONE, Presence.duty(state, wifiOnly))
     }
 
     @Test
