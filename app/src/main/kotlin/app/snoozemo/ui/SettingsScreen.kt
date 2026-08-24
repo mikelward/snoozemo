@@ -136,7 +136,7 @@ internal fun SettingsScreen(
             )
         }
         // Absent rather than disabled while there is nothing yet to edit: no
-        // Do Not Disturb access, or access granted but the rule not created
+        // Do Not Disturb access, or access allowed but the rule not created
         // yet (TODO.md's "SettingsScreen button to the system zen rule's own
         // interruption-filter screen" — MainActivity clears `filtersRuleId`
         // in both cases). A button with nothing behind it is the dead tap

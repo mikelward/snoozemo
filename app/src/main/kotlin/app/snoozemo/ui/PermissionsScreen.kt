@@ -86,20 +86,20 @@ fun PermissionsScreen(
             )
         }
         // Nothing at all until access has been read, rather than a guess in
-        // either direction: the wrong guess either tells a user who granted
+        // either direction: the wrong guess either tells a user who allowed
         // access that they haven't, or offers to arm something that can't.
         access?.let {
             val granted = it == PolicyAccess.GRANTED
             SetupRow(
                 title = stringResource(R.string.setup_dnd_title),
                 status = stringResource(
-                    if (granted) R.string.setup_dnd_granted else R.string.setup_dnd_missing,
+                    if (granted) R.string.setup_dnd_allowed else R.string.setup_dnd_missing,
                 ),
-                // `Grant` rather than `Allow`: this one is a Settings toggle
-                // with no in-app dialog and no result callback (SPEC.md §5.2),
-                // and the pair of verbs is what is left of saying so now that
-                // the row no longer spends a line on the mechanism.
-                action = stringResource(R.string.setup_action_grant).takeUnless { granted },
+                // Same `Allow`/`Allowed` wording as every other row, even
+                // though this one is a Settings toggle with no in-app dialog
+                // and no result callback (SPEC.md §5.2) — the mechanism
+                // differs but what the user is doing doesn't need its own verb.
+                action = stringResource(R.string.setup_action_allow).takeUnless { granted },
                 onAction = onAccessRow,
                 failure = stringResource(R.string.failure_could_not_open_settings)
                     .takeIf { settingsFailure == SetupRowId.DND },
@@ -109,7 +109,7 @@ fun PermissionsScreen(
         // first frame like everything else here, so this is briefly absent
         // rather than briefly wrong.
         notifications?.let {
-            // Granted is necessary and not sufficient. The permission can be
+            // Allowed is necessary and not sufficient. The permission can be
             // held while the app is switched off in Settings or either channel
             // is blocked, and the system then drops every post — so the row may
             // only say `Allowed`, and only drop its button, when a message
@@ -119,7 +119,7 @@ fun PermissionsScreen(
                 title = stringResource(R.string.setup_notifications_title),
                 status = stringResource(
                     if (working) {
-                        R.string.setup_notifications_granted
+                        R.string.setup_notifications_allowed
                     } else {
                         R.string.setup_notifications_missing
                     },
@@ -138,7 +138,7 @@ fun PermissionsScreen(
             SetupRow(
                 title = stringResource(R.string.setup_location_title),
                 status = stringResource(
-                    if (granted) R.string.setup_location_granted else R.string.setup_location_missing,
+                    if (granted) R.string.setup_location_allowed else R.string.setup_location_missing,
                 ),
                 action = stringResource(R.string.setup_action_allow).takeUnless { granted },
                 onAction = onLocationRow,

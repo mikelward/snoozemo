@@ -8,9 +8,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import app.snoozemo.core.LocationPermission
@@ -77,7 +79,10 @@ class PermissionsScreenScreenshotTest {
         capture("permissions-screen-access-denied.png") {
             PermissionsScreen(
                 access = PolicyAccess.DENIED,
-                notifications = NotificationPermission.ASKABLE,
+                // Left unread: an askable notifications row would render its
+                // own `Allow` button too, and make `onNodeWithText("Allow")`
+                // ambiguous about which row this test is clicking.
+                notifications = null,
                 notificationsReachTheUser = true,
                 location = LocationPermission.GRANTED,
                 settingsFailure = null,
@@ -89,12 +94,8 @@ class PermissionsScreenScreenshotTest {
         }
 
         composeRule.onNodeWithText("Snoozemo can't snooze without it").assertExists()
-        composeRule.onNodeWithText("Grant").performClick()
+        composeRule.onNodeWithText("Allow").performClick()
         assertEquals(1, opened)
-        // The two verbs keep the one distinction worth carrying: Do Not
-        // Disturb access is a Settings toggle with no in-app dialog (SPEC.md
-        // §5.2), while notifications really is a runtime prompt.
-        composeRule.onNodeWithText("Allow").assertExists()
     }
 
     @Test
@@ -136,9 +137,6 @@ class PermissionsScreenScreenshotTest {
 
         composeRule.onNodeWithText("Snoozemo can't show what a snooze is doing").assertExists()
         composeRule.onNodeWithText("Allow").assertExists()
-        // Access is granted in this state, so its row has nothing left to
-        // offer.
-        composeRule.onNodeWithText("Grant").assertDoesNotExist()
     }
 
     @Test
@@ -147,14 +145,15 @@ class PermissionsScreenScreenshotTest {
 
         capture("permissions-screen-notifications-muted.png") {
             PermissionsScreen(
-                access = PolicyAccess.GRANTED,
+                // Left unread: an allowed access row shares "Allowed" with
+                // notifications now (AGENTS.md's standardized status text)
+                // and would otherwise leave a second `Allowed` on screen and
+                // make `assertDoesNotExist()` ambiguous about which row it
+                // means — this test is about the notifications row
+                // specifically. Same reason location stays unread below.
+                access = null,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = false,
-                // Left unread: location sharing "Allowed" with notifications
-                // now (AGENTS.md's standardized status text) would otherwise
-                // leave a second `Allowed` on screen and make
-                // `assertDoesNotExist()` ambiguous about which row it means
-                // — this test is about the notifications row specifically.
                 location = null,
                 settingsFailure = null,
                 onAccessRow = {},
@@ -199,16 +198,13 @@ class PermissionsScreenScreenshotTest {
     }
 
     @Test
-    fun `location granted reads Allowed, the standardized status word`() {
+    fun `granted rows read Allowed, the standardized status word`() {
         capture("permissions-screen-idle.png") {
             PermissionsScreen(
                 access = PolicyAccess.GRANTED,
-                // Left unread: notifications shares "Allowed" with location
-                // now (AGENTS.md's standardized status text), and this test
-                // is about the location row specifically — a granted
-                // notifications row would leave a second `Allowed` on screen
-                // and make `assertExists()` ambiguous about which one it
-                // found.
+                // Left unread: a granted notifications row would leave a
+                // third `Allowed` on screen and make the count below need
+                // updating for reasons that have nothing to do with this test.
                 notifications = null,
                 notificationsReachTheUser = true,
                 location = LocationPermission.GRANTED,
@@ -220,12 +216,12 @@ class PermissionsScreenScreenshotTest {
             )
         }
 
-        // AGENTS.md: granted status text is either "Granted" or "Allowed" and
-        // nothing else — location used to say "Tracking your place".
-        composeRule.onNodeWithText("Allowed").assertExists()
-        composeRule.onNodeWithText("Granted").assertExists()
+        // AGENTS.md: status text is either "Allowed" or the capability's own
+        // missing-state copy — location used to say "Tracking your place",
+        // and Do Not Disturb access used to say "Granted".
+        composeRule.onAllNodesWithText("Allowed").assertCountEquals(2)
         composeRule.onNodeWithText("Tracking your place").assertDoesNotExist()
-        composeRule.onNodeWithText("Grant").assertDoesNotExist()
+        composeRule.onNodeWithText("Granted").assertDoesNotExist()
         composeRule.onNodeWithText("Allow").assertDoesNotExist()
     }
 
@@ -307,7 +303,7 @@ class PermissionsScreenScreenshotTest {
         // another route into Settings, or an administrator, while this
         // screen is up. The row loses its button at that moment, so a
         // message about a tap that could not happen would sit under
-        // `Granted` with nothing left to clear it (flagged by Codex on PR
+        // `Allowed` with nothing left to clear it (flagged by Codex on PR
         // #21, on the screen this split out of).
         capture("permissions-screen-idle.png") {
             PermissionsScreen(
@@ -323,7 +319,7 @@ class PermissionsScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("Granted").assertExists()
+        composeRule.onAllNodesWithText("Allowed").assertCountEquals(3)
         composeRule.onNodeWithText("Couldn't open Settings").assertDoesNotExist()
     }
 

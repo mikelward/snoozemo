@@ -121,8 +121,8 @@ class MainScreenScreenshotTest {
         composeRule.onNodeWithText("Snooze").assertDoesNotExist()
         composeRule.onNodeWithText("End snooze").assertDoesNotExist()
         // The banner's only job is routing to the interstitial — it does not
-        // grant anything itself.
-        composeRule.onNodeWithText("Grant").performClick()
+        // allow anything itself.
+        composeRule.onNodeWithText("Allow").performClick()
         assertEquals(1, opened)
     }
 
