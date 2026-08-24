@@ -175,6 +175,16 @@ Listing text is user-facing copy: US English and the concise-copy rules in
 `AGENTS.md` apply, and commits touching it get user-readable subjects (no
 `docs:`/`internal:` prefix).
 
+The listing's **graphics** are version-controlled already, in
+`docs/play-store/` — the 512 px app icon and the 1,024 × 500 feature graphic,
+both recorded by `PlayStoreGraphicsScreenshotTest`, which draws the adaptive
+icon's own layers with Android's renderer, so there is no second copy of the
+mark to edit out of step with the app icon and no renderer of ours that could
+draw it differently. CI regenerates them on every PR that touches the app and
+fails the build if the committed PNGs are stale. Like the AAB's release notes
+they go up by hand, since no API upload path is wired for them; that README
+covers the Play slots and how to regenerate.
+
 ## Generating the upload keystore
 
 Keep this keystore safe. It is only the upload credential — Play App Signing
