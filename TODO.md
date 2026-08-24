@@ -2308,6 +2308,17 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     a snooze that ends on a duration cap needs the same controller.
 
 ## Decisions needing review
+
+- **The Wi-Fi recheck alarm's period is 15 minutes** (2026-08-24): a Wi-Fi-only anchor has no
+  geofence, so nothing durable was watching it once Android stopped the service, and this alarm
+  is what restores a reader (`SPEC.md` §6.10). 15 minutes puts the worst-case departure latency
+  at about 15 + the 5-minute grace, against the 30 + 5 the backstop alone gave —
+  `setAndAllowWhileIdle` tends to fire sooner than the backstop's `WorkManager` period, though the
+  cadence is best-effort, not a bound (the cap stays the only hard one; Codex, PR #105). **The
+  cost** is 16 extra wakeups over a 4-hour snooze
+  (`SPEC.md` §9), each a service start and a network-state read, paid only by anchors with no
+  usable fix. **The alternative** was leaving it at the backstop's 30 minutes for no extra
+  wakeups, or going to 10 for a tighter bound and half again the wakes. Reversible: one constant.
 - **Consider an in-app banner (or similar Settings-surfaced cue) for a
   changed hosted privacy policy.** `docs/PRIVACY.md` now rides the docs lane
   and is never forced into release notes (2026-08-22 — see AGENTS.md

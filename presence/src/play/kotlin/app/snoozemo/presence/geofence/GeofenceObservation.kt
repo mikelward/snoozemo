@@ -50,6 +50,21 @@ internal sealed interface GeofenceObservation {
     data class RepairPoke(override val atElapsedRealtimeMs: Long) : GeofenceObservation
 
     /**
+     * [WifiRecheckAlarm] fired: the periodic re-read that stands in for a
+     * geofence on an anchor that has none (SPEC.md §6.6).
+     *
+     * A question rather than news, like the pokes — it carries nothing about
+     * the world, because the alarm cannot see the world; what it asks for is
+     * the Wi-Fi watch to be *running* so it can. But unlike a poke it is
+     * never dropped for want of a monitor: no monitor is precisely the case
+     * it exists for, and the wake is the whole answer. Never retained
+     * either — a restore rebuilds the watch, which reads the current
+     * association on its own, so there is nothing here worth replaying to a
+     * later attach.
+     */
+    data class WifiRecheck(override val atElapsedRealtimeMs: Long) : GeofenceObservation
+
+    /**
      * [CapabilityLossAlarm] fired: a `CapabilityLost` ending was decided and
      * durably recorded in [CapabilityLossStore], and this is the prompt to
      * act on it — not the payload. No cause travels with it: the monitor
