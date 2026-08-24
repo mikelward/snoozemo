@@ -5,8 +5,11 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.drawable.Icon
+import android.os.Handler
+import android.os.Looper
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
+import android.util.Log
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.dnd.PrefsZenRuleIdStore
 
@@ -44,6 +47,15 @@ class SnoozeTileService : TileService() {
      */
     @Volatile
     private var listening: TileSnapshot? = null
+
+    /** Posts a repaint onto the main thread when one arrives off it. */
+    private val mainThread = Handler(Looper.getMainLooper())
+
+    /**
+     * Held in a field rather than built at each call, because it is the identity
+     * [TileRepaintRegistry] registers and unregisters by.
+     */
+    private val repaint = TileRepaintRegistry.Repaint { repaintFromRecord() }
 
     /**
      * The tile has been added to Quick Settings.
@@ -98,7 +110,81 @@ class SnoozeTileService : TileService() {
         // thread is no worse off than today — the slow path still arms.
         warmZenRule(applicationContext)
 
-        val snapshot = TileSnapshot.read(applicationContext).also { listening = it }
+        // Only while listening, which is the only time a repaint can reach the
+        // shade at all — and, since the platform stops listening as the panel
+        // closes, the only time one is worth doing. Registered before the first
+        // paint so a snooze ending in the gap between the two is not missed;
+        // the paint below reads the record afterwards either way.
+        TileRepaintRegistry.register(repaint)
+
+        paint(TileSnapshot.read(applicationContext).also { listening = it })
+    }
+
+    /**
+     * Nothing is on screen any more, so a repaint would be work nobody sees —
+     * and `updateTile` is only valid while listening. The next
+     * [onStartListening] re-reads the record, so nothing is lost by dropping
+     * the registration rather than queueing what arrives while it is gone.
+     */
+    override fun onStopListening() {
+        TileRepaintRegistry.unregister(repaint)
+        super.onStopListening()
+    }
+
+    /**
+     * Belt and braces: the platform is not obliged to pair every
+     * [onStartListening] with an [onStopListening] before tearing the service
+     * down, and a registration outliving its service would repaint through a
+     * dead `qsTile` forever.
+     */
+    override fun onDestroy() {
+        TileRepaintRegistry.unregister(repaint)
+        super.onDestroy()
+    }
+
+    /**
+     * A snooze started or ended somewhere other than this tile — the cap
+     * firing, `End now` or `+30 min` on the ongoing notification sitting inches
+     * below the tile in the same shade, a release from the app screen — so the
+     * tile is now saying something false about a phone the user is looking at.
+     *
+     * `onClick`'s optimistic paint covers a tap on the tile itself and nothing
+     * else; this covers everything else. The record is already written by the
+     * time this runs (`SnoozeTileBridge` is called after the store, never
+     * before), so re-reading it is what makes this the *real* state rather than
+     * a second guess.
+     */
+    private fun repaintFromRecord() {
+        // The callers are main-thread today (a service callback, a broadcast
+        // receiver), so the common case pays no frame of delay; the hop is
+        // here because `updateTile` is a main-thread call and the registry
+        // promises nothing about which thread it is notified on.
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            paintFromRecord()
+        } else {
+            mainThread.post { paintFromRecord() }
+        }
+    }
+
+    private fun paintFromRecord() {
+        // Contained: a stale tile is cosmetic, and this runs on paths (the cap
+        // firing, a release) whose real job is getting the phone's sound back.
+        // Never swallowed, though — a tile that has quietly stopped tracking
+        // the snooze is exactly what this change exists to stop.
+        runCatching {
+            paint(TileSnapshot.read(applicationContext).also { listening = it })
+        }.onFailure {
+            Log.w(TAG, "Repainting the tile failed; it may be stale until the shade is reopened.", it)
+        }
+    }
+
+    /**
+     * The single rendering of a snapshot, shared by the shade-open path and the
+     * repaint, so the two cannot drift into showing different things for the
+     * same record. No-ops when the tile is not listening — `qsTile` is null
+     * then, and `updateTile` would not be valid anyway.
+     */
+    private fun paint(snapshot: TileSnapshot) {
         qsTile?.apply {
             state = if (snapshot.snoozing) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
             icon = Icon.createWithResource(applicationContext, R.drawable.ic_tile_snooze)
@@ -133,20 +219,19 @@ class SnoozeTileService : TileService() {
         val snapshot = listening ?: TileSnapshot.read(applicationContext)
         val paint = TileOptimisticPaint.forTap(snapshot.snoozing)
 
-        // Painted here rather than left to the service's own round trip
-        // (`SnoozeTileBridge.refresh` → `requestListeningState` →
-        // `onStartListening`): that path is a *request* to rebind, not a
-        // delivery guarantee, and on a real shade it visibly lagged a tap by a
-        // second or two (`TODO.md` Phase 2). This instance is already alive —
-        // the tap just arrived on it — so there is no reason to wait for a
-        // fresh bind to say what the tap itself already decided. `updateTile`
+        // Painted here rather than left to `SnoozeTileBridge.refresh`, which
+        // cannot answer before the service has decided: arming waits on a
+        // location fix for up to ten seconds, and on a real shade the tap
+        // visibly lagged by a second or two (`TODO.md` Phase 2). This instance
+        // is already alive — the tap just arrived on it — so there is nothing
+        // to wait for to say what the tap itself already decided. `updateTile`
         // is only valid from a method the platform called on this tile, which
         // `onClick` is.
         //
         // Safe to paint ahead of the real outcome: a refused arm or end is
-        // exactly what `SnoozeTileBridge.refresh` corrects moments later once
-        // the service knows, the same reconciliation this tile already relies
-        // on for every other stale reading (see [listening]'s own comment).
+        // exactly what [repaintFromRecord] corrects moments later once the
+        // service knows, the same reconciliation this tile already relies on
+        // for every other stale reading (see [listening]'s own comment).
         // The countdown is left alone rather than guessed — this tap has no
         // duration or record to compute one from, and a wrong number would be
         // worse than a moment of no subtitle at all.
@@ -218,6 +303,8 @@ class SnoozeTileService : TileService() {
         Intent().setComponent(ComponentName(applicationContext.packageName, className))
 
     companion object {
+        private const val TAG = "SnoozeTileService"
+
         private const val TRAMPOLINE_CLASS = "app.snoozemo.snooze.TileTrampolineActivity"
 
         /**

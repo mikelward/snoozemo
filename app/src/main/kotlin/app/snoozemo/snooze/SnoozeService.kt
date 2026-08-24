@@ -1151,7 +1151,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // follows within milliseconds. Off the arm path: `STATE_TRUE` landed
         // above, so these binder calls delay nothing the user is waiting on.
         notifications.showOngoing(snooze)
-        SnoozeTileBridge.refresh(applicationContext)
+        SnoozeTileBridge.refresh()
 
         // The backstop, before capture rather than only with the watch it
         // rides beside: capture takes up to 10 s, and a process death inside
@@ -1321,7 +1321,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // frame that survives, and a transition would commit the record a second
         // time to say so. The tile's subtitle is stale in exactly the same way.
         notifications.showOngoing(restated)
-        SnoozeTileBridge.refresh(applicationContext)
+        SnoozeTileBridge.refresh()
     }
 
     /** The notification's `+30 min` (SPEC.md §4.3). */
@@ -1484,9 +1484,10 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // a refused arm reaches `IDLE`, which refreshes here, and a successful
         // one refreshes from `armWithCap` the moment the rule is on — capture
         // can hold `ARMED` off for ten seconds now, so that refresh no longer
-        // waits for it. What is gained is one fewer binder call on the path
-        // whose whole purpose is to be immediate.
-        if (state != SnoozeState.ARMING) SnoozeTileBridge.refresh(applicationContext)
+        // waits for it. And the record it would repaint from has only been
+        // handed to `saveAsync` at this point, so a refresh here could read the
+        // state the tile is already showing.
+        if (state != SnoozeState.ARMING) SnoozeTileBridge.refresh()
         // Nothing running, nothing to own. Keyed on the record rather than on
         // the state: a successful release reports RELEASED and settles into
         // IDLE without a second callback, so a state test here would never fire
@@ -1946,11 +1947,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         }
         notifications.showOngoing(snooze)
         // The tile renders the mode too — its subtitle drops to `timer only`
-        // (Codex, PR #33). It reads the record in `onStartListening` and nothing
-        // else, so without this the shade keeps the old subtitle until the
-        // system happens to restart listening. Every state transition already
-        // refreshes; a mode change is the one that doesn't have one.
-        SnoozeTileBridge.refresh(applicationContext)
+        // (Codex, PR #33). It renders from the record, so without this an open
+        // shade keeps the old subtitle until it is closed and reopened. Every
+        // state transition already refreshes; a mode change is the one that
+        // doesn't have one.
+        SnoozeTileBridge.refresh()
     }
 
     override fun onZenFailure(failure: ZenFailure, whileArming: Boolean) {

@@ -294,6 +294,20 @@ must never feel slow or refuse.
   `android.service.quicksettings.action.QS_TILE_PREFERENCES`.
 - **Locked device:** arming works locked — no `unlockAndRun()` wrapper. The whole point is a
   one-tap action from the shade. Ending also works locked. Only the settings screen requires unlock.
+- **The tile tracks the snooze, not just its own taps.** A snooze can start or end with no tile tap
+  behind it — the duration cap firing, `End now` or `+30 min` on the ongoing notification, a release
+  from the app screen — and the notification the user taps sits in the same shade as the tile, so
+  the tile has to change with it rather than at the next time the shade is reopened.
+
+**The tile stays a *passive* tile** (2026-08-24). Android offers an opt-in "active" mode whose whole
+purpose is letting an app push a tile update at will, and Snoozemo deliberately does not take it:
+an active tile is bound only when it asks to be or when a tap needs delivering, and the shade-open
+bind is what recomputes the countdown subtitle from the record and what warms the zen rule while a
+tap may be a moment away (§4.1). Giving up a live countdown and a warm arm path to gain a push is
+the wrong trade for this product. The consequence is that the platform's own
+`requestListeningState` push — which the API documents as doing nothing for a tile that has not
+opted in — is unavailable, so a state change reaches an on-screen tile in-process instead: `:tile`
+and `:app` are one process, and a listening tile is a live object in it.
 
 **The app screen keeps a snooze button of its own, and the tile is still the way in** (maintainer,
 2026-08-13). The two are not competing front doors. The button exists so the app is self-sufficient

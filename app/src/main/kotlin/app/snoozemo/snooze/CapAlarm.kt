@@ -644,7 +644,7 @@ internal fun releaseDirectly(
             // retry below is the only thing that will, and the cap bounds it.
             Log.e(RELEASE_TAG, "The record could not be marked released; a restore may resurrect it.")
         }
-        SnoozeTileBridge.refresh(context.applicationContext)
+        SnoozeTileBridge.refresh()
         if (erased) return true
         // Nothing was loaded, so the failed clear was an empty commit and there
         // is no record for a retry to come back for. Scheduling one anyway
@@ -899,7 +899,7 @@ internal fun restoreDirectly(
         // legible and endable.
     }
     notifications.showOngoing(snooze)
-    SnoozeTileBridge.refresh(context.applicationContext)
+    SnoozeTileBridge.refresh()
 }
 
 /**
@@ -1075,7 +1075,7 @@ private fun restateDirectly(
     // in the clock the user is now on. The tile's subtitle is stale in exactly
     // the same way.
     SnoozeNotifications(context.applicationContext).showOngoing(restated)
-    SnoozeTileBridge.refresh(context.applicationContext)
+    SnoozeTileBridge.refresh()
 }
 
 /**
@@ -1184,7 +1184,7 @@ internal fun discardForeignRecord(
         // at the next boot or update, which is harmless and self-healing.
         Log.w(RELEASE_TAG, "The stranded snooze record could not be erased; it stays refused either way.")
     }
-    SnoozeTileBridge.refresh(context.applicationContext)
+    SnoozeTileBridge.refresh()
 }
 
 class BootReceiver : BroadcastReceiver() {

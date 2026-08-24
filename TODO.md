@@ -150,13 +150,30 @@ the point is that every other line of the app is worthless if it isn't true.
       once the service knows the real outcome. The action/render decision itself is `TileOptimisticPaint`
       (Codex, PR #93), a plain Kotlin type with no `TileService`/`Tile`, covered by
       `TileOptimisticPaintTest` for both starting states — `:tile` carried no test source set before
-      this, so that infrastructure is new too. **Still open and unverified on a device**: a state
-      change with no tap behind it — the cap firing, `+30 min` from the notification, a manual
-      release from `MainScreen` — has no live `TileService` instance to paint from and still depends
-      entirely on `requestListeningState()`'s own latency, which nothing here measures or bounds.
+      this, so that infrastructure is new too.
       `TileService`/`qsTile` themselves aren't practically unit-testable under Robolectric, so
       `onClick`'s actual `qsTile` writes (as opposed to the decision feeding them) are still verified
       by inspection only — needs a real device.
+- [x] **Tile latency on a state change with no tap behind it** — the cap firing, `+30 min` or
+      `End now` from the ongoing notification, a release from `MainScreen` (maintainer, 2026-08-24:
+      *"still not immediately toggling the tile state/appearance when exiting or entering snooze"*).
+      Not latency at all, in the end: `SnoozeTileBridge` sent `TileService.requestListeningState()`,
+      which the platform documents as applying "only to tiles that have `META_DATA_ACTIVE_TILE`
+      defined as true on their `TileService` Manifest declaration, and **will do nothing
+      otherwise**". Snoozemo's tile is not an active tile, so all eight refresh call sites were a
+      documented no-op and the tile only ever changed when the shade was closed and reopened —
+      including while the user was looking at the ongoing notification an inch below it. Declaring
+      the tile active would have fixed the push and cost the two things the passive shade-open bind
+      buys (`SPEC.md` §4.2): a countdown recomputed from the record every time the shade opens, and
+      the zen rule warmed while a tap may be a moment away. So the delivery moved in-process
+      instead — `:tile` and `:app` are one process, and a listening `TileService` is a live object
+      in it. `TileRepaintRegistry` is the seam: the tile registers in `onStartListening` and drops
+      out in `onStopListening`, and `SnoozeTileBridge.refresh()` notifies it after the record is
+      written. A tile that is not listening is not on screen, and `onStartListening` re-reads the
+      record when it next is, so there is nothing to queue. Covered by `TileRepaintRegistryTest`
+      and `SnoozeTileBridgeTest` — the register/notify half is plain Kotlin precisely because
+      `TileService` is not testable. **Still owed: a device check** that the repaint lands
+      visibly while the shade is open (hardware item below).
 - [x] `ArmTrampolineActivity` (`SPEC.md` §6.9): transparent theme, starts the service in
       `onCreate` before any UI, launched via `startActivityAndCollapse(PendingIntent)`.
 - [x] Ongoing notification on channel `snooze_active`, `IMPORTANCE_LOW`, with `End now` and
@@ -2129,6 +2146,14 @@ that can only be settled on a real device, ordered by risk.
         Not Disturb" toggle in Settings reflects each flag and that switching it off there is
         honored (the user's explicit override, per §5.7). **Test on a fresh install or after
         clearing app data** — like importance, this is set at channel creation.
+13. [ ] **The tile repaints while the shade is open** (`SPEC.md` §4.2, Phase 2). With the
+        shade down and the tile visible, tap `End now` on the ongoing notification below it,
+        and let a cap fire with the shade open: the tile should flip to `Snooze here` without
+        the shade being closed and reopened. Then confirm the passive bind is still intact —
+        reopen the shade twice a few minutes apart and check the countdown subtitle has moved,
+        which is what an active tile would have cost. Nothing in this sandbox can check either:
+        `TileService` and `qsTile` aren't practically testable, so only the register/notify
+        seam behind them is covered by unit tests.
 
 ### Samsung, at Phase 8
 
