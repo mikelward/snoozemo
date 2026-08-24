@@ -31,3 +31,7 @@ local.properties
 # JVM fatal-error / replay crash dumps from forked test workers
 hs_err_pid*.log
 replay_pid*.log
+
+# Bytecode from the docs-tooling scripts (scripts/*.py); nothing here ships.
+__pycache__/
+*.pyc
