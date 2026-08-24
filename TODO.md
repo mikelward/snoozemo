@@ -84,20 +84,27 @@ release rather than dropped.
       Written from the manifests and the five `SharedPreferences` stores rather than from
       the spec alone, so the "what Snoozemo keeps" table lists what the code actually
       writes and when it is erased. Two things it deliberately does **not** do:
-      - **It does not describe the debug log (§4.6).** The log isn't built, and a policy
-        that describes a feature the app doesn't have is inaccurate in the direction that
-        costs trust. The gate stays where it was — the log's own PR adds the section, and
-        Phase 5's "must describe what the log carries **before** the sharing surface ships"
-        is what holds it.
+      - **It does not describe the debug log (§4.6)** — *true when this item landed, since
+        superseded* (Codex, PR #102). At the time the log wasn't built, and a policy
+        describing a feature the app doesn't have is inaccurate in the direction that costs
+        trust; the gate was Phase 5's "must describe what the log carries **before** the
+        sharing surface ships". Both have since happened: the sharing surface is in, and
+        `docs/PRIVACY.md` has a complete `The debug log` section. Nothing here blocks
+        hosting the policy.
       - **It is not published by this commit.** Hosting it, and the Play Data Safety form
         it has to agree with, belong to Phase 6's release plumbing — which is the
         *internal-track* release, so both are due before the first build reaches a tester,
         not at some later public launch.
-- [ ] Re-verify `docs/PRIVACY.md` against the shipped manifest before the first release.
-      It describes **v1 as specified**, so it names location, background location and the
-      Wi-Fi read, none of which the app declares yet (Phase 3). That is the safe direction
-      to be wrong in — a policy promising less than the app does is the harmful one — but
-      it has to be true on the day it is hosted, not merely true eventually.
+- [ ] Re-verify `docs/PRIVACY.md` against the shipped build before the first release.
+      **The manifest half is done** — location and the Wi-Fi read landed in the main
+      manifest and background location in `play`'s (2026-08-22), so the earlier note that
+      the app declared none of them is stale (Codex, PR #102). What is still ahead of the
+      build is behavior: it describes **v1 as specified**, including the departure
+      detection that ends a snooze on leaving, and presence is Phase 3 — every snooze is
+      duration-only today. A policy promising less than the app does is the harmful
+      direction, so this is the safe one to be wrong in, but what it says Snoozemo keeps
+      and does has to match the shipped build on the day it is hosted, not merely
+      eventually.
 
 ## Phase 1 (M1) — The DND half
 
@@ -1727,9 +1734,33 @@ the point is that every other line of the app is worthless if it isn't true.
       *(Landed: `checkReleaseVersionDerivation` fails every `pre*ReleaseBuild` when the
       count, hash, or clone depth kept the version from being derived; debug builds, tests,
       and lint on a shallow checkout are untouched.)*
+- [ ] **Gate a release build on the merged `playRelease` manifest**, the way
+      `checkReleaseVersionDerivation` gates it on a derived version. `DeclaredPermissionsTest`
+      asserts the permissions the Play declarations rest on, but unit tests run on the debug
+      build type alone (`app/build.gradle.kts` — enabling release unit tests needs
+      `compose.ui.test.manifest` moved off `debugImplementation` first, or the screenshot tests
+      lose the activity they launch), so it reads `playDebug`. Nothing today makes the two
+      differ — no release source set, no `releaseImplementation`, and the permission sets match
+      apart from the applicationId suffix on `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` — so
+      this closes a gap by construction rather than fixing a live bug (Codex, PR #102). A task
+      reading `SingleArtifact.MERGED_MANIFEST` for the `playRelease` variant and failing on
+      `INTERNET`, `AD_ID`, a typed `FOREGROUND_SERVICE_*`, or any `foregroundServiceType` is
+      the shape; hook it the way the version check hooks `pre*ReleaseBuild`.
+- [ ] **Maintainer decision: does WorkManager's merged `FOREGROUND_SERVICE` permission matter?**
+      The `play` release manifest carries `android.permission.FOREGROUND_SERVICE` and `WAKE_LOCK`
+      from WorkManager, though Snoozemo's own manifests request neither and no service declares a
+      `foregroundServiceType` (`DeclaredPermissionsTest` pins the typed permissions and the
+      service types — not the bare `FOREGROUND_SERVICE`, and not `WAKE_LOCK`, so a change to
+      either of those goes unnoticed by it). Play reviews the
+      *type*, and there is none — so the expectation is that no Foreground service types section
+      appears in Console. Confirm that when filing the other declarations; if a section does
+      appear, it needs a decision before upload rather than a form filled in on the spot, since
+      `SPEC.md` §3.3's whole argument is that Snoozemo must not enter a foreground-service review.
+      Reasoning and the options are in `docs/play-store-declarations.md`.
 - [ ] Data Safety declaration: "no data collected, no data shared" (`SPEC.md` §12). The intended
-      answer and its reasoning are recorded in `docs/play-store-internal-track.md`; filing it in
-      the Play Console questionnaire is the maintainer's own step.
+      answer and its reasoning are recorded in `docs/play-store-declarations.md`, together with
+      every other App content questionnaire and the drafted text for the background-location
+      permissions declaration; filing them in the Play Console is the maintainer's own step.
 - [x] In-app prominent disclosure before the location permission prompt (`SPEC.md` §3.2/§12).
       **Landed**, rewritten 2026-08-22 to match the sibling ClothesCast repo's shape — which has
       already cleared Play review with it — after the original full-screen version drew several

@@ -152,36 +152,15 @@ will accept uploads from the service account.
 
 ## App content declarations
 
-How to answer the Play Console questionnaires (Policy → App content). These
-answers must stay consistent with `docs/PRIVACY.md` and `SPEC.md` §12 —
-re-check the Console's current wording when actually submitting; Google
-revises these forms periodically.
-
-- **Privacy policy**: https://mikelward.github.io/snoozemo/PRIVACY.html
-- **Ads**: **No.** Snoozemo embeds no ad SDKs, shows no ads, and declares no
-  `INTERNET` permission at all (`SPEC.md` §12), so there is nothing that could
-  serve one.
-- **App access**: all functionality is available without special access — no
-  login, no gated areas.
-- **Content rating (IARC questionnaire)**: utility app; no user-generated
-  content, no violence, sexuality, gambling, or controlled substances; expect
-  an Everyone rating.
-- **Target audience**: general audience, not directed at children — a Do Not
-  Disturb utility has no content or feature aimed at kids. Do not declare
-  appeal to children.
-- **Data safety**: **no data collected, no data shared.** Snoozemo declares no
-  `INTERNET` permission, so nothing can leave the device at all (`SPEC.md`
-  §3.5, §12) — the strongest form this answer can take, and the one already
-  recorded as the intended answer in `SPEC.md` before this doc existed.
-  Location is used on-device only, to compare the phone's current position
-  against the place a snooze started; it is never transmitted, stored beyond
-  what `docs/PRIVACY.md` describes, or shared with anyone. The **background
-  location permissions declaration** (Play Console → App content →
-  Permissions Declaration Form, `SPEC.md` §3.2) is a separate form from Data
-  Safety and is Phase 3/6's own longest-lead item — see `TODO.md` — needing a
-  working departure to film before it can be submitted.
-- **Government app / News app / COVID-19 app / Financial features / Health**:
-  No / not applicable to all of them.
+Every Play Console questionnaire, the answer to give, and the reason behind
+it now live in **[`play-store-declarations.md`](play-store-declarations.md)**,
+alongside the drafted text for the background-location permissions
+declaration. Short version: no ads, no data collected, no data shared, not
+directed at children, and a separate permissions declaration form that gates
+publishing — on the internal track as much as production — and every
+automated upload through the Publishing API, until it is filed. It does not
+gate the manual seed upload in step 2 above, which a new listing needs
+before the API path exists at all.
 
 ## Store listing (fastlane metadata)
 
