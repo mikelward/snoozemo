@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="tile_name">Snoozemo</string>
+    <string name="tile_snooze_here">Hier schlummern</string>
+    <string name="tile_snoozing">Schlummert</string>
+    <string name="tile_timer_only">Nur Timer · %1$s</string>
+    <string name="tile_state_off">Aus</string>
+    <string name="tile_state_on">Schlummert, %1$s</string>
+    <string name="tile_remaining_hours">noch %1$dh %2$dm</string>
+    <string name="tile_remaining_minutes">noch %1$dm</string>
+</resources>
