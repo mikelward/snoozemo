@@ -100,37 +100,61 @@ internal class PlatformWifiWatch(
             // seeded from the arm-time anchor as *associated*, would then
             // hold that belief forever: a restore after the user already
             // left, off Wi-Fi from the start, suppressed until the cap
-            // rather than watched. This reads the state the callback would
-            // have reported and delivers it once, explicitly; the async
-            // callback still owns every transition after. A separate
-            // `runCatching` from the registration above, so a failure here —
-            // registered fine, but the read itself refused — is diagnosed
-            // for what it is rather than reported as a registration failure;
-            // either way the outcome is the same fail-open loss.
-            runCatching { seedFromCurrentNetworks() }
+            // rather than watched. So the one thing this read has to settle
+            // is whether there is any Wi-Fi at all; the async callback owns
+            // every transition after, and it is the only source that can
+            // name the network.
+            //
+            // **It cannot read the SSID, and must not try.**
+            // `getNetworkCapabilities` documents that it strips
+            // location-sensitive data — `FLAG_INCLUDE_LOCATION_INFO` applies
+            // to a callback, never to a direct read — so every SSID this
+            // path could see is the redaction placeholder, which the tracker
+            // reads (correctly, for a callback) as *not associated*. Asking
+            // anyway reported a loss on every arm and every restore, however
+            // firmly the phone was sitting on the anchor's network: a
+            // five-minute grace deadline armed against a snooze in no
+            // trouble at all, cleared only if the async callback won the
+            // race to correct it. So a Wi-Fi network being present here
+            // means "wait for the callback", and only its *absence* — which
+            // needs no SSID to establish — is reported.
+            //
+            // A separate `runCatching` from the registration above, so a
+            // failure here — registered fine, but the read itself refused —
+            // is diagnosed for what it is rather than reported as a
+            // registration failure; either way the outcome is the same
+            // fail-open loss.
+            val read = runCatching { anyWifiConnected() }
                 .onFailure { SnoozeDebugLog.warning("Wi-Fi initial state read refused; treating as loss", it) }
-                // A refused read joins the same fail-open path as a genuine
-                // disconnect — through the tracker, not straight to
-                // `onSignal` — so its state stays the source of truth for
-                // the async callback still to come; two `AnchorWifiLost`s in
-                // a row from a stale tracker belief would be a spurious
-                // repeat the tracker exists to suppress.
-                .let { tracker.onWifiSsid(currentAssociationSsid(), readElapsedRealtimeMs())?.let(onSignal) }
+            // A refused read joins the same fail-open path as a genuine
+            // disconnect — through the tracker, not straight to `onSignal` —
+            // so its state stays the source of truth for the async callback
+            // still to come; two `AnchorWifiLost`s in a row from a stale
+            // tracker belief would be a spurious repeat the tracker exists to
+            // suppress. What the read may conclude at all is the tracker's
+            // rule, stated and tested there.
+            tracker.onSeedRead(
+                readSucceeded = read.isSuccess,
+                anyWifiConnected = read.getOrDefault(false),
+                atElapsedRealtimeMs = readElapsedRealtimeMs(),
+            )?.let(onSignal)
         }
     }
 
     /**
-     * Populates [ssidByNetwork] from whatever Wi-Fi networks are already
-     * connected — the aggregation the async callback builds up over time,
-     * read once up front (Codex, PR #77) rather than waited for, since a
-     * registration with nothing to transition from dispatches nothing.
+     * Whether the phone is on any Wi-Fi network at all, read once up front
+     * (Codex, PR #77) rather than waited for, since a registration with
+     * nothing to transition from dispatches nothing.
+     *
+     * Deliberately says nothing about *which* network, and does not touch
+     * [ssidByNetwork] — see the constructor's note on why an SSID read here
+     * can only ever come back redacted. False is the one answer this can
+     * establish on its own, and it is the answer that matters: no Wi-Fi
+     * means no anchor association, whatever the anchor's SSID is.
      */
-    private fun seedFromCurrentNetworks() {
-        for (network in connectivity.allNetworks) {
-            val caps = connectivity.getNetworkCapabilities(network) ?: continue
-            if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue
-            ssidByNetwork[network] = (caps.transportInfo as? WifiInfo)?.ssid
-        }
+    private fun anyWifiConnected(): Boolean = connectivity.allNetworks.any { network ->
+        connectivity.getNetworkCapabilities(network)
+            ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
     }
 
     /**

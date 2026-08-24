@@ -38,6 +38,38 @@ internal class AnchorWifiTracker(private val anchorSsid: String) {
      * forbids. The escalation it causes is settled by the same machinery as
      * any other — a fix, or the grace period.
      */
+    /**
+     * Feeds the one-shot read of the platform's *currently connected*
+     * networks that [PlatformWifiWatch] takes at registration, as opposed to
+     * the callback's reports.
+     *
+     * That read is a weaker instrument than a callback and this is where the
+     * difference is stated: it cannot name a network, because
+     * `getNetworkCapabilities` strips the SSID from a direct read and hands
+     * back the redaction placeholder however firmly the phone is associated.
+     * So it may answer only the question it can actually answer — is there
+     * any Wi-Fi at all — and the two answers are not symmetric. *No* Wi-Fi
+     * settles the anchor's association on its own: nothing is associated to
+     * anything. Wi-Fi *present* settles nothing, because which network it is
+     * decides everything and this read cannot see it; the callback that owns
+     * every transition is along momentarily, and waiting for it is free.
+     *
+     * Reading the redacted SSID anyway is what put a five-minute grace
+     * deadline on every arm and every restore of a Wi-Fi-only snooze — a
+     * loss reported against a phone sitting on its own anchor, cleared only
+     * if the callback won the race to correct it, and ending the snooze if
+     * it did not.
+     *
+     * [readSucceeded] false is a refused read, which fails open to a loss
+     * like every other unanswerable question here (D7).
+     */
+    fun onSeedRead(
+        readSucceeded: Boolean,
+        anyWifiConnected: Boolean,
+        atElapsedRealtimeMs: Long,
+    ): PresenceSignal? =
+        if (readSucceeded && anyWifiConnected) null else onWifiSsid(null, atElapsedRealtimeMs)
+
     fun onWifiSsid(raw: String?, atElapsedRealtimeMs: Long): PresenceSignal? {
         val now = AnchorCapture.sanitizeSsid(raw) == anchorSsid
         val was = associated
