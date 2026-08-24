@@ -2307,6 +2307,29 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     against this question in the meantime; the engine work already landed stands either way, since
     a snooze that ends on a duration cap needs the same controller.
 
+## Flagged for maintainer decision
+
+- **A grace deadline restored by the grace alarm can end a Wi-Fi-only snooze the user
+  returned to** (Codex, PR #105; open). Sequence: Wi-Fi-only snooze loses its network (grace
+  starts), the process dies during the 5-minute grace, the user rejoins the anchor's Wi-Fi,
+  and the *grace alarm* — not the recheck alarm — is what restores the service. On restore
+  `PlatformWifiWatch`'s synchronous seed runs before the bridge replays the held
+  `GraceElapsed`, and PR #91's ordering assumes that seed delivers a positive association to
+  clear the deadline first. It can't: `ConnectivityManager.getNetworkCapabilities()` redacts
+  the SSID (only a `NetworkCallback` with `FLAG_INCLUDE_LOCATION_INFO` sees it), so the seed
+  can only report Wi-Fi present/absent, never *which* network. The replayed `GraceElapsed`
+  then resolves `Departed` and the async association callback is ignored (`resolved` state).
+  - **Pre-existing, not introduced by this PR**: the old seed returned `AnchorWifiLost` on
+    this path, so it resolved `Departed` on replay too. This PR's redaction-aware seed is
+    neutral on the race, and its new recheck alarm makes the race *less* likely (a recheck
+    firing during the outage while the user is back on Wi-Fi clears the deadline first).
+  - **Direction is fail-open** — it ends a snooze the user returned to, principle 1's safe
+    side, not the never-ends failure.
+  - **The fix is architectural**: defer the `GraceElapsed` replay until the async Wi-Fi
+    callback has reported, and correct the now-false PR #91 ordering comment in
+    `GeofencePresenceMonitor`. That reworks carefully-reasoned restore ordering, so it wants
+    a deliberate call rather than a patch folded into this PR.
+
 ## Decisions needing review
 
 - **The Wi-Fi recheck alarm's period is 15 minutes** (2026-08-24): a Wi-Fi-only anchor has no
