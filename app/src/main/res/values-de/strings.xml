@@ -57,6 +57,7 @@
     <string name="setup_action_add">Hinzufügen</string>
     <string name="failure_could_not_add_tile">Kachel konnte nicht hinzugefügt werden</string>
     <string name="failure_could_not_open_settings">Einstellungen konnten nicht geöffnet werden</string>
+    <string name="main_not_snoozing">Schlummert nicht</string>
     <string name="arm">Schlummern</string>
     <string name="release">Schlummern beenden</string>
     <string name="rule_failed">Der Zugriff auf „Nicht stören“ ist erlaubt, aber Snoozemo konnte seine Regel nicht erstellen</string>
