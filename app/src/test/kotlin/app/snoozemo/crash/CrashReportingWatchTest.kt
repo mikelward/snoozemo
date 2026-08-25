@@ -27,6 +27,23 @@ class CrashReportingWatchTest {
 
     private val context get() = ApplicationProvider.getApplicationContext<Context>()
 
+    /**
+     * Writes the setting and **waits for the worker to finish it**.
+     *
+     * `CrashReporting.setEnabled` returns as soon as it has queued the work on
+     * a FIFO worker shared by every test in this class. A restore left
+     * unawaited therefore lands whenever it lands — including after the next
+     * test has registered its watch and asked for the opposite value, which
+     * fires that watch on the previous test's write and reads the wrong
+     * setting back out. Awaiting makes the ordering explicit rather than
+     * leaving it to how fast the runner happens to be.
+     */
+    private fun setEnabledAndWait(enabled: Boolean) {
+        val done = CountDownLatch(1)
+        CrashReporting.setEnabled(context, enabled = enabled) { done.countDown() }
+        assertTrue("the crash-reporting write never completed", done.await(5, TimeUnit.SECONDS))
+    }
+
     @Test
     fun `the watch fires with the store already settled`() {
         // What the replacement screen reads when the watch wakes it. Captured
@@ -46,7 +63,7 @@ class CrashReportingWatchTest {
             assertFalse(CrashReporting.lastSaveRefused)
         } finally {
             watch.close()
-            CrashReporting.setEnabled(context, enabled = true) {}
+            setEnabledAndWait(enabled = true)
         }
     }
 
@@ -68,7 +85,7 @@ class CrashReportingWatchTest {
             )
         } finally {
             second.close()
-            CrashReporting.setEnabled(context, enabled = true) {}
+            setEnabledAndWait(enabled = true)
         }
     }
 }
