@@ -1032,6 +1032,26 @@ internal object DebugLogging {
         onDismissOutcome = null
         lastDismissFailed = false
         worker.submit {
+            // Drain the outgoing sink's *own* worker before orphaning it.
+            // Nulling the field below stops nothing that is already queued on
+            // that private thread, and the queue is not always empty: an
+            // install that read the stored setting as **off** has a whole
+            // `deleteEverything()` pending (see `DebugFileSink.start`). Left
+            // running, that delete lands after the *next* test has written its
+            // fixture files and wipes them, so its own `install` finds an empty
+            // directory — the failure reads "install left [current.log] with
+            // the log on", with nothing in the test body to explain it, because
+            // by then `@Before` has already set the setting back to on.
+            //
+            // `SnoozemoApplication.onCreate` is what makes this reachable
+            // rather than theoretical: it installs the log for every
+            // Robolectric test, so each test inherits a sink started under
+            // whatever setting the previous test left behind — and this class
+            // deliberately writes the setting off partway through.
+            //
+            // Draining here removes the race by construction instead of
+            // narrowing the window.
+            sink?.awaitIdleForTest()
             sink = null
             // Cleared alongside the sink: leaving it set would let a read in
             // the next test retry the installation and quietly succeed,
