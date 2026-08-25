@@ -914,10 +914,6 @@ jobs:
           # "stay queued and ship with the next real release instead of
           # being lost").
           oldest_head=""
-          # 332161221 is this workflow's id before the ci.yml rename. Its runs
-          # hold the last published release until one publishes under the
-          # new path; drop it once that has happened.
-          for WORKFLOW_REF in ci.yml 332161221; do
           while IFS=$'\t' read -r run_id run_head; do
             [ -z "$run_id" ] && continue
             [ "$run_head" = "$AFTER_SHA" ] && continue
@@ -947,13 +943,9 @@ jobs:
               break
             fi
           done < <(gh api \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW_REF}/runs?branch=main&per_page=100" \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&per_page=100" \
             --jq '.workflow_runs[]? | [.id, .head_sha] | @tsv' \
             2>/dev/null || true)
-            if [ -n "$prev_sha" ]; then
-              break
-            fi
-          done
 
           # If a later push already published, this run is superseded —
           # skip (Codex, PR #97, tenth and eleventh passes). `concurrency`
