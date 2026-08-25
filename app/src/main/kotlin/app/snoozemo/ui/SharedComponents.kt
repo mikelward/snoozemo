@@ -34,7 +34,8 @@ import app.snoozemo.R
 import app.snoozemo.UpdateProgress
 
 /**
- * The three screens (`MainScreen`, `PermissionsScreen`, `SettingsScreen`) share
+ * Every screen (`MainScreen`, `PermissionsScreen`, `SettingsScreen`,
+ * `LicensesScreen`) shares
  * this theme and these building blocks — `SetupRow` in particular is what a
  * capability row looks like wherever one appears, so it lives here rather than
  * inside any one screen's file.

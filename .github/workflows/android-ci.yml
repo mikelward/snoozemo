@@ -165,6 +165,17 @@ jobs:
         # other (SPEC.md §3.4).
         run: ./gradlew assembleDebug
 
+      - name: Check licenses exports are up to date
+        # The open-source attribution lists are committed to res/raw, one per
+        # flavor (AGP 9 can't auto-generate them into the app -- see
+        # app/build.gradle.kts). Regenerate and fail on drift so a dependency
+        # bump can't ship a stale or inaccurate Licenses page while CI stays
+        # green -- including the case where a new dependency lands in only one
+        # flavor.
+        run: |
+          ./gradlew :app:exportBundledLicenses --rerun
+          git diff --exit-code app/src/play/res/raw/aboutlibraries.json app/src/direct/res/raw/aboutlibraries.json
+
       - name: Run unit tests
         run: ./gradlew test
 
@@ -331,6 +342,13 @@ jobs:
 
       - name: Run settings screen screenshot tests
         run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.SettingsScreenScreenshotTest" -Proborazzi.test.record=true
+
+      - name: Run licenses screen screenshot tests
+        # Records the `play` flavor's attribution list, from that flavor's own
+        # committed res/raw/aboutlibraries.json — so the baseline moves
+        # whenever what the Play build bundles does. `direct`'s list is a
+        # strict subset and is covered by the export drift check in `build`.
+        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.LicensesScreenScreenshotTest" -Proborazzi.test.record=true
 
       - name: Run edge-to-edge screenshot tests
         run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.EdgeToEdgeScreenshotTest" -Proborazzi.test.record=true

@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.aboutlibraries)
 }
 
 // The fallback keeps a checkout with no git (a source zip, a fork's odd CI)
@@ -253,6 +254,83 @@ kotlin {
     }
 }
 
+// ----------------------------------------------------------------------------
+// Open-source attribution -> committed res/raw/aboutlibraries.json, per flavor
+// ----------------------------------------------------------------------------
+// AboutLibraries' Android auto-integration needs the legacy AppExtension that
+// AGP 9 removed, so the plugin can't generate res/raw for us at build time.
+// Instead we commit the export as a resource and regenerate it on demand with
+// `./gradlew :app:exportBundledLicenses`; CI reruns it and fails on drift. The
+// Licenses page reads the committed R.raw.aboutlibraries at runtime.
+//
+// One export per flavor, not one shared file: `play` bundles Play's in-app
+// update library (and the Play Services stack under it) and `direct` bundles
+// none of it (SPEC.md §3.4). A shared list would have the sideload build
+// claiming to ship Play code it doesn't contain, which is the opposite of what
+// an attribution page is for. So the plugin collects the union of both release
+// variants into a build-directory scratch file, and the task below writes one
+// filtered resource per flavor from it.
+aboutLibraries {
+    collect {
+        // Both release variants: their runtime classpaths differ, and the
+        // scratch export has to be a superset of each. Scoping to release also
+        // keeps test/debug-only artifacts (JUnit, Robolectric, Roborazzi,
+        // Compose tooling) out; includePlatform = false drops BOM/platform
+        // POMs that ship no runtime artifact.
+        filterVariants.addAll("playRelease", "directRelease")
+        includePlatform = false
+    }
+    export {
+        outputFile = layout.buildDirectory.file("aboutlibraries/all-variants.json").get().asFile
+        prettyPrint = true
+        // Drop the full SPDX license text: it's resolved from a network-fetched
+        // SPDX list whose exact wording varies by environment, so committing it
+        // would make the regenerate-and-diff CI check non-deterministic. The
+        // page still shows each license's name, SPDX id, and URL.
+        excludeFields.add("License.content")
+    }
+}
+
+// The plugin walks the dependency *graph*, so the scratch export lists nodes
+// that resolve to no bundled artifact even before the flavor split: KMP
+// metadata coordinates (e.g. androidx.compose.ui:ui, which selects
+// ...:ui-android) and the org.jetbrains.compose redirect modules that alias to
+// the androidx artifacts on Android. Both would render as duplicate rows.
+// Intersecting against a flavor's own release runtime classpath drops them and
+// settles the flavor question in the same pass -- what's left is exactly what
+// that flavor's APK bundles.
+@Suppress("UNCHECKED_CAST")
+tasks.register("exportBundledLicenses") {
+    description = "Exports open-source attributions, one per flavor, filtered to that APK's bundled artifacts."
+    group = "build"
+    dependsOn("exportLibraryDefinitions")
+    val scratchFile = layout.buildDirectory.file("aboutlibraries/all-variants.json")
+    val runtimeClasspaths = mapOf(
+        "play" to configurations.named("playReleaseRuntimeClasspath"),
+        "direct" to configurations.named("directReleaseRuntimeClasspath"),
+    )
+    val outputFiles = runtimeClasspaths.keys.associateWith { file("src/$it/res/raw/aboutlibraries.json") }
+    doLast {
+        runtimeClasspaths.forEach { (flavor, classpath) ->
+            val bundled = classpath.get().incoming
+                .artifactView { lenient(true) }.artifacts.artifacts
+                .mapNotNull { it.id.componentIdentifier as? org.gradle.api.artifacts.component.ModuleComponentIdentifier }
+                .map { "${it.moduleIdentifier.group}:${it.moduleIdentifier.name}" }
+                .toSet()
+            val root = groovy.json.JsonSlurper().parse(scratchFile.get().asFile) as MutableMap<String, Any?>
+            val libraries = root["libraries"] as List<Map<String, Any?>>
+            val kept = libraries.filter { (it["uniqueId"] as String) in bundled }
+            root["libraries"] = kept
+            // Prune any license no longer referenced by a kept library.
+            val used = kept.flatMap { (it["licenses"] as? List<String>).orEmpty() }.toSet()
+            (root["licenses"] as? MutableMap<String, Any?>)?.keys?.retainAll(used)
+            val out = outputFiles.getValue(flavor)
+            out.parentFile.mkdirs()
+            out.writeText(groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(root)) + "\n")
+        }
+    }
+}
+
 dependencies {
     implementation(project(":core"))
     implementation(project(":dnd"))
@@ -284,6 +362,10 @@ dependencies {
     // to this flavor alone, same as `presence`'s geofencing dependency, since
     // `direct` carries no Play Services dependency at all (SPEC.md §3.4).
     "playImplementation"(libs.play.app.update)
+    // Reads the committed res/raw/aboutlibraries.json for the Licenses page.
+    // Only `rememberLibraries` and the `Libs`/`Library` model are used -- the
+    // artifact's own list UI is not.
+    implementation(libs.aboutlibraries.compose.m3)
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)

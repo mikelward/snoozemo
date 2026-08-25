@@ -70,6 +70,7 @@ internal fun SettingsScreen(
     onShareDebugLog: () -> Unit,
     onDismissCrash: () -> Unit = {},
     onOpenPrivacyPolicy: () -> Unit = {},
+    onOpenLicenses: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -189,6 +190,21 @@ internal fun SettingsScreen(
         ) {
             Text(
                 text = stringResource(R.string.settings_privacy_policy),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        // Below the privacy policy, above the version — the same row, shape,
+        // and position as the sibling Simmo repo's own Licenses row.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpenLicenses)
+                .padding(vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.settings_licenses),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.weight(1f),
             )

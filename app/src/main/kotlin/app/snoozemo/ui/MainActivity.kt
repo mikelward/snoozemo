@@ -79,23 +79,23 @@ private const val KEY_ROUTED_TO_PERMISSIONS_ONCE = "routedToPermissionsOnce"
 private const val TICK_INTERVAL_MS = 60_000L
 
 /**
- * The three screens this activity switches between; there is no back stack
+ * The four screens this activity switches between; there is no back stack
  * beyond one level. Internal rather than private only so a lifecycle test
  * can assert on [MainActivity.screen] directly; nothing outside this file
  * constructs one in production.
  */
-internal enum class Screen { MAIN, PERMISSIONS, SETTINGS }
+internal enum class Screen { MAIN, PERMISSIONS, SETTINGS, LICENSES }
 
 /**
- * Hosts the three screens the app is split into (`TODO.md` Phase 4): [MainScreen],
- * [PermissionsScreen] and [SettingsScreen]. There is no navigation library —
- * deliberately, per the same TODO entry — so this class holds the one piece of
- * navigation state itself.
+ * Hosts the four screens the app is split into (`TODO.md` Phase 4): [MainScreen],
+ * [PermissionsScreen], [SettingsScreen], and [LicensesScreen] as a leaf off the
+ * Settings foot. There is no navigation library — deliberately, per the same
+ * TODO entry — so this class holds the one piece of navigation state itself.
  */
 class MainActivity : ComponentActivity() {
 
     /**
-     * Which of the three screens is on top.
+     * Which of the four screens is on top.
      *
      * Internal rather than private, like [latestAccessRefresh] below, only so
      * a test can pin it directly; nothing outside this class reads it in
@@ -756,7 +756,16 @@ class MainActivity : ComponentActivity() {
                                 onShareDebugLog = ::shareDebugLog,
                                 onDismissCrash = ::dismissCrash,
                                 onOpenPrivacyPolicy = ::openPrivacyPolicy,
+                                onOpenLicenses = { screen = Screen.LICENSES },
                             )
+                        }
+                        // Reached only from Settings, so Back goes there rather
+                        // than to Main. `screen` is persisted in the saved
+                        // instance state above, so a rotation partway down the
+                        // list stays on the page.
+                        Screen.LICENSES -> {
+                            BackHandler { screen = Screen.SETTINGS }
+                            LicensesScreen(onBack = { screen = Screen.SETTINGS })
                         }
                     }
                     // The one disclosure this app shows: SPEC.md §12 requires it
