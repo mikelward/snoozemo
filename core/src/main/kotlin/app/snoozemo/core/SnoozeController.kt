@@ -344,6 +344,40 @@ class SnoozeController(
     }
 
     /**
+     * Brings the cap in to [newCapExpiresAt] — a time chosen in the
+     * end-condition sheet (SPEC.md §4.4). Returns the shortened snooze, or null
+     * when there is nothing running or the new cap is not actually earlier.
+     *
+     * The mirror of [extendTo] and refuses the opposite direction, but the
+     * ordering rule it depends on is the same one and not the mirror of it: the
+     * caller re-arms the alarm **before** calling this, both ways round.
+     * Extending needs it because an alarm still set for the old time would end
+     * a snooze the countdown had promised more of; shortening needs it because
+     * an alarm left at the *later* time is a phone that stays quiet past the
+     * moment the user just picked, which is principle 1's failure rather than a
+     * cosmetic disagreement.
+     *
+     * §4.4 is explicit that this is not a fourth exit. It moves the one
+     * deadline the cap alarm already watches, so departure tracking is
+     * untouched and whichever comes first still wins (§7) — there is nothing
+     * here to tell the presence engine about.
+     *
+     * Clamping is the caller's: this refuses a value it cannot honor rather
+     * than quietly substituting a different one, so a sheet that computed its
+     * offer against a stale reading is a tap that reports failure instead of a
+     * snooze silently ending at a time nobody chose.
+     */
+    fun lowerCapTo(newCapExpiresAt: Instant): ActiveSnooze? {
+        val snooze = active ?: return null
+        if (!newCapExpiresAt.isBefore(snooze.capExpiresAt)) return null
+
+        val shortened = snooze.copy(capExpiresAt = newCapExpiresAt)
+        active = shortened
+        listener.onStateChanged(state, shortened, null)
+        return shortened
+    }
+
+    /**
      * Takes [restated] as the running snooze — the same snooze with its clock
      * frames rewritten onto the clock the user has just set (SPEC.md §7).
      * Returns it, or null when there is nothing running or it describes a

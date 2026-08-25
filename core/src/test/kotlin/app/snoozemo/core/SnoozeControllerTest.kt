@@ -915,6 +915,60 @@ class SnoozeControllerTest {
     }
 
     @Test
+    fun `a chosen time pulls the cap in and reports the new one`() {
+        // The end-condition sheet's time row (SPEC.md §4.4). Not a fourth exit
+        // — the same one deadline, moved.
+        armFully()
+        val chosen = start.plus(Duration.ofHours(1))
+
+        val shortened = controller.lowerCapTo(chosen)
+
+        assertEquals(chosen, shortened?.capExpiresAt)
+        assertEquals(chosen, controller.active?.capExpiresAt)
+        // Reported, so the notification's countdown follows the cap in rather
+        // than promising the eight hours it opened with.
+        assertEquals(SnoozeState.ARMED, listener.states.last().first)
+    }
+
+    @Test
+    fun `a chosen time refuses to push the cap out`() {
+        // The mirror of the extension's refusal, and for the same reason read
+        // the other way: the caller re-arms the alarm first, so a cap that isn't
+        // earlier means the alarm didn't move either. `+30 min` is the only
+        // thing that lengthens a snooze (SPEC.md §4.3).
+        armFully()
+        val original = controller.active!!.capExpiresAt
+
+        assertNull(controller.lowerCapTo(original))
+        assertNull(controller.lowerCapTo(original.plusSeconds(60)))
+        assertEquals(original, controller.active?.capExpiresAt)
+    }
+
+    @Test
+    fun `choosing a time on nothing does nothing`() {
+        assertNull(controller.lowerCapTo(start.plus(Duration.ofHours(1))))
+        assertNull(controller.active)
+    }
+
+    @Test
+    fun `a chosen cap still fires, at the chosen time`() {
+        // The invariant a shortened cap must not break either: the cap always
+        // fires, and now it fires sooner than the default would have.
+        armFully()
+        val chosen = start.plus(Duration.ofHours(1))
+        controller.lowerCapTo(chosen)
+
+        now = chosen.minusSeconds(1)
+        controller.onCapCheck()
+        assertNotNull(controller.active)
+
+        now = chosen
+        controller.onCapCheck()
+        assertNull(controller.active)
+        assertEquals(EndReason.DURATION_CAP, listener.states.last { it.second != null }.second)
+    }
+
+    @Test
     fun `an extended cap still fires, at the new time`() {
         // The invariant the extension must not break: the cap always fires.
         armFully()
