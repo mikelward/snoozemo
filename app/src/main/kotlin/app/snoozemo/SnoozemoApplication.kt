@@ -4,6 +4,7 @@ import android.app.Application
 import android.os.Handler
 import android.os.Looper
 import app.snoozemo.core.SnoozeDebugLog
+import app.snoozemo.crash.CrashReporting
 import app.snoozemo.dnd.PrefsZenRuleIdStore
 import app.snoozemo.presence.installPresenceWakeup
 import app.snoozemo.snooze.ActiveSnoozeStore
@@ -50,6 +51,13 @@ class SnoozemoApplication : Application(), androidx.work.Configuration.Provider 
         // recorded before the sink registers still reach the file, since the
         // sink writes the whole buffer on the next entry after.
         DebugLogging.install(this)
+        // Crash reporting's own gate (SPEC.md §12). Spawns its own worker like
+        // the line above, so the cold tap never waits on the preferences read
+        // — and it is what makes the opt-out real: the play manifest starts
+        // Crashlytics with collection off, so an install where the user has
+        // opted out never begins collecting. A no-op on `direct`, which has no
+        // reporter to gate.
+        CrashReporting.install(this)
         // A presence observation arriving into a process the system restarted
         // — a geofence exit is often the very thing that restarts it — has
         // nobody to receive it until the service restores the snooze, so this

@@ -35,8 +35,9 @@ DND back off.
 - Scheduled DND. The OS already does this well; Snoozemo is the *ad-hoc, place-scoped* case it does
   badly. The calendar is read once, at arm time, only to seed a suggested end time (§4.4) — the app
   never triggers itself from your calendar.
-- Cross-device sync or accounts. The app declares no `INTERNET` permission today — see §12's
-  correction for why that is not read as a permanent architectural constraint.
+- Cross-device sync or accounts. Nothing about a snooze, a place, or the user's settings leaves
+  the phone. The `play` flavor does declare `INTERNET`, for crash reporting alone (§12); `direct`
+  declares none at all.
 - Wear OS, tablets, foldable-specific UI.
 - Automatic *arming* on arrival at a place (geofence enter). Deliberately deferred — see §14.
 
@@ -192,9 +193,11 @@ Arguing for approval:
   the user puts the phone in their pocket and stops interacting with it.
 - Google's own policy now routes this exact use case to the Geofence API, which requires the
   permission. The declaration can say so directly, and that is a strong argument to make in the form.
-- There is no `INTERNET` permission (§12). Nothing is collected, transmitted, or monetized, and the
-  Data Safety form says so. Most background-location rejections are about undisclosed collection and
-  sharing; there is nothing here to disclose.
+- **No location data is collected, transmitted, or monetized, and the Data Safety form says so**
+  (§12). The `play` build does declare `INTERNET`, but the only thing using it is crash reporting,
+  which carries no coordinate, no SSID/BSSID and no place name — the declaration covers crash logs,
+  diagnostics and an installation identifier, and nothing else. Most background-location rejections
+  are about undisclosed collection and sharing of *location*; there is none of that here.
 - The in-app prominent disclosure and the permission flow are straightforward to demonstrate on
   video, and the feature is visibly the app's headline function.
 
@@ -619,9 +622,9 @@ Snoozemo neither notices nor cares — it committed to 14:00. That is correct. A
 re-times itself under you is worse than one that is occasionally stale, and `+30 min` (§4.3) covers
 the overrun.
 
-Remaining constraints: read-only, never written, never leaves the device (there is no `INTERNET`
-permission for it to leave by, §12); and v1.1 ends at the current event and does **not** chain into
-the next one — chaining is how you end up silenced all afternoon by a calendar you forgot about.
+Remaining constraints: read-only, never written, never leaves the device (nothing transmits it —
+crash reporting is the only thing on the network and it carries no calendar data, §12); and v1.1
+ends at the current event and does **not** chain into the next one — chaining is how you end up silenced all afternoon by a calendar you forgot about.
 
 ### 4.5 Ending
 
@@ -638,10 +641,10 @@ no trace the user can read, and "it ended early" is not a reproducible bug repor
 the two failures that matter most — an early release and a stuck snooze — are exactly the two that
 cannot be diagnosed.
 
-**An on-device log, on by default** (maintainer, 2026-08-11), with a setting to turn it off. The
-app already declares no `INTERNET` permission (§12), so nothing leaves the device unless the user
-hands it over: sharing goes through the system share sheet (and a copy-to-clipboard fallback), which
-makes every send an explicit act with a visible destination. Retention is bounded — the current run
+**An on-device log, on by default** (maintainer, 2026-08-11), with a setting to turn it off.
+Nothing in it leaves the device unless the user hands it over: it is not attached to a crash report
+— the only thing that transmits (§12) — so sharing goes through the system share sheet (and a
+copy-to-clipboard fallback), which makes every send an explicit act with a visible destination. Retention is bounded — the current run
 plus the previous one, rotated at start, in `cacheDir`, which is excluded from backup.
 
 On-by-default is the decision because off-by-default has a cost that only looks small: the failures
@@ -2184,6 +2187,64 @@ doesn't mention shows up as a row with no rationale behind it.
   configure". When it lands, the Play Data Safety declaration, `docs/PRIVACY.md`, and the
   `AndroidManifest.xml` comment above the (then-present) `INTERNET` permission all need to
   change together, not just the code.
+- **That is now what happened: Crashlytics is in, on `play` only** (2026-08-25). The bullet
+  above is the decision; this is its resolution, and the two bullets are the pair to read
+  together. Firebase Crashlytics reports crashes from the `play` flavor, which therefore
+  declares `INTERNET`. `docs/crashlytics.md` carries the operational detail (cost — $0/month,
+  no metered tier; setup; how to verify it on a device).
+
+  Four things about the shape of it are decisions rather than implementation:
+
+  - **`play` only, and that is not a convenience.** `direct` exists to be the build with no
+    restricted permission and no Play Services dependency (§3.4), so it gains neither the
+    reporter nor `INTERNET` — "this build cannot open a network connection" stays literally
+    true of one of the two flavors, auditable from its manifest, and an F-Droid build could
+    not carry a proprietary reporter anyway. `DeclaredPermissionsTest` pins both directions.
+  - **On by default, with an opt-out in Settings**, as the bullet above specified. A reporter
+    that starts off guarantees the first crash — the unrepeatable one — is the one nobody
+    captured, which is the same argument §4.6 makes for the debug log. What makes the default
+    honest is that the switch is real: the `play` manifest starts Crashlytics with collection
+    **off**, and the app applies the stored choice at startup, so an install where the user
+    has opted out never begins collecting rather than collecting until told to stop.
+  - **Crashlytics without Firebase Analytics, for now.** The understanding this rests on
+    is that Analytics is what brings the `AD_ID` permission in, and Play's "Advertising ID:
+    not used" answer was judged worth more than the console's crash-free-users percentage.
+    That link has not been verified against Google's own documentation from this repo, so it
+    is the working reason rather than an established one. What *is* checked is the outcome:
+    `DeclaredPermissionsTest` asserts `AD_ID` absent on both flavors. Analytics may be added
+    later (maintainer, 2026-08-25); when it is, that assertion failing is the prompt to take
+    the Data Safety and Advertising ID answers as a decision rather than a dependency bump.
+  - **The floor is unchanged, and nothing was added to reach it.** A crash report is a stack
+    trace, a device model, and a version. Snoozemo attaches no custom keys and no breadcrumbs,
+    so there is no mechanism here that could carry a coordinate, an SSID or BSSID, or a
+    user-typed place name. The debug log stays on the phone and still leaves it only when the
+    user shares it by hand.
+
+  **What the off switch means: the feature, not the network** (maintainer's reading, 2026-08-25 —
+  `TODO.md` carries it as the working direction awaiting confirmation, not a closed decision).
+  Turning
+  crash reporting off stops crash reports. It does not claim the process opens no connection at
+  all, and it does not need to: **the permission is not the invariant — user data leaving the
+  device is.** Most Play apps hold `INTERNET`, and treating its presence as a problem in itself
+  costs the product without buying the user anything.
+
+  So the line this section defends is unchanged and is the one worth testing: nothing derivable
+  about where the user lives, works or sleeps leaves the phone, and what does leave is under the
+  user's control. A crash report carries a stack trace, a device model and a version — no
+  coordinate, no SSID/BSSID, no place name, no snooze timing, no debug log — and the user can
+  switch it off. The corollary is that **gates key on whether a feature is on, not on whether a
+  permission is held**, which is why the release pipeline's Data Safety gate asks whether crash
+  reporting is enabled in the build rather than inspecting the manifest.
+
+  **Play Data Safety moved with it**, as the bullet above required: from "no data collected,
+  no data shared" to **crash logs, diagnostics, and device or other IDs — collected, not
+  shared, optional**. The third type is the Crashlytics installation identifier, which
+  `docs/PRIVACY.md` describes: it is what lets repeat crashes on one phone be told apart, and
+  omitting it from the form would under-declare (maintainer, 2026-08-25, on Codex's reading in
+  PR #113). It is app-scoped and is **not** an advertising identifier — the separate
+  Advertising ID declaration stays "not used", and that answer is checked rather than asserted,
+  by `DeclaredPermissionsTest`. `docs/play-store-declarations.md` carries the field-by-field
+  answers; updating the Play Console form is a maintainer action the code cannot do.
 - Coordinates never leave the device. The v1 anchor is discarded when the snooze ends.
 - Snooze history (if added) is local, off by default, and clearable.
 - **The debug log (§4.6) is the one sanctioned exception, and a narrow one.** It is on by default

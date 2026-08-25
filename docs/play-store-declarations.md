@@ -8,10 +8,11 @@ declarations.
 
 Two rules govern everything below. **These answers must stay true of the `play`
 flavor's shipped manifest**, which is the only build that reaches Play (`SPEC.md`
-§3.4). `DeclaredPermissionsTest` covers four of them — no `INTERNET` (Data safety),
-no `AD_ID` (Advertising ID), no typed `FOREGROUND_SERVICE_*` permission and no
-service declaring a `foregroundServiceType` on `play` (foreground service types),
-and the background grant on `play` but never on `direct`. Everything else here is a
+§3.4). `DeclaredPermissionsTest` covers four of them — `INTERNET` on `play` but never on
+`direct` (Data safety), no `AD_ID` on either (Advertising ID), no typed
+`FOREGROUND_SERVICE_*` permission and no service declaring a `foregroundServiceType`
+on `play` (foreground service types), and the background grant on `play` but never on
+`direct`. Everything else here is a
 statement about the product, not something a test can hold.
 
 **What that test reads is the `playDebug` merged manifest, not `playRelease`.**
@@ -61,16 +62,16 @@ Play Console → **Policy → App content**. Answers, and why each one is what i
 |---|---|---|
 | **Privacy policy** | `https://mikelward.github.io/snoozemo/PRIVACY.html` | Required for any app requesting a sensitive permission. Must resolve before you submit. |
 | **App access** | All functionality available without special access | No account, no login, no gated area. Nothing for a reviewer to be given credentials for. |
-| **Ads** | No ads | No ad SDK, and no `INTERNET` permission for one to use (`SPEC.md` §12). |
+| **Ads** | No ads | No ad SDK. `INTERNET` is declared on `play`, but the only thing that uses it is crash reporting (`SPEC.md` §12). |
 | **Content rating** (IARC) | Utility; no user-generated content, violence, sexuality, gambling, or controlled substances | Expect Everyone. |
 | **Target audience and content** | **13 and over**; not directed at children | Maintainer's answer (2026-08-24), from what has cleared review on their other listings. A Do Not Disturb utility has no content or feature aimed at kids, and leaving the under-13 boxes clear is how Play expresses "not directed at children" — which keeps Snoozemo out of the Families program without declaring an adults-only audience it does not have. That matters because `docs/PRIVACY.md` says outright that the app works the same for a user of any age; 13+ agrees with that, where 18+ would not. Note the sibling Simmo repo records 18+ for its own listing, on a rationale specific to it (future travel-eSIM commerce links). |
 | **News app** | No | |
 | **COVID-19 contact tracing / status** | No | |
-| **Data safety** | No data collected, no data shared | See below — this is the one with substance. |
+| **Data safety** | Collects **crash logs**, **diagnostics**, and **device or other IDs**; shares nothing; all optional | See below — this is the one with substance, and it changed when Crashlytics landed. |
 | **Government apps** | No | |
 | **Financial features** | None | |
 | **Health apps** | No | Not a health app; DND is not a health feature. |
-| **Advertising ID** | Not used | No `AD_ID` permission, no ad or analytics SDK. |
+| **Advertising ID** | Not used | No `AD_ID` permission and no analytics SDK. Crashlytics is added *without* Firebase Analytics precisely to keep this true (`SPEC.md` §12); `DeclaredPermissionsTest` fails if `AD_ID` ever appears. |
 | **Foreground service types** | *Expect no section* — but read the note below before assuming | No service in the `play` build declares a `foregroundServiceType`, and the type is what Play reviews (`SPEC.md` §3.3). The merged manifest does carry the bare `FOREGROUND_SERVICE` permission, from WorkManager. |
 
 ### Open: WorkManager puts `FOREGROUND_SERVICE` in the shipped manifest
@@ -106,25 +107,93 @@ runs on WorkManager), so it is not a change to make speculatively.
 
 ### Data safety, in detail
 
-The answer is **"Does your app collect or share any of the required user data
-types?" → No**, which collapses the rest of the form.
+**This answer changed on 2026-08-25**, when Crashlytics landed on the `play` flavor
+(`SPEC.md` §12). It used to be a flat "no data collected, no data shared", which the
+absence of `INTERNET` made trivially verifiable from the manifest. That is still true
+of `direct`, but `direct` never reaches Play — so the form now has to be filled in.
 
-That is not a stretched reading. Play defines *collection* as transmitting data off
-the device from your app, and *sharing* as transferring it to a third party.
-Snoozemo declares no `INTERNET` permission, so it cannot open a network connection
-at all — location is compared against the anchor on the phone and the record is
-erased when the snooze ends (`SPEC.md` §12, `docs/PRIVACY.md`). A reviewer can
-verify it from the manifest, which is the strongest form this answer takes.
+Answer **"Does your app collect or share any of the required user data types?" →
+Yes**, then, under **App activity / App info and performance**:
 
-The form still asks, whatever the answer above:
+| Field | Answer |
+|---|---|
+| Data type | **Crash logs**, and **Diagnostics** (plus **Device or other IDs** — see below) |
+| Collected | Yes |
+| Shared | **No** — Firebase Crashlytics processes on Snoozemo's behalf, which Play does not count as sharing |
+| Processed ephemerally | No — Crashlytics retains reports (90 days) |
+| Required or optional | **Optional** — Settings → *Crash reports* turns it off, which is exactly what Play means by optional |
+| Purpose | **App functionality** and **Analytics** |
+
+Declare **no Location**. That is the answer that matters most here and it is not a
+stretched reading: the anchor is compared on the phone, is erased when the snooze ends,
+and is not attached to a crash report — the app has no code that attaches custom keys or
+breadcrumbs at all (`SPEC.md` §12's floor, `docs/crashlytics.md`). Nothing about a place,
+a network, or a snooze's timing is transmitted.
+
+#### **Device or other IDs** is declared too (maintainer, 2026-08-25)
+
+Raised by Codex on PR #113: `docs/PRIVACY.md` states plainly that Crashlytics records
+a randomly-generated installation identifier so repeat crashes on one phone can be told
+apart, and Play's **Device or other IDs** category covers app-scoped installation
+identifiers. Declaring only crash logs and diagnostics would then be an
+**under**-declaration — the direction with real consequences, where the other direction
+costs an extra row.
+
+The maintainer's call was to declare it. That looks accurate rather than merely
+cautious — `docs/PRIVACY.md` does say an installation identifier is recorded — but the
+decision was made without anyone here having read Google's current wording, so treat the
+row as the intended answer, to be checked against the page named below.
+
+| Field | Answer |
+|---|---|
+| Data type | **Device or other IDs** |
+| Collected | Yes |
+| Shared | **No** |
+| Processed ephemerally | No |
+| Required or optional | **Optional** — the same *Crash reports* switch turns it off with everything else |
+| Purpose | **App functionality**, **Analytics** |
+
+One thing left to confirm, and it can only make the declaration *more* complete: Google's
+own Firebase data disclosure page for the Crashlytics SDK —
+<https://firebase.google.com/docs/android/play-data-disclosure> — is **not reachable from
+the build sandbox**, so nobody working in this repo has read its current wording. Skim it
+when filling in the form and add anything else it lists for `firebase-crashlytics`.
+
+Beyond Location, these three types are the whole declaration.
+
+#### The **Advertising ID** question is a separate one
+
+Worth flagging because the two are easy to run together, and they currently have
+different answers:
+
+- **Advertising ID** (App content) is answered **No** for Snoozemo today. That question
+  is about the Google Advertising ID and the `AD_ID` permission, and no `AD_ID` appears
+  in either flavor's merged manifest — which `DeclaredPermissionsTest` checks, so it is a
+  fact about the build rather than a judgment.
+- **Device or other IDs** (Data safety) is **Yes**, per the row above, covering the
+  Crashlytics installation identifier.
+
+The common understanding is that Firebase **Analytics** is what brings `AD_ID` in, and
+that is the reason Snoozemo's Crashlytics dependency is added without it — but that has
+not been verified against Google's documentation from this repo, so confirm it rather
+than relying on it. The point to carry forward is narrower and safe either way: these are
+two different questions, and the answer to one does not settle the other.
+
+**This changes if analytics is added later**, which the maintainer has flagged as
+possible. Adding Firebase Analytics (or another SDK carrying `AD_ID`) would likely move
+the Advertising ID answer to yes and add data types here, so it is a distribution
+decision to take deliberately — `DeclaredPermissionsTest`'s `AD_ID` assertion failing is
+the intended prompt for that conversation, not an obstacle to route around.
+
+The form also asks:
 
 - **Data deletion** — no accounts exist, so there is no account-deletion URL to give.
-  Uninstalling removes everything; `docs/PRIVACY.md` says so.
-- **Encryption in transit** — not applicable with nothing in transit. Answer it as the
-  Console presents it rather than leaving it blank.
+  Uninstalling removes everything on the phone; Crashlytics reports age out after 90
+  days, and `docs/PRIVACY.md` gives a contact address for removing them sooner.
+- **Encryption in transit** — **Yes**. Crashlytics uploads over HTTPS.
 
-**Two paths move data off the phone, and neither is collection — worth having the
-answer ready rather than discovering it in a reviewer's question.** *Share debug
+**Two further paths move data off the phone, and neither is collection — worth having
+the answer ready rather than discovering it in a reviewer's question.** *Share debug
 logs* hands a report to Android's share sheet: the user picks the destination and the
 app transmits nothing, which is the user acting, not the app collecting. Android's
 own new-phone transfer copies app-private data at the OS's initiative, not
@@ -132,10 +201,10 @@ Snoozemo's, and the runtime snooze record is excluded from it by
 `res/xml/data_extraction_rules.xml`. Both are described plainly in
 `docs/PRIVACY.md`.
 
-**This answer changes the day `INTERNET` lands.** A crash reporter is expected
-(`SPEC.md` §12) and it moves Data safety off "no data collected" onto crash logs and
-diagnostics. Manifest comment, `SPEC.md` §12, `docs/PRIVACY.md`, and this form all
-change together.
+**Updating the Console form is a maintainer action.** Nothing in the repo can do it,
+and a build that ships crash reporting under the old "no data collected" answer is a
+policy violation rather than a stale doc — so this is the one item here that has to
+be done before the next `play` upload, not alongside it.
 
 ## The background location permissions declaration
 
@@ -166,8 +235,9 @@ keep them true of the build you are uploading.
 > The app registers one geofence around the point where the snooze was armed and
 > ends the snooze on the exit transition. It runs no other location work: nothing is
 > tracked when no snooze is running, no path or history is recorded, and the anchor
-> point is erased the moment the snooze ends. Location never leaves the device — the
-> app does not request the `INTERNET` permission, so it cannot transmit anything.
+> point is erased the moment the snooze ends. Location never leaves the device: the
+> app sends nothing but crash reports, which contain a stack trace, the device model
+> and the app version, and no location data of any kind.
 
 ### Why can a foreground (while-in-use) permission not achieve the same result?
 

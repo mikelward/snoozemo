@@ -37,6 +37,18 @@ internal fun SettingsScreen(
     settingsFailure: SetupRowId?,
     debugLogEnabled: Boolean?,
     debugLogSaveFailed: Boolean,
+    /**
+     * Whether crash reporting is on, or **null when this build has no reporter
+     * to offer** — `direct` always, and a `play` build made without a Firebase
+     * config (`docs/crashlytics.md`). Null draws no row at all rather than a
+     * disabled one: a switch over a reporter that does not exist would tell
+     * the user they had turned something off that was never on. It is also
+     * null until the store has answered, the same
+     * null-until-read discipline as [debugLogEnabled] and for the same reason.
+     */
+    crashReportingEnabled: Boolean? = null,
+    /** Whether the last crash-reporting save was refused by storage. */
+    crashReportingSaveFailed: Boolean = false,
     // `PlayUpdateState.NotAvailable` on `direct` (no flavor branch needed
     // here — that flavor's checker never reports anything else) and while
     // `MainActivity` hasn't finished its own first resume check yet.
@@ -64,6 +76,7 @@ internal fun SettingsScreen(
     onTileRow: () -> Unit,
     onFiltersRow: () -> Unit,
     onDebugLog: (Boolean) -> Unit,
+    onCrashReporting: (Boolean) -> Unit = {},
     onStartPlayUpdate: () -> Unit = {},
     onCompletePlayUpdate: () -> Unit = {},
     onDismissPlayUpdate: () -> Unit = {},
@@ -162,6 +175,18 @@ internal fun SettingsScreen(
                 saveFailed = debugLogSaveFailed,
                 cleanupFailed = debugLogCleanupFailed,
                 onChange = onDebugLog,
+            )
+        }
+        // Directly below the debug-log switch: the two are the app's whole
+        // diagnostics story and belong read together, and this is the one of
+        // the pair that sends something off the phone — so it sits second,
+        // where the row above has already established what "diagnostics"
+        // means here.
+        crashReportingEnabled?.let {
+            CrashReportingRow(
+                enabled = it,
+                saveFailed = crashReportingSaveFailed,
+                onChange = onCrashReporting,
             )
         }
         // Always offered, unlike the rows above: there is no "done" state to

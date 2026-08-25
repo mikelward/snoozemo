@@ -80,7 +80,9 @@ release rather than dropped.
         glyphs fit at all: an even-weight stroke costs less area than a filled wedge, so
         the smallest `z` keeps its counters open under the tint that blooms.
 - [x] `docs/PRIVACY.md` backing the hosted privacy policy, plus the Play Data Safety
-      answers it has to agree with ("no data collected, no data shared", `SPEC.md` §12).
+      answers it has to agree with — "no data collected, no data shared" when this landed,
+      since superseded by crash reporting (`SPEC.md` §12; the current answer is the Phase 6
+      item below).
       Written from the manifests and the five `SharedPreferences` stores rather than from
       the spec alone, so the "what Snoozemo keeps" table lists what the code actually
       writes and when it is erased. Two things it deliberately does **not** do:
@@ -1726,6 +1728,88 @@ the point is that every other line of the app is worthless if it isn't true.
       one per flavor rather than one shared file, since `play` bundles Play's update library
       and `direct` bundles none of it; CI regenerates both and fails on drift.
 
+- [x] **Crash reporting (Firebase Crashlytics), `play` flavor only.** (`SPEC.md` §12,
+      `docs/crashlytics.md`) **Landed**: `play` declares `INTERNET` and reports crashes;
+      `direct` gains neither the reporter nor the permission, so that flavor still cannot
+      open a network connection at all. On by default with an opt-out at Settings → *Crash
+      reports*; the `play` manifest starts Crashlytics with collection off and the app
+      applies the stored choice at startup, so an opt-out install never begins collecting.
+      Crashlytics **without** Firebase Analytics, so the Play "Advertising ID: not used"
+      answer stays true (`DeclaredPermissionsTest` fails if `AD_ID` ever appears). The
+      build activates it only when `app/google-services.json` exists, so fresh clones,
+      forks and every CI job but `deploy` build with it dormant.
+
+      Two follow-ups this leaves, both owned by the maintainer rather than the code:
+
+      - [ ] **Create the Firebase project and set `GOOGLE_SERVICES_JSON`.** Until the
+            secret is set in the `production` environment, the released AAB ships with
+            crash reporting dormant — a green build that reports nothing, which is worth
+            knowing rather than discovering from an empty console. Steps:
+            `docs/crashlytics.md`.
+      - [ ] **Decide whether a failed delete of queued crash reports needs its own
+            warning on the switch** (Codex, PR #113, P2 — **deferred, not declined**).
+            `deleteUnsentReports()` returns a `Task` whose completion this code discards, so
+            a deletion that fails is reported to the user as a clean opt-out even though
+            `docs/PRIVACY.md` promises waiting reports are deleted. The finding is right.
+
+            Not fixed in that PR on purpose. Surfacing it properly means a **third** failure
+            state on the row, distinct from "couldn't save this setting" — the shape the
+            debug log already has with its separate `lastDisableCleanupFailed` line — and
+            that needs new user-facing copy, which is the maintainer's to approve
+            (`AGENTS.md`, *Translations* and *Concise copy*) rather than invented while they
+            were offline. It also sits inside the mechanism the question below reopens, so
+            it may be reshaped by that answer.
+
+            The narrower alternative if a new row state is judged not worth it: observe the
+            task and record the failure in the debug log only, so it is at least
+            reconstructible, without adding a fourth thing the Settings row can say.
+
+      - [ ] **Decide what the off switch means — maintainer's impression recorded, not yet
+            confirmed** (2026-08-25). The leaning: off means **no crash reports** — the
+            feature, not the network — with defaults staying on for reporting and Play
+            in-app updates, and `INTERNET` not treated as a problem in itself, since most
+            Play apps hold it and defending its absence costs the product without buying the
+            user anything. Written down as the working direction; **confirm before any of it
+            is worded as a promise in `docs/PRIVACY.md`.**
+
+            **The invariant that does matter: no user data leaves the device, and anything
+            that does is under the user's configuration.** That is what users and the EU
+            care about, and it is the line to hold and to keep testing. Crash reports carry
+            a stack trace, device model and app version — no coordinate, no SSID/BSSID, no
+            place name, no snooze timing, and no debug log — because nothing attaches custom
+            keys or breadcrumbs. The user can switch even that off. `SPEC.md` §12's floor is
+            unchanged, and `DeclaredPermissionsTest` plus the absence of any key-attaching
+            code are what keep it honest.
+
+            Consequences already applied, and both safe under either answer: the shipped
+            switch already gates the feature, so no behavior changed; and the release
+            pipeline's Data Safety gate keys on whether crash reporting is **enabled in the
+            build**, not on whether the manifest holds a permission
+            (`.github/workflows/ci.yml`, `PLAY_DATA_SAFETY_DECLARED`).
+
+            **What deciding the stronger option would take**, so the choice is costed rather
+            than guessed: drive `firebase_data_collection_default_enabled` (verified present
+            in `firebase-common`'s `DataCollectionConfigStorage`) from the same switch, then
+            confirm on a device with a network monitor that nothing else in the Firebase
+            stack still calls out — Firebase Installations declares `INTERNET` of its own and
+            this sandbox cannot observe it. The claim is only worth making in
+            `docs/PRIVACY.md` if that check is actually done.
+
+      - [ ] **Update the Play Console Data Safety form before the next `play` upload.**
+            It moved from "no data collected, no data shared" to *crash logs,
+            diagnostics, and device or other IDs — collected, not shared, optional*
+            (`docs/play-store-declarations.md`). Shipping crash reporting under the old
+            answer is a policy violation, not a stale doc, so this one is blocking rather
+            than tidy-up.
+
+            The third type was the maintainer's call (2026-08-25) after Codex pointed out
+            that `docs/PRIVACY.md` already says Crashlytics records an installation
+            identifier, so omitting it would under-declare. The separate **Advertising
+            ID** question stays *no*: that one is about `AD_ID`, which Firebase Analytics
+            carries and Snoozemo deliberately does not — `docs/play-store-declarations.md`
+            spells the distinction out, since answering it yes off the back of the Data
+            Safety row would be wrong.
+
 - [x] Release signing and a `deploy` job that builds a downloadable AAB. **Landed**:
       `signingConfigs["release"]` (`app/build.gradle.kts`) reads the upload keystore from
       `RELEASE_KEYSTORE_FILE` and its companion env vars, attaching only when they're present so
@@ -1792,10 +1876,16 @@ the point is that every other line of the app is worthless if it isn't true.
       appear, it needs a decision before upload rather than a form filled in on the spot, since
       `SPEC.md` §3.3's whole argument is that Snoozemo must not enter a foreground-service review.
       Reasoning and the options are in `docs/play-store-declarations.md`.
-- [ ] Data Safety declaration: "no data collected, no data shared" (`SPEC.md` §12). The intended
-      answer and its reasoning are recorded in `docs/play-store-declarations.md`, together with
-      every other App content questionnaire and the drafted text for the background-location
-      permissions declaration; filing them in the Play Console is the maintainer's own step.
+- [ ] Data Safety declaration: **crash logs, diagnostics, and device or other IDs — collected,
+      not shared, optional** (`SPEC.md` §12). This item used to read "no data collected, no data
+      shared"; that answer was correct until crash reporting landed and is now false of a
+      reporting-enabled `play` build, so filing it would be a policy violation rather than a
+      stale note (Codex, PR #113 — it was still standing here after the rest of the sweep). The
+      separate **Advertising ID** question stays *not used*. The field-by-field answers and their
+      reasoning are in `docs/play-store-declarations.md`, together with every other App content
+      questionnaire and the drafted text for the background-location permissions declaration;
+      filing them in the Play Console is the maintainer's own step, and publishing a
+      reporting-enabled build is gated on it (`PLAY_DATA_SAFETY_DECLARED`).
 - [x] In-app prominent disclosure before the location permission prompt (`SPEC.md` §3.2/§12).
       **Landed**, rewritten 2026-08-22 to match the sibling ClothesCast repo's shape — which has
       already cleared Play review with it — after the original full-screen version drew several
@@ -2164,7 +2254,20 @@ that can only be settled on a real device, ordered by risk.
         Not Disturb" toggle in Settings reflects each flag and that switching it off there is
         honored (the user's explicit override, per §5.7). **Test on a fresh install or after
         clearing app data** — like importance, this is set at channel creation.
-13. [ ] **The tile repaints while the shade is open** (`SPEC.md` §4.2, Phase 2). With the
+13. [ ] **What Firebase's own `ContentProvider` costs a cold tile tap** (`SPEC.md` §4.1,
+        §12). Firebase initializes during process creation, ahead of `Application.onCreate`
+        and therefore ahead of the trampoline — so it is not *inside* the arm path, but it
+        is time added before any of Snoozemo's code runs, and "one tap, under a second,
+        from a cold process" is the claim it could erode. Measure a cold tile tap to zen
+        rule `STATE_TRUE` on a `play` build with a Firebase config against one without, on
+        the same device. Nothing in this sandbox can: there is no emulator, and an emulator
+        would not answer a cold-start-timing question anyway.
+14. [ ] **A crash actually reaches the console, and the opt-out actually stops it**
+        (`docs/crashlytics.md`, *Verifying it*). Needs a device and a build made from a
+        checkout carrying `google-services.json` — the switch is absent without one, which
+        is itself the first thing to check. Crashlytics uploads on the launch *after* the
+        crash, so each pass needs a relaunch.
+15. [ ] **The tile repaints while the shade is open** (`SPEC.md` §4.2, Phase 2). With the
         shade down and the tile visible, tap `End now` on the ongoing notification below it,
         and let a cap fire with the shade open: the tile should flip to `Snooze here` without
         the shade being closed and reopened. Then confirm the passive bind is still intact —

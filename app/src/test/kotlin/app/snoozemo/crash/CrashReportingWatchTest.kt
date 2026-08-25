@@ -1,0 +1,74 @@
+package app.snoozemo.crash
+
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+
+/**
+ * The rotation path: a tap's own completion callback can only reach the
+ * instance that made it, so a configuration change mid-write leaves the
+ * replacement screen showing the pre-tap value and swallowing a refused save
+ * (Codex, PR #113 — the same failure `DebugLogging` already carries
+ * `watchSaveOutcome` for). The watch is what corrects the replacement, so
+ * these pin that it fires and that the store is settled by the time it does.
+ *
+ * Latches rather than sleeps: the write runs on `CrashReporting`'s own FIFO
+ * worker, so the ordering is made explicit instead of waited out.
+ */
+@RunWith(RobolectricTestRunner::class)
+class CrashReportingWatchTest {
+
+    private val context get() = ApplicationProvider.getApplicationContext<Context>()
+
+    @Test
+    fun `the watch fires with the store already settled`() {
+        // What the replacement screen reads when the watch wakes it. Captured
+        // inside the callback, because reading after the fact would pass even
+        // if the watch had fired before the write landed — which is the bug.
+        var seenByWatch: Boolean? = null
+        val fired = CountDownLatch(1)
+        val watch = CrashReporting.watchSaveOutcome {
+            seenByWatch = CrashReportingStore(context).isEnabled()
+            fired.countDown()
+        }
+
+        try {
+            CrashReporting.setEnabled(context, enabled = false) {}
+            assertTrue("the watch never fired", fired.await(5, TimeUnit.SECONDS))
+            assertEquals(false, seenByWatch)
+            assertFalse(CrashReporting.lastSaveRefused)
+        } finally {
+            watch.close()
+            CrashReporting.setEnabled(context, enabled = true) {}
+        }
+    }
+
+    @Test
+    fun `closing the handle unregisters that registration only`() {
+        val first = CrashReporting.watchSaveOutcome { }
+        val secondFired = CountDownLatch(1)
+        val second = CrashReporting.watchSaveOutcome { secondFired.countDown() }
+
+        try {
+            // The earlier handle must not unregister the later registrant —
+            // otherwise a screen replaced mid-write would silently lose its
+            // own watch to the dead instance's `onStop`.
+            first.close()
+            CrashReporting.setEnabled(context, enabled = false) {}
+            assertTrue(
+                "closing the first handle unregistered the second watch",
+                secondFired.await(5, TimeUnit.SECONDS),
+            )
+        } finally {
+            second.close()
+            CrashReporting.setEnabled(context, enabled = true) {}
+        }
+    }
+}

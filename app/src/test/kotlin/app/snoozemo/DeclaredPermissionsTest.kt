@@ -17,13 +17,28 @@ import org.robolectric.RobolectricTestRunner
  * grant the Geofencing API needs, and `direct` must never gain a restricted
  * permission, because shipping without one is that flavor's reason to exist.
  *
- * INTERNET is asserted absent unconditionally: SPEC.md §12's "no data
- * collected, no data shared" is auditable precisely because nothing can leave
- * the device, and a dependency quietly merging the permission in is the way
- * that guarantee would break without anyone deciding it.
+ * INTERNET is now part of that split rather than absent everywhere: `play`
+ * declares it for crash reporting (SPEC.md §12), and `direct` must not, so
+ * "this build cannot open a network connection" stays literally true of the
+ * sideload flavor. Asserting both directions is what stops a dependency
+ * quietly merging the permission into `direct` — the way that guarantee would
+ * break without anyone deciding it.
  */
 @RunWith(RobolectricTestRunner::class)
 class DeclaredPermissionsTest {
+
+    /**
+     * The flavor, read from the versionName suffix the build script sets,
+     * because BuildConfig generation carries no flavor field in this project.
+     * If the suffix convention changes, the assertions that use this fail
+     * loudly rather than silently guarding the wrong flavor.
+     */
+    private val isDirectFlavor: Boolean by lazy {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.packageManager
+            .getPackageInfo(context.packageName, 0).versionName.orEmpty()
+            .endsWith("-direct")
+    }
 
     private val declared: List<String> by lazy {
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -49,14 +64,7 @@ class DeclaredPermissionsTest {
     @Test
     fun `only the play flavor carries the restricted background grant`() {
         val restricted = Manifest.permission.ACCESS_BACKGROUND_LOCATION in declared
-        // The flavor read from the versionName suffix the build script sets,
-        // because BuildConfig generation is off in this project. If the suffix
-        // convention changes this test fails loudly on the assertion below
-        // rather than silently guarding the wrong flavor.
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        val versionName = context.packageManager
-            .getPackageInfo(context.packageName, 0).versionName.orEmpty()
-        if (versionName.endsWith("-direct")) {
+        if (isDirectFlavor) {
             assertFalse("direct ships with no restricted permission (SPEC.md §3.4)", restricted)
         } else {
             assertTrue("play is the Geofencing build and needs the grant", restricted)
@@ -64,11 +72,19 @@ class DeclaredPermissionsTest {
     }
 
     @Test
-    fun `nothing can reach the network`() {
-        assertFalse(
-            "INTERNET would end the no-data-leaves-the-device guarantee (SPEC.md §12)",
-            Manifest.permission.INTERNET in declared,
-        )
+    fun `only the play flavor can reach the network`() {
+        val network = Manifest.permission.INTERNET in declared
+        if (isDirectFlavor) {
+            assertFalse(
+                "direct must not be able to open a network connection (SPEC.md §3.4, §12)",
+                network,
+            )
+        } else {
+            assertTrue(
+                "play declares INTERNET for crash reporting (SPEC.md §12)",
+                network,
+            )
+        }
     }
 
     @Test
@@ -77,6 +93,14 @@ class DeclaredPermissionsTest {
         // (docs/play-store-declarations.md). A dependency merging this in makes
         // that answer false without anyone deciding it — the same failure shape
         // INTERNET has above, and the same reason to assert it here.
+        //
+        // Unconditional, INTERNET's split notwithstanding: Crashlytics is
+        // added without Firebase Analytics, on the understanding that
+        // Analytics is what brings AD_ID in (not verified against Google's
+        // docs from this repo — the assertion is the check, not the belief).
+        // Analytics may be added later; this failing then is the intended
+        // prompt to decide the Advertising ID and Data Safety answers
+        // deliberately, rather than an obstacle to route around.
         assertFalse(
             "AD_ID would falsify the Advertising ID declaration",
             "com.google.android.gms.permission.AD_ID" in declared,
@@ -103,9 +127,7 @@ class DeclaredPermissionsTest {
         // service at Phase 7, where none of this review applies.
         val context = ApplicationProvider.getApplicationContext<Context>()
         val packageManager = context.packageManager
-        val versionName = packageManager
-            .getPackageInfo(context.packageName, 0).versionName.orEmpty()
-        if (versionName.endsWith("-direct")) return
+        if (isDirectFlavor) return
 
         val typed = declared.filter {
             it.startsWith("android.permission.FOREGROUND_SERVICE_")
