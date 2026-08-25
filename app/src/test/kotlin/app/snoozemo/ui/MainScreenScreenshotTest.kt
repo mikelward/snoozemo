@@ -85,6 +85,9 @@ class MainScreenScreenshotTest {
         composeRule.onNodeWithText("Do Not Disturb access needed").assertDoesNotExist()
         composeRule.onNodeWithText("Snooze").assertDoesNotExist()
         composeRule.onNodeWithText("End snooze").assertDoesNotExist()
+        // And no idle claim either: the record has not been read, so "Not
+        // snoozing" would be a guess — over a snooze that may well be running.
+        composeRule.onNodeWithText("Not snoozing").assertDoesNotExist()
     }
 
     @Test
@@ -120,6 +123,9 @@ class MainScreenScreenshotTest {
         // affordance while access is missing.
         composeRule.onNodeWithText("Snooze").assertDoesNotExist()
         composeRule.onNodeWithText("End snooze").assertDoesNotExist()
+        // Missing access is why nothing *can* snooze; it does not make the
+        // state itself unknown, so the line still reports it.
+        composeRule.onNodeWithText("Not snoozing").assertExists()
         // The banner's only job is routing to the interstitial — it does not
         // allow anything itself.
         composeRule.onNodeWithText("Allow").performClick()
@@ -182,6 +188,9 @@ class MainScreenScreenshotTest {
         }
 
         composeRule.onNodeWithText("Do Not Disturb access needed").assertDoesNotExist()
+        // The point of this test: idle is stated, not left to be inferred
+        // from which button happens to be enabled.
+        composeRule.onNodeWithText("Not snoozing").assertExists()
         composeRule.onNodeWithText("Snooze").assertIsEnabled()
         composeRule.onNodeWithText("End snooze").assertIsEnabled()
         composeRule.onNodeWithText("Settings").assertExists()
@@ -246,6 +255,9 @@ class MainScreenScreenshotTest {
         composeRule.onNodeWithText("End snooze").assertIsEnabled()
         composeRule.onNodeWithText("Ends when you leave").assertExists()
         composeRule.onNodeWithText("3h 40m left").assertExists()
+        // The same slot, not a second line — a screen showing both at once
+        // would contradict itself.
+        composeRule.onNodeWithText("Not snoozing").assertDoesNotExist()
     }
 
     @Test

@@ -418,6 +418,14 @@ purpose: it is always literally `"Here"` today (saved/named places are unbuilt â
 places"), and the notification doesn't show it either, so surfacing it here first would only read
 as filler.
 
+**And it says so when no snooze is running** (landed 2026-08-25): the same line reads `Not
+snoozing`. Idle used to render as an empty gap, which made "nothing is running" and "the record
+hasn't been read yet" look identical â€” the only thing separating them was whether the Snooze
+button happened to be enabled, which is principle 2's failure in miniature: the app's actual state
+knowable only by inference. The unread case keeps the gap, deliberately: an idle claim over a
+snooze this screen has not finished reading is the one wrong thing the line could say, and it is
+the wrong direction to be wrong in.
+
 **The active tile inverts, and that is the platform's doing, not ours.** A Quick Settings tile
 cannot specify a background: the system draws it from `Tile.state`, so `STATE_ACTIVE` while a
 snooze runs gives the same light-when-off / dark-when-on treatment as the system's own Do Not
