@@ -899,13 +899,55 @@ the point is that every other line of the app is worthless if it isn't true.
       backstop instead. `TYPE_SIGNIFICANT_MOTION` needs no permission and is a hardware-backed
       one-shot, so this is battery-cheap by design (`SPEC.md` §9). Re-arm the trigger after each
       firing, and suppress it while associated the way the engine already does.
-      **The other half of the same duty cycle is missing too** (Codex, same review): §6.7 pairs
-      the armed trigger with a 10-minute sanity poll, and nothing schedules one.
-      `CheckingFixes.sanityCheck()` runs only on a transition into `SANITY` duty or on a
-      `SanityPoke`, and the only source of pokes is the 30-minute `SnoozeBackstop` — so the
-      resting cadence is the backstop's, three times slower than the spec's. Both halves belong
-      to this item: registering and re-arming the trigger, *and* a 10-minute resting schedule.
-      Closing one without the other would leave §6.7 unimplemented while looking done.
+      **The trigger half landed, and covers less than it looks like on `play`** (2026-08-25;
+      the limit found by Codex on PR #119). `requestTriggerSensor` registers an in-process
+      listener and there is no `PendingIntent` form of it, so the trigger dies with the service
+      — which on `play` means it is armed for roughly the minute after each wake rather than for
+      the snooze. During that minute a phone picked up escalates immediately instead of waiting
+      up to 30 minutes for the next backstop; outside it, nothing changes. That is a real but
+      narrow win, and it is close to the argument `SPEC.md` §7 already makes against an
+      in-process cap timer — "it dies with the process, so it would only ever cover cases the
+      alarm already covers, while making the alarm look optional". It is not quite that, because
+      it *does* beat the backstop inside its window, but the shape is the same and the commit
+      subject was rewritten to stop promising more.
+      **The durable version is a product decision, not more engineering.** Nothing in the
+      platform delivers significant motion to a dead process. The one mechanism that would is
+      Play Services' Activity Recognition transition API, which takes a `PendingIntent` — and
+      needs the `ACTIVITY_RECOGNITION` runtime permission, a new Data Safety answer, and a
+      second `play`-only dependency. That is a distribution decision (`AGENTS.md`, *Cost and
+      reliability*), so it is recorded here rather than guessed. On `direct`, Phase 7's
+      foreground service keeps the process resident and the trigger as written works as §6.7
+      intends, with no new permission — which is why both classes live in the shared source set.
+      **What landed:** `MotionTrigger` owns the lifecycle over a
+      `TriggerRegistrar` seam — armed exactly while the duty is `SANITY`, idempotent because the
+      engine restates the duty on every update, and re-armed after every firing, since a trigger
+      sensor disarms itself when it fires. `PlatformMotionTrigger` is the `SensorManager` half.
+      Both live in `:presence`'s shared source set rather than the `play` flavor's, so Phase 7's
+      `direct` monitor gets them without a second implementation. A device with no such sensor,
+      or a platform that refuses, is recorded once and never re-asked — hardware cannot appear
+      mid-snooze — and said in the log, because a snooze escalating only on the backstop's
+      cadence is a real difference a stuck-snooze report has to explain. Tests:
+      `MotionTriggerTest` (9), over a manual registrar.
+      **The 10-minute resting poll is deliberately NOT in that commit — it needs a decision.**
+      §6.7 pairs the armed trigger with a 10-minute sanity poll and nothing schedules one:
+      `CheckingFixes.sanityCheck()` runs only on a transition into `SANITY` or on a `SanityPoke`,
+      and the only poke source is the 30-minute `SnoozeBackstop`. The reason this is not a
+      straightforward fix is that **§6.7 was written for the foreground-service design**, where
+      the process stays alive and an in-process 10-minute timer is exactly right — which is
+      `direct`'s Phase 7 shape, not `play`'s. On `play` there is no foreground service, the
+      process is reclaimed within about a minute of each wake, so an in-process timer would
+      almost never fire, and the only mechanism that would actually deliver a 10-minute cadence
+      is a repeating alarm — roughly **6 wakes per hour against the backstop's 2**, each one a
+      service start and a location request, which is a real change to §9's budget for a snooze
+      that can run eight hours. The same reasoning already recorded for one-shot fixes over
+      §6.5's continuous request applies here. Three options, none of them mine to pick:
+      - **Amend §6.7** to say the resting cadence is the backstop's on `play`, with the
+        10-minute figure applying to `direct`'s foreground service from Phase 7. Cheapest, and
+        arguably what the spec already means; costs a documented slower resting cadence.
+      - **Add the alarm** and take the battery cost, honestly stated in §9.
+      - **Split by capability**: schedule the resting alarm only where the motion trigger is
+        unavailable, since covering for a failed trigger is what the poll is for. Costs nothing
+        on the devices that have the sensor, which is nearly all of them.
       **Distinct from the deferred motion work** in Phase 6: that item is motion as an explicit
       *end condition* (`until I move`), a product decision gated on hardware item 2. This one is
       motion as a duty-cycle input, which `SPEC.md` §6.7 specifies for v1 — the audit conflated
