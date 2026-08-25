@@ -7,11 +7,14 @@ lives in `TODO.md`. This repo mirrors the engineering conventions of the sibling
 Launcher (`mikelward/typelauncher`) and Simmo (`mikelward/simmo`) repos; when a convention
 is underspecified here, Simmo's `AGENTS.md` is the tiebreaker.
 
-**Status: the snooze half works.** The Gradle build, the module split, the two product
-flavors, and CI (build + unit tests + lint + screenshots) are in place and green, and so is
-the DND half: the tile arms and ends a snooze, the record survives process death and
-reboots, and the duration cap holds across a clock change. Presence — the *leave here and it
-ends* half — is not built yet, so every snooze is honestly duration-only (`TODO.md` Phase 3).
+**Status: both halves are built; presence has never run on a handset.** The Gradle build,
+the module split, the two flavors and CI are green, and so is the DND half: the tile arms
+and ends a snooze, the record survives process death and reboots, and the duration cap holds
+across a clock change. On `play`, presence ends a snooze when you leave — three wake-up
+sources feeding one departure test — and degrades to duration-only, saying so, when the
+anchor supports nothing better; `direct` is duration-only until Phase 7. Phase 3 still owes real
+code — the §6.7 motion trigger, the degradation *cause* reaching the user — alongside the
+on-device verification (`TODO.md` Phase 3).
 Every rule below is live, screenshot tests included: the four screens (`MainScreen`,
 `PermissionsScreen`, `SettingsScreen`, `LicensesScreen`) each record through their own
 `*ScreenshotTest`, and a new one needs its own step in the CI allow-list or it records
