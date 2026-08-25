@@ -49,6 +49,13 @@ internal fun SettingsScreen(
     crashReportingEnabled: Boolean? = null,
     /** Whether the last crash-reporting save was refused by storage. */
     crashReportingSaveFailed: Boolean = false,
+    /**
+     * Whether the tile asks when to unsnooze (`SPEC.md` §4.4), or null until
+     * [MainActivity] has read it. Off by default, so the row is an offer.
+     */
+    askWhenToUnsnooze: Boolean? = null,
+    /** Whether the last tap on that switch failed to reach disk. */
+    askWhenToUnsnoozeSaveFailed: Boolean = false,
     // `PlayUpdateState.NotAvailable` on `direct` (no flavor branch needed
     // here — that flavor's checker never reports anything else) and while
     // `MainActivity` hasn't finished its own first resume check yet.
@@ -77,6 +84,7 @@ internal fun SettingsScreen(
     onFiltersRow: () -> Unit,
     onDebugLog: (Boolean) -> Unit,
     onCrashReporting: (Boolean) -> Unit = {},
+    onAskWhenToUnsnooze: (Boolean) -> Unit = {},
     onStartPlayUpdate: () -> Unit = {},
     onCompletePlayUpdate: () -> Unit = {},
     onDismissPlayUpdate: () -> Unit = {},
@@ -147,6 +155,19 @@ internal fun SettingsScreen(
                 onAction = onTileRow,
                 failure = stringResource(R.string.failure_could_not_add_tile)
                     .takeIf { settingsFailure == SetupRowId.TILE },
+            )
+        }
+        // Directly below the tile row, because it changes what a tile tap does:
+        // off (the default) arms and gets out of the way, on puts the
+        // end-condition sheet in front of the user first (`SPEC.md` §4.4). Same
+        // null-until-read discipline as the switch below — a row that asserted
+        // the default and corrected itself a frame later would flash `off` on
+        // the one launch where the user had turned it on.
+        askWhenToUnsnooze?.let {
+            AskWhenToUnsnoozeRow(
+                enabled = it,
+                saveFailed = askWhenToUnsnoozeSaveFailed,
+                onChange = onAskWhenToUnsnooze,
             )
         }
         // Absent rather than disabled while there is nothing yet to edit: no

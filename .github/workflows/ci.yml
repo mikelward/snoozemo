@@ -350,6 +350,9 @@ jobs:
         # strict subset and is covered by the export drift check in `build`.
         run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.LicensesScreenScreenshotTest" -Proborazzi.test.record=true
 
+      - name: Run end-condition sheet screenshot tests
+        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.EndConditionSheetScreenshotTest" -Proborazzi.test.record=true
+
       - name: Run edge-to-edge screenshot tests
         run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.EdgeToEdgeScreenshotTest" -Proborazzi.test.record=true
 

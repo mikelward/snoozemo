@@ -85,13 +85,21 @@ data class EndCondition(
             val floor = now.plus(ActiveSnooze.MIN_CAP)
             val seed = roundToHalfHour(now.plus(SEED_AHEAD), zone)
             return EndCondition(
-                // `coerceAtLeast(floor)` second, so a ceiling that has fallen
-                // below the floor — nothing produces one today, but a snooze
-                // minutes from its backstop would — leaves a value the sheet
-                // can still show rather than one below its own floor. The sheet
-                // has nothing useful to offer there, and reports it by having
-                // neither button enabled.
-                endsAt = seed.coerceAtMost(ceiling).coerceAtLeast(floor),
+                // **`coerceAtMost(ceiling)` last, and the order is the point.**
+                // A ceiling below the floor is producible — a duplicate arm
+                // onto a snooze with ten minutes left gives one — and clamping
+                // up to the floor afterward put `endsAt` *past the cap*. The
+                // service then answers `APPLIED`, correctly, because a chosen
+                // time no earlier than the cap is honored by doing nothing: the
+                // row read 12:30 and the snooze ended at 12:10 (Codex, PR #118).
+                //
+                // Clamped this way the sheet can show a time below its own
+                // floor instead, which the service declines rather than wrongly
+                // accepts. Neither is a good offer, and the trampoline's own
+                // gate is what keeps the sheet away from this case at all — but
+                // between a displayed time that lies and one that is refused,
+                // the refusal is the one the user can see.
+                endsAt = seed.coerceAtLeast(floor).coerceAtMost(ceiling),
                 floor = floor,
                 ceiling = ceiling,
             )

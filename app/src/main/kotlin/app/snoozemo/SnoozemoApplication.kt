@@ -10,6 +10,7 @@ import app.snoozemo.presence.installPresenceWakeup
 import app.snoozemo.snooze.ActiveSnoozeStore
 import app.snoozemo.snooze.CapAlarm
 import app.snoozemo.snooze.DebugLogging
+import app.snoozemo.snooze.EndSheetStore
 import app.snoozemo.snooze.SnoozeNotifications
 import app.snoozemo.snooze.SnoozeService
 
@@ -46,6 +47,11 @@ class SnoozemoApplication : Application(), androidx.work.Configuration.Provider 
         // binder calls that the service would otherwise make in its onCreate,
         // which on a cold tap sits between the tap and the rule going on.
         SnoozeNotifications.warm(this)
+        // The end-condition sheet's own gate (SPEC.md §4.4). Not on the arm path
+        // — the trampoline reads it after the service start — but a cold read
+        // would land in front of the sheet's first frame over a transparent
+        // window, and off by default means most installs never read it at all.
+        EndSheetStore(this).warm()
         // The debug log's rotation and file sink (SPEC.md §4.6). Spawns its
         // own thread, so the cold tap above never waits on it; entries
         // recorded before the sink registers still reach the file, since the

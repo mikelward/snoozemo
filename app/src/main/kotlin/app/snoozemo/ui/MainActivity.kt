@@ -57,6 +57,8 @@ import app.snoozemo.snooze.ActiveSnoozeStore
 import app.snoozemo.crash.CrashReporting
 import app.snoozemo.snooze.DebugLogStore
 import app.snoozemo.snooze.DebugLogging
+import app.snoozemo.snooze.EndSheetSetting
+import app.snoozemo.snooze.EndSheetStore
 import app.snoozemo.snooze.DebugReport
 import app.snoozemo.snooze.LocationPromptStore
 import app.snoozemo.snooze.NotificationPromptStore
@@ -393,6 +395,28 @@ class MainActivity : ComponentActivity() {
      * corrected a frame later — the same discipline as every row above.
      */
     private var debugLogEnabled by mutableStateOf<Boolean?>(null)
+
+    /**
+     * Whether the tile asks when to unsnooze (SPEC.md §4.4). Null until the
+     * store has been read, same discipline as [debugLogEnabled]: off is the
+     * default, so a row that asserted it and corrected itself a frame later
+     * would flash the wrong answer at exactly the user who had turned it on.
+     */
+    private var askWhenToUnsnooze by mutableStateOf<Boolean?>(null)
+
+    /** Whether the last tap on that switch failed to reach disk. */
+    private var askWhenToUnsnoozeSaveFailed by mutableStateOf(false)
+
+    /**
+     * How many of its writes are still on the worker. Main thread only, like
+     * [debugLogWrites], and for the same reason: while it is non-zero the
+     * switch shows the user's tap and every read-back holds off, so a start
+     * repainting the old stored value over an in-flight tap can't happen.
+     */
+    private var askWhenToUnsnoozeWrites = 0
+
+    /** The handle for its save-outcome watch; see [onStart] and [EndSheetSetting.watchSaveOutcome]. */
+    private var askWhenToUnsnoozeWatch: AutoCloseable? = null
 
     /**
      * How many debug-log writes are still on the worker. Main thread only,
@@ -770,6 +794,8 @@ class MainActivity : ComponentActivity() {
                                 debugLogSaveFailed = debugLogSaveFailed,
                                 crashReportingEnabled = crashReportingEnabled,
                                 crashReportingSaveFailed = crashReportingSaveFailed,
+                                askWhenToUnsnooze = askWhenToUnsnooze,
+                                askWhenToUnsnoozeSaveFailed = askWhenToUnsnoozeSaveFailed,
                                 playUpdate = displayedPlayUpdate,
                                 playUpdateRestartFailed = playUpdateRestartFailed,
                                 debugLogCleanupFailed = debugLogCleanupFailed,
@@ -783,6 +809,7 @@ class MainActivity : ComponentActivity() {
                                 onFiltersRow = ::openFilters,
                                 onDebugLog = ::setDebugLog,
                                 onCrashReporting = ::setCrashReporting,
+                                onAskWhenToUnsnooze = ::setAskWhenToUnsnooze,
                                 onStartPlayUpdate = ::startPlayUpdate,
                                 onCompletePlayUpdate = ::completePlayUpdate,
                                 onDismissPlayUpdate = ::dismissPlayUpdate,
@@ -863,6 +890,19 @@ class MainActivity : ComponentActivity() {
         // screen. The outcome watch, not a preferences listener, because only
         // the watch fires after the write's *result* is known — a preference
         // notification is dispatched before it (see `watchSaveOutcome`).
+        // Same shape as the debug log's below, and for the same reason: a tap
+        // whose write is still on the worker when a configuration change hands
+        // off completes into the dead screen, so this instance's own read — which
+        // has already run — would leave the switch showing the pre-tap value
+        // until the next launch (Codex, PR #118).
+        askWhenToUnsnoozeWatch = EndSheetSetting.watchSaveOutcome {
+            runOnUiThread {
+                if (askWhenToUnsnoozeWrites == 0) {
+                    askWhenToUnsnooze = EndSheetStore(this).isEnabled()
+                    askWhenToUnsnoozeSaveFailed = EndSheetSetting.lastSaveRefused
+                }
+            }
+        }
         debugLogWatch = DebugLogging.watchSaveOutcome {
             runOnUiThread {
                 if (debugLogWrites == 0) {
@@ -1056,6 +1096,22 @@ class MainActivity : ComponentActivity() {
                 if (crashReportingWrites == 0 && CrashReporting.isAvailable(this)) {
                     crashReportingEnabled = CrashReporting.isEnabled(this)
                     crashReportingSaveFailed = CrashReporting.lastSaveRefused
+                }
+                // Its own one-key file, and read here rather than in `onCreate`
+                // for the same reason as the rows above — this runs after the
+                // first frame, so a cold launch never waits on it. Held off
+                // while a tap's write is still on the worker, same as above.
+                if (askWhenToUnsnoozeWrites == 0) {
+                    askWhenToUnsnooze = EndSheetStore(this).isEnabled()
+                    // The failure alongside the value, exactly as the two reads
+                    // above do it. Reading only the value meant a recreation
+                    // after a refused write — a rotation, or the write landing
+                    // between the old instance's `onStop` and the replacement's
+                    // `onStart`, which the watch cannot cover — silently dropped
+                    // the message while the outcome was still true (Codex,
+                    // PR #118). A failure that disappears on rotation reads as
+                    // a tap that worked.
+                    askWhenToUnsnoozeSaveFailed = EndSheetSetting.lastSaveRefused
                 }
                 // Its own one-key file too. `compareAndSet`-style guard isn't
                 // needed the way a coroutine version would need one: this is
@@ -1344,6 +1400,8 @@ class MainActivity : ComponentActivity() {
         recordWatch = null
         tileWatch?.close()
         tileWatch = null
+        askWhenToUnsnoozeWatch?.close()
+        askWhenToUnsnoozeWatch = null
         debugLogWatch?.close()
         debugLogWatch = null
         crashReportingWatch?.close()
@@ -1643,6 +1701,39 @@ class MainActivity : ComponentActivity() {
      * a switch that quietly returns to where it was reads as a missed tap,
      * which is principle 2's failure on the screen built to prevent it.
      */
+    /**
+     * The `Ask when to unsnooze` switch (SPEC.md §4.4).
+     *
+     * The same shape as [setDebugLog] and for the same reasons: the tap is shown
+     * immediately, the write goes to a worker, and only the *last* outstanding
+     * write repaints — surfacing an earlier write's refusal would leave a
+     * failure line standing over a later tap that saved fine. A failed save says
+     * so under the row, not only by the snap-back: a switch that quietly returns
+     * to where it was reads as a missed tap.
+     *
+     * Simpler than [setDebugLog] in one way that matters — there is nothing to
+     * clean up. Turning the debug log off deletes what it kept; turning this off
+     * only stops a sheet appearing, so there is no second failure to report.
+     */
+    private fun setAskWhenToUnsnooze(enabled: Boolean) {
+        if (askWhenToUnsnooze == null) return
+        askWhenToUnsnoozeSaveFailed = false
+        askWhenToUnsnoozeWrites++
+        askWhenToUnsnooze = enabled
+        EndSheetSetting.setEnabled(this, enabled) { _ ->
+            runOnUiThread {
+                askWhenToUnsnoozeWrites--
+                if (askWhenToUnsnoozeWrites == 0) {
+                    askWhenToUnsnooze = EndSheetStore(this).isEnabled()
+                    // The process-level outcome rather than this callback's own
+                    // argument, so it reads the same value the watch would — one
+                    // source, whichever path gets here first.
+                    askWhenToUnsnoozeSaveFailed = EndSheetSetting.lastSaveRefused
+                }
+            }
+        }
+    }
+
     private fun setDebugLog(enabled: Boolean) {
         if (debugLogEnabled == null) return
         debugLogSaveFailed = false

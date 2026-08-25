@@ -581,3 +581,32 @@ internal fun CrashReportingRow(
         onChange = onChange,
     )
 }
+
+/**
+ * Whether the tile asks when to unsnooze (SPEC.md §4.4) — **off by default**, so
+ * an ordinary tap arms and gets out of the way.
+ *
+ * The opposite default to [DebugLogRow]'s, and deliberately: the debug log is on
+ * because an uncaptured failure is unrepeatable, while a sheet not shown costs
+ * nothing that turning it on can't recover. So this row is an offer, not a way
+ * out of something.
+ *
+ * No cleanup-failure line either — turning it off stops a sheet appearing and
+ * deletes nothing, so a refused save is the only thing that can go wrong.
+ */
+@Composable
+internal fun AskWhenToUnsnoozeRow(
+    enabled: Boolean,
+    saveFailed: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    SwitchRow(
+        title = stringResource(R.string.setup_ask_unsnooze_title),
+        description = stringResource(R.string.setup_ask_unsnooze_description),
+        enabled = enabled,
+        failures = listOfNotNull(
+            stringResource(R.string.setup_debug_log_save_failed).takeIf { saveFailed },
+        ),
+        onChange = onChange,
+    )
+}

@@ -146,6 +146,11 @@ class EndConditionTest {
         val ceiling = now.plus(Duration.ofMinutes(10))
         val condition = EndCondition.seededAt(now, ceiling, ZoneId.of("UTC"))
 
+        // Never later than the ceiling, even though that is below the floor.
+        // Clamping up to the floor afterward put the shown time *past the cap*,
+        // which the service honors by doing nothing and reports as applied —
+        // a row reading 13:30 over a snooze ending at 13:10 (Codex, PR #118).
+        assertEquals(ceiling, condition.endsAt)
         assertFalse(condition.canStepDown)
         assertFalse(condition.canStepUp)
     }
