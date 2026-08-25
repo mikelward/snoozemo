@@ -102,8 +102,11 @@ release rather than dropped.
       manifest and background location in `play`'s (2026-08-22), so the earlier note that
       the app declared none of them is stale (Codex, PR #102). What is still ahead of the
       build is behavior: it describes **v1 as specified**, including the departure
-      detection that ends a snooze on leaving, and presence is Phase 3 — every snooze is
-      duration-only today. A policy promising less than the app does is the harmful
+      detection that ends a snooze on leaving. That is built and wired on `play` (though
+      never yet run on a handset); on `direct` it genuinely is ahead of the build, since
+      `DurationOnlyPresenceMonitor` is a stand-in until Phase 7 and every `direct` snooze
+      is a timer today. This bullet said "every snooze is duration-only" until the
+      2026-08-25 audit. A policy promising less than the app does is the harmful
       direction, so this is the safe one to be wrong in, but what it says Snoozemo keeps
       and does has to match the shipped build on the day it is hosted, not merely
       eventually.
@@ -436,8 +439,9 @@ the point is that every other line of the app is worthless if it isn't true.
       - "Always have it in settings" is a row on the main screen for now, because there is no
         settings screen yet. When one lands, that row is what moves into it.
 - [x] Real anchor capture on the arm path — landed with the Phase 3 capture item below
-      (2026-08-22). The snooze still *arms* honestly duration-only, by an explicit mode at the
-      one call site, until the monitor consumes what was captured.
+      (2026-08-22). The snooze *arms* honestly duration-only, by an explicit mode at the one
+      call site; the monitor has since landed and consumes what was captured, raising the mode
+      when capture completes.
 - [x] **minSdk 34** (maintainer, 2026-08-11). The tile's `startActivityAndCollapse` needed the
       deprecated `Intent` overload on API 33; raising the floor deleted the version branch and the
       lint suppression together, so the arm path is a single code path again. Reasoning recorded in
@@ -481,6 +485,15 @@ the point is that every other line of the app is worthless if it isn't true.
       service; the in-app prompt and prominent disclosure are Phase 6's items and need copy.
 - [ ] `PresenceMonitor` interface and `GeofencePresenceMonitor`, with everything above the
       interface flavor-agnostic (`SPEC.md` §6.1).
+      **Both are built and wired** (audited 2026-08-25): the interface lives in `:core`, the
+      `play` flavor implements it with `GeofencePresenceMonitor` and the `direct` flavor with
+      `DurationOnlyPresenceMonitor`, and `SnoozeService` starts the monitor on arm and on
+      restore, collects its reports, clamps the claimed mode to `supportedModes`, and stops it
+      with the snooze. What keeps the box open is code, not just verification: the degradation
+      *cause* stopping at the controller (needs approved copy **and** the plumbing to carry the
+      cause to it) and the mode-changed listener that would re-register the fence promptly when
+      location services return — both below — plus the on-device verification the whole item is
+      gated on. Phase 3 also still owes the §6.7 significant-motion trigger, its own item below.
       - [x] **The engine above the interface**: `Presence`, a pure state machine in `:core` over
         (state, signal, anchor). Owns escalation and de-escalation, the §6.7 duty cycle, the
         degraded-tracking report, and the §6.6 grace period. Landed with `PresenceTest` (37),
@@ -502,8 +515,10 @@ the point is that every other line of the app is worthless if it isn't true.
         requests). One-shots rather than §6.5's continuous request, deliberately: that request
         belongs to the `direct` flavor's Phase 7 foreground service, and a background app gets
         continuous location throttled to nothing — §6.10's design takes one fix per
-        confirmation step instead. `SANITY` duty maps to nothing yet; its resting-coverage role
-        belongs to the §6.10 periodic backstop when that slice lands.
+        confirmation step instead. `SANITY` duty mapped to nothing when this slice landed; the
+        §6.10 periodic backstop has since arrived and drives the resting fix — at its own
+        30-minute cadence, not §6.7's 10-minute one, which is still unscheduled (see the
+        duty-cycle item below).
         **Third slice landed** (2026-08-22): the service wiring. `SnoozeService` starts
         `defaultPresenceMonitor` with the captured anchor once the arm completes (and again on
         restore — the presence analog of re-asserting the rule), collects every report into
@@ -527,11 +542,14 @@ the point is that every other line of the app is worthless if it isn't true.
         in-process resources, and the fence comes down solely in `stop()`, when the snooze
         actually ends — a background-limits service destroy leaves it watching. Still to come
         in later slices: **re-registering the
-        fence when location services come back on** (Codex, PR #70: `GEOFENCE_NOT_AVAILABLE` at
-        registration reports the §8.4 degradation correctly but nothing retries, so the snooze
-        stays degraded until the cap even after the user re-enables location — the mode-changed
-        listener belongs with the same device-state watching the checking burst needs) and the
-        on-device verification the whole item is gated on. The grace alarm for
+        fence promptly when location services come back on** (Codex, PR #70:
+        `GEOFENCE_NOT_AVAILABLE` at registration reports the §8.4 degradation correctly but
+        nothing watches for the recovery — the mode-changed listener belongs with the same
+        device-state watching the checking burst needs). **Bounded since the backstop landed**:
+        every restore re-registers, so the periodic wake heals this in roughly its cadence
+        rather than leaving the snooze degraded to the cap, as this note said before that slice.
+        A listener would make it prompt, which is the remaining value. Also still to come is
+        the on-device verification the whole item is gated on. The grace alarm for
         `graceDeadlineMs` landed with the Wi-Fi suppressor slice.
       - [x] **The grace deadline has to survive process death** (Codex, PR #31, re-flagged and
         partly mitigated on PR #77). `PresenceState` is in-memory only; a service killed after
@@ -818,8 +836,8 @@ the point is that every other line of the app is worthless if it isn't true.
       `AnchorCapture`; the platform half (`AnchorCaptureRunner`, shared by both flavors)
       starts strictly after `STATE_TRUE`. The captured anchor is recorded but the snooze
       still arms with an explicit `DURATION_ONLY`, because a mode is a claim about what is
-      *watching* and nothing consumes the anchor until the monitor wiring lands — that
-      slice replaces the explicit mode with `TrackingMode.from(anchor)`. Still owed a
+      *watching* and nothing consumed the anchor when this landed. The monitor wiring has
+      since arrived and raises the mode once capture completes. Still owed a
       handset: that the flag plus our permissions yields a real SSID end to end (the §6.4
       item below), and what an indoor fix's accuracy actually is.
 - [ ] **Register the Wi-Fi callback with `FLAG_INCLUDE_LOCATION_INFO`** (`SPEC.md` §6.4),
@@ -829,7 +847,14 @@ the point is that every other line of the app is worthless if it isn't true.
       (Codex, PR #24). This breaks the **SSID anchor**, not just the BSSID, and it fails
       quietly: real objects, plausible strings, an anchor that matches nothing. Any test
       here must reject the placeholders rather than accept them as values.
-- [ ] Three independent wake-up sources feeding one confirmation test (`SPEC.md` §6.10):
+      **The code half landed**: both callbacks that read an SSID pass the flag
+      (`AnchorCaptureRunner`, `PlatformWifiWatch`), and `AnchorCapture` rejects the two
+      placeholder values by name rather than treating them as an anchor, with
+      `AnchorCaptureTest` pinning that. What is left is only the on-device assertion, which
+      the audit found was gated on hardware but missing from the hardware-verification list —
+      added there as item 16, under tuning: a redaction that gets through costs the Wi-Fi
+      capability through the tracked-degradation path, not silently.
+- [x] Three independent wake-up sources feeding one confirmation test (`SPEC.md` §6.10):
       geofence exit (landed, PR #73), the `WorkManager` backstop (landed — see below), and
       Wi-Fi loss via `NetworkCallback` (landed with the D4 suppressor below). No source
       ends a snooze on its own evidence.
@@ -854,6 +879,37 @@ the point is that every other line of the app is worthless if it isn't true.
         is likewise bounded to roughly the backstop's cadence now (best-effort, `SPEC.md` §6.10): the backstop's resting probe re-tests presence
         even though the held exit is gone. Full `PresenceState` persistence remains its
         own recorded slice.
+      - **Ticked 2026-08-25** on an audit of what actually shipped, not on new work: all
+        three sources are built, wired into `SnoozeService`, and feeding the one §6.6
+        confirmation test. Nothing under §6.10 itself is unbuilt — `TYPE_SIGNIFICANT_MOTION`
+        is *not* a fourth wake-up source. But motion is not therefore all deferred: it has two
+        separate uses, and only one is a product decision. As an explicit end condition
+        (`until I move`) it sits in Phase 6's fallback table, gated on hardware item 2. As a
+        §6.7 duty-cycle input it is v1 spec and still unbuilt — its own item above. The
+        residuals here stay residuals: best-effort bounds the design accepts, each with its
+        own recorded slice.
+- [ ] **The significant-motion trigger that drives the §6.7 duty cycle** (found by Codex on
+      the 2026-08-25 status audit). `Presence` already handles `PresenceSignal.SignificantMotion`
+      — suppressed while associated with the anchor's Wi-Fi, escalating to `CHECKING` otherwise —
+      and `PresenceTest` covers it, but **nothing produces the signal**: there is no
+      `SensorManager.requestTriggerSensor` anywhere in the app, so that branch is dead code.
+      The cost is not a missed departure but a slow one: for a coordinate anchor off its Wi-Fi,
+      §6.7 says motion is what escalates the 10-minute sanity poll to the 90 s active request,
+      so with the trigger absent a geofence exit that is late or dropped waits for the 30-minute
+      backstop instead. `TYPE_SIGNIFICANT_MOTION` needs no permission and is a hardware-backed
+      one-shot, so this is battery-cheap by design (`SPEC.md` §9). Re-arm the trigger after each
+      firing, and suppress it while associated the way the engine already does.
+      **The other half of the same duty cycle is missing too** (Codex, same review): §6.7 pairs
+      the armed trigger with a 10-minute sanity poll, and nothing schedules one.
+      `CheckingFixes.sanityCheck()` runs only on a transition into `SANITY` duty or on a
+      `SanityPoke`, and the only source of pokes is the 30-minute `SnoozeBackstop` — so the
+      resting cadence is the backstop's, three times slower than the spec's. Both halves belong
+      to this item: registering and re-arming the trigger, *and* a 10-minute resting schedule.
+      Closing one without the other would leave §6.7 unimplemented while looking done.
+      **Distinct from the deferred motion work** in Phase 6: that item is motion as an explicit
+      *end condition* (`until I move`), a product decision gated on hardware item 2. This one is
+      motion as a duty-cycle input, which `SPEC.md` §6.7 specifies for v1 — the audit conflated
+      the two before Codex separated them.
 - [x] The departure test itself (`SPEC.md` §6.6): accuracy gate, 50 m hysteresis, two
       qualifying fixes ≥30 s apart *or* one unambiguous fix beyond radius + 500 m. Covered
       by recorded fix traces including bad-accuracy jumps. Landed in `:core` as `Departure`
@@ -893,9 +949,10 @@ the point is that every other line of the app is worthless if it isn't true.
         qualifying reading. The literal reading of §6.6's "consecutive" ships until the
         walk says otherwise, because that is the conservative direction, not because the
         alternative is unavailable.
-      - Still owed: the platform monitors that *deliver* signals. The decisions around the
-        test — escalation, the duty cycle (§6.7), the degraded report, the grace period —
-        landed as `Presence`; what remains is the three wake-up sources (§6.10) feeding it.
+      - The decisions around the test — escalation, the duty cycle (§6.7), the degraded
+        report, the grace period — landed as `Presence`, and the platform monitors that
+        *deliver* signals have since landed too: all three §6.10 wake-up sources feed it,
+        per the item below. This bullet read "still owed" until the 2026-08-25 audit.
 - [x] Wi-Fi as suppressor only (D4): associated with the anchor SSID suppresses location
       work entirely; loss escalates to `CHECKING` and never ends a snooze on its own.
       Landed as `AnchorWifiTracker` (the pure transition machine) + `PlatformWifiWatch`
@@ -2276,6 +2333,16 @@ that can only be settled on a real device, ordered by risk.
         which is what an active tile would have cost. Nothing in this sandbox can check either:
         `TileService` and `qsTile` aren't practically testable, so only the register/notify
         seam behind them is covered by unit tests.
+16. [ ] **The Wi-Fi callback returns a real SSID, not a redacted placeholder** (`SPEC.md`
+        §6.4, Phase 3). Associate with a network, arm, and confirm the captured anchor names
+        the network rather than the redaction placeholders. The flag and the permissions are
+        in place and `AnchorCapture.sanitizeSsid` rejects the placeholders by name, so what
+        is unverified is only whether the platform hands the real value back on a real
+        device. What a redaction costs is **the Wi-Fi capability, tracked**, not a silent
+        failure: the rejected value becomes `ssid = null`, `supportedModes` then omits
+        `WIFI_ONLY`, and the snooze runs on the coordinate anchor or honestly degrades to
+        duration-only and says so. Worth measuring because losing the D4 suppressor changes
+        how the product behaves indoors, not because anything fails quietly.
 
 ### Samsung, at Phase 8
 
@@ -2479,8 +2546,8 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     end there because association is D4's strong presence evidence and the geofence is the signal
     §6.10 documents as unreliable; but the same reasoning that keeps a cinema quiet is what leaves
     that case silent. The two questions are one question, and they should be answered together.
-  - Nothing ships either way until the monitors land, so the engine's current behavior is not yet
-    reachable by a user.
+  - The monitors have since landed, so the engine's behavior is now reachable by a user — this
+    question is live rather than hypothetical, and answering it is no longer free.
 - **Should ending be a prompt rather than an action, at least sometimes?** Asked as: *"prompt me to
   unsnooze when I unlock as an option, rather than only always unsnoozing automatically."* The
   natural shape is not a global switch but a split: a *confirmed* departure ends the snooze

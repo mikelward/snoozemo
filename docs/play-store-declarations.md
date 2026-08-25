@@ -42,10 +42,13 @@ Three things gate the rest, in this order:
    permissions it names are all declared now — location and the Wi-Fi read in the main
    manifest, background location in `play`'s — so the manifest half is done. What is
    still ahead of the build is *behavior*: it describes v1 as specified, including the
-   departure detection that ends a snooze when you leave, and presence is Phase 3, so
-   today every snooze is duration-only. Checking that what the policy says Snoozemo
-   keeps and does matches what the shipped build actually keeps and does is the part
-   that has to be true on the day it is hosted.
+   departure detection that ends a snooze when you leave. That is built and wired on
+   `play` now, though it has never run on a handset — so on that flavor the policy is
+   ahead of what anyone has *seen* work rather than ahead of what ships. On `direct` it
+   is genuinely ahead of the build: `DurationOnlyPresenceMonitor` is a stand-in until
+   Phase 7's foreground monitor lands, so every `direct` snooze is a timer today.
+   Checking that what the policy says Snoozemo keeps and does matches what each shipped
+   flavor actually keeps and does is the part that has to be true on the day it is hosted.
 3. **Film the demonstration video** (`TODO.md` Phase 3, steps 2–7). Nothing else
    blocks the permissions declaration, and the permissions declaration blocks
    *publishing* a bundle carrying `ACCESS_BACKGROUND_LOCATION` — on the internal track
