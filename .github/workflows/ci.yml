@@ -1323,19 +1323,56 @@ jobs:
             > "${RUNNER_TEMP}/whatsnew/whatsnew-en-US"
           echo "PLAY_WHATSNEW_DIR=${RUNNER_TEMP}/whatsnew" >> "${GITHUB_ENV}"
 
+      - name: Check the Data Safety declaration covers crash reporting
+        # A feature-based gate, not a permission-based one (maintainer,
+        # 2026-08-25): what matters is whether *crash reporting is on in this
+        # build*, not whether the manifest happens to hold a permission.
+        #
+        # The hazard it closes: the moment GOOGLE_SERVICES_JSON is set, the
+        # next push to main builds a reporting-enabled AAB and the step below
+        # publishes it — while the Play Data Safety form may still say "no data
+        # collected". That is a policy violation the pipeline would be
+        # automating, not a stale doc (docs/play-store-declarations.md, TODO.md).
+        #
+        # So publishing a reporting-enabled build additionally requires the
+        # repository variable PLAY_DATA_SAFETY_DECLARED to be "true", set by
+        # hand once the Console form actually carries crash logs, diagnostics
+        # and device or other IDs. Builds with reporting dormant are unaffected,
+        # and the signed AAB is still produced and uploaded as an artifact
+        # either way — so the device checks TODO.md owes are not blocked.
+        #
+        # Skips loudly rather than failing: a red main on every push until a
+        # variable is set is noise, but a silent skip would look like a
+        # successful release. The warning names what to do.
+        if: env.RELEASE_KEYSTORE_FILE != '' && env.HAS_PLAY_SA == 'true'
+        env:
+          DATA_SAFETY_DECLARED: ${{ vars.PLAY_DATA_SAFETY_DECLARED }}
+        run: |
+          set -euo pipefail
+          if [ "${HAS_FIREBASE_CONFIG}" != "true" ]; then
+            echo "Crash reporting is dormant in this build; the old Data Safety answer still holds."
+            exit 0
+          fi
+          if [ "${DATA_SAFETY_DECLARED}" = "true" ]; then
+            echo "Data Safety declared as covering crash reporting; publishing allowed."
+            exit 0
+          fi
+          echo "PLAY_UPLOAD_BLOCKED=true" >> "${GITHUB_ENV}"
+          echo "::warning::Not publishing to Play: this build has crash reporting enabled, but the repository variable PLAY_DATA_SAFETY_DECLARED is not \"true\". Update the Play Console Data Safety form to declare crash logs, diagnostics and device or other IDs (docs/play-store-declarations.md), then set that variable. The signed AAB is still attached to this run as an artifact."
+
       - name: Upload to Play Store internal track
         # Gated so it only runs with both the upload key and service account
         # configured. Also skipped when "Build release notes" set
         # RELEASE_NOTES_SKIP=true — no Play-worthy "What's new" entry exists,
-        # so shipping a release would be redundant. See
-        # docs/play-store-internal-track.md for the Play Console / service
-        # account setup this depends on, and this PR's own note about not
-        # merging until the declarations and the service account's granted
-        # permissions are checked.
+        # so shipping a release would be redundant — and when the step above
+        # found crash reporting enabled without the Data Safety declaration
+        # confirmed. See docs/play-store-internal-track.md for the Play Console
+        # / service account setup this depends on.
         if: |
           env.RELEASE_KEYSTORE_FILE != '' &&
           env.HAS_PLAY_SA == 'true' &&
-          env.RELEASE_NOTES_SKIP != 'true'
+          env.RELEASE_NOTES_SKIP != 'true' &&
+          env.PLAY_UPLOAD_BLOCKED != 'true'
         uses: r0adkll/upload-google-play@a80b0bcdcfdfcc2d026f2bc73f726760b2cbc967  # post-v1.1.5: fixes DEP0040/DEP0169 Node.js deprecation warnings
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}

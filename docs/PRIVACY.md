@@ -1,36 +1,80 @@
 # Snoozemo privacy policy
 
-**Last updated: 2026-08-23. Covers Snoozemo v1 for Android.**
+**Last updated: 2026-08-25. Covers Snoozemo v1 for Android.**
 
 ## The short version
 
-**Snoozemo does not send anything automatically.** There is no account to create, no
-analytics, no advertising, no crash reporting, and no server for any of it to go to.
-Snoozemo does need to know where you are — that is the whole point of "stay quiet until I
-leave here" — but that answer is worked out on your phone and never sent anywhere on its
-own. Two things can still move its data off the phone, and both need you to act first:
-Android's own new-phone setup transfer, covered under **Backup**, and the *Share debug logs*
-button — you build the report and choose where it goes, covered under **The debug log**.
+**Snoozemo sends one thing automatically, and it is a crash report.** There is no account
+to create, no analytics, and no advertising. If the app crashes, the Google Play version
+sends the crash — what the code was doing when it fell over, your device model, and your
+Android and app version — so the bug can be fixed. **You can turn that off** in Settings,
+and the version distributed outside Google Play cannot send it at all. Details under
+**Crash reports**.
+
+**Where you are is never part of that, and never leaves your phone.** Snoozemo does need to
+know where you are — that is the whole point of "stay quiet until I leave here" — but that
+answer is worked out on your phone and is not in a crash report, not in anything else
+Snoozemo sends, and not on any server. Two other things can move Snoozemo's data off the
+phone, and both need you to act first: Android's own new-phone setup transfer, covered
+under **Backup**, and the *Share debug logs* button — you build the report and choose where
+it goes, covered under **The debug log**.
 
 ## What leaves your phone
 
-Snoozemo sends nothing automatically, to anyone.
+**One thing, automatically: a crash report, and only from the Google Play version.** It is
+described under **Crash reports** below, it contains nothing about where you are, and you
+can turn it off.
 
-It does not ask Android for the `INTERNET` permission, so it cannot open a network
-connection at all — nothing here is ever an upload. That is not a promise you have to take
-on trust: Android enforces it, and the permission list is in the app's manifest, which
-anyone can read in the source at <https://github.com/mikelward/snoozemo>.
+Our Google Play Data Safety declaration says so: Snoozemo declares **crash logs**,
+**diagnostics**, and the **installation identifier** described below — collected for app
+functionality and analytics, not shared with anyone else, and optional, which is Play's
+word for a switch you can turn off. It declares no location data, because none is sent,
+and it does not use an advertising ID at all.
 
-Our Google Play Data Safety declaration says the same thing: **no data collected, no data
-shared** — "shared" there means transmitted by the app itself, which Snoozemo cannot do.
+**The version distributed outside Google Play sends nothing at all.** Snoozemo ships in two
+builds. The sideloaded / F-Droid one does not ask Android for the `INTERNET` permission, so
+it cannot open a network connection under any circumstances — nothing from that build is
+ever an upload, and that is not a promise you have to take on trust: Android enforces it,
+and the permission list is in the app's manifest, which anyone can read in the source at
+<https://github.com/mikelward/snoozemo>.
 
-Two things can still move Snoozemo's data off a phone, and both are things you do, not
+Two further things can move Snoozemo's data off a phone, and both are things you do, not
 things Snoozemo does on its own. Android itself, when you set up a new phone from your old
 one — a copy you asked for, going to a device you own, covered under **Backup** below. And
 the *Share debug logs* button, or the post-crash banner's own Share action: tapping either
 builds a plain-text report and hands it to the clipboard and Android's share sheet, so a
 destination is something you pick, not something Snoozemo decides — covered under **The
 debug log** below.
+
+## Crash reports
+
+When the Google Play version of Snoozemo crashes, it sends a crash report to **Firebase
+Crashlytics**, a Google service, so the bug can be found and fixed.
+
+**What is in it**: the technical trace of what the code was doing when it crashed, your
+device model, your Android version, and your Snoozemo version. Google's own service also
+records a randomly-generated installation identifier so repeat crashes on one phone can be
+told apart, and the approximate time.
+
+**What is not in it, ever**: your location or any coordinate, the name or identifier of any
+Wi-Fi network, any place name you typed, when or how long you snoozed for, and the contents
+of the debug log described below. None of that is attached, and the app has no code that
+could attach it. A crash report answers *did Snoozemo break, and where in the code* — not
+*where is this person*.
+
+**It is on by default**, because a crash that nobody reports is a crash that does not get
+fixed, and the alternative is asking every user to opt in to something they would have to
+understand first. **You can turn it off**: Settings → *Crash reports*. Turning it off stops
+anything further being sent and deletes any report already waiting to go.
+
+**The version distributed outside Google Play has no crash reporting at all** — no switch,
+because there is nothing to switch. It cannot open a network connection.
+
+**When it is sent**: on the next launch after a crash — never at the moment of the crash,
+and never on a schedule of its own. Crash reporting adds no background wake-up, no extra
+location check, and nothing that runs on its own while you are snoozed. A snooze can outlive
+the app's process, so that next launch can happen while one is still running; when it does,
+the report travels with a launch that was going to happen anyway rather than causing one.
 
 ## What Snoozemo keeps on your phone
 
@@ -50,6 +94,7 @@ All of this lives in Snoozemo's private app storage, which other apps cannot rea
 | Whether you have turned down the notification permission | So the app asks once and then stops asking | Erased as soon as you allow notifications, or when you uninstall |
 | Why a snooze failed to start, when it failed while you were not looking | So a tap that quietly did nothing tells you what went wrong, rather than leaving you to guess | Erased when your next snooze starts and makes it moot. It is kept even after the message is shown, in case the message never arrived — if it was waiting on notification permission, showing it is what clears it |
 | A note that Do Not Disturb may still be on after Snoozemo lost track of it | So Snoozemo keeps trying to turn its own rule back off, instead of leaving your phone quiet with nothing watching | Erased when the rule is confirmed off, or when a new snooze takes the rule over — seeing the warning is not enough |
+| Whether you have turned crash reports off | So the choice sticks, and nothing is sent while it is off. It is a single yes/no, stored on the phone, and never sent anywhere itself | Until you uninstall |
 | A short technical log of what the snooze machinery did, and when — see **The debug log** below | So a snooze that ended early, or never ended, can be explained after the fact | The current run of the app and the one before it; deleted immediately if you turn the log off |
 
 There is no history: Snoozemo does not keep a record of past snoozes, past places, or past
@@ -161,10 +206,10 @@ warning — a log that starts off guarantees the first one is the one nobody cap
 **Turning it off deletes everything the log kept, immediately**, including an unshared
 crash record: off means off, not "stop writing but keep the old files".
 
-**None of it leaves your phone unless you share it.** The app cannot open a network
-connection, so there is no automatic upload of any kind — the only way this log reaches
-anyone else is the *Share debug logs* button in Settings, and the banner offering to share
-after a crash. Both are always an explicit act: tapping either builds a plain-text report and
+**None of it leaves your phone unless you share it.** It is not part of a crash report and
+there is no automatic upload of it of any kind — the only way this log reaches anyone else
+is the *Share debug logs* button in Settings, and the banner offering to share after a
+crash. Both are always an explicit act: tapping either builds a plain-text report and
 puts it on your clipboard, then opens Android's own share sheet so you choose the
 destination — email, a messaging app, a bug report form, wherever you decide to paste it.
 Nothing is sent anywhere by Snoozemo itself.
@@ -210,7 +255,8 @@ you started on an old one.
 That record is a scrambled value, not a device identity: it is derived from an Android
 identifier through a one-way hash, and the only question ever asked of it is whether it
 matches the one on this phone. It is stored with the snooze and erased with it, and
-Snoozemo never sends it anywhere — there is no permission in the app that could. The one
+Snoozemo never sends it anywhere — it is not in a crash report and there is nothing else
+that transmits. The one
 way it can move is the same device-to-device transfer described above, and that is not an
 exception so much as the point: if the transfer copies the snooze, the marker has to travel
 with it, because comparing it is how the new phone knows to refuse. If
@@ -231,15 +277,21 @@ settled either way.
 - Or, without uninstalling: **Settings → Apps → Snoozemo → Storage → Clear storage**, also
   unconditional. This is the one to use if you want a guarantee rather than a retry.
 
-There is no server holding a copy, so there is nothing to delete anywhere else — with one
-exception worth naming: if Snoozemo's data came across to a new phone during setup, the old
-phone still has its own copy, and it is deleted the same way.
+No server holds a copy of anything in the list above — with one exception worth naming: if
+Snoozemo's data came across to a new phone during setup, the old phone still has its own
+copy, and it is deleted the same way.
+
+Crash reports are the one thing that is not on your phone to delete. Turning *Crash
+reports* off in Settings stops any more being sent and drops any that were still waiting;
+reports already received are held by Firebase Crashlytics for 90 days and then deleted
+automatically. To have earlier ones removed sooner, email the address at the foot of this
+page.
 
 ## Children
 
 Snoozemo is not directed at children. It works the same way for a user of any age: what it
-keeps is the short list in the table above, it stays on that phone, and none of it is
-collected by us or sent to anyone.
+keeps is the short list in the table above, it stays on that phone, and the only thing sent
+anywhere is a crash report you can turn off.
 
 ## Changes to this policy
 

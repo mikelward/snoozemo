@@ -1,16 +1,59 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The play flavor's half of SPEC.md §3.4's split: the Geofencing API needs the
-  background grant to deliver an exit while the app holds no foreground
-  service, and this flavor deliberately has none — the declaration below is
-  the whole of what the flavor adds. It stays out of the main manifest so the
-  direct flavor ships with no restricted permission at all, which is that
-  flavor's reason to exist; DeclaredPermissionsTest pins the split in both
-  directions. Declared with the maintainer's approval (2026-08-22); the Play
-  Console declaration it commits us to is SPEC.md §3.5's risk.
+  The play flavor's half of SPEC.md §3.4's split. It stays out of the main
+  manifest so the direct flavor ships with no restricted permission and no
+  network access at all, which is that flavor's reason to exist;
+  DeclaredPermissionsTest pins the split in both directions.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!--
+      The Geofencing API needs the background grant to deliver an exit while
+      the app holds no foreground service, and this flavor deliberately has
+      none. Declared with the maintainer's approval (2026-08-22); the Play
+      Console declaration it commits us to is SPEC.md §3.5's risk.
+    -->
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+
+    <!--
+      Crash reporting, and nothing else, uses this (SPEC.md §12). It was
+      absent from both flavors until Crashlytics landed, and the day it landed
+      the Play Data Safety answer moved off "no data collected, no data
+      shared" onto crash logs, diagnostics and the installation identifier
+      Crashlytics records — docs/play-store-declarations.md
+      carries the new answer and docs/PRIVACY.md the user-facing statement.
+
+      Still absent from `direct`: that flavor holds no Play Services
+      dependency, so it has no reporter to feed, and "this build cannot open a
+      network connection" stays literally true there.
+
+      The floor of SPEC.md §12 is unchanged by this permission — no
+      coordinates, no SSID or BSSID, no user-typed place name goes anywhere,
+      and the on-device debug log still leaves the phone only when the user
+      shares it. What Crashlytics sends is a stack trace, and the user can
+      turn even that off in Settings.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application>
+        <!--
+          Off until the app says otherwise. Crashlytics would otherwise start
+          collecting during process creation — before Snoozemo has read the
+          stored opt-out — so an install where the user has turned reporting
+          off would still upload the first crash after every launch. The gate
+          in CrashReporter applies the stored choice at startup; both SDK
+          switches persist what they are given, so later launches honor the
+          last-known choice even before the store has been read.
+
+          The cost of this ordering is the narrow window it leaves: a crash
+          between process creation and the gate applying `true` is not
+          reported. That is the right way round — an unreported crash is a
+          missing diagnostic, a wrongly-reported one breaks a promise made in
+          Settings.
+        -->
+        <meta-data
+            android:name="firebase_crashlytics_collection_enabled"
+            android:value="false" />
+    </application>
 
 </manifest>

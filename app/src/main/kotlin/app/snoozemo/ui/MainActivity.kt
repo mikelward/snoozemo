@@ -54,6 +54,7 @@ import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenRuleState
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.snooze.ActiveSnoozeStore
+import app.snoozemo.crash.CrashReporting
 import app.snoozemo.snooze.DebugLogStore
 import app.snoozemo.snooze.DebugLogging
 import app.snoozemo.snooze.DebugReport
@@ -407,6 +408,9 @@ class MainActivity : ComponentActivity() {
     /** The handle for the debug-log setting watch; see [onStart]. */
     private var debugLogWatch: AutoCloseable? = null
 
+    /** The handle for the crash-reporting setting watch; see [onStart]. */
+    private var crashReportingWatch: AutoCloseable? = null
+
     /**
      * Whether the last debug-log save was refused by storage. Cleared by the
      * next tap: the message describes the previous attempt, and a new attempt
@@ -414,6 +418,32 @@ class MainActivity : ComponentActivity() {
      * failures follow.
      */
     private var debugLogSaveFailed by mutableStateOf(false)
+
+    /**
+     * Whether crash reporting is on (SPEC.md §12), or **null when this build
+     * has no reporter** — `direct` always, and a `play` build made without a
+     * Firebase config. Null is also the value before the store has been read,
+     * and both mean the same thing to the screen: draw no row. The
+     * availability check is what separates them, and it runs before the first
+     * read below rather than after, so a build with no reporter never briefly
+     * shows a switch it would then have to take away.
+     */
+    private var crashReportingEnabled by mutableStateOf<Boolean?>(null)
+
+    /**
+     * How many crash-reporting writes are still on the worker. Main thread
+     * only, exactly as [debugLogWrites] is and for the same reason: while it
+     * is non-zero the switch shows the user's tap and every read-back holds
+     * off, so a start or a store re-read cannot repaint the *old* stored value
+     * over an in-flight tap.
+     */
+    private var crashReportingWrites = 0
+
+    /**
+     * Whether the last crash-reporting save was refused by storage. Cleared by
+     * the next tap, same rule as [debugLogSaveFailed].
+     */
+    private var crashReportingSaveFailed by mutableStateOf(false)
 
     /**
      * Whether the most recent Off toggle left one or more debug-log files
@@ -738,6 +768,8 @@ class MainActivity : ComponentActivity() {
                                 settingsFailure = settingsFailure,
                                 debugLogEnabled = debugLogEnabled,
                                 debugLogSaveFailed = debugLogSaveFailed,
+                                crashReportingEnabled = crashReportingEnabled,
+                                crashReportingSaveFailed = crashReportingSaveFailed,
                                 playUpdate = displayedPlayUpdate,
                                 playUpdateRestartFailed = playUpdateRestartFailed,
                                 debugLogCleanupFailed = debugLogCleanupFailed,
@@ -750,6 +782,7 @@ class MainActivity : ComponentActivity() {
                                 onTileRow = ::addTile,
                                 onFiltersRow = ::openFilters,
                                 onDebugLog = ::setDebugLog,
+                                onCrashReporting = ::setCrashReporting,
                                 onStartPlayUpdate = ::startPlayUpdate,
                                 onCompletePlayUpdate = ::completePlayUpdate,
                                 onDismissPlayUpdate = ::dismissPlayUpdate,
@@ -844,6 +877,21 @@ class MainActivity : ComponentActivity() {
                     // tap's own completion callback belongs to the dead one
                     // (Codex, PR #89).
                     debugLogCleanupFailed = DebugLogging.lastDisableCleanupFailed
+                }
+            }
+        }
+        // Followed for exactly the reason above, and it is not optional here
+        // either: a tap on the crash-reporting switch is a privacy choice, so
+        // a replacement instance left showing the pre-tap value would tell the
+        // user they had turned reporting off when the write had not landed —
+        // and would swallow a refused save with it (Codex, PR #113). A fresh
+        // replacement's own `crashReportingWrites` is zero, so this is the
+        // read that corrects it.
+        crashReportingWatch = CrashReporting.watchSaveOutcome {
+            runOnUiThread {
+                if (crashReportingWrites == 0 && CrashReporting.isAvailable(this)) {
+                    crashReportingEnabled = CrashReporting.isEnabled(this)
+                    crashReportingSaveFailed = CrashReporting.lastSaveRefused
                 }
             }
         }
@@ -999,6 +1047,15 @@ class MainActivity : ComponentActivity() {
                     debugLogEnabled = DebugLogStore(this).isEnabled()
                     debugLogSaveFailed = DebugLogging.lastSaveRefused
                     debugLogCleanupFailed = DebugLogging.lastDisableCleanupFailed
+                }
+                // Its own one-key file too, warmed by `CrashReporting.install`
+                // at process start, so this is a memory hit like the reads
+                // above. Held off the same way while a tap's write is still on
+                // the worker. Left null — and so unrendered — where the build
+                // carries no reporter at all (SPEC.md §3.4).
+                if (crashReportingWrites == 0 && CrashReporting.isAvailable(this)) {
+                    crashReportingEnabled = CrashReporting.isEnabled(this)
+                    crashReportingSaveFailed = CrashReporting.lastSaveRefused
                 }
                 // Its own one-key file too. `compareAndSet`-style guard isn't
                 // needed the way a coroutine version would need one: this is
@@ -1289,6 +1346,8 @@ class MainActivity : ComponentActivity() {
         tileWatch = null
         debugLogWatch?.close()
         debugLogWatch = null
+        crashReportingWatch?.close()
+        crashReportingWatch = null
         // The one background wakeup this screen owns on its own — every
         // minute while visible is negligible, but only while visible. Left
         // running past `onStop` would tick a screen nobody can see.
@@ -1614,6 +1673,36 @@ class MainActivity : ComponentActivity() {
                     // successful enable already clears the field itself,
                     // synchronously, before this callback ever runs.
                     debugLogCleanupFailed = DebugLogging.lastDisableCleanupFailed
+                }
+            }
+        }
+    }
+
+    /**
+     * The crash-reporting switch (SPEC.md §12), same shape as [setDebugLog]:
+     * the tap is shown immediately, the write goes to a worker, and the
+     * completion reconciles the switch from the store — which by then holds
+     * the truth on success and failure alike.
+     */
+    private fun setCrashReporting(enabled: Boolean) {
+        // Nothing to toggle before the store has answered, or on a build with
+        // no reporter — where this stays null and the row is never drawn.
+        if (crashReportingEnabled == null) return
+        crashReportingSaveFailed = false
+        crashReportingWrites++
+        crashReportingEnabled = enabled
+        CrashReporting.setEnabled(this, enabled) { _ ->
+            runOnUiThread {
+                // Only the last outstanding write repaints — the value *and*
+                // the failure line — so an earlier write's refusal can't leave
+                // `Couldn't save this setting` standing over a later tap that
+                // saved fine. The process-level outcome is written
+                // per-completion on the FIFO worker, so once the queue drains
+                // it is the latest write's.
+                crashReportingWrites--
+                if (crashReportingWrites == 0) {
+                    crashReportingEnabled = CrashReporting.isEnabled(this)
+                    crashReportingSaveFailed = CrashReporting.lastSaveRefused
                 }
             }
         }

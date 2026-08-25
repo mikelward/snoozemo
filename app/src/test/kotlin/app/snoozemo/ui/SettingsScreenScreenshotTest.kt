@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -277,6 +278,118 @@ class SettingsScreenScreenshotTest {
         }
 
         composeRule.onNodeWithText("Couldn't save this setting").assertExists()
+    }
+
+    @Test
+    fun `crash reporting is offered under the debug log, when there is a reporter`() {
+        var changed: Boolean? = null
+
+        capture("settings-screen-crash-reporting.png") {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                crashReportingEnabled = true,
+                debugLogCleanupFailed = false,
+                shareFailed = false,
+                versionName = SAMPLE_VERSION_NAME,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onCrashReporting = { changed = it },
+                onShareDebugLog = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Crash reports").assertExists()
+        composeRule.onNodeWithText("Send crash details so bugs get fixed. No location is included.")
+            .assertExists()
+        composeRule.onNodeWithText("Crash reports").performClick()
+        assertEquals(false, changed)
+    }
+
+    @Test
+    fun `a build with no reporter offers no crash reporting row at all`() {
+        // `direct` always, and a `play` build made with no Firebase config
+        // (docs/crashlytics.md). A disabled switch would say the user had
+        // turned something off that was never on; the row is absent instead.
+        capture {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                crashReportingEnabled = null,
+                debugLogCleanupFailed = false,
+                shareFailed = false,
+                versionName = SAMPLE_VERSION_NAME,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onShareDebugLog = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Debug log").assertExists()
+        composeRule.onNodeWithText("Crash reports").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a refused crash reporting save says so under its own switch`() {
+        capture("settings-screen-crash-reporting-save-failed.png") {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                crashReportingEnabled = true,
+                crashReportingSaveFailed = true,
+                debugLogCleanupFailed = false,
+                shareFailed = false,
+                versionName = SAMPLE_VERSION_NAME,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onCrashReporting = {},
+                onShareDebugLog = {},
+            )
+        }
+
+        // The debug log's own switch above is unaffected, so the failure has
+        // to read as belonging to this row rather than to "a setting".
+        composeRule.onAllNodesWithText("Couldn't save this setting").assertCountEquals(1)
+    }
+
+    @Test
+    fun `crash reporting turned off still shows the row`() {
+        capture("settings-screen-crash-reporting-off.png") {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                crashReportingEnabled = false,
+                debugLogCleanupFailed = false,
+                shareFailed = false,
+                versionName = SAMPLE_VERSION_NAME,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onCrashReporting = {},
+                onShareDebugLog = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Crash reports").assertExists()
     }
 
     @Test

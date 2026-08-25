@@ -453,20 +453,25 @@ internal fun CrashBanner(
 }
 
 /**
- * The debug log's on/off switch (SPEC.md §4.6): on by default, and turning it
- * off deletes what was kept.
+ * A setting with two valid states, as opposed to a [SetupRow]'s "capability
+ * missing, here is its one repair".
  *
- * Not a [SetupRow]: those state a capability and offer its one repair, while
- * this is a choice with two valid states, so it carries a switch. The whole
- * card is the target and the switch is its indicator — one TalkBack target per
- * row, the same rule the rows above keep — which is why the switch itself
- * takes no `onCheckedChange` of its own.
+ * The whole card is the target and the switch is its indicator — one TalkBack
+ * target per row, the same rule the rows above keep — which is why the switch
+ * itself takes no `onCheckedChange` of its own.
+ *
+ * [failures] are shown under the description, in order, and are what stops a
+ * switch snapping back to the stored truth from reading as a missed tap. Each
+ * one is a distinct failure with a distinct fix, so they stack rather than
+ * replace one another; already-null entries are dropped by the caller's own
+ * `listOfNotNull`.
  */
 @Composable
-internal fun DebugLogRow(
+private fun SwitchRow(
+    title: String,
+    description: String,
     enabled: Boolean,
-    saveFailed: Boolean,
-    cleanupFailed: Boolean,
+    failures: List<String>,
     onChange: (Boolean) -> Unit,
 ) {
     Surface(
@@ -493,11 +498,11 @@ internal fun DebugLogRow(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    text = stringResource(R.string.setup_debug_log_title),
+                    text = title,
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
-                    text = stringResource(R.string.setup_debug_log_description),
+                    text = description,
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 // Inside the row, like SetupRow's failure line and for the
@@ -505,20 +510,9 @@ internal fun DebugLogRow(
                 // scrolls. The switch has already snapped back to the stored
                 // truth by the time this shows; the line is what stops the
                 // snap-back reading as a missed tap.
-                if (saveFailed) {
+                failures.forEach { failure ->
                     Text(
-                        text = stringResource(R.string.setup_debug_log_save_failed),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                // Distinct from saveFailed: the setting itself did save as
-                // Off, but the delete that's supposed to go with it left
-                // something behind — a different failure than the switch
-                // not taking (Codex, PR #89).
-                if (cleanupFailed) {
-                    Text(
-                        text = stringResource(R.string.setup_debug_log_cleanup_failed),
+                        text = failure,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
@@ -527,4 +521,63 @@ internal fun DebugLogRow(
             Switch(checked = enabled, onCheckedChange = null)
         }
     }
+}
+
+/**
+ * The debug log's on/off switch (SPEC.md §4.6): on by default, and turning it
+ * off deletes what was kept.
+ */
+@Composable
+internal fun DebugLogRow(
+    enabled: Boolean,
+    saveFailed: Boolean,
+    cleanupFailed: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    SwitchRow(
+        title = stringResource(R.string.setup_debug_log_title),
+        description = stringResource(R.string.setup_debug_log_description),
+        enabled = enabled,
+        failures = listOfNotNull(
+            stringResource(R.string.setup_debug_log_save_failed).takeIf { saveFailed },
+            // Distinct from saveFailed: the setting itself did save as Off,
+            // but the delete that's supposed to go with it left something
+            // behind — a different failure than the switch not taking
+            // (Codex, PR #89).
+            stringResource(R.string.setup_debug_log_cleanup_failed).takeIf { cleanupFailed },
+        ),
+        onChange = onChange,
+    )
+}
+
+/**
+ * Crash reporting's on/off switch (SPEC.md §12): on by default, and the one
+ * place in the app where the user can stop something leaving the phone.
+ *
+ * Drawn only when there is a reporter behind it — the `play` flavor, built
+ * with a Firebase config (`docs/crashlytics.md`). `SettingsScreen` decides
+ * that by being handed a null, so this composable never has to know which
+ * flavor it is in, and a screenshot test can render the row either way.
+ *
+ * No cleanup-failure line to match the debug log's: turning this off deletes
+ * the reports Crashlytics had already captured, but that delete is the SDK's
+ * own asynchronous call and reports no outcome back, so there is nothing
+ * honest to say about it here. What the row can promise — and does — is that
+ * nothing further is collected.
+ */
+@Composable
+internal fun CrashReportingRow(
+    enabled: Boolean,
+    saveFailed: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    SwitchRow(
+        title = stringResource(R.string.setup_crash_reporting_title),
+        description = stringResource(R.string.setup_crash_reporting_description),
+        enabled = enabled,
+        failures = listOfNotNull(
+            stringResource(R.string.setup_crash_reporting_save_failed).takeIf { saveFailed },
+        ),
+        onChange = onChange,
+    )
 }

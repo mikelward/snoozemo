@@ -495,13 +495,15 @@ it in the same commit.
   the coordinates of a real home, a real address — lifted from a device or a bug report.
   Roborazzi snapshots are the easy mistake: they ship to the repo, so record them from
   fixture data, never from a device with a real anchor captured.
-- **Adding `INTERNET` (a crash reporter, analytics, a map tile, a geocoder) is a product
+- **Anything new that leaves the device (analytics, a map tile, a geocoder) is a product
   decision, not an implementation detail.** It changes the Play Data Safety declaration and
-  is worth calling out plainly (see *Cost and reliability*) — but it is not off the table,
-  and this file no longer treats "no `INTERNET` permission" as a standing constraint to
-  defend. Whatever gets added still owes the same floor as everything else on this list:
+  is worth calling out plainly (see *Cost and reliability*). Crash reporting has already
+  been through that gate and landed on `play` (`SPEC.md` §12); the next thing has to go
+  through it too, and it still owes the same floor as everything else on this list:
   location data and the user's own configuration stay off any channel that leaves the
-  device unless the user has been told plainly and agreed.
+  device unless the user has been told plainly and agreed. Nothing sent off the device may
+  carry a coordinate, an SSID/BSSID, or a user-typed place name — which is why the crash
+  reporter attaches no custom keys and no breadcrumbs at all.
 - **The floor below is a list, and the list is exhaustive.** What it names is forbidden
   absolutely; what it does not name is a judgment call, and the answer to a judgment call
   is not "add it to the floor to be safe". Widening the floor by inference is how the app
@@ -646,10 +648,11 @@ apostrophes (`\'`) in any locale's string resources.
   $/month at expected traffic — and note reliability implications: new failure modes, rate
   limits, added latency, extra points of failure, and what the user sees if the dependency
   is down. If the impact is effectively zero, say so rather than omitting the note.
-- **`INTERNET` is no longer a line this app refuses to cross** (Crashlytics and similar are
-  expected later), but it is still the thing to name explicitly: it moves the Play Data
-  Safety answer off "no data collected, no data shared", so say that plainly alongside the
-  dollar figure. See *Privacy*.
+- **`INTERNET` has landed on `play` and stays off `direct`** — Crashlytics, `SPEC.md` §12,
+  `docs/crashlytics.md`. So the line to hold now is the flavor split, not the permission:
+  anything that would give `direct` network access, or that would add a second thing using
+  `play`'s, is a distribution decision to bring to the user, with its Data Safety
+  consequence named alongside the dollar figure. See *Privacy*.
 - **Battery is this app's other running cost, paid by the user.** A snooze can be armed for
   eight hours, so a change that adds a wakeup, a location request, a sensor registration,
   or a `WorkManager` period is a battery change and gets stated as one against `SPEC.md`

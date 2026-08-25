@@ -3,13 +3,17 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-      No INTERNET permission today (SPEC.md §12): nothing can leave the
-      device, which is what makes the Play Data Safety answer "no data
-      collected, no data shared" trivially auditable. Not a permanent
-      constraint — Crashlytics or similar is expected later, gated by a
-      user-facing opt-out — but adding it is a product decision, not an
-      implementation detail, and the day it lands this comment and §12 both
-      need to say so.
+      No INTERNET permission here, and none in `direct` (SPEC.md §12): that
+      flavor cannot open a network connection at all, which is what makes its
+      "nothing leaves the device" claim auditable from the manifest.
+
+      The `play` flavor does declare it, as of the change that added crash
+      reporting, and its own manifest says why. That was the product decision
+      §12 anticipated rather than an implementation detail slipping in: the
+      Play Data Safety answer moved with it, and the floor did not. Location
+      data and the user's own configuration still stay off any channel that
+      leaves the device — a crash reporter answers "did Snoozemo crash and
+      why", not "where is this person".
     -->
 
     <!--
