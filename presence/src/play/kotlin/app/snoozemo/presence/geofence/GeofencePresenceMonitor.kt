@@ -15,6 +15,8 @@ import app.snoozemo.core.PresenceSignal
 import app.snoozemo.core.PresenceUpdate
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.TrackingMode
+import app.snoozemo.presence.MotionTrigger
+import app.snoozemo.presence.PlatformMotionTrigger
 import app.snoozemo.presence.PlatformWifiWatch
 import app.snoozemo.presence.PresenceFeed
 import com.google.android.gms.common.api.ApiException
@@ -280,6 +282,7 @@ class GeofencePresenceMonitor(
         // checking, started and stopped by the duty the engine itself reports
         // (§6.7). Declared before `deliver` because delivery is what drives it.
         var checkingFixes: CheckingFixes? = null
+        var motionTrigger: MotionTrigger? = null
 
         // The feed is a plain value and its callers arrive from more than one
         // thread — the bridge and the fixes on main, the setup body on the
@@ -516,6 +519,16 @@ class GeofencePresenceMonitor(
             // Pause, not close: the duty leaving ACTIVE is a state the engine
             // can re-enter, and only teardown (awaitClose) may end the burst
             // for good.
+            // §6.7's escalator, armed exactly where the duty cycle wants
+            // it: SANITY is the resting state — away from the anchor's
+            // Wi-Fi, with something to measure against, nothing being
+            // checked — and it is the only state where being told the phone
+            // moved changes what happens next. ACTIVE is already asking
+            // faster than a trigger would help; NONE means either D4 has
+            // better evidence for free or there is nothing a fix could
+            // settle. Restated on every update, so [MotionTrigger.reconcile]
+            // has to be idempotent rather than this call being conditional.
+            motionTrigger?.reconcile(duty == LocationDuty.SANITY)
             if (duty == LocationDuty.ACTIVE) {
                 checkingFixes?.start()
             } else {
@@ -561,6 +574,11 @@ class GeofencePresenceMonitor(
                 is GeofenceRegistrationFailure.Fatal -> failCapability(failure.cause)
             }
         }
+        motionTrigger = MotionTrigger(
+            PlatformMotionTrigger(appContext),
+            readElapsedRealtimeMs,
+            ::deliver,
+        )
         checkingFixes = CheckingFixes(
             AndroidBurstScheduler(),
             PlatformFixRequester(appContext),
@@ -914,6 +932,11 @@ class GeofencePresenceMonitor(
             SnoozeDebugLog.event("presence watch closed; a wake-up restores it")
             active.compareAndSet(handle, null)
             checkingFixes?.close()
+            // In-process like the burst, and cheap to lose: a restored
+            // monitor re-arms from the duty it recomputes, and a resting
+            // phone with no live trigger is exactly the case the §6.10
+            // backstop already covers.
+            motionTrigger?.close()
             bridge?.close()
             // In-process like the burst: a restarted service re-registers its
             // own watch. The grace *alarm* is deliberately not canceled here
