@@ -33,7 +33,7 @@ release rather than dropped.
 - [x] Two product flavors, `play` and `direct` (`SPEC.md` §3.4), differing only below
       `PresenceMonitor`. `play` is the default; CI's `assembleDebug` builds both, since a
       change that compiles in one can break the other.
-- [x] CI workflow (`.github/workflows/android-ci.yml`): build both flavors, `:core:test` on
+- [x] CI workflow (`.github/workflows/ci.yml`): build both flavors, `:core:test` on
       its own, unit tests with failing-test PR comments, lint. The Roborazzi screenshot job
       lands with the first real UI (Phase 2/4) and the `deploy` job with the release
       plumbing (Phase 6) — an empty screenshot allow-list is only a check nobody reads.
@@ -1730,7 +1730,7 @@ the point is that every other line of the app is worthless if it isn't true.
       `signingConfigs["release"]` (`app/build.gradle.kts`) reads the upload keystore from
       `RELEASE_KEYSTORE_FILE` and its companion env vars, attaching only when they're present so
       a fresh clone still builds unsigned; the `deploy` job in
-      `.github/workflows/android-ci.yml` builds `:app:bundlePlayRelease` on every push to `main`
+      `.github/workflows/ci.yml` builds `:app:bundlePlayRelease` on every push to `main`
       and publishes it as a downloadable `app-release-aab` workflow artifact, for the manual seed
       upload Play requires (`docs/play-store-internal-track.md`). R8 stays off — a separate
       follow-up once there is a device to verify a shrunk build against.
@@ -2211,7 +2211,7 @@ Nothing here is scheduled; each is a sequel that follows from something already 
       `mikelward/ci-commit-artifact` for the screenshot-refresh commit (today's
       `screenshot-tests` job runs the PR's own Gradle/Roborazzi code and commits/pushes in
       that same job — the structural risk `ci-commit-artifact`'s README exists to close)
-      and migrates `android-ci.yml` to `pull_request_target` like `typelauncher`, so a PR
+      and migrates `ci.yml` to `pull_request_target` like `typelauncher`, so a PR
       can no longer rewrite the workflow definition to forge a green required check. Six
       ordered milestones, each its own PR; the doc has the full architecture, the
       `CI_COMMIT_ARTIFACT_TOKEN` PAT reuse from `typelauncher`, why the trigger switch also
@@ -2224,7 +2224,7 @@ Nothing here is scheduled; each is a sequel that follows from something already 
       matches no class — branch behind `main`, a renamed test, a step added without its
       class — Gradle's actual "No tests found for given includes: [...]" line is buried
       after a page of unrelated `NO-SOURCE`/compile noise from other modules
-      (`android-ci.yml`'s screenshot-tests job, one step per class). A quick look at the
+      (`ci.yml`'s screenshot-tests job, one step per class). A quick look at the
       log shows only the `NO-SOURCE` lines and no clear signal that the whole job is about
       to fail. Worth a step that checks the named class exists before invoking Gradle, or
       an explicit failure message that names the missing class up front. Not built; ran into
@@ -2236,7 +2236,7 @@ Nothing here is scheduled; each is a sequel that follows from something already 
       the comment ever needs to drop entries, on the theory that a dark capture is usually
       the same state as its light counterpart and carries less unique signal. Not built —
       the truncation cap was instead switched to a character budget against GitHub's
-      comment-size limit (`.github/workflows/android-ci.yml`, "Post screenshot diffs as a
+      comment-size limit (`.github/workflows/ci.yml`, "Post screenshot diffs as a
       PR comment" step), so in practice this never triggers for the current screenshot
       count. Worth revisiting if the comment ever does truncate in the field.
 
@@ -2571,7 +2571,7 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   refreshed head with no checks would sit blocked forever, not just under-verified). A
   push made with `GITHUB_TOKEN` deliberately starts no workflow run, but a *dispatch*
   made with the same token is GitHub's documented exception, so the refresh step now
-  dispatches `android-ci.yml` onto the branch it just pushed and fails loudly if the
+  dispatches `ci.yml` onto the branch it just pushed and fails loudly if the
   dispatch is refused. The dispatched run is a non-PR event, so `classify` sends it down
   the code lane and every heavy job runs against the refreshed head; its check runs land
   on that head SHA and satisfy the ruleset like any other. This fix was not among the
@@ -3134,6 +3134,6 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
       already publishes the `codex` status here, and it must remain the
       only workflow holding `statuses: write`.
 - [ ] Verify the settings half of the fleet's bar: a ruleset on the
-      default branch requiring `android-ci.yml`'s always-reporting `gate`
+      default branch requiring `ci.yml`'s always-reporting `gate`
       job and the `codex` status, plus conversation resolution and
       up-to-date branches, with the auto-merge setting enabled.

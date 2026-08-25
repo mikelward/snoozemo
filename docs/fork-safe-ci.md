@@ -1,6 +1,6 @@
 # Making CI safe to open to external PRs and forks
 
-Snoozemo's CI (`android-ci.yml`) currently trusts every pull request the same
+Snoozemo's CI (`ci.yml`) currently trusts every pull request the same
 way: it runs on plain `pull_request`, so GitHub already withholds repo
 secrets from fork PRs, but the job **definitions themselves** are read from
 whatever the PR branch contains — a PR could rewrite `classify`/`build`/
@@ -23,7 +23,7 @@ while still on plain `pull_request` — and under `pull_request` a same-repo
 PR's own branch controls the workflow YAML *and* receives the full
 `secrets` context (only fork PRs get secrets withheld). Until milestone 5
 switches to `pull_request_target`, any same-repo PR could rewrite
-`android-ci.yml` to exfiltrate whichever secret already exists. That's safe
+`ci.yml` to exfiltrate whichever secret already exists. That's safe
 right now only because snoozemo has exactly one collaborator — **don't
 grant anyone else push/collaborator access, and don't accept a fork PR,
 between landing milestone 2 and finishing milestone 5.** If that changes
@@ -34,7 +34,7 @@ proceeding on schedule.
 
 `pull_request_target` loads the workflow **definition** from the base branch
 (`main`) regardless of what the PR itself contains — a PR touching
-`android-ci.yml` can no longer rewrite `classify`/`build`/`gate` to forge a
+`ci.yml` can no longer rewrite `classify`/`build`/`gate` to forge a
 green check. That's the one thing plain `pull_request` can't give us: GitHub
 already protects secrets from fork PRs there, but not the job definitions.
 
@@ -171,7 +171,7 @@ for the screenshot commit-back, matching typelauncher's `sync-screenshots` +
   written, as safe since `comment-marker` stays unset — that reasoning
   covers runtime behavior, not the platform's static permission check)
   produces an outright `startup_failure`, not a runtime permission error:
-  `.github/workflows/android-ci.yml (Line: N, Col: N): Error calling
+  `.github/workflows/ci.yml (Line: N, Col: N): Error calling
   workflow '…'. The nested job 'commit' is requesting 'pull-requests:
   write', but is only allowed 'pull-requests: none'.` `pull-requests:
   write` is genuinely dead weight for what this call does — `comment-marker`
@@ -189,7 +189,7 @@ for the screenshot commit-back, matching typelauncher's `sync-screenshots` +
   step gets copied into a new job) that call fails before the comment can
   post. **Needs its own `permissions: contents: read, pull-requests:
   write`** for the same reason as above. Port snoozemo's existing
-  byte-budget truncation logic here (`android-ci.yml`'s current `Post
+  byte-budget truncation logic here (`ci.yml`'s current `Post
   screenshot diffs as a PR comment` step, PR #83) rather than
   typelauncher's older fixed-20-item version — snoozemo's is strictly
   better and already proven.
@@ -281,7 +281,7 @@ stop and reassess between any two if something doesn't verify as expected.
    as above — including the drift-fail step staying in the render job and
    `gate`/`lanes` gaining `sync-screenshots` in their own `needs:` and
    verdict, both from this milestone on, not deferred to milestone 3 —
-   but with `dispatch-workflow: android-ci.yml` in place of `push-token`
+   but with `dispatch-workflow: ci.yml` in place of `push-token`
    for now, since `ci-commit-artifact`'s own validation treats that as
    safe under plain `pull_request`. This is the structural security fix
    (commit/push no longer shares a job with PR-controlled Gradle code)

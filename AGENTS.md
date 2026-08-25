@@ -592,7 +592,7 @@ apostrophes (`\'`) in any locale's string resources.
   failure shapes — a GPS jump, a 500 m-accuracy cell fix, a walk to the end of the garden.
   Cover each with a recorded fix trace, and add the trace when a bug is found in the field.
 - UI changes must include or update Robolectric + Roborazzi screenshot tests, wired into
-  `.github/workflows/android-ci.yml`. The screenshot job records against an explicit
+  `.github/workflows/ci.yml`. The screenshot job records against an explicit
   `--tests` allow-list (one step per screenshot class), so a new `*ScreenshotTest` class
   that isn't added there never records in CI even when it passes locally — add a
   `Run … screenshot tests` step alongside the test class.
