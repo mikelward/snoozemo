@@ -179,8 +179,7 @@
       snooze active" — the screen already names the app and the subject
       (AGENTS.md, *Concise copy*).
     -->
-    <!-- TODO: translate -->
-    <string name="main_not_snoozing" tools:ignore="MissingTranslation">Not snoozing</string>
+    <string name="main_not_snoozing">Not snoozing</string>
     <string name="arm">Snooze</string>
     <string name="release">End snooze</string>
     <string name="rule_failed">Do Not Disturb access is on, but Snoozemo could not create its rule</string>
