@@ -16,7 +16,7 @@ rules:
         # mutable ref, and each exemption should be a decision somebody made.
         # Adding one is one line here.
         #
-        # The lane-classification engine android-ci.yml's classify/gate/
+        # The lane-classification engine ci.yml's classify/gate/
         # lanes jobs invoke — same repo-tracked-deliberately reasoning as
         # the rest of this list.
         "mikelward/lanes": ref-pin
@@ -27,7 +27,7 @@ rules:
         # reference above does not cover it.
         "mikelward/codex-review/.github/workflows/check-consumer.yml": ref-pin
         "mikelward/gradle-update/.github/workflows/gradle-update.yml": ref-pin
-        # android-ci.yml's `sync-screenshots` job — the reusable workflow
+        # ci.yml's `sync-screenshots` job — the reusable workflow
         # that pushes a refreshed-snapshot commit back to a same-repo PR
         # branch (`docs/fork-safe-ci.md` milestone 1). Same reasoning as
         # the rest of this list: this account's own repo, gated behind its

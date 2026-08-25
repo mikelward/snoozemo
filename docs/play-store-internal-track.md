@@ -46,7 +46,7 @@ below only authenticates to Play — it doesn't sign what testers run.
 ## When the build and upload run
 
 The `Build release AAB` and `Upload signed AAB as workflow artifact` steps in
-the `deploy` job (`.github/workflows/android-ci.yml`) run only when
+the `deploy` job (`.github/workflows/ci.yml`) run only when
 `RELEASE_KEYSTORE_BASE64` is non-empty. A fresh repo or fork without that
 secret still gets a green run — the steps are skipped, not failed.
 
@@ -246,7 +246,7 @@ GitHub.
 
 ## Release notes
 
-The `Build release notes` step (`.github/workflows/android-ci.yml`) walks
+The `Build release notes` step (`.github/workflows/ci.yml`) walks
 every commit since the last release that actually published and collects the
 subject of each one worth shipping, per `AGENTS.md`'s "Commit messages"
 convention: `ci:`/`docs:`/`internal:`/`refactor:`/`test:`/`tests:`-prefixed
