@@ -28,6 +28,14 @@ local.properties
 # keystore itself, and not covered by the two patterns above.
 *.keystore.b64
 
+# The Firebase config that turns Crashlytics on for a build (docs/crashlytics.md).
+# Untracked on purpose: it names one Firebase project, so a fork that built with
+# it committed would file its crashes into this project's console, and a fresh
+# clone should build with crash reporting dormant rather than pointed somewhere.
+# It is not a credential -- it ships inside every Play build -- so this is about
+# which project a build reports to, not about secrecy.
+/app/google-services.json
+
 # JVM fatal-error / replay crash dumps from forked test workers
 hs_err_pid*.log
 replay_pid*.log

@@ -830,6 +830,181 @@
             ]
         },
         {
+            "uniqueId": "androidx.datastore:datastore-android",
+            "artifactVersion": "1.1.7",
+            "name": "DataStore",
+            "description": "Android DataStore - contains the underlying store used by each serialization method along with components that require an Android dependency",
+            "website": "https://developer.android.com/jetpack/androidx/releases/datastore#1.1.7",
+            "developers": [
+                {
+                    "name": "The Android Open Source Project"
+                }
+            ],
+            "organization": {
+                "name": "The Android Open Source Project"
+            },
+            "scm": {
+                "connection": "scm:git:https://android.googlesource.com/platform/frameworks/support",
+                "url": "https://cs.android.com/androidx/platform/frameworks/support"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "androidx.datastore:datastore-core-android",
+            "artifactVersion": "1.1.7",
+            "name": "DataStore Core",
+            "description": "Android DataStore Core - contains the underlying store used by each serialization method",
+            "website": "https://developer.android.com/jetpack/androidx/releases/datastore#1.1.7",
+            "developers": [
+                {
+                    "name": "The Android Open Source Project"
+                }
+            ],
+            "organization": {
+                "name": "The Android Open Source Project"
+            },
+            "scm": {
+                "connection": "scm:git:https://android.googlesource.com/platform/frameworks/support",
+                "url": "https://cs.android.com/androidx/platform/frameworks/support"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "androidx.datastore:datastore-core-okio-jvm",
+            "artifactVersion": "1.1.7",
+            "name": "DataStore Core Okio",
+            "description": "Android DataStore Core Okio- contains APIs to use datastore-core in multiplatform via okio",
+            "website": "https://developer.android.com/jetpack/androidx/releases/datastore#1.1.7",
+            "developers": [
+                {
+                    "name": "The Android Open Source Project"
+                }
+            ],
+            "organization": {
+                "name": "The Android Open Source Project"
+            },
+            "scm": {
+                "connection": "scm:git:https://android.googlesource.com/platform/frameworks/support",
+                "url": "https://cs.android.com/androidx/platform/frameworks/support"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "androidx.datastore:datastore-preferences-android",
+            "artifactVersion": "1.1.7",
+            "name": "Preferences DataStore",
+            "description": "Android Preferences DataStore",
+            "website": "https://developer.android.com/jetpack/androidx/releases/datastore#1.1.7",
+            "developers": [
+                {
+                    "name": "The Android Open Source Project"
+                }
+            ],
+            "organization": {
+                "name": "The Android Open Source Project"
+            },
+            "scm": {
+                "connection": "scm:git:https://android.googlesource.com/platform/frameworks/support",
+                "url": "https://cs.android.com/androidx/platform/frameworks/support"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "androidx.datastore:datastore-preferences-core-android",
+            "artifactVersion": "1.1.7",
+            "name": "Preferences DataStore Core",
+            "description": "Android Preferences DataStore without the Android Dependencies",
+            "website": "https://developer.android.com/jetpack/androidx/releases/datastore#1.1.7",
+            "developers": [
+                {
+                    "name": "The Android Open Source Project"
+                }
+            ],
+            "organization": {
+                "name": "The Android Open Source Project"
+            },
+            "scm": {
+                "connection": "scm:git:https://android.googlesource.com/platform/frameworks/support",
+                "url": "https://cs.android.com/androidx/platform/frameworks/support"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "androidx.datastore:datastore-preferences-external-protobuf",
+            "artifactVersion": "1.1.7",
+            "name": "Preferences External Protobuf",
+            "description": "Repackaged proto-lite dependency for use by datastore preferences",
+            "website": "https://developer.android.com/jetpack/androidx/releases/datastore#1.1.7",
+            "developers": [
+                {
+                    "name": "The Android Open Source Project"
+                }
+            ],
+            "organization": {
+                "name": "The Android Open Source Project"
+            },
+            "scm": {
+                "connection": "scm:git:https://android.googlesource.com/platform/frameworks/support",
+                "url": "https://cs.android.com/androidx/platform/frameworks/support"
+            },
+            "licenses": [
+                "BSD-3-Clause"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "androidx.datastore:datastore-preferences-proto",
+            "artifactVersion": "1.1.7",
+            "name": "Preferences DataStore Proto",
+            "description": "Jarjar the generated proto for use by datastore-preferences.",
+            "website": "https://developer.android.com/jetpack/androidx/releases/datastore#1.1.7",
+            "developers": [
+                {
+                    "name": "The Android Open Source Project"
+                }
+            ],
+            "organization": {
+                "name": "The Android Open Source Project"
+            },
+            "scm": {
+                "connection": "scm:git:https://android.googlesource.com/platform/frameworks/support",
+                "url": "https://cs.android.com/androidx/platform/frameworks/support"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
             "uniqueId": "androidx.emoji2:emoji2",
             "artifactVersion": "1.4.0",
             "name": "Emoji2",
@@ -1787,6 +1962,63 @@
             ]
         },
         {
+            "uniqueId": "com.google.android.datatransport:transport-api",
+            "artifactVersion": "3.2.0",
+            "name": "com.google.android.datatransport:transport-api",
+            "description": "",
+            "developers": [
+                
+            ],
+            "scm": {
+                "connection": "scm:git:https://github.com/firebase/firebase-android-sdk.git",
+                "url": "https://github.com/firebase/firebase-android-sdk"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.android.datatransport:transport-backend-cct",
+            "artifactVersion": "3.3.0",
+            "name": "com.google.android.datatransport:transport-backend-cct",
+            "description": "",
+            "developers": [
+                
+            ],
+            "scm": {
+                "connection": "scm:git:https://github.com/firebase/firebase-android-sdk.git",
+                "url": "https://github.com/firebase/firebase-android-sdk"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.android.datatransport:transport-runtime",
+            "artifactVersion": "3.3.0",
+            "name": "com.google.android.datatransport:transport-runtime",
+            "description": "",
+            "developers": [
+                
+            ],
+            "scm": {
+                "connection": "scm:git:https://github.com/firebase/firebase-android-sdk.git",
+                "url": "https://github.com/firebase/firebase-android-sdk"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
             "uniqueId": "com.google.android.gms:play-services-base",
             "artifactVersion": "18.5.0",
             "name": "play-services-base",
@@ -1803,7 +2035,7 @@
         },
         {
             "uniqueId": "com.google.android.gms:play-services-basement",
-            "artifactVersion": "18.1.0",
+            "artifactVersion": "18.8.0",
             "name": "play-services-basement",
             "description": "",
             "developers": [
@@ -1833,7 +2065,7 @@
         },
         {
             "uniqueId": "com.google.android.gms:play-services-tasks",
-            "artifactVersion": "18.0.2",
+            "artifactVersion": "18.4.0",
             "name": "play-services-tasks",
             "description": "",
             "developers": [
@@ -1871,6 +2103,268 @@
             ],
             "licenses": [
                 "PCSDKToS"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.errorprone:error_prone_annotations",
+            "artifactVersion": "2.26.0",
+            "name": "error-prone annotations",
+            "description": "Error Prone is a static analysis tool for Java that catches common programming mistakes at compile-time.",
+            "website": "https://errorprone.info/error_prone_annotations",
+            "developers": [
+                {
+                    "name": "Eddie Aftandilian"
+                }
+            ],
+            "organization": {
+                "name": "Google LLC",
+                "url": "http://www.google.com"
+            },
+            "scm": {
+                "connection": "scm:git:https://github.com/google/error-prone.git/error_prone_annotations",
+                "developerConnection": "scm:git:git@github.com:google/error-prone.git/error_prone_annotations",
+                "url": "https://github.com/google/error-prone/error_prone_annotations"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.firebase:firebase-annotations",
+            "artifactVersion": "17.0.0",
+            "name": "com.google.firebase:firebase-annotations",
+            "description": "",
+            "developers": [
+                
+            ],
+            "scm": {
+                "connection": "scm:git:https://github.com/firebase/firebase-android-sdk.git",
+                "url": "https://github.com/firebase/firebase-android-sdk"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.firebase:firebase-common",
+            "artifactVersion": "22.2.0",
+            "name": "com.google.firebase:firebase-common",
+            "description": "",
+            "developers": [
+                
+            ],
+            "scm": {
+                "connection": "scm:git:https://github.com/firebase/firebase-android-sdk.git",
+                "url": "https://github.com/firebase/firebase-android-sdk"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.firebase:firebase-components",
+            "artifactVersion": "19.0.0",
+            "name": "com.google.firebase:firebase-components",
+            "description": "",
+            "developers": [
+                
+            ],
+            "scm": {
+                "connection": "scm:git:https://github.com/firebase/firebase-android-sdk.git",
+                "url": "https://github.com/firebase/firebase-android-sdk"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.firebase:firebase-config-interop",
+            "artifactVersion": "16.0.1",
+            "name": "com.google.firebase:firebase-config-interop",
+            "description": "",
+            "developers": [
+                
+            ],
+            "scm": {
+                "connection": "scm:git:https://github.com/firebase/firebase-android-sdk.git",
+                "url": "https://github.com/firebase/firebase-android-sdk"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.firebase:firebase-crashlytics",
+            "artifactVersion": "20.1.0",
+            "name": "com.google.firebase:firebase-crashlytics",
+            "description": "",
+            "developers": [
+                
+            ],
+            "scm": {
+                "connection": "scm:git:https://github.com/firebase/firebase-android-sdk.git",
+                "url": "https://github.com/firebase/firebase-android-sdk"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.firebase:firebase-datatransport",
+            "artifactVersion": "19.0.0",
+            "name": "com.google.firebase:firebase-datatransport",
+            "description": "",
+            "developers": [
+                
+            ],
+            "scm": {
+                "connection": "scm:git:https://github.com/firebase/firebase-android-sdk.git",
+                "url": "https://github.com/firebase/firebase-android-sdk"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.firebase:firebase-encoders",
+            "artifactVersion": "17.0.0",
+            "name": "firebase-encoders",
+            "description": "",
+            "developers": [
+                
+            ],
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.firebase:firebase-encoders-json",
+            "artifactVersion": "18.0.1",
+            "name": "com.google.firebase:firebase-encoders-json",
+            "description": "",
+            "developers": [
+                
+            ],
+            "scm": {
+                "connection": "scm:git:https://github.com/firebase/firebase-android-sdk.git",
+                "url": "https://github.com/firebase/firebase-android-sdk"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.firebase:firebase-encoders-proto",
+            "artifactVersion": "16.0.0",
+            "name": "firebase-encoders-proto",
+            "description": "",
+            "developers": [
+                
+            ],
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.firebase:firebase-installations",
+            "artifactVersion": "19.1.2",
+            "name": "com.google.firebase:firebase-installations",
+            "description": "",
+            "developers": [
+                
+            ],
+            "scm": {
+                "connection": "scm:git:https://github.com/firebase/firebase-android-sdk.git",
+                "url": "https://github.com/firebase/firebase-android-sdk"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.firebase:firebase-installations-interop",
+            "artifactVersion": "17.3.0",
+            "name": "com.google.firebase:firebase-installations-interop",
+            "description": "",
+            "developers": [
+                
+            ],
+            "scm": {
+                "connection": "scm:git:https://github.com/firebase/firebase-android-sdk.git",
+                "url": "https://github.com/firebase/firebase-android-sdk"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.firebase:firebase-measurement-connector",
+            "artifactVersion": "20.0.1",
+            "name": "firebase-measurement-connector",
+            "description": "",
+            "developers": [
+                
+            ],
+            "licenses": [
+                "ASDKL"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.firebase:firebase-sessions",
+            "artifactVersion": "3.0.7",
+            "name": "com.google.firebase:firebase-sessions",
+            "description": "",
+            "developers": [
+                
+            ],
+            "scm": {
+                "connection": "scm:git:https://github.com/firebase/firebase-android-sdk.git",
+                "url": "https://github.com/firebase/firebase-android-sdk"
+            },
+            "licenses": [
+                "Apache-2.0"
             ],
             "funding": [
                 
@@ -1970,6 +2464,48 @@
             ]
         },
         {
+            "uniqueId": "com.squareup.okio:okio-jvm",
+            "artifactVersion": "3.4.0",
+            "name": "okio",
+            "description": "A modern I/O library for Android, Java, and Kotlin Multiplatform.",
+            "website": "https://github.com/square/okio/",
+            "developers": [
+                {
+                    "name": "Square, Inc."
+                }
+            ],
+            "scm": {
+                "connection": "scm:git:git://github.com/square/okio.git",
+                "developerConnection": "scm:git:ssh://git@github.com/square/okio.git",
+                "url": "https://github.com/square/okio/"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "javax.inject:javax.inject",
+            "artifactVersion": "1",
+            "name": "javax.inject",
+            "description": "The javax.inject API",
+            "website": "http://code.google.com/p/atinject/",
+            "developers": [
+                
+            ],
+            "scm": {
+                "url": "http://code.google.com/p/atinject/source/checkout"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
             "uniqueId": "org.jetbrains.compose.ui:ui-backhandler-android",
             "artifactVersion": "1.8.1",
             "name": "Compose Multiplatform BackHandler",
@@ -1994,10 +2530,106 @@
             ]
         },
         {
+            "uniqueId": "org.jetbrains.kotlin:kotlin-android-extensions-runtime",
+            "artifactVersion": "1.9.22",
+            "name": "Kotlin Android Extensions Runtime",
+            "description": "Kotlin Android Extensions Runtime",
+            "website": "https://kotlinlang.org/",
+            "developers": [
+                {
+                    "name": "Kotlin Team",
+                    "organisationUrl": "https://www.jetbrains.com"
+                }
+            ],
+            "scm": {
+                "connection": "scm:git:https://github.com/JetBrains/kotlin.git",
+                "developerConnection": "scm:git:https://github.com/JetBrains/kotlin.git",
+                "url": "https://github.com/JetBrains/kotlin"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "org.jetbrains.kotlin:kotlin-parcelize-runtime",
+            "artifactVersion": "1.9.22",
+            "name": "Parcelize Runtime",
+            "description": "Runtime library for the Parcelize compiler plugin",
+            "website": "https://kotlinlang.org/",
+            "developers": [
+                {
+                    "name": "Kotlin Team",
+                    "organisationUrl": "https://www.jetbrains.com"
+                }
+            ],
+            "scm": {
+                "connection": "scm:git:https://github.com/JetBrains/kotlin.git",
+                "developerConnection": "scm:git:https://github.com/JetBrains/kotlin.git",
+                "url": "https://github.com/JetBrains/kotlin"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
             "uniqueId": "org.jetbrains.kotlin:kotlin-stdlib",
             "artifactVersion": "2.4.10",
             "name": "Kotlin Stdlib",
             "description": "Kotlin Standard Library",
+            "website": "https://kotlinlang.org/",
+            "developers": [
+                {
+                    "name": "Kotlin Team",
+                    "organisationUrl": "https://www.jetbrains.com"
+                }
+            ],
+            "scm": {
+                "connection": "scm:git:https://github.com/JetBrains/kotlin.git",
+                "developerConnection": "scm:git:https://github.com/JetBrains/kotlin.git",
+                "url": "https://github.com/JetBrains/kotlin"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "org.jetbrains.kotlin:kotlin-stdlib-jdk7",
+            "artifactVersion": "1.8.0",
+            "name": "Kotlin Stdlib Jdk7",
+            "description": "Kotlin Standard Library JDK 7 extension",
+            "website": "https://kotlinlang.org/",
+            "developers": [
+                {
+                    "name": "Kotlin Team",
+                    "organisationUrl": "https://www.jetbrains.com"
+                }
+            ],
+            "scm": {
+                "connection": "scm:git:https://github.com/JetBrains/kotlin.git",
+                "developerConnection": "scm:git:https://github.com/JetBrains/kotlin.git",
+                "url": "https://github.com/JetBrains/kotlin"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "org.jetbrains.kotlin:kotlin-stdlib-jdk8",
+            "artifactVersion": "1.8.0",
+            "name": "Kotlin Stdlib Jdk8",
+            "description": "Kotlin Standard Library JDK 8 extension",
             "website": "https://kotlinlang.org/",
             "developers": [
                 {
@@ -2065,6 +2697,28 @@
             "uniqueId": "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm",
             "artifactVersion": "1.11.0",
             "name": "kotlinx-coroutines-core",
+            "description": "Coroutines support libraries for Kotlin",
+            "website": "https://github.com/Kotlin/kotlinx.coroutines",
+            "developers": [
+                {
+                    "name": "JetBrains Team",
+                    "organisationUrl": "https://www.jetbrains.com"
+                }
+            ],
+            "scm": {
+                "url": "https://github.com/Kotlin/kotlinx.coroutines"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "org.jetbrains.kotlinx:kotlinx-coroutines-play-services",
+            "artifactVersion": "1.11.0",
+            "name": "kotlinx-coroutines-play-services",
             "description": "Coroutines support libraries for Kotlin",
             "website": "https://github.com/Kotlin/kotlinx.coroutines",
             "developers": [
@@ -2189,6 +2843,13 @@
             "internalHash": "Apache-2.0",
             "spdxId": "Apache-2.0",
             "hash": "Apache-2.0"
+        },
+        "BSD-3-Clause": {
+            "name": "BSD 3-Clause \"New\" or \"Revised\" License",
+            "url": "https://spdx.org/licenses/BSD-3-Clause.html",
+            "internalHash": "BSD-3-Clause",
+            "spdxId": "BSD-3-Clause",
+            "hash": "BSD-3-Clause"
         },
         "PCSDKToS": {
             "name": "Play Core Software Development Kit Terms of Service",
