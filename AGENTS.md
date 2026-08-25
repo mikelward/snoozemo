@@ -12,9 +12,10 @@ flavors, and CI (build + unit tests + lint + screenshots) are in place and green
 the DND half: the tile arms and ends a snooze, the record survives process death and
 reboots, and the duration cap holds across a clock change. Presence — the *leave here and it
 ends* half — is not built yet, so every snooze is honestly duration-only (`TODO.md` Phase 3).
-Every rule below is live, screenshot tests included: the three screens (`MainScreen`,
-`PermissionsScreen`, `SettingsScreen`) each record through their own `*ScreenshotTest`, and a
-new one needs its own step in the CI allow-list or it records nothing.
+Every rule below is live, screenshot tests included: the four screens (`MainScreen`,
+`PermissionsScreen`, `SettingsScreen`, `LicensesScreen`) each record through their own
+`*ScreenshotTest`, and a new one needs its own step in the CI allow-list or it records
+nothing.
 
 ## Project documentation
 

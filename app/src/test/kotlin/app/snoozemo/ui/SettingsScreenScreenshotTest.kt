@@ -592,6 +592,33 @@ class SettingsScreenScreenshotTest {
     }
 
     @Test
+    fun `the licenses row opens the attribution page`() {
+        var opened = 0
+
+        capture {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                debugLogCleanupFailed = false,
+                shareFailed = false,
+                versionName = SAMPLE_VERSION_NAME,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onShareDebugLog = {},
+                onOpenLicenses = { opened++ },
+            )
+        }
+
+        composeRule.onNodeWithText("Licenses").performClick()
+        assertEquals(1, opened)
+    }
+
+    @Test
     fun `the version is shown at the foot of the page`() {
         capture {
             SettingsScreen(

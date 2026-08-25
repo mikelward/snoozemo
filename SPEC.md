@@ -344,7 +344,8 @@ This **revises** the line below rather than sitting beside it: "the tile is the 
 written when the tile was the only one, and it stays true as a statement of which path the product
 leads with — it is no longer true as a statement that the tile is the *only* way to start a snooze.
 
-**The app is three screens, not one** (`TODO.md` Phase 4, landed 2026-08-23). `MainScreen` is the
+**The app is four screens, not one** (`TODO.md` Phase 4, landed 2026-08-23; the fourth,
+`LicensesScreen`, arrived later — §4.7). `MainScreen` is the
 tile-equivalent Arm/Release control: the app's title, a banner for the one required-and-missing
 capability (Do Not Disturb access — nothing on this screen can arm without it), the tile banner
 below, and the Snooze/End snooze/Settings controls. `PermissionsScreen` is the interstitial that
@@ -362,7 +363,9 @@ isn't granted or the rule doesn't exist yet — a button that opens to nothing i
 button. None of the rows is gated behind another being resolved first — leaving any of them is
 always one tap, on the same "fail open" principle the duration cap itself follows (D7): a setup
 flow that cannot be left
-without finishing it is a trap, not onboarding.
+without finishing it is a trap, not onboarding. `LicensesScreen` is a leaf off `SettingsScreen`'s
+foot (§4.7), and the only screen reached from exactly one place — which is why Back there returns
+to Settings rather than to `MainScreen`.
 
 `SettingsScreen` also carries the **update banner** (landed 2026-08-23, `play` flavor only —
 §3.4's `direct` flavor is never distributed through Play, so it has nothing to check for): when
@@ -692,8 +695,16 @@ turns out not to be knowable from any one place: it is usually `MainScreen`, but
 Do Not Disturb access still missing routes straight to `PermissionsScreen` (§4.2), and a process
 killed while the user was in Settings is restored *there* from saved state. Both of those were
 found as separate bugs against a rule phrased around the landing screen (Codex, PR #89), which is
-the argument for the exhaustive rule: there are three screens, all three show it, and no future
-routing change can reintroduce the gap. Only a crash raises it — an ordinary process death, a
+the argument for the exhaustive rule: every screen a cold start can *land* on shows it, and no
+future routing change can reintroduce the gap.
+
+**`LicensesScreen` is the one deliberate exception** (maintainer, 2026-08-25). It is a read-only
+reference list reached by one deliberate tap, and a crash banner over it is noise rather than the
+thing its reader came for. The cost is real and was accepted rather than argued away: `screen` is
+restored from saved state, so a process killed while the licenses were open comes back there with
+the banner not yet raised. One Back returns to Settings, which raises it — the banner is deferred
+by a tap, never lost. This is the boundary the rule above draws: every screen a run can *start* on,
+not every screen that exists. Only a crash raises it — an ordinary process death, a
 force-stop, or an app update does not, since those runs' logs stay shareable without nagging.
 
 A crashed run is **pinned, not rotated**: the crash handler leaves a marker, the next start moves
@@ -728,6 +739,31 @@ was itself the single largest source of defects in this feature (PR #89). Coales
 deletes the question instead of answering it, and reads better besides — a disabled button that says
 what it is doing beats a tap that resolves into some other attempt's outcome. The delivery path stays
 serialized underneath as a floor, so the guarantee does not depend on every caller honoring the gate.
+
+### 4.7 Open-source licenses
+
+The Settings foot carries a **Licenses** row, beside the privacy policy, opening a page that lists
+every third-party component this build bundles and the license each ships under. Names only, one
+row each — the list runs to around ninety entries, and a version and license on every row turns a
+scannable index into a wall; tapping a name opens the version and a link out to the full license
+text.
+
+**One attribution list per flavor, not one shared list.** `play` bundles Play's in-app update
+library and the Play Services stack beneath it; `direct` bundles none of it (§3.4). A shared list
+would have the sideload build claiming to ship Play code it does not contain, which is the opposite
+of what an attribution page is for. Each flavor's list names what that flavor's APK actually
+bundles rather than what the dependency graph mentions, and is kept current by the build rather
+than by hand, so a dependency bump cannot quietly leave either one stale.
+
+**A link that cannot open says so.** On a device with nothing able to handle a web link, the tap
+would otherwise be absorbed and read as the app being broken — principle 2's failure, not a
+graceful degradation. The dialog states the failure instead, and clears it on the next attempt. No
+fallback route to the URL is offered: where there is no browser there is nowhere to send it, and a
+copy control would be more chrome than a two-line metadata dialog earns.
+
+**Rows are ordered by the name shown, not by dependency coordinate.** The coordinates are hidden
+and there is no search, so the displayed name is the only thing a reader can scan by. The ordering
+is the page's own guarantee rather than a side effect of how the list happens to be parsed.
 
 ---
 

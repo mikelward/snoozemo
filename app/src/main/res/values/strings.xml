@@ -214,4 +214,25 @@
     -->
     <string name="settings_privacy_policy">Privacy policy</string>
     <string name="settings_privacy_url" translatable="false">https://mikelward.github.io/snoozemo/PRIVACY.html</string>
+
+    <!--
+      Open-source attribution, in the Settings foot beside the privacy policy —
+      same row and position as the sibling Simmo repo's, which is also where
+      its own Licenses row sits. The row reads "Licenses" because the page it
+      opens spells out which licenses these are.
+    -->
+    <!-- TODO: translate -->
+    <string name="settings_licenses" tools:ignore="MissingTranslation">Licenses</string>
+    <!-- TODO: translate -->
+    <string name="settings_licenses_title" tools:ignore="MissingTranslation">Open source licenses</string>
+    <!-- Dismisses the details dialog a component row opens. Not the page's own
+         "Done": that one leaves the page, and two controls a tap apart reading
+         the same word is exactly the ambiguity to avoid. -->
+    <!-- TODO: translate -->
+    <string name="action_close" tools:ignore="MissingTranslation">Close</string>
+    <!-- Shown in the details dialog when a tap on a license link found nothing
+         on the device able to open a web link. Says so rather than letting the
+         tap look like it did nothing. -->
+    <!-- TODO: translate -->
+    <string name="settings_licenses_link_failed" tools:ignore="MissingTranslation">Couldn\'t open the license</string>
 </resources>
