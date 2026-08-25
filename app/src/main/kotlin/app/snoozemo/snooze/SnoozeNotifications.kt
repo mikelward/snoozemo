@@ -526,6 +526,17 @@ class SnoozeNotifications(private val context: Context) {
     /** `+30 min` couldn't move the cap alarm, so the cap stands where it was. */
     fun showCouldNotExtend() = showOneShot(R.string.failure_could_not_extend)
 
+    /**
+     * A time chosen in the end-condition sheet that the cap would not take
+     * (SPEC.md §4.4).
+     *
+     * Its own card rather than [showCouldNotExtend]'s, because the two failures
+     * leave the user in different places: a refused `+30 min` means the snooze
+     * ends when it always said it would, while this means it ends *later* than
+     * the moment they just picked — the one the message has to be about.
+     */
+    fun showCouldNotSetEnd() = showOneShot(R.string.failure_could_not_set_end)
+
     /** `+30 min` with nowhere left to go: the 24 h backstop is absolute (§7). */
     fun showAtMaxDuration() = showOneShot(R.string.extend_at_max)
 

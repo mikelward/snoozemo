@@ -61,6 +61,7 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
+                askWhenToUnsnooze = false,
                 debugLogCleanupFailed = false,
                 shareFailed = false,
                 versionName = SAMPLE_VERSION_NAME,
@@ -765,6 +766,7 @@ class SettingsScreenScreenshotTest {
                 settingsFailure = null,
                 debugLogEnabled = true,
                 debugLogSaveFailed = false,
+                askWhenToUnsnooze = false,
                 debugLogCleanupFailed = false,
                 shareFailed = false,
                 versionName = SAMPLE_VERSION_NAME,
@@ -784,6 +786,95 @@ class SettingsScreenScreenshotTest {
      * [name] when a name is given. See the sibling suites for why both the
      * theme and the `Surface` matter.
      */
+    @Test
+    fun `the ask-when-to-unsnooze switch sits with the tile row it changes`() {
+        var changed: Boolean? = null
+
+        capture("settings-screen-ask-unsnooze.png") {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                askWhenToUnsnooze = false,
+                debugLogCleanupFailed = false,
+                shareFailed = false,
+                versionName = SAMPLE_VERSION_NAME,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onAskWhenToUnsnooze = { changed = it },
+                onShareDebugLog = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Ask when to unsnooze").assertExists()
+        // Deliberately does not name the departure row: that one is absent on a
+        // build with no presence monitor, and this string is shared.
+        composeRule.onNodeWithText("Offer an end time when a snooze starts").assertExists()
+
+        // The whole card is the target, not the switch — one TalkBack target
+        // per row, the same rule every row on this screen keeps.
+        composeRule.onNodeWithText("Ask when to unsnooze").performClick()
+        assertEquals(true, changed)
+    }
+
+    @Test
+    fun `the ask-when-to-unsnooze row waits for the store rather than asserting a default`() {
+        // Null until read. Off is the default, so a row that asserted it and
+        // corrected itself a frame later would flash the wrong answer at
+        // exactly the user who had turned it on.
+        capture {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                askWhenToUnsnooze = null,
+                debugLogCleanupFailed = false,
+                shareFailed = false,
+                versionName = SAMPLE_VERSION_NAME,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onShareDebugLog = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Ask when to unsnooze").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a refused ask-when-to-unsnooze save says so under the switch`() {
+        capture("settings-screen-ask-unsnooze-save-failed.png") {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                askWhenToUnsnooze = false,
+                askWhenToUnsnoozeSaveFailed = true,
+                debugLogCleanupFailed = false,
+                shareFailed = false,
+                versionName = SAMPLE_VERSION_NAME,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onShareDebugLog = {},
+            )
+        }
+
+        // The switch has already snapped back by now; this line is what stops
+        // the snap-back reading as a missed tap.
+        composeRule.onAllNodesWithText("Couldn't save this setting")[0].assertExists()
+    }
+
     private fun capture(name: String? = null, content: @Composable () -> Unit) {
         composeRule.setContent {
             SnoozemoTheme {

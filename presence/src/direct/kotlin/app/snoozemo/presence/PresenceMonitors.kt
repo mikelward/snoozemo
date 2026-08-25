@@ -16,6 +16,22 @@ fun defaultPresenceMonitor(context: Context): PresenceMonitor =
     DurationOnlyPresenceMonitor()
 
 /**
+ * Whether this build can ever end a snooze because the user left (SPEC.md §3.4).
+ *
+ * A capability of the *build*, deliberately, not of a running snooze. The
+ * end-condition sheet (§4.4) has to decide whether to offer "until I leave" at
+ * the instant the tile is tapped, and a fresh record always says `DURATION_ONLY`
+ * — the real mode arrives later, when anchor capture completes. So the record
+ * cannot answer this, and the flavor can: `direct` has no presence monitor at
+ * all, so departure is not something it will ever report.
+ *
+ * A `play` build can still degrade to duration-only for an anchor it can't use
+ * (§8.4); that is reported where it becomes known, on the ongoing notification.
+ * This is the half that is knowable in time to decide what to draw.
+ */
+const val PRESENCE_TRACKS_DEPARTURE: Boolean = false
+
+/**
  * The `play` flavor's wake-up hook, as a no-op: this flavor registers no
  * geofence, so no observation can arrive with nobody to receive it. Exists
  * so the caller above the seam stays flavor-blind.

@@ -896,6 +896,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 repairDegradedWatch()
             }
             ACTION_EXTEND -> extend()
+            ACTION_SET_CAP -> setCap(intent)
             ACTION_CLOCK_CHANGED -> reconcileClock()
             // A cold start already did everything through the restore on the
             // way in. Warm, this action is the retry ladder arriving with the
@@ -1563,6 +1564,181 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         controller.extendTo(extendedCap)
     }
 
+    /**
+     * A row committed in the end-condition sheet (SPEC.md §4.4).
+     *
+     * Choosing a time **lowers the cap**; it does not add a fourth exit and it
+     * does not disable departure tracking. Walking out earlier still ends the
+     * snooze earlier — whichever comes first wins (§7) — so there is nothing
+     * here to tell the presence engine about.
+     *
+     * The sheet does its own arithmetic against the clock, because §6.9 forbids
+     * it waiting on the record to exist. So the value arriving here was computed
+     * against a reading that may be a moment stale, and against a cap the sheet
+     * only assumed. This is where it meets the record that actually exists:
+     * clamped to the snooze's own backstop above and the thirty-minute floor
+     * below, both re-derived from a fresh reading rather than trusted from the
+     * sender.
+     *
+     * The sheet is still up waiting to hear how this went — a started service is
+     * not an applied change, and the notification these failures post is
+     * invisible to a tile-first user who denied that permission (Codex,
+     * PR #118). So the outcome is reported **once, here**, from whatever
+     * [applyChosenEnd] returns.
+     *
+     * Structured that way rather than as a `report` beside each `return`,
+     * because the version that did the latter forgot one: the branch where the
+     * record write is refused and the rollback *succeeds* fell through silently
+     * and left the sheet waiting forever with every control inert (Codex,
+     * PR #118, again). A function returning the outcome cannot forget a branch —
+     * the compiler won't let it — which is a stronger guarantee than a test per
+     * exit, and it holds for exits nobody has written yet.
+     */
+    private fun setCap(intent: Intent?) {
+        val result = applyChosenEnd(intent)
+        // A retry that took must not leave the previous attempt's card standing
+        // in the shade saying it didn't. The one-shot carries its own id, so
+        // the ongoing card reposting over the new cap does not replace it, and
+        // a notifications-denied user aside, the shade is exactly where this
+        // user was told to look (Codex, PR #118).
+        //
+        // Keyed off the result rather than added beside one `return`, for the
+        // reason `applyChosenEnd` is a total function at all: every `APPLIED`
+        // exit clears it, including the one that applies by doing nothing and
+        // any written later.
+        if (result == EndChoiceResult.APPLIED) notifications.cancelFailure()
+        EndChoiceOutcome.report(result)
+    }
+
+    /**
+     * The work behind [setCap]. Returns what became of the choice: applied —
+     * which includes the case where the snooze already ended no later, since
+     * doing nothing there is honoring it — gone, or refused.
+     */
+    private fun applyChosenEnd(intent: Intent?): EndChoiceResult {
+        val requestedMillis = intent?.getLongExtra(EXTRA_CAP_EXPIRES_AT, 0L) ?: 0L
+        if (requestedMillis <= 0L) {
+            // No sender produces this, so it is a defect rather than a state —
+            // but silently doing nothing to a snooze the user just set a time on
+            // is exactly what leaves them thinking the app ignored them.
+            SnoozeDebugLog.warning("end-condition: a chosen end carried no time; leaving the cap alone")
+            return EndChoiceResult.REFUSED
+        }
+        val snooze = controller.active ?: run {
+            // The sheet outlived its snooze: the arm was refused, or the cap or
+            // a departure got there first. Nothing to shorten, and nothing to
+            // say either — whichever of those happened has already posted its
+            // own card, and a second one would report the same event twice.
+            //
+            // `GONE`, not `REFUSED`: the sheet dismisses instead of standing
+            // there offering a retry that can only fail the same way, over a
+            // snooze that is already over (Codex, PR #118).
+            SnoozeDebugLog.event("end-condition: a chosen end arrived with no snooze running")
+            return EndChoiceResult.GONE
+        }
+
+        val reading = readClock()
+        val floor = Instant.ofEpochMilli(reading.wallMillis).plus(ActiveSnooze.MIN_CAP)
+        // A time that has fallen inside the floor is **declined, not moved**.
+        // The sheet computes against the clock at the moment it is drawn, so one
+        // left open long enough can be offering a time that is no longer 30
+        // minutes away — and clamping it up meant a row reading 14:00 committed
+        // 14:15 and then reported success, dismissing over a deadline the user
+        // was never shown (Codex, PR #118). The sheet reseeds itself on the
+        // refusal, so declining is recoverable where a silent substitution was
+        // simply wrong.
+        val requested = Instant.ofEpochMilli(requestedMillis)
+        if (requested.isBefore(floor)) {
+            SnoozeDebugLog.event("end-condition: the chosen end is inside the floor now; declining it")
+            return EndChoiceResult.REFUSED
+        }
+        // The backstop clamp is currently unreachable, and stays anyway. Nothing
+        // can produce a cap later than its own ceiling yet, so a request above
+        // the ceiling is also above the cap and the refusal below already
+        // declines it — but `extendedCap`'s own doc names the case that would
+        // change that (a per-place cap above the default, which no setting
+        // offers yet), and the day one exists this is what keeps §7's backstop
+        // absolute above any chosen value. Cheap, and the alternative is
+        // remembering to add it back at exactly the moment it stops being
+        // obvious.
+        val target = requested.coerceAtMost(snooze.capCeilingAt)
+        if (!target.isBefore(snooze.capExpiresAt)) {
+            // Not a failure: the snooze already ends no later than the moment
+            // the user picked, so their choice is honored by doing nothing.
+            // `+30 min` is what moves a cap the other way (§4.3).
+            SnoozeDebugLog.event("end-condition: the chosen end is not sooner than the cap; leaving it")
+            // Applied, not failed: the snooze already ends no later than the
+            // moment chosen, so doing nothing *is* honoring it.
+            return EndChoiceResult.APPLIED
+        }
+
+        // The alarm first, exactly as `+30 min` does it, and for the same reason
+        // read the other way round: the alarm is the cap, so a record brought in
+        // to a time no alarm is set for is a phone that stays quiet past the
+        // moment the user just chose — principle 1's failure, not a cosmetic
+        // disagreement.
+        val shortened = snooze.copy(capExpiresAt = target)
+        if (!CapAlarm.arm(applicationContext, shortened, reading)) {
+            notifications.showCouldNotSetEnd()
+            return EndChoiceResult.REFUSED
+        }
+
+        if (!store.save(shortened)) {
+            notifications.showCouldNotSetEnd()
+
+            // The record, then the alarm — the order `+30 min` rolls back in,
+            // and load-bearing for the same reason: a failed `commit` leaves the
+            // shortened cap in the preferences' in-memory map, so anything
+            // reading the record in this process would find the choice we have
+            // just told the user did not take.
+            val recordRolledBack = store.save(snooze)
+            if (recordRolledBack && CapAlarm.arm(applicationContext, snooze, readClock())) {
+                // The rollback is the *success* of this branch and still a
+                // failure of the change the user asked for, so it answers like
+                // one.
+                return EndChoiceResult.REFUSED
+            }
+
+            // The roll-back failed too, and this ends the snooze — the same
+            // answer `+30 min` gives its own double failure, for the same
+            // reason: a cap we can no longer state is not one to keep
+            // (SPEC.md §7).
+            //
+            // An earlier version of this kept the snooze running, reasoning that
+            // both halves sit at or before the *original* cap so the worst case
+            // ends early, which is where D7 sends every ambiguity. That was
+            // wrong about the end state (Codex, PR #118). The alarm left behind
+            // is at the *shortened* time, and it is one-shot: when it fires,
+            // `ACTION_CHECK_CAP` finds the controller not expired and
+            // `rescheduleIfUnfinished` returns without replacing it. The alarm
+            // is then spent, and the hard cap rests on the deferrable
+            // `WorkManager` backstop alone — which is the one invariant this app
+            // does not get to weaken.
+            Log.e(TAG, "Rolling back a refused end time failed; ending the snooze.")
+            SnoozeDebugLog.warning("end-condition: could not restore the cap after a refused change")
+            controller.end(EndReason.LOST_CAPABILITY)
+            // And if even that release is refused, make sure something is
+            // scheduled: this re-arms at the controller's cap, which is still
+            // the original one, and so also drags back an alarm left sitting at
+            // the shortened deadline.
+            ensureCapAfterRefusedEnd(EndReason.LOST_CAPABILITY)
+            // `GONE` only if the release actually took. `controller.end` keeps
+            // the snooze when the rule refuses to come off, and
+            // `ensureCapAfterRefusedEnd` then reschedules it — so an
+            // unconditional `GONE` dismissed the sheet over a snooze that is
+            // still running, leaving a notifications-denied user with no visible
+            // acknowledgement at all (Codex, PR #118). Asked rather than
+            // assumed: the answer is right here.
+            return if (controller.active == null) {
+                EndChoiceResult.GONE
+            } else {
+                EndChoiceResult.REFUSED
+            }
+        }
+        controller.lowerCapTo(target)
+        return EndChoiceResult.APPLIED
+    }
+
     override fun onStateChanged(state: SnoozeState, snooze: ActiveSnooze?, reason: EndReason?) {
         // Every transition and its reason (SPEC.md §4.6) — the debug log's
         // whole point is reconstructing a snooze's life after the fact. Cheap
@@ -2220,6 +2396,17 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         const val ACTION_END = "app.snoozemo.action.END"
         const val ACTION_CHECK_CAP = "app.snoozemo.action.CHECK_CAP"
         const val ACTION_EXTEND = "app.snoozemo.action.EXTEND"
+
+        /**
+         * A time chosen in the end-condition sheet (SPEC.md §4.4).
+         *
+         * Distinct from [ACTION_EXTEND] even though both move the same
+         * deadline: extending steps a *relative* half hour off whatever the
+         * cap currently is, while this names an *absolute* moment the user
+         * picked, and the two clamp against opposite edges — the backstop
+         * above, the thirty-minute floor below.
+         */
+        const val ACTION_SET_CAP = "app.snoozemo.action.SET_CAP"
         const val ACTION_RESTORE = "app.snoozemo.action.RESTORE"
         const val ACTION_CAP_LOST = "app.snoozemo.action.CAP_LOST"
         const val ACTION_REFRESH = "app.snoozemo.action.REFRESH"
@@ -2263,6 +2450,17 @@ open class SnoozeService : Service(), SnoozeController.Listener {
          * components and goes nowhere else.
          */
         const val EXTRA_RECORD_STARTED_AT = "app.snoozemo.extra.RECORD_STARTED_AT"
+
+        /**
+         * When an [ACTION_SET_CAP] start wants the snooze to end, as epoch
+         * millis.
+         *
+         * On-device only, and never logged at its face value: when a user
+         * intends to stop being disturbed is theirs (`AGENTS.md`,
+         * *Privacy*), so it travels between the app's own components and
+         * goes nowhere else.
+         */
+        const val EXTRA_CAP_EXPIRES_AT = "app.snoozemo.extra.CAP_EXPIRES_AT"
 
         /**
          * Why an [ACTION_RELEASE_STUCK] start is ending a snooze, as an
@@ -2311,6 +2509,20 @@ open class SnoozeService : Service(), SnoozeController.Listener {
 
         /** Re-post the ongoing notification, after something unblocked it. */
         fun refresh(context: Context) = start(context, ACTION_REFRESH)
+
+        /**
+         * Bring the running snooze's cap in to [endsAt] — the end-condition
+         * sheet committing a row (SPEC.md §4.4).
+         *
+         * Returns false if the service would not start, which the sheet reports
+         * where the tap happened: the snooze is still running on its default
+         * cap, so nothing is stranded, but a tap that silently kept the old
+         * deadline is the app quietly doing the wrong thing.
+         */
+        fun chooseEnd(context: Context, endsAt: Instant): Boolean =
+            start(context, ACTION_SET_CAP) {
+                it.putExtra(EXTRA_CAP_EXPIRES_AT, endsAt.toEpochMilli())
+            }
 
         /**
          * Restate the running snooze's clock frames after the wall clock was

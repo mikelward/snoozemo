@@ -224,6 +224,47 @@
     <string name="failure_not_forgotten">Snooze ended, but it may come back</string>
     <string name="failure_could_not_extend">Couldn\'t add 30 minutes</string>
     <string name="extend_at_max">Already at the time limit</string>
+    <!-- TODO: translate -->
+    <string name="failure_could_not_set_end" tools:ignore="MissingTranslation">Couldn\'t set the end time</string>
+
+    <!--
+      The end-condition sheet (SPEC.md §4.4), shown by the tile's trampoline once
+      the snooze is already armed. The rows read as continuations of the title
+      above them — "Snoozing / until 14:00" — which is why they are lowercase and
+      carry no verb of their own.
+    -->
+    <!-- TODO: translate -->
+    <string name="sheet_title" tools:ignore="MissingTranslation">Snoozing</string>
+    <!-- TODO: translate -->
+    <string name="sheet_until_time" tools:ignore="MissingTranslation">until %1$s</string>
+    <!-- TODO: translate -->
+    <string name="sheet_until_i_leave" tools:ignore="MissingTranslation">until I leave</string>
+    <!--
+      Not decoration: choosing a time lowers the cap rather than replacing
+      departure tracking, so the two rows are not exclusive modes and the sheet
+      has to say so (SPEC.md §4.4).
+    -->
+    <!-- TODO: translate -->
+    <string name="sheet_footer" tools:ignore="MissingTranslation">Ends when you leave, either way.</string>
+    <!-- Content descriptions for the − / + steppers, which draw as symbols. -->
+    <!-- TODO: translate -->
+    <string name="sheet_earlier" tools:ignore="MissingTranslation">Half an hour earlier</string>
+    <!-- TODO: translate -->
+    <string name="sheet_later" tools:ignore="MissingTranslation">Half an hour later</string>
+
+    <!--
+      The Settings switch that turns the sheet on. Off by default, so this row is
+      an offer rather than a way out of something (SPEC.md §4.4).
+    -->
+    <!-- TODO: translate -->
+    <string name="setup_ask_unsnooze_title" tools:ignore="MissingTranslation">Ask when to unsnooze</string>
+    <!--
+      Deliberately does not name "until you leave": that row is absent on a build
+      with no presence monitor, and one shared string has to be true on both
+      (Codex, PR #118). The title carries the meaning either way.
+    -->
+    <!-- TODO: translate -->
+    <string name="setup_ask_unsnooze_description" tools:ignore="MissingTranslation">Offer an end time when a snooze starts</string>
 
     <!-- The app version, at the foot of Settings — same format as the sibling Simmo repo. -->
     <string name="settings_version">Version %1$s</string>

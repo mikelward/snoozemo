@@ -1223,18 +1223,41 @@ the point is that every other line of the app is worthless if it isn't true.
       `permissions_screen_title` → `permissions_title`, `settings_screen_title` →
       `settings_title`, `main_dnd_banner_title` → `dnd_banner_title` — the last one paired with
       `tile_banner_title`, the sibling banner that already had this right.
-- [ ] The two rows (`until <time>` seeded at now + 1 h rounded to the half hour, and
+- [x] The two rows (`until <time>` seeded at now + 1 h rounded to the half hour, and
       `until I leave`), with `−` / `+` in 30-minute steps, floored at 30 min from now and
-      ceilinged at the 8 h backstop.
-- [ ] Choosing a time **lowers the cap**; it does not disable departure tracking. Whichever
-      comes first wins (`SPEC.md` §7).
-- [ ] Dismissing the sheet, or never seeing it, leaves the user correctly snoozed.
-- [ ] Setting to disable the sheet entirely — the trampoline then finishes in `onCreate`.
-- [ ] Screenshot tests for the sheet, wired into the CI allow-list.
-- [ ] The sheet handles its own insets. It arrives in the trampoline, whose theme is transparent
+      ceilinged at the 8 h backstop. **Landed 2026-08-25** as `EndCondition` in `:core` (the
+      seeding, stepping and clamping, with no Android in it) and `EndConditionSheetContent`
+      in `:app` (stateless, handed a condition and reporting taps). One property worth
+      knowing rather than rediscovering: rounding the seed onto the half hour can leave as
+      little as 45 minutes of headroom above the floor, and a step is 30 — so on a tap at
+      13:12, whose seed is 14:00, `−` is legitimately dead, because the value below it is
+      18 minutes out. It disables rather than clamping onto a ragged 13:42.
+- [x] Choosing a time **lowers the cap**; it does not disable departure tracking. Whichever
+      comes first wins (`SPEC.md` §7). **Landed** as `SnoozeController.lowerCapTo` — the
+      mirror of `extendTo`, refusing the opposite direction — driven by
+      `SnoozeService.ACTION_SET_CAP`, which re-arms the alarm, then writes the record, then
+      tells the controller, in that order and with `+30 min`'s own rollback. Nothing is said
+      to the presence engine, because nothing about tracking changed.
+- [x] Dismissing the sheet, or never seeing it, leaves the user correctly snoozed. The scrim
+      and the back gesture both just finish the activity; the snooze was armed before the
+      sheet existed.
+- [x] Setting to disable the sheet entirely — the trampoline then finishes in `onCreate`.
+      **Landed 2026-08-25, and inverted: the sheet is off by default** (maintainer, same day),
+      so the setting turns it *on* rather than off. `Ask when to unsnooze` on `SettingsScreen`,
+      backed by `EndSheetStore`'s own one-key file. The trampoline reads it from the posted
+      block, after the service start and never before it, so the gate is off the arm path by
+      construction — and on a default install this activity draws nothing at all, exactly as
+      it did before the sheet existed. Overlaps `SettingsScreen.kt` with PR #113; the new row
+      is kept in that file rather than `SharedComponents.kt`, which #113 is restructuring.
+- [x] Screenshot tests for the sheet, wired into the CI allow-list.
+      `EndConditionSheetScreenshotTest` records the seeded sheet, the sheet at its floor
+      (a disabled `−`), and a refused commit.
+- [x] The sheet handles its own insets. It arrives in the trampoline, whose theme is transparent
       and now follows dark mode, but which deliberately declares no edge-to-edge of its own —
       nothing may run between `onCreate` and the service start (`SPEC.md` §6.9), so the call
-      belongs after it, in the same posted block the sheet is rendered from.
+      belongs after it, in the same posted block the sheet is rendered from. **Landed** that
+      way: `enableEdgeToEdge` runs inside `showEndConditionSheet`, and the sheet carries
+      `navigationBarsPadding`.
 
 ## Phase 5 (M5) — Edge cases and degraded modes
 
@@ -2765,6 +2788,132 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     a snooze that ends on a duration cap needs the same controller.
 
 ## Decisions needing review
+
+- **The sheet gate reads the snooze record without any guarantee the arm has landed**
+  (2026-08-25, Codex on PR #118, declined for that change — and it corrects a claim made
+  repeatedly while building it). `shouldOfferSheet` decides from `window.decorView.post`,
+  on the assumption that `startService` has already queued `onStartCommand` on the same
+  looper. **That assumption is wrong.** `ContextImpl.startServiceCommon` is a synchronous
+  binder into `ActivityManagerService`, but the way back is `IApplicationThread`, whose
+  `scheduleCreateService` / `scheduleServiceArgs` are oneway callbacks landing on a binder
+  thread, which only then `sendMessage(H.SERVICE_ARGS, …)` to the main looper. Nothing
+  orders that against a local `post`.
+  The failure is intermittent and fails closed: the decision can run first, find no record,
+  and finish — so an opted-in user occasionally gets no sheet over a snooze that armed
+  correctly a moment later. Annoying, not harmful, and the same outcome as having the
+  setting off.
+  **The options:**
+  1. **Have the service say when the arm resolved**, over an in-memory channel like the one
+     `EndChoiceOutcome` already provides, and let the decision await it under a short bound.
+     Correct, and the most mechanism: a new channel, a timeout, and a degraded path when the
+     bound expires.
+  2. **Re-read the record a second time** a frame later before giving up. Cheap, and closes
+     most of the window without proving anything.
+  3. **Leave it.** The sheet is off by default, the miss is silent and safe, and the snooze
+     is armed either way.
+
+  Not guessed here because option 1 is real design and the other two are admissions. Worth
+  settling alongside the departure-row entry below, which needs the same post-arm signal.
+
+- **Rounding drops a wall clock that only exists on the other side of a spring-forward gap**
+  (2026-08-25, Codex on PR #118, declined — the fifth consecutive finding on this surface).
+  `getValidOffsets` is empty for a local time inside the gap, so that neighbor contributes no
+  candidate at all. In New York a 00:50 tap targets 01:50; 02:00 is invalid but normalizes to
+  03:00, ten minutes from the target, while the surviving 01:30 candidate is twenty away — so
+  the seed lands forty minutes out rather than about an hour. **The options:** include each
+  invalid neighbor's `atZone`-normalized instant as a candidate; leave it and accept a
+  short seed for one hour a year; or make the whole question moot by changing how rounding
+  works at all (see the entry below). Declined here for the same reason as the `+` label
+  above — it is the fifth sliver of one one-hour-a-year surface, and the rounding question
+  underneath it is unanswered.
+
+- **`+` can move the *displayed* time backward across a daylight-saving fall-back**
+  (2026-08-25, Codex on PR #118, declined there — the fourth consecutive finding on this
+  one surface). Stepping adds 30 minutes to the *instant*, which is right: the snooze
+  genuinely ends half an hour later than before. But in a repeated hour the label follows
+  the wall clock, so a sheet reading `1:30` (EDT) steps to `1:00` (EST) under a button
+  that says later. **The alternative** is stepping through unambiguous local choices, or
+  showing an offset or a date so the two occurrences can be told apart. Both put new copy
+  on a sheet whose whole design brief is the shortest thing that still reads (`SPEC.md`
+  §4.4), which makes it a product decision rather than a clamp.
+  **Why it is recorded rather than fixed**: rounds 12, 17, 18 and 19 were all the same
+  one-hour-a-year surface, each fix drawing a new finding one sliver over — the UTC grid,
+  then the overlap offset, then the transition boundary, now the step. That is the
+  non-convergence `AGENTS.md` names, and the failure here is a confusing label, not a
+  snooze that ends at the wrong moment. Same category as the time-zone label staleness
+  recorded above, and it wants the same answer at the same time.
+
+- **Whether the seed should be rounded in local time at all** (2026-08-25, raised by the
+  maintainer). Rounding on the user's wall clock is what makes `2:00` rather than `2:15`,
+  and it is the only reason any of the daylight-saving handling exists. Rounding on the
+  epoch instead would delete all of it, at the cost of permanently ragged times in zones
+  whose offset is not a whole half hour — Nepal (+05:45), the Chatham Islands (+12:45),
+  Eucla (+08:45); India (+05:30) is unaffected. A third option keeps local rounding but
+  fixes the offset at the target instant and does plain modular arithmetic from there:
+  as short as the epoch version, always lands on a local half hour since every
+  transition is itself a multiple of 30 minutes, and gives up only "nearest" for one
+  hour a year. **Undecided**, and it is what the entry above should be settled alongside.
+
+- **The end-condition sheet does not follow a time-zone change while it is open**
+  (2026-08-25, Codex on PR #118, declined there with this note). The sheet formats the
+  chosen instant once; a zone change while it sits open leaves the row reading `14:00`
+  for an instant now local-15:00. The *instant* committed is still the one the user
+  picked, so the snooze ends when they meant — the label is what goes stale.
+  **The alternative** was a `ACTION_TIMEZONE_CHANGED` receiver (or an `onResume`
+  re-format) to re-render the row. Declined for this change: it is a new wake-up
+  registration on a transient sheet that exists for the seconds after a tile tap, to
+  correct a label in a case that needs the user to change zone in exactly that window.
+  Reversible: re-formatting on resume is a one-line change if it ever matters, and
+  `EndCondition` already holds the instant rather than a rendered string.
+
+- **The departure row commits by changing nothing** (2026-08-25, the end-condition sheet).
+  `until I leave` dismisses and leaves the snooze exactly as the tile armed it: departure
+  tracking is already on and the 8-hour backstop is already the cap, so there is nothing for
+  that row to set. **The alternative** was having it write something anyway — a flag, or a
+  cap pinned to the backstop — so the two rows are symmetric in the record. Rejected because
+  a write with no effect is a write that can fail, on the one row whose whole promise is that
+  dismissing and choosing it are the same outcome (`SPEC.md` §4.4). Reversible: it is one
+  callback in `TileTrampolineActivity`.
+- ~~**The sheet's ceiling is derived from the clock, not read from the record**~~ —
+  **reversed on the same PR** (2026-08-25, Codex on PR #118). The guess was that §6.9 barred
+  the read, so the sheet clamped against `now + DEFAULT_CAP`. It doesn't: §6.9 forbids
+  *waiting* on the service, and the sheet is decided in the posted block after the start is
+  away, where `shouldOfferSheet` was already reading the same warmed file. The constant was
+  also wrong on its own terms — a duplicate arm from a stale tile snapshot keeps the snooze
+  already running, so the sheet offered an hour over one with ten minutes left and the
+  service reported it applied. The ceiling is now the record's own `capExpiresAt`.
+
+- **`until I leave` is offered on what the build tracks, not on what this snooze tracks**
+  (2026-08-25, Codex on PR #118, P1 — declined for this change and left open). On `play`,
+  `PRESENCE_TRACKS_DEPARTURE` is `true`, so the row is drawn; an anchor that degrades to
+  duration-only (`SPEC.md` §6.5) still gets it, and choosing it then leaves the phone quiet
+  to the 8-hour cap after the user has left. The degradation says so in the ongoing
+  notification — but a user who has just denied the notification permission cannot see that,
+  and the tile is their only surface (§4.2).
+  It cannot be gated on the record: `beginArming` writes `DURATION_ONLY` on both flavors, and
+  the real mode only lands up to 10 s later in `onAnchorCaptured`, while the sheet draws
+  within a frame of the arm. So at the moment the row must be drawn the answer does not
+  exist, and reading `snooze.mode` would drop the row from every arm including healthy ones.
+  **The options, all three:**
+  1. **Offer the row and correct it** when `onAnchorCaptured` lands — the sheet is still up,
+     so it can redraw. Costs a row changing under the user's finger on a screen whose whole
+     job is one tap.
+  2. **Hold the sheet** until the anchor resolves — up to 10 s of nothing after a tap the
+     user expects to be instant. Against `SPEC.md` §6.9 and the first-frame rule.
+  3. **Drop the row** until the mode is knowable — honest, and it removes the feature's
+     headline half on the flavor that actually has presence.
+
+  Each trades a different principle, so none is autopilot's to guess. **This is the one open
+  item on the sheet that can leave the phone quiet when the user expected it not to be.**
+- **The sheet follows the notification-permission dialog rather than replacing it**
+  (2026-08-25). A first-run arm now shows the permission dialog, and the sheet after the
+  answer, so a tile-first user gets both. **The alternative** was skipping the sheet on the
+  run that asked, so the first arm stays a single tap. Rejected because it makes the first
+  snooze — the one most likely to want a time bound — the only one that can't have one.
+  Reversible: one branch in the permission callback.
+- ~~**The sheet ships with no off switch yet**~~ — **settled by the maintainer, 2026-08-25**:
+  the sheet ships *off by default*, behind `Ask when to unsnooze` in Settings. Not a guess and
+  not pending review; recorded here only because the superseded guess was.
 
 - **The Wi-Fi recheck alarm's period is 15 minutes** (2026-08-24): a Wi-Fi-only anchor has no
   geofence, so nothing durable was watching it once Android stopped the service, and this alarm

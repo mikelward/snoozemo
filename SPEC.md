@@ -551,22 +551,53 @@ renders a compact bottom sheet. Arming never waits on the UI, so the one-tap pat
         Ends when you leave, either way.
 ```
 
+- **Off by default, behind `Ask when to unsnooze` in Settings.** One tap from the shade with
+  nothing in the way is goal 1, and the sheet — however cheap — is something between the tap
+  and getting on with what you were doing. A user who wants to be asked says so once; a user
+  who doesn't never has to. So on a default install the trampoline still draws nothing at all
+  and finishes as soon as the service start is queued, exactly as it did before the sheet
+  existed. This inverts the debug log's own default (§4.6) on purpose: that one is off-by-
+  default's mirror because an uncaptured failure is unrepeatable, while a sheet not shown
+  costs nothing that can't be had by turning it on.
 - **A sane default, no inference.** The time is seeded at **one hour from now, rounded to the
   nearest half hour** — a tap at 13:12 offers 14:00, not 14:12. Ragged times look like a bug and
   invite pointless fiddling.
 - **`−` / `+` adjust in 30-minute steps** without dismissing the sheet. Floor is 30 minutes from now;
   ceiling is the 8-hour backstop (§7). Two taps covers 13:00–15:00, which is most meetings.
-- **Two rows, both live.** Tapping a row commits that end condition and dismisses.
+- **Two rows, both live — where there are two.** Tapping a row commits that end condition
+  and dismisses. `until I leave` is drawn only on a build that tracks departure: `direct` is
+  duration-only until §3's Phase 7, and there it is a single row with no helper line, because
+  a row promising an end nothing behind it can deliver is worse than no row.
 - **The helper line is not decoration.** Choosing a time *lowers the cap*; it does not disable
   departure tracking (§7). Walking out at 13:40 still ends the snooze at 13:40. The rows differ only
   in whether there is a time bound below the backstop, and the sheet should say so plainly rather
   than implying they are exclusive modes.
+- **The sheet does its own arithmetic; the service has the final word.** §6.9 forbids the
+  trampoline *waiting* on the service it has just started, not reading what that service has
+  already written: the sheet is decided after the start is away, so it reads the record to learn
+  the cap the running snooze actually carries and offers nothing later. It seeds and steps against
+  the clock from there, and the service re-clamps whatever is committed. Two clamps rather than
+  one, on purpose: the sheet's keeps `−` from offering times the service would refuse, and the
+  service's keeps a value chosen against a stale reading from outliving it. The ceiling has to be
+  the record's own cap and not a fresh backstop, because a duplicate arm from a stale tile snapshot
+  keeps the snooze already running (§4.2) — offering an hour over a snooze with ten minutes left
+  would be honored by doing nothing and reported as applied.
+- **`until I leave` commits by changing nothing.** Departure tracking is already armed and the
+  backstop is already the cap, so that row is the snooze exactly as the tile left it — which is
+  also why dismissing the sheet and choosing that row are the same outcome, as the rule above
+  requires. It is offered on the strength of what the *build* tracks, which is not the same
+  question as what this snooze ended up tracking: a `play` anchor that degrades to duration-only
+  (§6.5) still gets the row. The degradation says so where the user is looking, but the row is a
+  promise made before the answer is known — see `TODO.md`.
+- **A step that would land inside the floor disables its button rather than clamping onto it.**
+  Rounding the seed onto the half hour can leave less than a step of headroom, and a control
+  whose promise is half-hour steps must not answer a tap with a ragged time.
 
 #### Candidates considered
 
 | End condition | Signal needed | Verdict |
 |---|---|---|
-| **I leave here** | §6 presence engine | **v1.** Always offered |
+| **I leave here** | §6 presence engine | **v1** on `play`, offered whenever the build tracks departure. `direct` is duration-only until Phase 7 (§3), and drops the row rather than promising it |
 | **A time, adjustable** | none | **v1.** Seeded at now + 1 h; also the §7 cap |
 | **Whichever comes first** | both | **v1.** Not a third row — implied. Setting a time leaves departure tracking armed |
 | **This meeting ends** | `READ_CALENDAR` | **v1.1.** Strong, but deferred — see below |
@@ -1510,9 +1541,12 @@ system has killed the service mid-snooze. That start is subject to the same back
 as the arm's, and a refusal there is not a slow exit but no exit: the tap the user reaches for to
 get their phone back is the one that must never fail (§7).
 
-**Anything else this activity does is queued, not called.** `startService` only *posts*
-`onStartCommand` to the same main looper, so work done synchronously after that line — including the
-binder call inside a permission request — runs *before* the arm rather than after it. The arm keeps
+**Anything else this activity does is queued, not called.** `startService` does not run the service:
+it is a binder round trip into `ActivityManagerService`, which comes back through a oneway
+`IApplicationThread` callback that posts `onStartCommand` to this looper from a binder thread. So
+work done synchronously after that line — including the binder call inside a permission request —
+runs *before* the arm rather than after it. The converse does not follow: nothing orders the arm
+ahead of a block this activity posts, so a later read of the snooze record is a best-effort one. The arm keeps
 the thread; everything else takes what's left.
 
 **The trampoline is also where the tile-first user is asked for notification permission.** The tile
