@@ -22,6 +22,17 @@ interface ZenController {
     fun policyAccess(): PolicyAccess
 
     /**
+     * Whether the phone is currently interrupting normally — no Do Not
+     * Disturb of any kind in effect, ours or anyone else's.
+     *
+     * Read rather than inferred from our own rule's state, because what
+     * matters to a running snooze is whether the phone is actually quiet, and
+     * an app-owned rule's state is not a reliable answer to that (see
+     * [InterruptionFilterChange]).
+     */
+    fun audible(): Boolean
+
+    /**
      * Makes sure Snoozemo's one long-lived rule exists, creating it on first
      * successful onboarding and reusing it forever after (SPEC.md §5.3).
      * Idempotent, and safe to call on every start — which is the point, since

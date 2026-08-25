@@ -916,6 +916,23 @@ merges most-restrictive-wins, this is safe and idempotent. On release, Snoozemo 
 own rule* — whatever else was making the phone quiet stays. This is the concrete benefit of D1 over
 `setInterruptionFilter(INTERRUPTION_FILTER_ALL)`, which would have stomped the other rule.
 
+**DND turned off underneath a running snooze ends it** (maintainer, 2026-08-25). §5.6 above is the
+state at arm time; this is the user reaching into the shade mid-snooze. The snooze is over at that
+moment — the phone is audible, which is the only thing the snooze was ever for — so Snoozemo records
+an ordinary ending (`EndReason.DND_TURNED_OFF`) rather than letting the record, the tile and the
+ongoing notification go on claiming a snooze while the phone rings. It ends **silently**: no
+notification, for the same reason a manual end posts none — the user did this and can hear the
+result. Nothing to warn about, nothing to retry.
+
+The test is the **interruption filter, not our own rule's state**, and that is the design decision
+rather than an implementation detail. Whether turning DND off deactivates an app-owned
+`AutomaticZenRule`, leaves it active-but-overridden, or something else again is an open platform
+question; reading the filter is correct under all of those answers, needs no new wake-up (the
+platform broadcasts the change, and the receiver rides the same process lifetime as the
+policy-access one, §8.4), and errs toward ending a snooze early rather than leaving a phone quiet
+with nothing to release it — D7's direction. A filter that is merely *different* — another app's
+rule, a schedule, our own — is not audible and changes nothing.
+
 ### 5.7 Bypassing our own DND
 
 Two of the app's three notification channels — `snooze_active` (§4.3) and the emergency-only

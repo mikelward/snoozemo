@@ -317,7 +317,9 @@ class SnoozeNotifications(private val context: Context) {
             EndReason.LOST_CAPABILITY -> R.string.ended_lost_capability
             // A manual end needs no notification: the user just did it and can
             // see the result. Telling them what they already know is noise.
-            EndReason.MANUAL, null -> return
+            // Turning Do Not Disturb off from the shade is the same kind of
+            // act, and the result is even more obvious — the phone is audible.
+            EndReason.MANUAL, EndReason.DND_TURNED_OFF, null -> return
         }
         post(
             ID_ENDED,

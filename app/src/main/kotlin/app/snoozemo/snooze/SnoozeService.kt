@@ -18,6 +18,8 @@ import app.snoozemo.core.ClockChangeAction
 import app.snoozemo.core.ClockReading
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.EndReason
+import app.snoozemo.core.InterruptionFilterAction
+import app.snoozemo.core.InterruptionFilterChange
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.PolicyAccessAction
 import app.snoozemo.core.PolicyAccessChange
@@ -389,6 +391,19 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      */
     private var unwindingFailedArm: Boolean = false
 
+    /**
+     * The user reaching into the shade and turning Do Not Disturb off. Beside
+     * the policy-access receiver deliberately, with the same process-lifetime
+     * limit (SPEC.md §8.4): this must be free, so it rides the wake-ups that
+     * already exist rather than justifying one of its own (TODO.md).
+     */
+    private val interruptionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) = reconcileInterruptionFilter()
+    }
+
+    /** Whether [interruptionReceiver] actually registered. */
+    private var interruptionReceiverRegistered: Boolean = false
+
     private val accessReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) = reconcilePolicyAccess()
     }
@@ -408,6 +423,35 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * alike, so this reads the current state rather than inferring a direction
      * (SPEC.md §5.2) — which is also what makes it safe to call from anywhere.
      */
+    /**
+     * The phone became audible while we believe a snooze is running, so the
+     * snooze is over (SPEC.md §7; [InterruptionFilterChange] has the why).
+     *
+     * Contained for the same reason as [reconcilePolicyAccess]: this runs on
+     * every wake-up, and an escaping exception here would unwind
+     * `onStartCommand` before the branch that actually ends the snooze.
+     * Leaving the snooze alone is the right outcome for an unreadable filter —
+     * the record and its cap are untouched, and the next wake-up asks again.
+     */
+    private fun reconcileInterruptionFilter() {
+        val audible = runCatching { zen.audible() }.getOrElse {
+            Log.e(TAG, "Reading the interruption filter failed; leaving the snooze as it is.", it)
+            SnoozeDebugLog.warning("interruption filter unreadable; leaving the snooze as it is", it)
+            return
+        }
+        when (InterruptionFilterChange.resolve(audible, controller.state)) {
+            InterruptionFilterAction.EndSnooze -> {
+                // Recorded, because "why did my snooze stop" has to be
+                // answerable even when the answer is "you turned it off"
+                // (SPEC.md §4.6) — and because from the record's side this
+                // looks like an ending nobody asked for.
+                SnoozeDebugLog.event("Do Not Disturb switched off mid-snooze; ending")
+                controller.end(EndReason.DND_TURNED_OFF)
+            }
+            InterruptionFilterAction.None -> Unit
+        }
+    }
+
     private fun reconcilePolicyAccess() {
         // Contained because of where it runs: on every wake-up, including the
         // cap check. An escaping exception here would unwind `onStartCommand`
@@ -489,6 +533,19 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             )
         }.onFailure {
             Log.e(TAG, "Registering the policy-access receiver failed; wake-ups still reconcile.", it)
+        }.isSuccess
+
+        // Same contract, same fallback: losing this one costs latency, not the
+        // ending — every wake-up calls `reconcileInterruptionFilter` too, so a
+        // snooze the user switched off is noticed then instead of now.
+        interruptionReceiverRegistered = runCatching {
+            registerReceiver(
+                interruptionReceiver,
+                IntentFilter(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED),
+                RECEIVER_NOT_EXPORTED,
+            )
+        }.onFailure {
+            Log.e(TAG, "Registering the interruption-filter receiver failed; wake-ups still reconcile.", it)
         }.isSuccess
 
         // Restoring is deliberately NOT here. onCreate cannot see which action
@@ -633,7 +690,13 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // gap goes unseen, leaving the record, tile and notification claiming a
         // snooze the platform has already dropped. Every later wake-up is a
         // chance to notice, and they are all off the arm path.
-        if (intent?.action != ACTION_ARM) reconcilePolicyAccess()
+        if (intent?.action != ACTION_ARM) {
+            reconcilePolicyAccess()
+            // After the policy read, not before: a revoked grant makes the
+            // filter unreadable anyway, and losing access is its own ending
+            // with its own reason.
+            reconcileInterruptionFilter()
+        }
 
         // An obligation that outlived its process gets discharged by whatever
         // starts us next, whatever that start was for. The flag is the only
@@ -1996,6 +2059,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // Only if it registered. A registration the platform refused is a state
         // this class now knows about, so unregistering it is not something to
         // attempt and then explain away.
+        if (interruptionReceiverRegistered) {
+            interruptionReceiverRegistered = false
+            runCatching { unregisterReceiver(interruptionReceiver) }.onFailure {
+                Log.w(TAG, "Unregistering the interruption-filter receiver failed.", it)
+            }
+        }
         if (!accessReceiverRegistered) return
         accessReceiverRegistered = false
         runCatching { unregisterReceiver(accessReceiver) }.onFailure {

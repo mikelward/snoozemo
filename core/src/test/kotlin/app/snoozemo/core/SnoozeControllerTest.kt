@@ -48,6 +48,9 @@ class SnoozeControllerTest {
     ) : ZenController {
         val calls = mutableListOf<Pair<Boolean, ZenTrigger>>()
         override fun policyAccess() = access
+
+        /** Not what these tests are about; the filter has its own. */
+        override fun audible() = false
         override fun ensureRule() = ZenRuleState.READY
         override fun setSnoozed(snoozed: Boolean, trigger: ZenTrigger, placeName: String): ZenOutcome {
             calls += snoozed to trigger

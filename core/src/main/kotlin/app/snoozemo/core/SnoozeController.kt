@@ -249,7 +249,14 @@ class SnoozeController(
      */
     fun end(reason: EndReason) {
         val ending = active
-        val trigger = if (reason == EndReason.MANUAL) ZenTrigger.USER_ACTION else ZenTrigger.CONTEXT
+        // Both of these are the user's own hand — the tile, or the shade's Do
+        // Not Disturb toggle — and the platform is told so.
+        val trigger =
+            if (reason == EndReason.MANUAL || reason == EndReason.DND_TURNED_OFF) {
+                ZenTrigger.USER_ACTION
+            } else {
+                ZenTrigger.CONTEXT
+            }
 
         val outcome = zen.setSnoozed(false, trigger, ending?.placeName ?: ActiveSnooze.DEFAULT_PLACE_NAME)
         if (outcome is ZenOutcome.NotApplied) {

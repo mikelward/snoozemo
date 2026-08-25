@@ -50,6 +50,15 @@ enum class EndReason {
      * on state it cannot verify (SPEC.md D7, §8.2).
      */
     LOST_CAPABILITY,
+
+    /**
+     * The phone became audible while the snooze was running — the user turning
+     * Do Not Disturb off from the shade. The snooze is over at that moment
+     * whatever the record says, so it is recorded as an ordinary ending rather
+     * than left to drift (see [InterruptionFilterChange]). Like [MANUAL] it
+     * posts no notification: the user did this and can hear the result.
+     */
+    DND_TURNED_OFF,
 }
 
 /**

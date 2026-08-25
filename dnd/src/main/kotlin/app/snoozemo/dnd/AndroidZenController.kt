@@ -40,6 +40,19 @@ class AndroidZenController(
         }
 
     /**
+     * `INTERRUPTION_FILTER_ALL` is the platform's "no Do Not Disturb at all".
+     * Any other filter — priority, alarms-only, none, ours or another app's —
+     * means something is still being held back, so the phone is not audible.
+     *
+     * `INTERRUPTION_FILTER_UNKNOWN` is reported when the caller has no policy
+     * access. Read as *not* audible, which is the direction that cannot end a
+     * snooze on a reading we were not allowed to take — losing access is
+     * already its own ending, with its own reason.
+     */
+    override fun audible(): Boolean =
+        notificationManager.currentInterruptionFilter == NotificationManager.INTERRUPTION_FILTER_ALL
+
+    /**
      * Serialized process-wide, because the rule is a singleton and creating it
      * is a read-then-write.
      *

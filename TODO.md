@@ -1235,7 +1235,7 @@ the point is that every other line of the app is worthless if it isn't true.
 - [ ] The §8.5 table: airplane mode, location services off, double-arm, short trip and
       return, bad-accuracy anchor, battery saver, uninstall while snoozed.
 - [ ] The §8.4 cases: `restricted` standby bucket, force-stop, OEM battery management.
-- [ ] **The user turning Do Not Disturb off from the shade may silently end our snooze**
+- [x] **The user turning Do Not Disturb off from the shade may silently end our snooze**
       (maintainer, 2026-08-12 — "we should handle that soon"). §5.6 covers the *pre-existing*
       case at arm time; this is the state changing underneath a running snooze. If switching
       DND off deactivates Snoozemo's rule, the snooze is over while the record, the tile and
@@ -1256,6 +1256,21 @@ the point is that every other line of the app is worthless if it isn't true.
       - The two neighboring cases are deliberately *not* in scope: DND turned on by the user
         or another app while we are idle (harmless; at most the tile reads "not snoozing"
         beside a quiet phone), and another app's rule ending while ours is on (nothing to do).
+      **Landed** (2026-08-25), and **without waiting on hardware item 6**, which is the one
+      change from the plan above. The item assumed the platform question had to be answered
+      first because the answer decided whether there was anything to build. It does not, if the
+      test is the *interruption filter* rather than our own rule's state: audible means the
+      snooze is silencing nothing, under every answer that question can have. So the hardware
+      check is no longer a blocker — it is now only worth knowing, and it stays on the list.
+      `InterruptionFilterChange` (new, `:core`) is the pure rule, `EndReason.DND_TURNED_OFF` the
+      ending, `ZenController.audible()` the seam over
+      `NotificationManager.getCurrentInterruptionFilter`, and a receiver beside the
+      policy-access one carries the broadcast — no new wake-up, and every existing wake also
+      reconciles, so a change missed while the process was dead is noticed late rather than
+      lost. **Maintainer decision (2026-08-25): it ends silently** — no notification, the same
+      treatment `MANUAL` gets and for the same reason. `ARMING` is excluded from the rule, or
+      the arm path's own audible moment before the rule lands would end every snooze on the way
+      up. Tests: `InterruptionFilterChangeTest` (5).
 - [ ] **A reboot that stays locked outlasts the cap** (flagged by Codex on PR #8).
       `BOOT_COMPLETED` reaches credential-unaware components only after the *first unlock*,
       and the snooze record lives in credential-protected storage, so a phone rebooted
@@ -2271,11 +2286,13 @@ that can only be settled on a real device, ordered by risk.
        force-stop, where the expected answer is that there is *no* in-app recovery and the
        user's route back is the system DND toggle.
 
-6. [ ] **What the shade's DND toggle does to an app-owned rule.** Blocks the Phase 5 item
-       above: with a Snoozemo snooze running, turn Do Not Disturb off from Quick Settings and
-       read our `AutomaticZenRule` back. Does it deactivate, stay active-but-overridden, or
-       something else? The answer decides whether there is a bug to fix or only a comment to
-       write. Repeat on One UI at Phase 8 — this is the sort of thing Samsung changes.
+6. [ ] **What the shade's DND toggle does to an app-owned rule.** No longer blocking: the
+       Phase 5 item it gated landed on 2026-08-25 by testing the *interruption filter* instead,
+       which is correct under every answer this question can have. Still worth knowing — with a
+       Snoozemo snooze running, turn Do Not Disturb off from Quick Settings and read our
+       `AutomaticZenRule` back. Does it deactivate, stay active-but-overridden, or something
+       else? The answer says whether a rule left active-but-overridden needs its own cleanup on
+       the next arm. Repeat on One UI at Phase 8 — this is the sort of thing Samsung changes.
 
 ### Tuning — these change details, not direction
 

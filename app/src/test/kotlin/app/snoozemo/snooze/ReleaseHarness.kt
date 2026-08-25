@@ -56,6 +56,9 @@ internal class RefusingZen : ZenController {
 
     override fun policyAccess(): PolicyAccess = PolicyAccess.GRANTED
 
+    /** Quiet, as a snooze this harness is releasing would be. */
+    override fun audible(): Boolean = false
+
     override fun ensureRule(): ZenRuleState = ZenRuleState.READY
 
     override fun setSnoozed(
