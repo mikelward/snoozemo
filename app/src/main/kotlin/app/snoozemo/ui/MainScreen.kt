@@ -125,13 +125,30 @@ fun MainScreen(
                     .takeIf { settingsFailure == SetupRowId.TILE },
             )
         }
+        // One slot, always saying which of the two states the screen is in
+        // once the record has been read — a running snooze reports what would
+        // end it and when, and an idle one says so outright. Leaving idle
+        // blank made "not snoozing" and "hasn't been read yet" render
+        // identically, so the only thing distinguishing them was whether the
+        // Snooze button happened to be enabled, which is principle 2's
+        // failure: the safe state, stated nowhere.
+        //
         // The record's own place name is left out on purpose: it is always
         // literally "Here" today (`ActiveSnooze.DEFAULT_PLACE_NAME`) since
         // saved/named places are unbuilt (`TODO.md`, "Saved places"), and the
         // ongoing notification doesn't show it either, so surfacing it here
         // first would only read as filler.
-        if (snoozing == true && trackingMode != null && remaining != null) {
-            SnoozeStatus(trackingMode, remaining)
+        when {
+            snoozing == true && trackingMode != null && remaining != null ->
+                SnoozeStatus(trackingMode, remaining)
+            snoozing == false -> NotSnoozingStatus()
+            // Nothing yet: either the record is still being read, or it read
+            // as running but without the mode and cap the line reports. Same
+            // "unread is not zero" discipline as the banners above — an idle
+            // claim over a snooze this screen hasn't finished reading is the
+            // one wrong thing this line could say, and it is exactly the
+            // wrong direction to be wrong in.
+            else -> Unit
         }
         // Gated behind access being allowed, same as the old DebugScreen —
         // not a design call this PR makes. TODO.md still tracks "how and when
@@ -172,6 +189,26 @@ fun MainScreen(
             Text(text = it, style = MaterialTheme.typography.bodySmall)
         }
     }
+}
+
+/**
+ * The idle half of the status slot: no snooze is running, said plainly.
+ *
+ * Same `titleMedium` and the same position as [SnoozeStatus]'s mode line, so
+ * the two read as one line changing rather than content appearing and
+ * disappearing — and so a user who glances at the screen gets the answer from
+ * the words rather than from which button is grayed.
+ *
+ * No second line beneath it. The running state's second line carries the
+ * remaining time; idle has no equivalent fact, and inventing one ("Tap Snooze
+ * to start") would only restate the button directly below it.
+ */
+@Composable
+private fun NotSnoozingStatus() {
+    Text(
+        text = stringResource(R.string.main_not_snoozing),
+        style = MaterialTheme.typography.titleMedium,
+    )
 }
 
 /**

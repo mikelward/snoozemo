@@ -170,6 +170,17 @@
     <string name="setup_action_add">Add</string>
     <string name="failure_could_not_add_tile">Couldn\'t add the tile</string>
     <string name="failure_could_not_open_settings">Couldn\'t open Settings</string>
+    <!--
+      MainScreen's idle status line (SPEC.md §4.4). The counterpart to the
+      running snooze's mode line, in the same slot and the same style: when
+      one is running that line says what would end it, and when none is it
+      says so outright rather than leaving the user to read the state off a
+      disabled button. Deliberately not "Snoozemo is not snoozing" or "No
+      snooze active" — the screen already names the app and the subject
+      (AGENTS.md, *Concise copy*).
+    -->
+    <!-- TODO: translate -->
+    <string name="main_not_snoozing" tools:ignore="MissingTranslation">Not snoozing</string>
     <string name="arm">Snooze</string>
     <string name="release">End snooze</string>
     <string name="rule_failed">Do Not Disturb access is on, but Snoozemo could not create its rule</string>
