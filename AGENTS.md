@@ -192,7 +192,7 @@ it in the same commit.
 - Write every subject for end users, sentence case, plain English, no internal symbol
   names, ≤ ~70 characters; engineering detail goes in the body. This repo follows the
   sibling repos' release pipeline: every release-worthy commit subject in a push to `main`
-  ships as a bullet in the Firebase and Play "What's new" list (once the `deploy` job
+  ships as a bullet in the Play "What's new" list (once the `deploy` job
   lands — `TODO.md` Phase 8).
 - Because the repo rebase-merges, the PR title never lands on `main` — each commit's own
   subject does. Title **every** commit on the branch by these rules, not just the PR.
@@ -212,7 +212,7 @@ it in the same commit.
   commits anyway, so the intent is explicit and the subject never reads like a shippable
   bullet.
 - **Surviving subjects ship as a `• `-bulleted list, oldest-first** — always bulleted, even
-  when only one commit qualifies, so the Firebase and Play cards render the same shape.
+  when only one commit qualifies, so the Play card always renders the same shape.
   Bodies are always dropped: nothing below the subject line reaches a user.
 - **Play caps "What's new" at 500 characters per language.** CI measures the full formatted
   output — the `• ` bullets, the newline separators, and the `…` truncation marker all
@@ -389,7 +389,7 @@ it in the same commit.
   `git rev-list --count origin/main` (`app/build.gradle.kts` derives the versionCode from
   this count, once Phase 0 lands it). Report it as e.g. `Need versionCode 72 (b81c23d) or
   higher to test PR #52's fix` — number, short SHA, and a one-clause summary of what the
-  change gates. The user needs this to know which Firebase / locally-built APK contains
+  change gates. The user needs this to know which Play internal-track / locally-built APK contains
   their fix.
 - Link every open PR in the stack (one URL per line — the "View PR" chip sticks to the
   first link and hides the rest, anthropics/claude-code#46625) whenever you push, summarize

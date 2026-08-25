@@ -251,6 +251,27 @@ So the plan on losing a mechanism is: drop to the next rung, say so in the ongoi
 (§4.3 — a degraded snooze must never look like a tracked one), and ship. The product gets less
 clever; it does not stop working, and it never gets less safe.
 
+### 3.7 How a build reaches a tester
+
+**The Play internal track is the channel this repo is building toward, and Firebase App
+Distribution is deliberately not a second one.** Today `deploy` builds the signed AAB and publishes
+it as a workflow artifact; the internal-track upload step is wired but gates on
+`PLAY_SERVICE_ACCOUNT_JSON`, which stays unset until the Play Console declarations are filed
+(`docs/play-store-internal-track.md`), so a build currently reaches a tester through a hand seed
+upload. The `direct` flavor of §3.4 does not ride this channel at all — it is sideloaded today and
+F-Droid is its intended path at scale — since its whole point is a route Play does not gate.
+
+App Distribution is the obvious second channel and was rejected on the sibling repos' evidence
+rather than in the abstract: clothescast, Simmo and Type Launcher all ran it *alongside* the
+internal track, both published on every push to `main`, and both reached the same testers — so all
+three have since retired it. What it cost was a second console to keep in sync, a second signing
+identity (a stored debug keystore, so tester installs upgraded in place rather than colliding), and
+its own secrets, in exchange for a copy of a release that was already going out. What it bought was
+speed: App Distribution delivers in seconds where the internal track takes minutes to hours of Play
+caching. That is the trade to re-open if internal-track latency ever becomes the thing holding
+testing up — and only then; a duplicate channel is not free, and the one being duplicated is also
+the route to alpha, beta and production.
+
 ---
 
 ## 4. User-visible behavior

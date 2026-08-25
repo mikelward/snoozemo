@@ -1001,7 +1001,7 @@ the point is that every other line of the app is worthless if it isn't true.
       one, and it doesn't. **What actually is different about this app is the build it's tested
       as**: `app/build.gradle.kts`'s `release` block turns R8 off outright ("R8 stays off for now
       — a separate follow-up once there is a device to verify a shrunk build against", Phase 6
-      below), so *every* build this pipeline can currently produce — debug or release, Firebase or
+      below), so *every* build this pipeline can currently produce — debug or release, CI or
       local — is unminified and unshrunk, and carries no *app-specific* baseline profile of its
       own (Codex, PR #94: Compose's own library code ships with a default profile baked into its
       AARs regardless — the gap here is app code, `MainScreen`/`SettingsScreen`/`PermissionsScreen`
@@ -1742,6 +1742,11 @@ the point is that every other line of the app is worthless if it isn't true.
       itself doesn't publish anything — only adding `PLAY_SERVICE_ACCOUNT_JSON` afterward does —
       but the check is on the PR, not the secret, so a reviewer doesn't have to re-derive from the
       diff what to verify before flipping it on.
+- [x] **No Firebase App Distribution here.** Dropped before it was ever built — the sibling
+      repos ran it alongside the Play internal track, publishing every push to the same
+      testers, and have all since retired it. The internal track is the only channel this
+      repo is wiring up; a debug APK is something you build locally, not something CI hands
+      out. Decision and the trade that would re-open it: `SPEC.md` §3.7.
 - [x] Make a release build **fail** when its version can't be derived from git, rather than
       warning (`app/build.gradle.kts`). The fallback exists so a checkout without git still
       builds; once a build can reach a tester or Play, falling back to versionCode 1 is
