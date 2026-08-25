@@ -771,6 +771,7 @@ jobs:
     env:
       HAS_RELEASE_KEYSTORE: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' }}
       HAS_PLAY_SA: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+      HAS_FIREBASE_CONFIG: ${{ secrets.GOOGLE_SERVICES_JSON != '' }}
     permissions:
       contents: read
       # "Build release notes" walks recent main runs of this workflow via
@@ -1247,6 +1248,33 @@ jobs:
             exit 1
           fi
           echo "RELEASE_KEYSTORE_FILE=${RUNNER_TEMP}/release.keystore" >> "${GITHUB_ENV}"
+
+      - name: Materialize Firebase config
+        # Turns crash reporting on for the AAB that actually ships (SPEC.md
+        # §12, docs/crashlytics.md). Optional like every other secret in this
+        # job: without it the build still succeeds and Crashlytics stays
+        # dormant — the app's own gate then reports the reporter unavailable
+        # and Settings offers no switch — so a fork or a repo that has not set
+        # the secret up gets a green run rather than a red one nobody reads.
+        #
+        # Not a credential: google-services.json ships inside every Play build
+        # and identifies the project rather than authenticating to it. It is a
+        # secret here only because the repo deliberately does not track it, so
+        # a fork's builds cannot file crashes into this project's console.
+        if: env.RELEASE_KEYSTORE_FILE != '' && env.HAS_FIREBASE_CONFIG == 'true'
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${GOOGLE_SERVICES_JSON}" > app/google-services.json
+          # A truncated or mis-pasted secret would otherwise fail deep inside
+          # the Google Services plugin with a message about a missing client.
+          # Check the two keys the plugin actually reads, so the error names
+          # the secret instead.
+          if ! jq -e '.project_info and .client' app/google-services.json > /dev/null; then
+            echo "::error::GOOGLE_SERVICES_JSON is set but is not a valid google-services.json (no project_info/client)."
+            exit 1
+          fi
 
       - name: Build release AAB
         # Gated only on the keystore being present — a signed AAB is useful on

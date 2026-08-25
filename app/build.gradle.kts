@@ -4,6 +4,63 @@ plugins {
     alias(libs.plugins.aboutlibraries)
 }
 
+// Crash reporting (SPEC.md §12): Crashlytics activates per build. Both plugins
+// are applied only when the untracked google-services.json is present, so a
+// fresh clone, a fork, and CI all build with Crashlytics dormant and nothing
+// to configure — the app's own gate then reports "unavailable" and Settings
+// offers no switch over a reporter that isn't there. See docs/crashlytics.md.
+val firebaseConfigFile = file("google-services.json")
+val firebaseConfigured: Boolean = firebaseConfigFile.exists()
+if (firebaseConfigured) {
+    apply(plugin = libs.plugins.google.services.get().pluginId)
+    apply(plugin = libs.plugins.firebase.crashlytics.get().pluginId)
+
+    // ...but only for `play`. `direct` is the sideload/F-Droid build and
+    // carries no Play Services dependency at all (SPEC.md §3.4) — that is the
+    // flavor's reason to exist, and an F-Droid build cannot contain a
+    // proprietary reporter. Both plugins are project-wide once applied, so the
+    // flavor split is enforced here by disabling the `direct` variants' tasks.
+    //
+    // Disabling stops them regenerating, but Gradle does not delete a disabled
+    // task's earlier output: a checkout that ever built these variants with
+    // the plugins enabled still holds the project's google_app_id under
+    // build/generated/res/, and the resource merge would happily package it
+    // into the `direct` APK — Firebase would then initialize in the one build
+    // that must never reach the network. So purge that directory ahead of the
+    // merge rather than only skipping the regeneration. (Two paths: AGP names
+    // the directory after the task; older versions used google-services/.)
+    val purgeDirectFirebaseResources = tasks.register<Delete>("purgeDirectGoogleServicesResources") {
+        description = "Deletes Firebase resources generated for the direct flavor, which ships without them."
+        delete(
+            layout.buildDirectory.dir("generated/res/processDirectDebugGoogleServices"),
+            layout.buildDirectory.dir("generated/res/processDirectReleaseGoogleServices"),
+            layout.buildDirectory.dir("generated/res/google-services/directDebug"),
+            layout.buildDirectory.dir("generated/res/google-services/directRelease"),
+        )
+    }
+    afterEvaluate {
+        tasks.matching {
+            // Every google-services / Crashlytics task either plugin registers
+            // for a `direct*` variant, matched by name rather than listed: the
+            // Crashlytics plugin's task set depends on whether R8 runs, so an
+            // explicit list would silently stop covering a variant the day
+            // minification is turned on (TODO.md Phase 6) — and it already
+            // registers more than the mapping-file upload the obvious list
+            // would have named (injectCrashlyticsVersionControlInfo, which
+            // writes version-control metadata into the artifact).
+            (it.name.startsWith("process") && it.name.endsWith("GoogleServices")) ||
+                it.name.startsWith("injectCrashlytics") ||
+                it.name.startsWith("uploadCrashlytics")
+        }.configureEach {
+            if (name.contains("Direct")) {
+                enabled = false
+            }
+        }
+        tasks.matching { it.name.startsWith("mergeDirect") && it.name.endsWith("Resources") }
+            .configureEach { dependsOn(purgeDirectFirebaseResources) }
+    }
+}
+
 // The fallback keeps a checkout with no git (a source zip, a fork's odd CI)
 // building, but it must never be silent: falling back means versionCode 1, and a
 // build that quietly claims version 1 is either rejected by Play or looks like a
@@ -362,6 +419,13 @@ dependencies {
     // to this flavor alone, same as `presence`'s geofencing dependency, since
     // `direct` carries no Play Services dependency at all (SPEC.md §3.4).
     "playImplementation"(libs.play.app.update)
+    // Crash reporting, `play` only — `direct` carries no Play Services
+    // dependency (SPEC.md §3.4), and its own CrashReporter is a no-op. Present
+    // in every `play` build so the wiring compiles, but inert unless the build
+    // had a google-services.json: with no FirebaseApp initialized the gate
+    // reports unavailable and nothing is ever collected.
+    "playImplementation"(platform(libs.firebase.bom))
+    "playImplementation"(libs.firebase.crashlytics)
     // Reads the committed res/raw/aboutlibraries.json for the Licenses page.
     // Only `rememberLibraries` and the `Libs`/`Library` model are used -- the
     // artifact's own list UI is not.
