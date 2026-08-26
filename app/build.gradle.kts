@@ -4,6 +4,13 @@ plugins {
     alias(libs.plugins.aboutlibraries)
 }
 
+// GitHub Actions sets CI=true. It gates R8 (see buildTypes below): every build
+// CI produces — the Play AAB and both flavors' debug APKs — is minified, so the
+// shipping artifact and the artifact PR CI checks go through the same pipeline,
+// while a local build skips R8 and stays fast to iterate on. Mirrors the
+// sibling Simmo and Type Launcher repos.
+val isCiBuild: Boolean = System.getenv("CI") == "true"
+
 // Crash reporting (SPEC.md §12): Crashlytics activates per build. Both plugins
 // are applied only when the untracked google-services.json is present, so a
 // fresh clone, a fork, and CI all build with Crashlytics dormant and nothing
@@ -43,8 +50,8 @@ if (firebaseConfigured) {
             // Every google-services / Crashlytics task either plugin registers
             // for a `direct*` variant, matched by name rather than listed: the
             // Crashlytics plugin's task set depends on whether R8 runs, so an
-            // explicit list would silently stop covering a variant the day
-            // minification is turned on (TODO.md Phase 6) — and it already
+            // explicit list would have silently stopped covering a variant the
+            // day minification was turned on (it since has, below) — and it already
             // registers more than the mapping-file upload the obvious list
             // would have named (injectCrashlyticsVersionControlInfo, which
             // writes version-control metadata into the artifact).
@@ -253,16 +260,32 @@ android {
             // Only meaningful on the `play` flavor; the `direct` flavor's own
             // update checker never reads this field (SPEC.md's flavor split).
             buildConfigField("boolean", "PLAY_UPDATE_CHECKS_ENABLED", "false")
+            // No R8 here, deliberately. AGP disables optimization and
+            // obfuscation for any debuggable build ("All code optimizations
+            // and obfuscation are disabled for debuggable builds") and warns
+            // when you ask anyway, so minifying this variant could only ever
+            // have run the shrinker — a strict subset of what the release
+            // variants already run on every pull request (the `Build release
+            // APKs` step in .github/workflows/ci.yml). It bought no coverage
+            // and cost a slower build, so the debug APK stays unminified and
+            // fast to install. A shrunk artifact to test on a device comes
+            // from `CI=true ./gradlew assembleRelease`.
         }
         release {
             // Only the Play build can be updated by Play, so only it asks.
             buildConfigField("boolean", "PLAY_UPDATE_CHECKS_ENABLED", "true")
-            // R8 stays off for now — a separate follow-up once there is a
-            // device to verify a shrunk build against (TODO.md, Phase 6). The
-            // signing config below is this slice: a local release build stays
-            // unsigned unless RELEASE_KEYSTORE_FILE is set, so fresh clones
-            // still build cleanly with no secrets.
-            isMinifyEnabled = false
+            // Full R8 — shrinking, optimization and obfuscation — CI-only (see
+            // isCiBuild). Play requires coverage across all three from February
+            // 2027, so this is a distribution requirement rather than a size
+            // choice (SPEC.md §3.7). The PR build job runs it too
+            // (`assembleRelease`), so the deploy job is never the first build
+            // to find out that something was stripped or renamed.
+            isMinifyEnabled = isCiBuild
+            isShrinkResources = isCiBuild
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             // Only attach the signingConfig when CI (or a developer) has
             // actually populated it — an unset storeFile would fail
             // bundleRelease for anyone without the release secrets.

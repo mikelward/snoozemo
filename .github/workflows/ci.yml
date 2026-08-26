@@ -165,6 +165,19 @@ jobs:
         # other (SPEC.md §3.4).
         run: ./gradlew assembleDebug
 
+      - name: Build release APKs
+        # The only R8 coverage this repo has, and the reason the debug step
+        # above does not carry any: AGP disables optimization and obfuscation
+        # for debuggable builds outright, so a minified debug APK runs the
+        # shrinker and nothing else. Everything that can actually go wrong under
+        # R8 -- code stripped, or renamed out from under a reflective lookup --
+        # and everything Play's 2027 threshold measures (SPEC.md §3.7) lives in
+        # these two variants. Without this step the post-merge deploy would be
+        # the first build to run the code Play receives. Unsigned, since
+        # RELEASE_KEYSTORE_FILE is unset outside deploy; signing is not what
+        # this step checks.
+        run: ./gradlew assembleRelease
+
       - name: Check licenses exports are up to date
         # The open-source attribution lists are committed to res/raw, one per
         # flavor (AGP 9 can't auto-generate them into the app -- see
