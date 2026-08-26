@@ -275,6 +275,45 @@ caching. That is the trade to re-open if internal-track latency ever becomes the
 testing up — and only then; a duplicate channel is not free, and the one being duplicated is also
 the route to alpha, beta and production.
 
+**The release build goes through R8, with shrinking, optimization and obfuscation all on.**
+`isMinifyEnabled` and `isShrinkResources` are on for the release build type whenever `CI=true`;
+a local release build skips R8 and stays fast to inspect, and the debug build never runs it at
+all (see below for why not).
+
+Full R8 is a **distribution requirement, not a size preference**. From February 2027 Play
+requires a minimum of 25% coverage across *optimization, shrinking and obfuscation*, measured as
+DEX code optimization, and an app under the threshold loses store visibility and publishing
+capability. A shrink-only run — `-dontoptimize -dontobfuscate`, which is where this started —
+leaves two of those three dimensions at zero, so it was never an option for the `play` build.
+`direct` runs the same configuration: a second pipeline would be a second set of failures to
+find, and F-Droid does not object to an optimized build.
+
+What that costs, stated plainly because it is a real loss:
+
+- **Crash traces arrive obfuscated.** On `play` they are readable only if the Crashlytics
+  mapping file is uploaded with the build. On `direct` there is no crash reporter at all (§12),
+  so a trace from a sideloaded build — in a logcat, in a user's bug report — cannot be
+  de-obfuscated by anyone. That is the price of the flavor's independence, not a defect to fix.
+- **The optimizer and obfuscator can break code the shrinker alone would not**, and it is
+  reflection they break: anything resolved by name at runtime. Three stores here persist an enum
+  by `name()` and read it back with `valueOf` — a renamed constant would make a snooze record
+  written by one build unreadable by the next, which is D7's failure rather than a cosmetic one.
+  `app/proguard-rules.pro` keeps those names, and the enums, serializers, worker class name and
+  manifest components are verified against R8's mapping on every variant.
+
+**The pull-request build job builds the release APKs, and that is where all the R8 coverage
+is.** The debug build deliberately does not run R8: AGP disables optimization *and* obfuscation
+for any debuggable build, so minifying it could only ever run the shrinker — a strict subset of
+what the release variants run anyway, bought at the cost of a slower build and an AGP warning.
+Everything that can actually break under R8, and everything Play measures, lives in the release
+variants; building them on every pull request is what keeps the post-merge `deploy` from being
+the first run of the code Play receives.
+
+Worth knowing what this is and is not worth in bytes. The release APK drops by around 90%
+against an unminified build — but nearly all of that is the shrinker, and against a shrink-only
+run the **AABs barely move at all**, within about 2% and marginally larger. Optimization and
+obfuscation are here because the threshold requires them, not because they save space.
+
 ---
 
 ## 4. User-visible behavior

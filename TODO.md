@@ -1101,11 +1101,9 @@ the point is that every other line of the app is worthless if it isn't true.
       2026-08-23: "I haven't seen this in any other app") — a fair challenge, since a real
       hardware or system-skin effect would show up across every app on the phone, not just this
       one, and it doesn't. **What actually is different about this app is the build it's tested
-      as**: `app/build.gradle.kts`'s `release` block turns R8 off outright ("R8 stays off for now
-      — a separate follow-up once there is a device to verify a shrunk build against", Phase 6
-      below), so *every* build this pipeline can currently produce — debug or release, CI or
-      local — is unminified and unshrunk, and carries no *app-specific* baseline profile of its
-      own (Codex, PR #94: Compose's own library code ships with a default profile baked into its
+      as**: when this entry was written `app/build.gradle.kts` turned R8 off outright, so *every*
+      build the pipeline could produce — debug or release, CI or local — was unminified and
+      unshrunk, and carried no *app-specific* baseline profile of its own (Codex, PR #94: Compose's own library code ships with a default profile baked into its
       AARs regardless — the gap here is app code, `MainScreen`/`SettingsScreen`/`PermissionsScreen`
       and their hot paths, never being AOT-hinted, not Compose itself running fully uncompiled).
       That is a real, well-documented source of visibly slower recomposition/layout than a typical
@@ -1144,8 +1142,20 @@ the point is that every other line of the app is worthless if it isn't true.
       paths, so "unaffected" overclaims what a slow `framestats` reading alone would show — the
       point is that a slow reading doesn't confirm shrinking *would* fix it, not that shrinking
       *can't*). Confirm with an R8-on/R8-off comparison, or a trace that actually attributes the
-      delay to code shrinking changes, before pulling the Phase 6 follow-up forward on the
-      strength of a slow `framestats` reading alone. A fast result there narrows the field a different way — it rules out a slow
+      delay to code shrinking changes, rather than reading a slow `framestats` result as proof
+      that shrinking was the missing piece.
+      **R8 has since landed (Phase 6 below), which changes what to test rather than closing this.**
+      R8 has landed, which makes the R8-on/R8-off comparison the sentence above asks for
+      possible — but **only between release builds** (Codex, PR #121). A debug APK is never an
+      arm of it, whichever way it was built: AGP disables optimization and obfuscation for any
+      debuggable build, so a minified debug APK differs from an unminified one by the shrinker
+      alone, and a ghost that survives that comparison could still be caused by code the release
+      optimizer would have changed. The honest experiment is `./gradlew assembleRelease` (R8 off,
+      no `CI`) against `CI=true ./gradlew assembleRelease` (R8 on) at the same commit — or a
+      dedicated non-debuggable benchmark build type, which the repo does not have yet. Note also
+      that R8 ships no app-specific baseline profile either way, so the AOT-hinting half of the
+      gap described above is untouched by any of this.
+      A fast result there narrows the field a different way — it rules out a slow
       composition/layout pass, but `framestats` and HWUI's profile bars measure frame *duration*,
       not frame *contents*, so they cannot on their own clear a defect that renders wrong pixels
       within budget. A fast result still needs actual pixel-level evidence — a screen recording
@@ -2054,8 +2064,65 @@ the point is that every other line of the app is worthless if it isn't true.
       a fresh clone still builds unsigned; the `deploy` job in
       `.github/workflows/ci.yml` builds `:app:bundlePlayRelease` on every push to `main`
       and publishes it as a downloadable `app-release-aab` workflow artifact, for the manual seed
-      upload Play requires (`docs/play-store-internal-track.md`). R8 stays off — a separate
-      follow-up once there is a device to verify a shrunk build against.
+      upload Play requires (`docs/play-store-internal-track.md`). R8 was the one piece held back
+      from this slice; it has since landed as its own follow-up, below.
+- [x] **Run the shipping build through R8 — shrinking, optimization and obfuscation**
+      (`SPEC.md` §3.7). **Landed**: `isMinifyEnabled` and `isShrinkResources` are on for both
+      release build type whenever `CI=true`, and the pull-request build job builds the release
+      APKs so that coverage lands on every PR. The debug build deliberately does not run R8:
+      AGP disables optimization *and* obfuscation for debuggable builds (it warns if you ask
+      anyway), so minifying it could only run the shrinker — a strict subset of what the release
+      variants already cover, at the cost of a slower build (Codex, PR #121). A local build
+      skips R8 and stays fast to iterate on.
+      **This started as a shrink-only run (`-dontoptimize -dontobfuscate`) and was changed**
+      (maintainer, 2026-08-26): from February 2027 Play requires a minimum of 25% coverage across
+      *optimization, shrinking and obfuscation*, measured as DEX code optimization, with reduced
+      visibility and publishing capability below the threshold. Shrink-only leaves two of the
+      three at zero, so it could never have satisfied it.
+      Sizes, release APK, unminified against full R8: `play` 29.2 MB -> 3.2 MB and `direct`
+      25.7 MB -> 2.3 MB. But almost all of that is the shrinker: against the *shrink-only* build
+      this PR started from (6.6 MB and 4.8 MB) the APKs halve again, while the **AABs barely move
+      at all** — 4.3 MB and 3.2 MB, within ~2%, marginally larger. Optimization and obfuscation
+      are here for the threshold, not for bytes; say so rather than claiming a size win for them.
+      **Verified in the sandbox, not on a device**: both flavors' `assembleDebug` and
+      `bundle*Release` build clean with no `missing_rules.txt`; every one of the app's 106 strings
+      and all of its own drawables, raw and xml resources are `reachable` in the shrinker's
+      `resources.txt` (what it drops is library-owned — `androidx.window` attributes, Play
+      Services' sign-in glyphs, androidx-core's pre-Lollipop notification layout assets); every
+      manifest-declared component, `BackstopWorker`, and AboutLibraries' `$$serializer` classes
+      are present in the shrunk dex. What is still owed is the install: **run a CI-built APK of
+      each flavor on a handset** before trusting a shrunk build, and re-check the Licenses screen
+      in particular, since its JSON parse is the one reflective path in the app.
+      Firebase ships its own shrinker directives — `firebase_common_keep.xml` (which keeps
+      `google_app_id`, `gcm_defaultSenderId`, `google_api_key` and the rest of the
+      google-services–generated strings) and `firebase_crashlytics_keep.xml` — and both arrive
+      with the AARs, so they are in every `play` build's merged resources whether or not the
+      plugins are applied. Confirmed present in the shrinker's report; no rule needed here.
+- [ ] **PR CI still doesn't run the Crashlytics plugin's own R8-era tasks** (Codex, PR #121).
+      The `deploy` job materializes `app/google-services.json` from `GOOGLE_SERVICES_JSON`, so
+      only there do the google-services and Crashlytics plugins apply; a pull-request build has
+      neither. Most of that gap is narrower than it looks — the plugins add *tasks and generated
+      resources*, not classes, so R8's code input is byte-for-byte the same either way, and the
+      generated resources are keep-protected by the AARs above. What is genuinely new and
+      genuinely unexercised is the mapping-file upload the Crashlytics plugin registers **only
+      when minification is on**: turning R8 on activates a deploy-job code path that has never
+      run, and the deploy job is where it would first fail. Two things to settle, and both are
+      the maintainer's:
+      1. **The mapping upload is now required, not pointless** — this reversed when the build
+         went from shrink-only to full R8 (2026-08-26). With obfuscation on, a Crashlytics stack
+         trace is unreadable without the mapping file for that exact build, so
+         `mappingFileUploadEnabled` must stay **on** and the upload must actually work. It still
+         cannot be exercised from a sandbox with no `google-services.json`, which makes the first
+         `deploy` run after this lands the thing to watch: confirm a `play` crash de-obfuscates in
+         the console before trusting the channel. **`direct` has no reporter at all**
+         (`SPEC.md` §12), so its traces are now obfuscated with no mapping anywhere — the cost of
+         that flavor's independence, recorded so it is a known state rather than a surprise.
+      2. Whether a pull-request build should get a Firebase config at all. Codex's suggestion,
+         and it would close the gap properly — but it means a secret in a `pull_request`-triggered
+         job that runs PR-controlled build code, against a repo that deliberately builds
+         Crashlytics-dormant everywhere outside `deploy` (`docs/fork-safe-ci.md`,
+         `docs/crashlytics.md`). That is a CI security-posture decision, not an implementation
+         detail.
 - [ ] **Automatic upload to the Play internal track.** Deliberately not the first `deploy`-job
       PR's scope (maintainer, 2026-08-22): a `r0adkll/upload-google-play` step plus the "What's
       new" generation from commit subjects described in `AGENTS.md`, and their own
@@ -2523,6 +2590,37 @@ that can only be settled on a real device, ordered by risk.
         `WIFI_ONLY`, and the snooze runs on the coordinate anchor or honestly degrades to
         duration-only and says so. Worth measuring because losing the D4 suppressor changes
         how the product behaves indoors, not because anything fails quietly.
+
+17. [ ] **A CI-built, R8-shrunk APK of each flavor actually runs** (`SPEC.md` §3.7, Phase 6).
+        The shrink is verified from R8's own reports — no missing rules, every app-owned
+        resource reachable, every manifest component and `BackstopWorker` present in the dex —
+        but a shrinking bug is by definition one the reports did not predict, and no build
+        this repo has ever installed on a phone was minified, and obfuscation makes that gap
+        matter more than shrinking alone did. **It has to be a release build**: nothing in CI
+        uploads an APK (Codex, PR #121 — `deploy` publishes only the `app-release-aab`
+        artifact), and a debug APK would not do even if one were published, since AGP disables
+        optimization and obfuscation for debuggable builds.
+        **Build it signed, or it will not install** (Codex, PR #121): the release
+        `signingConfig` attaches only when `RELEASE_KEYSTORE_FILE` is set, so a bare
+        `CI=true ./gradlew assembleRelease` writes `app-*-release-unsigned.apk` and `adb install`
+        refuses it. Point the same env vars at the local debug keystore, which needs no secrets:
+
+        ```sh
+        RELEASE_KEYSTORE_FILE=$HOME/.android/debug.keystore \
+        RELEASE_KEYSTORE_PASSWORD=android RELEASE_KEY_ALIAS=androiddebugkey \
+        RELEASE_KEY_PASSWORD=android \
+        CI=true ./gradlew assembleRelease
+        ```
+
+        Verified to produce installable APKs signed by `CN=Android Debug`. The release
+        applicationId carries no `.debug` suffix, so it collides with an installed Play build —
+        uninstall that first rather than fighting a signature mismatch. `isCiBuild` gates nothing
+        but minification and resource shrinking, so those vars plus `CI=true` reproduce exactly
+        what CI builds. Then walk both flavors: arm from the tile, end a snooze, **reboot mid-snooze** (that is the enum
+        round-trip through `valueOf` that a renamed constant would break, and the failure would
+        be a snooze that never ends), and open the Licenses screen (its JSON parse is the app's
+        one reflective read). Once is enough; after that every pull request exercises the
+        pipeline.
 
 ### Samsung, at Phase 8
 
