@@ -112,6 +112,12 @@ jobs:
     if: needs.classify.outputs.docs_only != 'true'
     # Fail fast if a test deadlocks instead of burning the 6-hour default.
     timeout-minutes: 30
+    env:
+      # Presence only, never the value. The release-APK step below skips on main
+      # only when `deploy` will really build the AAB, and deploy's build is itself
+      # gated on this secret -- so without it, neither job would build a release
+      # variant and R8 would stop running anywhere. See that step's comment.
+      HAS_RELEASE_KEYSTORE: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' }}
     permissions:
       contents: read
       # Used by "Print failing test details" to post a comment on the
@@ -1235,6 +1241,24 @@ jobs:
             printf '%s\n' "$notes"
             printf '%s\n' "$delim"
           } >> "$GITHUB_ENV"
+
+      - name: Require a release keystore
+        # A push to main must end in a signed AAB. Without the keystore secret
+        # every step below skips on its own condition and the job goes green
+        # having built and published nothing -- indistinguishable, from the
+        # outside, from a release that worked. Fail here instead, naming what
+        # is missing, so a secret that was renamed, expired, or lost in a move
+        # to the `production` environment is caught on the push that broke it
+        # rather than the next time someone looks for a build that never came.
+        #
+        # Forks are exempt. They have no secrets by design, and building
+        # unsigned is a supported state here -- failing their main pushes would
+        # turn that into a red build. The `build` job keeps its release compile
+        # in exactly that case, so R8 still runs for them.
+        if: env.HAS_RELEASE_KEYSTORE != 'true' && github.event.repository.fork != true
+        run: |
+          echo "::error::A push to main must produce a signed AAB, but RELEASE_KEYSTORE_BASE64 is unset or empty. Set it together with RELEASE_KEYSTORE_PASSWORD, RELEASE_KEY_ALIAS and RELEASE_KEY_PASSWORD, or this release would publish nothing."
+          exit 1
 
       - name: Materialize release keystore
         # Decoded whenever the keystore secret is present, so the signed AAB
