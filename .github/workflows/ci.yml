@@ -1295,9 +1295,11 @@ jobs:
       - name: Build release AAB
         # Gated only on the keystore being present — a signed AAB is useful on
         # its own (a downloadable artifact for the seed upload). The release
-        # signingConfig only attaches when RELEASE_KEYSTORE_FILE is set
-        # (app/build.gradle.kts), so without it Play would reject the AAB
-        # anyway.
+        # signingConfig only attaches when all four RELEASE_KEYSTORE_* /
+        # RELEASE_KEY_* variables are set (app/build.gradle.kts), which the
+        # decode step above guarantees whenever it sets RELEASE_KEYSTORE_FILE —
+        # it fails first if any of the other three is empty. Without them Play
+        # would reject the AAB anyway.
         #
         # The `play` flavor only: it is the only flavor any Play track ships
         # (SPEC.md §3.4) — `direct` is the sideload/F-Droid fallback and has
