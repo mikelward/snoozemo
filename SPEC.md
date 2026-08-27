@@ -276,9 +276,13 @@ testing up — and only then; a duplicate channel is not free, and the one being
 the route to alpha, beta and production.
 
 **The release build goes through R8, with shrinking, optimization and obfuscation all on.**
-`isMinifyEnabled` and `isShrinkResources` are on for the release build type whenever `CI=true`;
-a local release build skips R8 and stays fast to inspect, and the debug build never runs it at
-all (see below for why not).
+`isMinifyEnabled` and `isShrinkResources` are on for the release build type on every machine,
+not only in CI, and the debug build never runs R8 at all (see below for why not). Gating
+minification on `CI=true` was the earlier decision and it was wrong: the release build is the
+artifact that ships, so it has to be the artifact anyone can reproduce. A local release build
+that skipped R8 meant the one build worth smoke-testing was the one nobody could smoke-test,
+and it hid exactly the defects R8 introduces — reflection, serialization, and the enum
+constant names this app round-trips through persistence and a reboot.
 
 Full R8 is a **distribution requirement, not a size preference**. From February 2027 Play
 requires a minimum of 25% coverage across *optimization, shrinking and obfuscation*, measured as

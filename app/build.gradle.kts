@@ -4,13 +4,6 @@ plugins {
     alias(libs.plugins.aboutlibraries)
 }
 
-// GitHub Actions sets CI=true. It gates R8 (see buildTypes below): every build
-// CI produces — the Play AAB and both flavors' debug APKs — is minified, so the
-// shipping artifact and the artifact PR CI checks go through the same pipeline,
-// while a local build skips R8 and stays fast to iterate on. Mirrors the
-// sibling Simmo and Type Launcher repos.
-val isCiBuild: Boolean = System.getenv("CI") == "true"
-
 // Crash reporting (SPEC.md §12): Crashlytics activates per build. Both plugins
 // are applied only when the untracked google-services.json is present, so a
 // fresh clone, a fork, and CI all build with Crashlytics dormant and nothing
@@ -269,19 +262,25 @@ android {
             // APKs` step in .github/workflows/ci.yml). It bought no coverage
             // and cost a slower build, so the debug APK stays unminified and
             // fast to install. A shrunk artifact to test on a device comes
-            // from `CI=true ./gradlew assembleRelease`.
+            // from `./gradlew assembleRelease`, which minifies on any machine.
         }
         release {
             // Only the Play build can be updated by Play, so only it asks.
             buildConfigField("boolean", "PLAY_UPDATE_CHECKS_ENABLED", "true")
-            // Full R8 — shrinking, optimization and obfuscation — CI-only (see
-            // isCiBuild). Play requires coverage across all three from February
-            // 2027, so this is a distribution requirement rather than a size
-            // choice (SPEC.md §3.7). The PR build job runs it too
-            // (`assembleRelease`), so the deploy job is never the first build
-            // to find out that something was stripped or renamed.
-            isMinifyEnabled = isCiBuild
-            isShrinkResources = isCiBuild
+            // Full R8 — shrinking, optimization and obfuscation — on any
+            // machine, not only in CI. Play requires coverage across all three
+            // from February 2027, so this is a distribution requirement rather
+            // than a size choice (SPEC.md §3.7).
+            //
+            // Unconditional because the CI-only form meant a release APK built
+            // on a developer's machine skipped R8 entirely: the one artifact
+            // worth reproducing was the one nobody could reproduce, and anyone
+            // testing a local release build was testing un-obfuscated code --
+            // exactly where R8 bugs live. `./gradlew assembleRelease` now
+            // produces the shipping configuration anywhere, which is the only
+            // way to verify R8 on a handset at all.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

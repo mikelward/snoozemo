@@ -1,6 +1,6 @@
-# R8 keep rules for the minified builds — the CI `debug` and `release` builds
-# (isMinifyEnabled = isCiBuild in app/build.gradle.kts). Keep this list tight:
-# each rule names why it exists.
+# R8 keep rules for the `release` builds, which minify on any machine
+# (isMinifyEnabled = true in app/build.gradle.kts). `debug` never minifies.
+# Keep this list tight: each rule names why it exists.
 
 # Full R8 — shrinking, optimization and obfuscation all on. This is a Play
 # requirement, not a size preference: from February 2027 an app must show a

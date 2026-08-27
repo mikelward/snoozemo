@@ -1150,9 +1150,13 @@ the point is that every other line of the app is worthless if it isn't true.
       arm of it, whichever way it was built: AGP disables optimization and obfuscation for any
       debuggable build, so a minified debug APK differs from an unminified one by the shrinker
       alone, and a ghost that survives that comparison could still be caused by code the release
-      optimizer would have changed. The honest experiment is `./gradlew assembleRelease` (R8 off,
-      no `CI`) against `CI=true ./gradlew assembleRelease` (R8 on) at the same commit — or a
-      dedicated non-debuggable benchmark build type, which the repo does not have yet. Note also
+      optimizer would have changed. That experiment now needs a build the repo does not have.
+      Release minifies on every machine (PR #122), so `./gradlew assembleRelease` and
+      `CI=true ./gradlew assembleRelease` are the same R8-on build and comparing them measures
+      nothing; `isCiBuild` is gone, so there is no flag left to flip. Getting an R8-off arm
+      means a dedicated non-debuggable benchmark build type — debuggable is not an option, since
+      AGP disables optimization and obfuscation for any debuggable build — or a temporary local
+      edit to `isMinifyEnabled` that is never committed. Note also
       that R8 ships no app-specific baseline profile either way, so the AOT-hinting half of the
       gap described above is untouched by any of this.
       A fast result there narrows the field a different way — it rules out a slow
@@ -2067,13 +2071,14 @@ the point is that every other line of the app is worthless if it isn't true.
       upload Play requires (`docs/play-store-internal-track.md`). R8 was the one piece held back
       from this slice; it has since landed as its own follow-up, below.
 - [x] **Run the shipping build through R8 — shrinking, optimization and obfuscation**
-      (`SPEC.md` §3.7). **Landed**: `isMinifyEnabled` and `isShrinkResources` are on for both
-      release build type whenever `CI=true`, and the pull-request build job builds the release
-      APKs so that coverage lands on every PR. The debug build deliberately does not run R8:
+      (`SPEC.md` §3.7). **Landed**: `isMinifyEnabled` and `isShrinkResources` are on for the
+      release build type on every machine, not only in CI (PR #122), and the pull-request build
+      job builds the release APKs so that coverage lands on every PR. The debug build deliberately does not run R8:
       AGP disables optimization *and* obfuscation for debuggable builds (it warns if you ask
       anyway), so minifying it could only run the shrinker — a strict subset of what the release
-      variants already cover, at the cost of a slower build (Codex, PR #121). A local build
-      skips R8 and stays fast to iterate on.
+      variants already cover, at the cost of a slower build (Codex, PR #121). So the debug
+      build is the one that stays fast to iterate on; a local *release* build runs R8 like
+      any other, which is the point — the artifact that ships is the one anyone can reproduce.
       **This started as a shrink-only run (`-dontoptimize -dontobfuscate`) and was changed**
       (maintainer, 2026-08-26): from February 2027 Play requires a minimum of 25% coverage across
       *optimization, shrinking and obfuscation*, measured as DEX code optimization, with reduced
@@ -2601,22 +2606,23 @@ that can only be settled on a real device, ordered by risk.
         artifact), and a debug APK would not do even if one were published, since AGP disables
         optimization and obfuscation for debuggable builds.
         **Build it signed, or it will not install** (Codex, PR #121): the release
-        `signingConfig` attaches only when `RELEASE_KEYSTORE_FILE` is set, so a bare
-        `CI=true ./gradlew assembleRelease` writes `app-*-release-unsigned.apk` and `adb install`
-        refuses it. Point the same env vars at the local debug keystore, which needs no secrets:
+        `signingConfig` attaches only when all four `RELEASE_KEYSTORE_*` / `RELEASE_KEY_*`
+        variables are set, so a bare `./gradlew assembleRelease` writes
+        `app-*-release-unsigned.apk` and `adb install` refuses it. Point the same env vars at the local debug keystore, which needs no secrets:
 
         ```sh
         RELEASE_KEYSTORE_FILE=$HOME/.android/debug.keystore \
         RELEASE_KEYSTORE_PASSWORD=android RELEASE_KEY_ALIAS=androiddebugkey \
         RELEASE_KEY_PASSWORD=android \
-        CI=true ./gradlew assembleRelease
+        ./gradlew assembleRelease
         ```
 
         Verified to produce installable APKs signed by `CN=Android Debug`. The release
         applicationId carries no `.debug` suffix, so it collides with an installed Play build —
-        uninstall that first rather than fighting a signature mismatch. `isCiBuild` gates nothing
-        but minification and resource shrinking, so those vars plus `CI=true` reproduce exactly
-        what CI builds. Then walk both flavors: arm from the tile, end a snooze, **reboot mid-snooze** (that is the enum
+        uninstall that first rather than fighting a signature mismatch. Release builds minify
+        on any machine now, so those vars alone reproduce exactly what CI builds — `CI=true` is
+        no longer needed and `isCiBuild` no longer exists (PR #122). Then walk both flavors: arm
+        from the tile, end a snooze, **reboot mid-snooze** (that is the enum
         round-trip through `valueOf` that a renamed constant would break, and the failure would
         be a snooze that never ends), and open the Licenses screen (its JSON parse is the app's
         one reflective read). Once is enough; after that every pull request exercises the
