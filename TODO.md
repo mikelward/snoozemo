@@ -31,8 +31,9 @@ release rather than dropped.
       classpath at all, so the seam is enforced by the build rather than by discipline, and
       CI runs `:core:test` on its own as the check that keeps it that way.
 - [x] Two product flavors, `play` and `direct` (`SPEC.md` §3.4), differing only below
-      `PresenceMonitor`. `play` is the default; CI's `assembleDebug` builds both, since a
-      change that compiles in one can break the other.
+      `PresenceMonitor`. `play` is the default; CI's `assembleRelease` builds both on a
+      pull request, since a change that compiles in one can break the other. On main
+      only `play` is built, by `deploy`'s `bundlePlayRelease`.
 - [x] CI workflow (`.github/workflows/ci.yml`): build both flavors, `:core:test` on
       its own, unit tests with failing-test PR comments, lint. The Roborazzi screenshot job
       lands with the first real UI (Phase 2/4) and the `deploy` job with the release
