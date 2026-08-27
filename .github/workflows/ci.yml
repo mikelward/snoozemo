@@ -112,12 +112,6 @@ jobs:
     if: needs.classify.outputs.docs_only != 'true'
     # Fail fast if a test deadlocks instead of burning the 6-hour default.
     timeout-minutes: 30
-    env:
-      # Presence only, never the value. The release-APK step below skips on main
-      # only when `deploy` will really build the AAB, and deploy's build is itself
-      # gated on this secret -- so without it, neither job would build a release
-      # variant and R8 would stop running anywhere. See that step's comment.
-      HAS_RELEASE_KEYSTORE: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' }}
     permissions:
       contents: read
       # Used by "Print failing test details" to post a comment on the
@@ -165,23 +159,66 @@ jobs:
         # module — and the tests run behind it.
         run: ./gradlew :core:verifyNoAndroid :core:test
 
-      - name: Build debug APKs
-        # Both flavors: `play` is the shipping build and `direct` is the
-        # sideload fallback, and a change that compiles in one can break the
-        # other (SPEC.md §3.4).
-        run: ./gradlew assembleDebug
-
       - name: Build release APKs
-        # The only R8 coverage this repo has, and the reason the debug step
-        # above does not carry any: AGP disables optimization and obfuscation
-        # for debuggable builds outright, so a minified debug APK runs the
-        # shrinker and nothing else. Everything that can actually go wrong under
-        # R8 -- code stripped, or renamed out from under a reflective lookup --
-        # and everything Play's 2027 threshold measures (SPEC.md §3.7) lives in
-        # these two variants. Without this step the post-merge deploy would be
-        # the first build to run the code Play receives. Unsigned, since
-        # RELEASE_KEYSTORE_FILE is unset outside deploy; signing is not what
-        # this step checks.
+        # The only R8 coverage this repo has. AGP disables optimization and
+        # obfuscation for debuggable builds outright, so a minified debug APK
+        # would run the shrinker and nothing else -- everything that can
+        # actually go wrong under R8 (code stripped, or renamed out from under a
+        # reflective lookup), and everything Play's 2027 threshold measures
+        # (SPEC.md §3.7), lives in these two variants. Unsigned, since the
+        # RELEASE_KEYSTORE_* variables are unset outside deploy; signing is not
+        # what this step checks.
+        #
+        # Pull requests only. On main `deploy` runs bundlePlayRelease, so
+        # running this too meant R8 ran twice per push, in series with the tests
+        # and lint inside this job and therefore on the critical path into
+        # deploy. The Gradle build cache does not save it: setup-gradle keys its
+        # cache per job, so deploy restores its own entry from the PREVIOUS run
+        # and never sees what this job just built.
+        #
+        # What main gives up is the `direct` flavor's release build:
+        # bundlePlayRelease covers `play` only, so lintVitalDirectRelease and
+        # optimizeDirectReleaseResources stop running there (verified by
+        # --dry-run, not assumed). Accepted rather than worked around, to keep
+        # this the same shape as the sibling repos: the pull request for the
+        # same commit builds both flavors, and `direct` is the sideload
+        # fallback rather than the shipping artifact.
+        #
+        # The condition is `deploy`'s `if:` verbatim -- note this repo's deploy
+        # has no workflow_dispatch arm, unlike the siblings. If that changes,
+        # change this with it, or the release check silently stops running
+        # somewhere.
+        #
+        # No assembleDebug. It built both debug flavors as a compile check, but
+        # this repo has no src/debug and only compose-ui-tooling and
+        # compose-ui-test-manifest as debugImplementation, so it compiled
+        # nothing the unit tests do not already compile, and nothing
+        # distributes a debug APK from CI.
+        #
+        # Skipped on main only where `deploy` is guaranteed to build a release
+        # variant in this run's place. On this repo that guarantee comes from
+        # deploy's "Require a release keystore" step: with the secret present it
+        # builds the play AAB, and without it the run fails outright, so a green main
+        # push always ran R8 somewhere.
+        #
+        # Forks get no such guarantee -- they are exempt from that step and
+        # deploy's build steps skip on their own conditions -- so they keep
+        # building the release APK here, and their unsigned no-keystore state
+        # stays covered exactly as before.
+        #
+        # Fork status rather than the keystore secret, deliberately: this job
+        # declares no `environment`, so whether it can see that secret at all
+        # depends on where the secret is scoped -- a repository secret is
+        # visible here, an environment one is not. Gating on it would then work
+        # or silently stop working depending on that scope, skipping nothing and
+        # quietly keeping the duplicate R8 build this change exists to remove.
+        # Fork status comes from the `github` context and holds either way.
+        #
+        # Note deploy only bundles the `play` flavor, so on main `direct`'s
+        # release build is given up either way -- see the note above.
+        if: |
+          !(github.ref == 'refs/heads/main' && github.event_name == 'push' &&
+            github.event.repository.fork != true)
         run: ./gradlew assembleRelease
 
       - name: Check licenses exports are up to date
@@ -766,10 +803,16 @@ jobs:
     #   3. `needs:` — runs only once build and screenshot-tests both pass, so
     #      a failing test or a screenshot drift on main blocks the release.
     #
-    # Both secrets below are optional and every step gates on its own
-    # presence, so a fresh repo or fork still gets a green run with nothing
-    # built or uploaded — an empty allow-list or a release with no signing
-    # config would only be a red check nobody reads.
+    # The Play secret below is optional and its steps gate on their own
+    # presence, so a repo with a keystore but no Play credentials still gets a
+    # green run that builds and archives the AAB without uploading it — an
+    # empty allow-list would only be a red check nobody reads.
+    #
+    # The keystore is not optional here any more. A fork without it still
+    # skips quietly, but on this repo a push to `main` that cannot produce a
+    # signed AAB fails in `Require a release keystore` below: every step
+    # gating on its own presence meant a release that silently never happened
+    # reported success, which is indistinguishable from one that worked.
     #
     # `concurrency` serializes every run of this job across the whole repo
     # (Codex, PR #97): without it, two pushes to `main` landing close
