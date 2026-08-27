@@ -2456,6 +2456,31 @@ the point is that every other line of the app is worthless if it isn't true.
 - [ ] Ship to the internal track — the point at which the declaration outcome becomes
       known.
 
+## Release secrets and docs — needs a maintainer pass
+
+- **Reconcile `docs/play-store-internal-track.md` with how the release secrets
+  are actually scoped and what CI now does** (Codex, PR #122; deferred there
+  deliberately). Two things are out of step and only the maintainer can settle
+  either:
+  - The doc says the keystore secret is **"Environment scope only — never as
+    repository secrets"**. The maintainer reports the secrets are currently
+    **repository-scoped**, with a move to environment scope planned but not
+    done. So the doc describes the intended end state as though it were
+    current. That mismatch already caused one wrong review conclusion, and it
+    will mislead the next reader the same way.
+  - The doc still promises a fresh repo without the keystore gets a green run
+    with the release steps skipped. That is now true only for **forks**: a
+    non-fork push to `main` that cannot produce a signed AAB fails in
+    `Require a release keystore`, which was a deliberate decision — a release
+    that silently never happened used to be indistinguishable from one that
+    worked.
+
+  Not fixed in PR #122 on purpose: rewriting the setup contract requires
+  knowing which repository is in which state, and inferring that from the same
+  document that is wrong about it is how a confident wrong statement gets
+  committed. CI behavior itself does not depend on the answer — the skip gates
+  on fork status rather than on the secret, so it holds under either scope.
+
 ## Phase 7 (M7) — The `direct` flavor
 
 Insurance, not a parallel product (`SPEC.md` §3.4). It sits after the internal-track
