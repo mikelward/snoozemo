@@ -2952,6 +2952,24 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
+- **Shortening the debug log's timestamps was tried and abandoned** (autopilot,
+  2026-08-28, PR #128 closed). Every component turned out to be load-bearing, so
+  the change ended up saving nothing.
+  - Dropping the **offset** to a marker announced on change cost five findings,
+    all one seam — the marker has to survive the ring's eviction, the persisted
+    file's character budget, the report tail's budgets, a sink registered after
+    the first entry, and two recorders racing the fan-out. A per-line offset has
+    none of them.
+  - Dropping the **year** looked safe because the log keeps two runs, but a run
+    has no time bound: `current.log` sits untouched if the app is not opened,
+    and rotates into `previous` whenever it next is. So a previous run can be
+    arbitrarily old, and `MM-dd` would make it read as this year — against the
+    install, update and process-exit times it is compared with.
+  - What remains is one character, `T` → space. Not worth a change.
+
+  Reopen only with a way to bound a run's calendar age. The relevant reasoning
+  is on PR #128's threads.
+
 - **The sheet gate reads the snooze record without any guarantee the arm has landed**
   (2026-08-25, Codex on PR #118, declined for that change — and it corrects a claim made
   repeatedly while building it). `shouldOfferSheet` decides from `window.decorView.post`,
