@@ -3,6 +3,7 @@ package app.snoozemo.core
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 import java.util.ArrayDeque
 import java.util.IdentityHashMap
 
@@ -113,15 +114,19 @@ object SnoozeDebugLog {
     /**
      * Wall-clock time for entries, injectable so tests pin the format. Real
      * timestamps are a maintainer decision (SPEC.md §4.6): an inexact alarm
-     * landing outside a Doze window, or cap arithmetic across a DST boundary,
-     * cannot be reconstructed from intervals — which is also why the zone
-     * offset is part of the format rather than left implicit.
+     * landing outside a Doze window cannot be reconstructed from intervals,
+     * and a user reports what their own clock said, so entries are written in
+     * *local* time.
+     *
+     * The offset stays on every entry: a line is read in isolation as often as
+     * in sequence, and one that cannot place itself is worth less than the
+     * characters it saves. The year is dropped, since the log spans two runs.
      */
     @Volatile
     internal var readMillis: () -> Long = System::currentTimeMillis
 
     private val TIMESTAMP: DateTimeFormatter =
-        DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXX")
+        DateTimeFormatter.ofPattern("MM-dd HH:mm:ss.SSSXX", Locale.US)
 
     /**
      * Records one line.

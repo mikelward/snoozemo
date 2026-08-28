@@ -771,7 +771,7 @@ happened:
   stopped us; it stays on the device like the rest of the log.
 - Build, device, and Android version.
 
-**Entries carry real timestamps** (maintainer, 2026-08-11). Times are diagnostic, not decorative:
+**Entries carry real timestamps, in local time** (maintainer, 2026-08-11). Times are diagnostic, not decorative:
 an inexact cap alarm (§7) that fires late because it landed outside a Doze maintenance window, cap
 arithmetic that goes wrong across a DST boundary (§13), or a user who reports "it ended around 3am"
 — none of those can be reconstructed from intervals alone, and a log that cannot answer *when* is
@@ -779,6 +779,14 @@ not worth keeping. The times of a user's snoozes are listed as user data in AGEN
 rule, which is why the log's other protections carry the weight instead: it stays on the device,
 bounded to two runs, and reaches nobody without an explicit share. That is what the "one sanctioned
 exception" in §12 is for.
+
+Timestamps carry the local date, time and zone offset, and no year: `08-28
+19:00:00.123+1000`. The year says nothing a log bounded to two runs needs, while the offset
+stays on every entry because a line is read in isolation as often as in sequence — grepped,
+quoted into a bug report, or arriving alone — and one that cannot place itself is worth less
+than the characters it saves. Announcing the offset only when it changes was tried and
+reverted: it saved five more characters per line and put the marker at the mercy of every
+truncation point the log has (`PR #128`).
 
 **The floor is absolute and is not a matter of judgment**: never raw coordinates, never a full
 SSID or BSSID, never a user-typed place name. Distance and accuracy answer "did the test fire

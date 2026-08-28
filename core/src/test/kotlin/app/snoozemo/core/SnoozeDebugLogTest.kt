@@ -111,13 +111,14 @@ class SnoozeDebugLogTest {
         SnoozeDebugLog.event("something happened")
 
         val entry = SnoozeDebugLog.snapshot().single()
-        // The fixed instant, rendered in whatever zone the JVM runs in — the
-        // offset suffix is what makes "when" answerable across a DST boundary
-        // (SPEC.md §4.6). Matching the shape rather than a literal keeps the
-        // test zone-independent.
+        // The fixed instant, rendered in whatever zone the JVM runs in. No
+        // year — the log spans two runs — but the offset stays on every line,
+        // so one quoted on its own can still be placed (SPEC.md §4.6).
+        // Matching the shape rather than a literal keeps the test
+        // zone-independent.
         assertTrue(
-            "expected an ISO timestamp with offset, got: $entry",
-            Regex("""^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}(Z|[+-]\d{4}) D something happened$""")
+            "expected a local timestamp with offset, got: $entry",
+            Regex("""^\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}(Z|[+-]\d{4}) D something happened$""")
                 .matches(entry),
         )
     }
