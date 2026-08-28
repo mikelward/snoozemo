@@ -20,4 +20,7 @@ internal object CrashReporter {
     fun isAvailable(context: Context): Boolean = false
 
     fun apply(context: Context, enabled: Boolean): ReporterOutcome = ReporterOutcome.NO_REPORTER
+
+    /** No reporter, so nothing is ever held to discard. */
+    fun discardPending(context: Context) = Unit
 }
