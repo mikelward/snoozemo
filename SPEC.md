@@ -756,6 +756,23 @@ happened:
 - Permission and capability state at each decision — notification-policy access, location permission
   and its precision, whether location services are on system-wide, battery-saver state. A denied
   permission is often the whole answer to "why didn't it end".
+- **Why the previous processes ended**, read from the platform at startup: Android's own exit
+  reason, the process importance at the time — the priority Android had assigned the process, which
+  says whether the system counted it as work the user was aware of (a visible screen, but equally a
+  running receiver or foreground service) rather than a background reclaim — the exit status and
+  time, and the platform's free-text description. Plus this package's install and last-update times,
+  which is what an exit reason is read against — an exit whose timestamp sits beside the update time
+  is the installer replacing the APK, not a failure. This closes the one blind spot the rest of the
+  log cannot cover: an uncaught exception is the only death the app can observe from the inside, so
+  an ANR, a native crash, an out-of-memory reclaim, an OEM's app standby, or an update all leave the
+  log simply restarting with no explanation. A snooze that never ended because the process was killed
+  and nothing restored the watch is principle 1's failure, and it is indistinguishable from a bug in
+  the state machine without this. The description is system-composed and can name the component that
+  stopped us; it stays on the device like the rest of the log. Up to five records are read,
+  which reaches back further than this section's own two-run retention — Android keeps that
+  history independently — so a shared report can describe endings older than the log's two
+  runs. Deliberate, since the failures worth diagnosing happen once a week or less, and
+  disclosed in `docs/PRIVACY.md` rather than left to contradict the retention promise.
 - Build, device, and Android version.
 
 **Entries carry real timestamps** (maintainer, 2026-08-11). Times are diagnostic, not decorative:

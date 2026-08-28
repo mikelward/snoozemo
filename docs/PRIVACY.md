@@ -191,6 +191,16 @@ that fix claimed to be, whether the anchor's Wi-Fi was still connected as a yes 
 the app, Android version, and device model. Entries carry real times, because *when*
 something fired is usually the question.
 
+It also records **why Snoozemo's previous runs ended** — Android's own reason (a crash, an
+out-of-memory reclaim, an app update, the system stopping it), the exit code or signal the
+process ended on, how important Android considered Snoozemo at that moment, and when it
+happened —
+together with **when Snoozemo was installed and last updated**. This is the app's own account of itself, not anything about you: a snooze
+that never ended because Android killed the app looks identical, from the inside, to one
+that never ended because of a bug, and without this there is nothing afterwards to tell
+those apart. Android's reason text is written by the system and can name the component
+that stopped Snoozemo — for an app update, the installer.
+
 **What it never records**, as a hard rule with its own automated test: your coordinates,
 the name or identifier of any Wi-Fi network, and any place name you typed. The distance
 number says whether the departure test worked; where you were is not in the log at all.
@@ -200,6 +210,15 @@ apps cannot read, Android's backup does not copy, and Android may clear on its o
 storage pressure. Two runs of the app are kept — the current one and the one before it —
 except that a run that ended in a crash is kept in place of the previous run until it is
 dealt with, so the evidence of a crash is not overwritten by a restart.
+
+One thing reaches back further than those two runs, and is worth stating rather than
+leaving to be inferred: the exit records above are read from **Android's own history of
+how Snoozemo's processes ended**, which the system keeps independently of this log. Up to
+five of them are copied in at each start, so a shared report can describe process endings
+older than the two runs of the log itself. They are the app's account of itself — a
+reason, a priority, an exit code and a time, with nothing about you — and reaching back is
+the point: the failures worth diagnosing here happen once a week or less, and one record
+would usually cover only a restart nobody was asking about.
 
 **It is on by default**, because the failures worth diagnosing happen once and without
 warning — a log that starts off guarantees the first one is the one nobody captured.

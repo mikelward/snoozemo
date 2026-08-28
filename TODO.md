@@ -2669,6 +2669,39 @@ that can only be settled on a real device, ordered by risk.
 
 ## Deferred
 
+- **Align the four app repos' debug loggers.** `ProcessExitReasons.kt` landed
+  here as a deliberate copy of Type Launcher's — same file name, function
+  names, log-line format and field names — so the logs read identically and a
+  future unification is a lift-and-share rather than a reconciliation. The
+  loggers underneath differ, and this is the inventory so whoever takes it on
+  does not have to rediscover them:
+  - **Type Launcher** has a *default-safe type rule* (`LogValue`): a log call is
+    a literal format string plus arguments, and an argument reaches the
+    Crashlytics breadcrumb mirror only if its type cannot name anything of the
+    user's, with `safe(...)` / `sensitive(...)` overriding per value.
+    `SnoozeDebugLog` takes a pre-built `String`, so redaction here is whatever
+    the call site remembered to do.
+  - **`SnoozeDebugLog` has no off-device mirror at all.** Crash reporting
+    deliberately attaches no breadcrumbs and no custom keys (`SPEC.md` §12), so
+    there is nothing to withhold from and the port invents no redaction
+    wrapper. That is why the exit `description` and the timestamps are logged
+    in full here but marked `sensitive(...)` in Type Launcher: same values,
+    different channel.
+  - **All three log by default; only the off-switch differs.** `SnoozeDebugLog`
+    records from first launch (`SPEC.md` §4.6, `docs/PRIVACY.md`: the failures
+    worth diagnosing happen once and without warning, so a log that starts off
+    guarantees the first one is the one nobody captured), and turning it off
+    both stops recording and deletes what it kept. Type Launcher and clothescast
+    log unconditionally with no user switch at all.
+  - clothescast's `DiagLog` and Simmo's logger differ again.
+
+  Unifying them is a bigger piece of work than any one port and was explicitly
+  out of scope for the ports (maintainer, 2026-08-28: *"the loggers should be
+  aligned, that's likely a bigger thing, but don't diverge them further"*). The
+  floor stays per-repo regardless: uniformity must not loosen any repo's
+  privacy rules.
+
+
 Nothing here is scheduled; each is a sequel that follows from something already built
 (`SPEC.md` §14).
 

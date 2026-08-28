@@ -11,6 +11,7 @@ import app.snoozemo.snooze.ActiveSnoozeStore
 import app.snoozemo.snooze.CapAlarm
 import app.snoozemo.snooze.DebugLogging
 import app.snoozemo.snooze.EndSheetStore
+import app.snoozemo.snooze.logRecentProcessExitsInBackground
 import app.snoozemo.snooze.SnoozeNotifications
 import app.snoozemo.snooze.SnoozeService
 
@@ -57,6 +58,15 @@ class SnoozemoApplication : Application(), androidx.work.Configuration.Provider 
         // recorded before the sink registers still reach the file, since the
         // sink writes the whole buffer on the next entry after.
         DebugLogging.install(this)
+        // Why the previous processes ended (SPEC.md §4.6). Queued on the debug
+        // log's own installation worker, which is both off this thread — the
+        // query is an ActivityManager binder call and nothing diagnostic may
+        // sit in front of a cold tile tap — and ordered behind the stored
+        // setting being applied to the recording gate. install() only enqueues
+        // that, so a collector on its own thread could otherwise record while
+        // the user's setting says Off. Must stay after install() for the FIFO
+        // ordering to mean anything.
+        logRecentProcessExitsInBackground(this)
         // Crash reporting's own gate (SPEC.md §12). Spawns its own worker like
         // the line above, so the cold tap never waits on the preferences read
         // — and it is what makes the opt-out real: the play manifest starts
