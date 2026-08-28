@@ -2961,6 +2961,28 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
+- **A crash captured while reporting was off is discarded on *every* off→on
+  crossing, not only the very first** (autopilot, 2026-08-28). A period spent
+  switched off is a period the user did not agree to, whether they had never
+  answered or had answered no, so both are treated alike. The alternative —
+  discarding only on a first-ever opt-in — would let a report captured during a
+  deliberate opt-out be released by a later re-opt-in. Reversible: one
+  condition in `CrashReporting.setEnabled`, and the cost of being wrong either
+  way is at most a lost report, never a sent one.
+
+- **The discard runs ahead of the enable, not after it** (autopilot,
+  2026-08-28). A process death between the two then leaves the reports gone
+  rather than sent, matching the asymmetry the off path already argues for.
+  Reversible, and pinned by `turning it on discards what was captured while it
+  was off, before enabling`.
+
+- **Not done, deliberately: never *storing* pre-consent crashes.** The
+  maintainer's ask was "don't send (and maybe don't store)". This discards
+  them; the reporting library still writes them to disk meanwhile, because
+  disabling collection does not uninstall its uncaught-exception handler. Never
+  storing them means not initializing Crashlytics until consent exists — a
+  startup-ordering change worth costing out on its own.
+
 - **The debug log's type rule landed with no mirror behind it** (autopilot,
   2026-08-28). `LogValue.kt` is ported from Type Launcher and `SnoozeDebugLog`
   now takes a format string plus arguments, but nothing is sent off the device —

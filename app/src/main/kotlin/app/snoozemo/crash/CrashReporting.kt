@@ -83,6 +83,15 @@ internal object CrashReporting {
         { context, enabled -> CrashReporter.apply(context, enabled) }
 
     /**
+     * The pre-opt-in discard, swappable for the same reason as
+     * [applyToReporter]: its correctness is its position relative to the
+     * switch, which only an observed ordering can pin.
+     */
+    @VisibleForTesting
+    internal var discardPendingReports: (Context) -> Unit =
+        { context -> CrashReporter.discardPending(context) }
+
+    /**
      * Whether this build has a reporter to offer at all — false on `direct`
      * always, and on a `play` build made without a `google-services.json`
      * (`docs/crashlytics.md`). Settings draws no row when this is false: a
@@ -169,6 +178,22 @@ internal object CrashReporting {
         runCatching {
             worker.execute {
                 val store = CrashReportingStore(app)
+                // Turning on from off discards first. Collection-off stops the
+                // reporter *sending*, not capturing, so anything it caught
+                // while the user had not agreed is on disk as unsent, and
+                // enabling would release it. Ahead of the switch, so a process
+                // death between the two leaves the reports gone rather than
+                // sent — the safe direction, and the same one the off path
+                // takes (Codex, ClothesCast PR #1161, against the same
+                // design).
+                //
+                // Every off→on crossing, not only the very first: a period
+                // spent switched off is a period the user did not agree to,
+                // whether they had never answered or had answered no.
+                // Re-applying an on that was already on discards nothing,
+                // which is what keeps this off the reports the feature exists
+                // to collect.
+                if (enabled && !store.isEnabled()) discardPendingReports(app)
                 // The off half of the ordering above. Deliberately ahead of
                 // the store write, and deliberately not conditional on it:
                 // stopping collection is the part that must survive a process

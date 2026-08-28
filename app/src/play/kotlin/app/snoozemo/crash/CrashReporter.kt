@@ -63,6 +63,27 @@ internal object CrashReporter {
     }
 
     /**
+     * Drops whatever the reporter is holding, without touching the collection
+     * switch.
+     *
+     * For the moment before an opt-in takes effect. Starting Crashlytics with
+     * collection off stops it *sending*, not capturing — the uncaught-exception
+     * handler is installed either way — so a crash while reporting is off is
+     * written to disk and sits there unsent. Enabling would then release it:
+     * a report from a period the user had not agreed to, sent because they
+     * later agreed to something else (Codex, ClothesCast PR #1161, against the
+     * same design).
+     *
+     * The disable path deletes as part of [apply]; this is the same deletion
+     * on its own, for the enable path where there is no collection change to
+     * hang it off.
+     */
+    fun discardPending(context: Context) {
+        if (!isAvailable(context)) return
+        FirebaseCrashlytics.getInstance().deleteUnsentReports()
+    }
+
+    /**
      * Blocks until Crashlytics' own collection override has actually reached
      * disk.
      *

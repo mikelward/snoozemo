@@ -34,11 +34,19 @@ class CrashReportingOrderingTest {
     private val applications = mutableListOf<Pair<Boolean, Boolean>>()
     private lateinit var realApply: (Context, Boolean) -> ReporterOutcome
 
+    /** Recorded in the same list, so a discard's position among the applies is visible. */
+    private val steps = mutableListOf<String>()
+    private lateinit var realDiscard: (Context) -> Unit
+
     @Before
     fun recordApplications() {
         realApply = CrashReporting.applyToReporter
+        realDiscard = CrashReporting.discardPendingReports
         applications.clear()
+        steps.clear()
+        CrashReporting.discardPendingReports = { steps += "discard" }
         CrashReporting.applyToReporter = { ctx, enabled ->
+            steps += "apply=$enabled"
             // The store is read *inside* the hook, so the recording captures
             // the interleaving rather than the end state — which is the whole
             // question here.
@@ -50,7 +58,53 @@ class CrashReportingOrderingTest {
     @After
     fun restore() {
         CrashReporting.applyToReporter = realApply
+        CrashReporting.discardPendingReports = realDiscard
         CrashReportingStore(context).setEnabled(true)
+    }
+
+    @Test
+    fun `turning it on discards what was captured while it was off, before enabling`() {
+        // Collection-off stops the reporter sending, not capturing: the
+        // uncaught-exception handler is installed either way, so a crash while
+        // reporting was off sits on disk unsent. Enabling without discarding
+        // first releases it — a report from a period the user had not agreed
+        // to (Codex, ClothesCast PR #1161, against the same design).
+        //
+        // The discard is asserted *before* the enable for the same reason the
+        // off path applies before it stores: a process death between the two
+        // must leave the reports gone rather than sent.
+        CrashReportingStore(context).setEnabled(false)
+        steps.clear()
+
+        setEnabledAndWait(true)
+
+        assertEquals(listOf("discard", "apply=true"), steps)
+    }
+
+    @Test
+    fun `re-applying an on that was already on discards nothing`() {
+        // Otherwise this would delete the reports the feature exists to
+        // collect, every time the switch was touched.
+        CrashReportingStore(context).setEnabled(true)
+        steps.clear()
+
+        setEnabledAndWait(true)
+
+        assertEquals(listOf("apply=true"), steps)
+    }
+
+    @Test
+    fun `turning it off discards through the disable, not separately`() {
+        // The off path's delete already lives inside CrashReporter.apply, and
+        // has to: it is sequenced with the durable flush of the collection
+        // override. A second discard here would be redundant, and hanging it
+        // ahead of the disable would undo that ordering.
+        CrashReportingStore(context).setEnabled(true)
+        steps.clear()
+
+        setEnabledAndWait(false)
+
+        assertEquals(listOf("apply=false"), steps)
     }
 
     private fun setEnabledAndWait(enabled: Boolean) {

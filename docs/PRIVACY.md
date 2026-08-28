@@ -64,8 +64,9 @@ could attach it. A crash report answers *did Snoozemo break, and where in the co
 
 **It is off until you turn it on**: Settings → *Crash reports*. Nothing is sent before you
 do. If the app crashes while it is off, the reporting library still writes the report to
-your phone — it is simply never sent. Turning the switch back off stops anything further
-being sent and deletes any report already waiting to go.
+your phone — it is never sent, and it is discarded when you turn the switch on, rather
+than being released. Turning the switch back off likewise stops anything further being
+sent and deletes any report already waiting to go.
 
 **The version distributed outside Google Play has no crash reporting at all** — no switch,
 because there is nothing to switch. It cannot open a network connection.
