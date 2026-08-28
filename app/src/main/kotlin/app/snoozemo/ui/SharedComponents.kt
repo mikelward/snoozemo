@@ -551,8 +551,8 @@ internal fun DebugLogRow(
 }
 
 /**
- * Crash reporting's on/off switch (SPEC.md §12): on by default, and the one
- * place in the app where the user can stop something leaving the phone.
+ * Crash reporting's on/off switch (SPEC.md §12): off until turned on, and the
+ * one place in the app where the user agrees to something leaving the phone.
  *
  * Drawn only when there is a reporter behind it — the `play` flavor, built
  * with a Firebase config (`docs/crashlytics.md`). `SettingsScreen` decides

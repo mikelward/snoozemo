@@ -1,7 +1,7 @@
 # Crash reporting
 
 Snoozemo's `play` builds report crashes through **Firebase Crashlytics**, behind a
-switch in Settings that is **on by default** (`SPEC.md` §12). The `direct` flavor has
+switch in Settings that is **off until the user turns it on** (`SPEC.md` §12). The `direct` flavor has
 no reporter at all: it carries no Play Services dependency and declares no `INTERNET`
 permission, so that build cannot send anything anywhere (`SPEC.md` §3.4).
 
