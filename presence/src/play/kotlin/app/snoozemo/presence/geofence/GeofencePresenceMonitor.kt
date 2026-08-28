@@ -655,7 +655,7 @@ class GeofencePresenceMonitor(
                 client.addGeofences(request, transitionIntent(appContext))
                     .addOnSuccessListener {
                         if (registrationAttempt.get() != attempt) return@addOnSuccessListener
-                        SnoozeDebugLog.event("geofence registered; radius=${anchor.radiusM}m")
+                        SnoozeDebugLog.event("geofence registered; radius=%sm", anchor.radiusM)
                         // Actual recovery is the one thing that clears the
                         // platform level: a registration that just succeeded
                         // is the fence provably watching again, and a level
@@ -1034,7 +1034,7 @@ class GeofencePresenceMonitor(
                         )
                     }
             }.onFailure {
-                SnoozeDebugLog.warning("geofence removal failed; it is inert without a snooze", it)
+                SnoozeDebugLog.failure(it, "geofence removal failed; it is inert without a snooze")
             }
         }
     }

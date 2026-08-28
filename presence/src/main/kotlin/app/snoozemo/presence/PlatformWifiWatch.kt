@@ -90,7 +90,7 @@ internal class PlatformWifiWatch(
             )
             registered = true
         }.onFailure {
-            SnoozeDebugLog.warning("Wi-Fi watch registration refused; treating as loss", it)
+            SnoozeDebugLog.failure(it, "Wi-Fi watch registration refused; treating as loss")
             onSignal(PresenceSignal.AnchorWifiLost(readElapsedRealtimeMs()))
         }
         if (registered) {
@@ -127,7 +127,7 @@ internal class PlatformWifiWatch(
             // registration failure; either way the outcome is the same
             // fail-open loss.
             val read = runCatching { anyWifiConnected() }
-                .onFailure { SnoozeDebugLog.warning("Wi-Fi initial state read refused; treating as loss", it) }
+                .onFailure { SnoozeDebugLog.failure(it, "Wi-Fi initial state read refused; treating as loss") }
             // A refused read joins the same fail-open path as a genuine
             // disconnect — through the tracker, not straight to `onSignal` —
             // so its state stays the source of truth for the async callback
@@ -176,7 +176,7 @@ internal class PlatformWifiWatch(
         }.onFailure {
             // Unregistering an already-gone callback is a lifecycle wrinkle,
             // not a leak the process can act on; logged, never swallowed.
-            SnoozeDebugLog.warning("Wi-Fi watch unregister failed", it)
+            SnoozeDebugLog.failure(it, "Wi-Fi watch unregister failed")
         }
     }
 }

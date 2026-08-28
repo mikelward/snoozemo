@@ -90,7 +90,7 @@ internal object SnoozeBackstop {
      */
     private fun rejectScheduling(context: Context, cause: Throwable) {
         Log.e(TAG, "Scheduling the periodic backstop failed; the cap alarm still bounds the snooze.", cause)
-        SnoozeDebugLog.warning("backstop schedule refused; the cap still bounds the snooze", cause)
+        SnoozeDebugLog.failure(cause, "backstop schedule refused; the cap still bounds the snooze")
         val prev = scheduleRetriesLeft.getAndUpdate { if (it > 0) it - 1 else 0 }
         if (prev > 0) {
             if (!CapAlarm.armPresenceRetry(context, RETRY_MS, attemptsLeft = prev - 1)) {

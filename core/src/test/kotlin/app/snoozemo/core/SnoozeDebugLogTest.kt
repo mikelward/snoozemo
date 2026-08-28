@@ -46,19 +46,28 @@ class SnoozeDebugLogTest {
             placeName = "Cinema",
         )
 
-        val line = snooze.logSummary()
+        val summary = snooze.logSummary()
 
-        assertFalse("the SSID is banned from the log", line.contains("ExampleWifi"))
-        assertFalse("the BSSID is banned from the log", line.contains("02:00"))
-        assertFalse("the place name is banned from the log", line.contains("Cinema"))
-        assertFalse("latitude is banned from the log", line.contains("12.345678"))
-        assertFalse("longitude is banned from the log", line.contains("87.654321"))
-        // What the summary is *for* still survives the floor: the times, the
-        // mode, what the anchor has, and the fix's accuracy in meters.
-        assertTrue(line.contains("2026-01-01T12:00:00Z"))
-        assertTrue(line.contains("FULL"))
-        assertTrue(line.contains("ssid captured"))
-        assertTrue(line.contains("accuracy=12.5m"))
+        // The floor holds in both renderings — it is absolute, not a matter of
+        // which audience is reading.
+        for ((audience, line) in listOf("on device" to summary.full, "off device" to summary.mirrored)) {
+            assertFalse("$audience: the SSID is banned", line.contains("ExampleWifi"))
+            assertFalse("$audience: the BSSID is banned", line.contains("02:00"))
+            assertFalse("$audience: the place name is banned", line.contains("Cinema"))
+            assertFalse("$audience: latitude is banned", line.contains("12.345678"))
+            assertFalse("$audience: longitude is banned", line.contains("87.654321"))
+            // What the summary is *for* survives either way: the mode, what
+            // the anchor has, and the fix's accuracy in meters.
+            assertTrue("$audience: the mode survives", line.contains("FULL"))
+            assertTrue("$audience: the anchor's shape survives", line.contains("ssid captured"))
+            assertTrue("$audience: the accuracy survives", line.contains("accuracy=12.5m"))
+        }
+
+        // The times are sanctioned on device and are the diagnostic there. Off
+        // device they say when someone was asleep or in a cinema, which the
+        // *Privacy* rule names as the user's — so only the shape travels.
+        assertTrue("the times are kept on device", summary.full.contains("2026-01-01T12:00:00Z"))
+        assertFalse("and withheld off it", summary.mirrored.contains("2026-01-01T12:00:00Z"))
     }
 
     @Test
@@ -69,7 +78,7 @@ class SnoozeDebugLogTest {
         val cause = IllegalStateException("ssid=ExampleWifi lat=12.345678")
         val thrown = RuntimeException("place=Home", cause)
 
-        SnoozeDebugLog.warning("capture failed", thrown)
+        SnoozeDebugLog.failure(thrown, "capture failed")
 
         val entry = SnoozeDebugLog.snapshot().single()
         assertFalse(entry.contains("ExampleWifi"))
@@ -77,6 +86,22 @@ class SnoozeDebugLogTest {
         assertFalse(entry.contains("Home"))
         assertTrue("the type is the diagnostic", entry.contains("java.lang.RuntimeException"))
         assertTrue("the cause chain survives", entry.contains("Caused by: java.lang.IllegalStateException"))
+    }
+
+    @Test
+    fun `a throwable handed to warning is rerouted without re-rendering its message`() {
+        // warning() reroutes to failure() rather than letting the exception
+        // bind as a formatting argument. Leaving it in the arguments would put
+        // it back: with no `%s` to fill it renders through toString(), which
+        // carries the message typesAndFrames() exists to exclude.
+        val thrown = IllegalStateException("ssid=ExampleWifi")
+
+        SnoozeDebugLog.warning("wifi callback refused", thrown)
+
+        val entry = SnoozeDebugLog.snapshot().single()
+        assertFalse("the message must not come back through toString()", entry.contains("ExampleWifi"))
+        assertTrue("but the type still does", entry.contains("java.lang.IllegalStateException"))
+        assertTrue("and the mistake is named", entry.contains("use failure()"))
     }
 
     // --- recording mechanics ---
@@ -122,7 +147,7 @@ class SnoozeDebugLogTest {
         val b = RuntimeException("b", a)
         a.initCause(b)
 
-        SnoozeDebugLog.warning("cycle", a)
+        SnoozeDebugLog.failure(a, "cycle")
 
         // Reaching the assertion is the test; a cycle would never get here.
         assertEquals(1, SnoozeDebugLog.snapshot().size)

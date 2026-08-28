@@ -4,6 +4,7 @@ import android.app.NotificationManager
 import android.content.Intent
 import app.snoozemo.R
 import app.snoozemo.core.Anchor
+import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenOutcome
 import app.snoozemo.ui.MainActivity
@@ -55,6 +56,22 @@ class SnoozeServiceArmCaptureTest {
             0,
             startId,
         )
+    }
+
+    @Test
+    fun `the state transition keeps the snooze summary separated from the state`() {
+        // Converting this line to format-plus-arguments dropped the "; " and
+        // ran the two together — `state → ARMINGsnooze(...)` (Codex, PR #129).
+        // It is the first line anyone reads in a debug report, so an ambiguous
+        // one costs exactly the diagnostic the log exists for.
+        SnoozeDebugLog.clearForTest()
+
+        startService(SnoozeService.ACTION_ARM)
+
+        val withSummary = SnoozeDebugLog.snapshot()
+            .filter { it.contains("state → ") && it.contains("snooze(") }
+        assertTrue("no transition carried a summary to check", withSummary.isNotEmpty())
+        assertTrue(withSummary.toString(), withSummary.all { it.contains("; snooze(") })
     }
 
     @Test

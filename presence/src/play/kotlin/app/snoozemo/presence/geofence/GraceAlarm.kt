@@ -79,7 +79,7 @@ internal object GraceAlarm {
      * alarm.
      */
     private fun rejectArming(context: Context, deadlineElapsedMs: Long?, cause: Throwable) {
-        SnoozeDebugLog.warning("grace alarm refused", cause)
+        SnoozeDebugLog.failure(cause, "grace alarm refused")
         // A failed cancel needs no ladder: an alarm left standing outlives
         // its reason, but `Presence.graceElapsed` already treats a stale
         // firing as a no-op — the same reasoning that lets the deadline

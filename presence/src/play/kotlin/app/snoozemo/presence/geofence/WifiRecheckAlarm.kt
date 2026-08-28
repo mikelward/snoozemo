@@ -94,7 +94,7 @@ internal object WifiRecheckAlarm {
                 SystemClock.elapsedRealtime() + PERIOD.toMillis(),
                 pendingIntent(context),
             )
-            SnoozeDebugLog.event("Wi-Fi recheck armed: ${PERIOD.toMinutes()} min")
+            SnoozeDebugLog.event("Wi-Fi recheck armed: %s min", PERIOD.toMinutes())
         }.onFailure {
             // No retry ladder, deliberately, and this is the difference
             // between this alarm and the grace one: a refused grace alarm
@@ -103,7 +103,7 @@ internal object WifiRecheckAlarm {
             // then the cap — layers that are still standing. Said, not
             // swallowed: what the user loses is departure latency, which is
             // exactly what a stuck snooze's report needs to show.
-            SnoozeDebugLog.warning("Wi-Fi recheck refused; the backstop and the cap still bound it", it)
+            SnoozeDebugLog.failure(it, "Wi-Fi recheck refused; the backstop and the cap still bound it")
         }
     }
 

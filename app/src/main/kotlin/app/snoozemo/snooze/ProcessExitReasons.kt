@@ -58,7 +58,7 @@ internal fun logRecentProcessExits(context: Context) {
         // A denial or a dead system_server leaves us no worse off than before
         // this existed, so report and return rather than letting the failure
         // escape into startup — which on this app is the arm path's neighbour.
-        SnoozeDebugLog.warning("processExits query failed", e)
+        SnoozeDebugLog.failure(e, "processExits query failed")
         return
     }
     if (exits.isEmpty()) {
@@ -101,14 +101,14 @@ private fun logOwnPackageTimestamps(context: Context) {
                 "firstInstallTime=${info.firstInstallTime}",
         )
     } catch (e: PackageManager.NameNotFoundException) {
-        SnoozeDebugLog.warning("ownPackage query failed", e)
+        SnoozeDebugLog.failure(e, "ownPackage query failed")
     } catch (e: RuntimeException) {
         // The lookup is a binder call, so it can also fail as a RuntimeException
         // — a dead system_server mid-restart being the realistic case, which is
         // exactly the sort of moment this diagnostic is read about. Caught for
         // the same reason as above: this is the optional half and must not take
         // the exit records down with it.
-        SnoozeDebugLog.warning("ownPackage query failed", e)
+        SnoozeDebugLog.failure(e, "ownPackage query failed")
     }
 }
 
@@ -149,13 +149,13 @@ internal fun logRecentProcessExitsInBackground(context: Context) {
             // condition from the uncaught-exception handler and from Android's
             // own exit accounting — the very accounting this file reads — while
             // leaving the process running compromised (Codex, PR #125).
-            runCatching { SnoozeDebugLog.warning("processExits worker hit a fatal error", e) }
+            runCatching { SnoozeDebugLog.failure(e, "processExits worker hit a fatal error") }
             throw e
         } catch (e: Exception) {
             // Nothing above this on the worker will report it, and a silently
             // missing section reads exactly like a query that was never wired
             // up — which is the state this whole file exists to end.
-            runCatching { SnoozeDebugLog.warning("processExits worker failed", e) }
+            runCatching { SnoozeDebugLog.failure(e, "processExits worker failed") }
         }
     }
 }

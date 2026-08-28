@@ -75,7 +75,7 @@ internal fun LicensesScreen(
                 // also not worth logging: the failure is fully described by
                 // "nothing here can open a web link", and that is what the
                 // reader needs.
-                SnoozeDebugLog.warning("license link: no activity to open it", exception)
+                SnoozeDebugLog.failure(exception, "license link: no activity to open it")
                 false
             }
         },

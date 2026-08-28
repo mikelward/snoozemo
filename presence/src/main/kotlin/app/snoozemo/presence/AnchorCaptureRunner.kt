@@ -125,7 +125,7 @@ class AnchorCaptureRunner(context: Context) {
                 // documented case). Settled as no Wi-Fi rather than left to the
                 // ceiling: nothing will answer, and waiting only delays the
                 // armed record.
-                SnoozeDebugLog.warning("anchor capture: wifi callback refused; no ssid", e)
+                SnoozeDebugLog.failure(e, "anchor capture: wifi callback refused; no ssid")
                 settle(capture.onNoWifi())
             }
         }
@@ -179,7 +179,7 @@ class AnchorCaptureRunner(context: Context) {
                     }
                 }
             } catch (e: SecurityException) {
-                SnoozeDebugLog.warning("anchor capture: last known fix refused", e)
+                SnoozeDebugLog.failure(e, "anchor capture: last known fix refused")
             }
             // Settled by the seed (or by everything else already having
             // answered): ten seconds of updates the capture would ignore is
@@ -200,10 +200,10 @@ class AnchorCaptureRunner(context: Context) {
                 locationRequested = true
             } catch (e: SecurityException) {
                 // Permission raced away between the check and the request.
-                SnoozeDebugLog.warning("anchor capture: location request refused; no fix", e)
+                SnoozeDebugLog.failure(e, "anchor capture: location request refused; no fix")
                 settle(capture.onNoFix())
             } catch (e: RuntimeException) {
-                SnoozeDebugLog.warning("anchor capture: location request failed; no fix", e)
+                SnoozeDebugLog.failure(e, "anchor capture: location request failed; no fix")
                 settle(capture.onNoFix())
             }
         }
@@ -233,14 +233,14 @@ class AnchorCaptureRunner(context: Context) {
                 wifiRegistered = false
                 runCatching { connectivity?.unregisterNetworkCallback(networkCallback) }
                     .onFailure {
-                        SnoozeDebugLog.warning("anchor capture: wifi callback would not unregister", it)
+                        SnoozeDebugLog.failure(it, "anchor capture: wifi callback would not unregister")
                     }
             }
             if (locationRequested) {
                 locationRequested = false
                 runCatching { locationManager?.removeUpdates(locationListener) }
                     .onFailure {
-                        SnoozeDebugLog.warning("anchor capture: location updates would not stop", it)
+                        SnoozeDebugLog.failure(it, "anchor capture: location updates would not stop")
                     }
             }
         }

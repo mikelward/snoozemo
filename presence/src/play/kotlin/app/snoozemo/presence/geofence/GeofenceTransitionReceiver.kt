@@ -35,7 +35,7 @@ class GeofenceTransitionReceiver : BroadcastReceiver() {
                     GeofenceObservation.Unavailable(SystemClock.elapsedRealtime()),
                 )
             } else {
-                SnoozeDebugLog.warning("geofence event carried error ${event.errorCode}")
+                SnoozeDebugLog.warning("geofence event carried error %s", event.errorCode)
             }
             return
         }

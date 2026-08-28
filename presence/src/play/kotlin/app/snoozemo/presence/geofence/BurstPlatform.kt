@@ -100,11 +100,11 @@ internal class PlatformFixRequester(context: Context) : FixRequester {
         } catch (e: SecurityException) {
             // The grant went between the check and the call — the same fatal
             // outcome as the check above, just later.
-            SnoozeDebugLog.warning("checking fix: request refused, permission gone", e)
+            SnoozeDebugLog.failure(e, "checking fix: request refused, permission gone")
             onOutcome(FixOutcome.PermissionLost)
             return NOTHING_TO_CANCEL
         } catch (e: RuntimeException) {
-            SnoozeDebugLog.warning("checking fix: request failed", e)
+            SnoozeDebugLog.failure(e, "checking fix: request failed")
             onOutcome(FixOutcome.NothingRecoverable)
             return NOTHING_TO_CANCEL
         }
