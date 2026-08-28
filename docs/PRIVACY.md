@@ -211,15 +211,6 @@ storage pressure. Two runs of the app are kept — the current one and the one b
 except that a run that ended in a crash is kept in place of the previous run until it is
 dealt with, so the evidence of a crash is not overwritten by a restart.
 
-One thing reaches back further than those two runs, and is worth stating rather than
-leaving to be inferred: the exit records above are read from **Android's own history of
-how Snoozemo's processes ended**, which the system keeps independently of this log. Up to
-five of them are copied in at each start, so a shared report can describe process endings
-older than the two runs of the log itself. They are the app's account of itself — a
-reason, a priority, an exit code and a time, with nothing about you — and reaching back is
-the point: the failures worth diagnosing here happen once a week or less, and one record
-would usually cover only a restart nobody was asking about.
-
 **It is on by default**, because the failures worth diagnosing happen once and without
 warning — a log that starts off guarantees the first one is the one nobody captured.
 **Turning it off deletes everything the log kept, immediately**, including an unshared

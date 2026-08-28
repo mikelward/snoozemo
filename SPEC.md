@@ -768,11 +768,7 @@ happened:
   log simply restarting with no explanation. A snooze that never ended because the process was killed
   and nothing restored the watch is principle 1's failure, and it is indistinguishable from a bug in
   the state machine without this. The description is system-composed and can name the component that
-  stopped us; it stays on the device like the rest of the log. Up to five records are read,
-  which reaches back further than this section's own two-run retention — Android keeps that
-  history independently — so a shared report can describe endings older than the log's two
-  runs. Deliberate, since the failures worth diagnosing happen once a week or less, and
-  disclosed in `docs/PRIVACY.md` rather than left to contradict the retention promise.
+  stopped us; it stays on the device like the rest of the log.
 - Build, device, and Android version.
 
 **Entries carry real timestamps** (maintainer, 2026-08-11). Times are diagnostic, not decorative:
