@@ -2017,9 +2017,18 @@ the point is that every other line of the app is worthless if it isn't true.
             task and record the failure in the debug log only, so it is at least
             reconstructible, without adding a fourth thing the Settings row can say.
 
+      - [ ] **Decide whether a Settings switch is enough, or Snoozemo needs a consent
+            surface** (2026-08-28). Crash reporting now defaults off (`SPEC.md` §12), so the
+            *absence* of collection is correct. But a switch the user has to go looking for
+            is not the same as having been asked, which is what explicit consent means.
+            Type Launcher has a consent card for this; Snoozemo has only the Settings row.
+            Cost of adding one: a surface in front of a user who opened the app to snooze.
+            Cost of not: reporting stays off for almost everyone, so crash visibility is
+            near zero in practice.
+
       - [ ] **Decide what the off switch means — maintainer's impression recorded, not yet
             confirmed** (2026-08-25). The leaning: off means **no crash reports** — the
-            feature, not the network — with defaults staying on for reporting and Play
+            feature, not the network — with defaults staying on for Play
             in-app updates, and `INTERNET` not treated as a problem in itself, since most
             Play apps hold it and defending its absence costs the product without buying the
             user anything. Written down as the working direction; **confirm before any of it

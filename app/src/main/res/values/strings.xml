@@ -103,7 +103,7 @@
     <string name="setup_debug_log_save_failed">Couldn\'t save this setting</string>
     <string name="setup_debug_log_cleanup_failed">Off, but some saved files couldn\'t be deleted</string>
     <!--
-      Crash reporting's switch (SPEC.md §12): on by default, `play` flavor
+      Crash reporting's switch (SPEC.md §12): off until turned on, `play` flavor
       only, and absent entirely on a build with no reporter behind it. The
       description says what leaves the phone, because that is the one thing
       this row is asking the user to agree to; the debug-log row above says

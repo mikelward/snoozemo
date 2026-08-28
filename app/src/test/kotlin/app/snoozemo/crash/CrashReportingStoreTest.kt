@@ -13,12 +13,13 @@ class CrashReportingStoreTest {
     private val store get() = CrashReportingStore(ApplicationProvider.getApplicationContext())
 
     @Test
-    fun `crash reporting is on by default`() {
-        // SPEC.md §12's decision: a reporter that starts off guarantees the
-        // first crash — the one nobody saw coming — is the one nobody
-        // captured. The opt-out in Settings is what buys that default
-        // honestly.
-        assertTrue(store.isEnabled())
+    fun `crash reporting is off until the user turns it on`() {
+        // SPEC.md §12, reversed 2026-08-28: reporting leaves the device, so it
+        // waits for the user's explicit agreement, and an install that has
+        // never been asked has not given it. The manifest already starts
+        // Crashlytics with collection off; this is the other half — the stored
+        // default the app applies at startup.
+        assertFalse(store.isEnabled())
     }
 
     @Test

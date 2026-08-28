@@ -62,10 +62,10 @@ of the debug log described below. None of that is attached, and the app has no c
 could attach it. A crash report answers *did Snoozemo break, and where in the code* — not
 *where is this person*.
 
-**It is on by default**, because a crash that nobody reports is a crash that does not get
-fixed, and the alternative is asking every user to opt in to something they would have to
-understand first. **You can turn it off**: Settings → *Crash reports*. Turning it off stops
-anything further being sent and deletes any report already waiting to go.
+**It is off until you turn it on**: Settings → *Crash reports*. Nothing is sent before you
+do. If the app crashes while it is off, the reporting library still writes the report to
+your phone — it is simply never sent. Turning the switch back off stops anything further
+being sent and deletes any report already waiting to go.
 
 **The version distributed outside Google Play has no crash reporting at all** — no switch,
 because there is nothing to switch. It cannot open a network connection.

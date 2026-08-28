@@ -5,12 +5,11 @@ import android.content.Context
 /**
  * Remembers whether the user has left crash reporting on (`SPEC.md` §12).
  *
- * **Defaults to on**, which is the decision recorded in §12: a crash reporter
- * that starts off guarantees the first crash — the one nobody saw coming — is
- * the one nobody captured, and an opt-out the user can reach in Settings is
- * what buys that default honestly. Nothing here decides whether a reporter
- * exists to be turned on; that is the flavor's answer (`CrashReporter`), and
- * `direct` has none.
+ * **Defaults to off** (maintainer, 2026-08-28), reversing §12's original
+ * on-by-default decision: reporting leaves the device, so it waits for the
+ * user's explicit agreement. Nothing here decides whether a reporter exists to
+ * be turned on; that is the flavor's answer (`CrashReporter`), and `direct`
+ * has none.
  *
  * `SharedPreferences`, like the other one-key stores in this app — read while
  * deciding what to draw, so it must not cost a coroutine or a disk wait — and
@@ -22,7 +21,7 @@ internal class CrashReportingStore(context: Context) {
     private val prefs = context.applicationContext
         .getSharedPreferences(FILE_NAME, Context.MODE_PRIVATE)
 
-    fun isEnabled(): Boolean = prefs.getBoolean(KEY_ENABLED, true)
+    fun isEnabled(): Boolean = prefs.getBoolean(KEY_ENABLED, false)
 
     /**
      * Persists the choice, returning whether the write reached disk.

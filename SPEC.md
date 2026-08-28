@@ -2376,12 +2376,21 @@ doesn't mention shows up as a row with no rationale behind it.
     reporter nor `INTERNET` — "this build cannot open a network connection" stays literally
     true of one of the two flavors, auditable from its manifest, and an F-Droid build could
     not carry a proprietary reporter anyway. `DeclaredPermissionsTest` pins both directions.
-  - **On by default, with an opt-out in Settings**, as the bullet above specified. A reporter
-    that starts off guarantees the first crash — the unrepeatable one — is the one nobody
-    captured, which is the same argument §4.6 makes for the debug log. What makes the default
-    honest is that the switch is real: the `play` manifest starts Crashlytics with collection
-    **off**, and the app applies the stored choice at startup, so an install where the user
-    has opted out never begins collecting rather than collecting until told to stop.
+  - **Off until the user turns it on** (maintainer, 2026-08-28, across all four sibling
+    apps; reverses the on-by-default decision in the bullet above). Crash reporting sends
+    data off the device, and that needs the user's explicit agreement first — an install
+    that has never been asked has not given it. The original reasoning was that a reporter
+    starting off loses the first, unrepeatable crash; that is true and is not something the
+    app weighs against consent. §4.6's identical argument for the debug log is untouched,
+    since that log never leaves the phone.
+
+    The mechanism was already here: the `play` manifest starts Crashlytics with collection
+    **off** and the app applies the stored choice at startup. Only the stored default
+    changed — absent now reads as "not agreed".
+
+    Open, in `TODO.md`: whether a switch in Settings is enough, or Snoozemo needs a consent
+    surface like Type Launcher's card.
+
   - **Crashlytics without Firebase Analytics, for now.** The understanding this rests on
     is that Analytics is what brings the `AD_ID` permission in, and Play's "Advertising ID:
     not used" answer was judged worth more than the console's crash-free-users percentage.
