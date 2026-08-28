@@ -1040,6 +1040,59 @@ the point is that every other line of the app is worthless if it isn't true.
 
 `SPEC.md` §4.4 is explicitly provisional — treat its mockups as a starting point.
 
+- [ ] **Round the end-condition seed to 15 minutes on epoch millis, not 30 on the wall
+      clock.** Open question raised by the maintainer (2026-08-28), not yet decided.
+
+      `EndCondition.roundToHalfHour` rounds the seeded end time on the **local wall
+      clock**, and its stated reason is that a 30-minute grid over epoch millis only
+      lines up with the user's own :00 and :30 in zones whose offset is a whole half
+      hour — the three-quarter-hour zones break. That reason is correct, and it is what
+      forces the domain layer to resolve daylight-saving gaps and overlaps
+      (`zone.rules.getValidOffsets`, the fall-back test) for what is ultimately a
+      cosmetic nicety: a suggested time that reads as `2:30` rather than `2:17`.
+
+      A 15-minute grid appears to dissolve it. Measured against the JDK's tz database —
+      every zone's current offset plus its next four transitions — all 40 distinct
+      offsets are whole multiples of 15 minutes, and exactly four are not multiples of
+      30: `+05:45` (Nepal), `+08:45` (Eucla), `+12:45` and `+13:45` (Chatham). So a
+      15-minute grid laid over epoch millis lands on local :00/:15/:30/:45 in every
+      zone, and the rounding becomes a pure `Instant` → `Instant` operation with no
+      `ZoneId` argument at all.
+
+      What that would delete: the wall-clock round trip and the gap/overlap resolution
+      with its `getValidOffsets` candidate search. The sub-minute truncation goes too —
+      rounding millis to the nearest 900,000 handles `13:59:59.9` without a special
+      case. The floor/ceiling clamping is untouched.
+
+      What would **not** be deleted is the `seeds forward through a daylight-saving
+      fall-back` test (Codex on PR #127). A tap inside the repeated hour is a real
+      clock-change case whatever the rounding does, and what that test asserts — that
+      the user is offered a future time near the intended one, not a past or clamped
+      one — has to keep holding. Its expected seed changes with the grid; the test
+      itself is retargeted, not dropped.
+
+      What it would change for the user: seeds land on quarter hours instead of half
+      hours. `SEED_AHEAD` is one hour (`EndCondition.kt`, `SPEC.md` §4.4), and a
+      quarter-hour grid lands nearer to it than a half-hour one does — a tap at 13:12
+      would offer 14:15 rather than 14:00, three minutes off the intended hour instead
+      of twelve.
+
+      That cuts both ways, and the counter-argument is the stronger half (Codex on
+      PR #127). `STEP` stays 30 minutes, so a seed landing on `:15` or `:45` puts every
+      reachable time on that grid — 13:45, 14:15, 14:45 — and the user can no longer
+      `−`/`+` their way to 14:00 or 14:30 at all. Common meeting endpoints become
+      unreachable from a seed that a quarter-hour grid made *nearer* to the target.
+      Taking the change therefore means either accepting that, or moving `STEP` to 15
+      minutes and doubling the taps to cross an hour. Either way it is a visible change
+      to the sheet and so a product call.
+
+      The one caveat worth stating: 15-minute alignment is a property of the current tz
+      database, not a guarantee of it. No zone has used an offset off a 15-minute
+      boundary since 1979 — Kiritimati sat at `-10:40` until 1979-10-01, later than
+      Liberia's `-00:44:30`, which ended in 1972. If one ever did, the seed would be
+      cosmetically ragged there — never unsafe, since the cap is epoch arithmetic and
+      unaffected either way.
+
 - [x] **Split the permission-setup rows from the Arm/Release view** (maintainer, 2026-08-22).
       **Landed** (maintainer, 2026-08-23) as three screens rather than the two the placeholder
       above weighed: `MainScreen` (the tile-equivalent Arm/Release control, a banner for the one
