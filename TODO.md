@@ -2952,6 +2952,47 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
+- **The debug log's type rule landed with no mirror behind it** (autopilot,
+  2026-08-28). `LogValue.kt` is ported from Type Launcher and `SnoozeDebugLog`
+  now takes a format string plus arguments, but nothing is sent off the device —
+  only a file sink and logcat are registered. The alternative was to wait until
+  a Crashlytics sink was wanted and port both together. Chose to land the rule
+  first because the reverse order means a logger with no redaction is one line
+  from becoming an upload channel. Reversible: deleting `LogValue.kt` and taking
+  `event(message: String)` back is mechanical, and no behavior depends on it yet.
+
+  **What this does *not* claim: that adding the mirror is then a one-line
+  change.** An earlier draft of this entry said so, and a `MirrorSink` type was
+  built on that basis and then removed — a speculative off-device path with no
+  consumer, whose own correctness nobody could check against a real sink. What
+  the type rule buys is that the *arguments* are already classified when a
+  mirror is wanted; the mirror itself still has to decide everything outside the
+  arguments.
+
+- **A mirror needs its own decision about the timestamp prefix** (Codex, PR #129,
+  deferred). `render()` prefixes every entry with wall-clock local time, which no
+  argument redaction touches. On device that is the sanctioned diagnostic — an
+  inexact alarm landing outside a Doze window cannot be reconstructed without it.
+  Off device a state-transition line's timestamp says when someone was asleep or
+  in a cinema, which `AGENTS.md`'s *Privacy* rule names as the user's, so a
+  mirror would have to omit or coarsen it. Nothing to do while no mirror exists;
+  this is a required step of building one, not an open defect.
+
+- **`safe`, `sensitive` and the value classes are public, not internal**
+  (autopilot, 2026-08-28). Type Launcher is a single module, so `internal`
+  sufficed there; here the call sites are in `:app` and the rule lives in
+  `:core`, so the wrappers have to cross the boundary. `logArgumentMayLeaveDevice`
+  and `formatLogMessage` stay internal. The alternative — a `:core` facade that
+  re-exports them — buys nothing and adds a layer.
+
+- **Wiring a Crashlytics sink is NOT part of this and still needs a real
+  answer.** It contradicts two published statements: `AGENTS.md` says the crash
+  reporter "attaches no custom keys and no breadcrumbs at all", and
+  `docs/PRIVACY.md` says the debug log reaches nobody without an explicit
+  share. Turning breadcrumbs on changes what the Data Safety declaration must
+  say, which `AGENTS.md` puts with the maintainer whatever mode is in effect.
+  Autopilot did not guess this one.
+
 - **The sheet gate reads the snooze record without any guarantee the arm has landed**
   (2026-08-25, Codex on PR #118, declined for that change — and it corrects a claim made
   repeatedly while building it). `shouldOfferSheet` decides from `window.decorView.post`,

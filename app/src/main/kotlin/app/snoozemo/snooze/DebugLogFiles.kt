@@ -3,6 +3,7 @@ package app.snoozemo.snooze
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import app.snoozemo.core.safe
 import app.snoozemo.core.SnoozeDebugLog
 import java.io.File
 import java.util.concurrent.LinkedBlockingQueue
@@ -349,7 +350,7 @@ internal class DebugFileSink internal constructor(
                     // whole deadline before the marker lands, and the next
                     // start reads the crash as a routine kill.
                     writePending.set(true)
-                    SnoozeDebugLog.warning("uncaught exception on thread ${thread.name}", throwable)
+                    SnoozeDebugLog.failure(throwable, "uncaught exception on thread %s", safe(thread.name))
                     // Marker first, so a flush killed at the deadline still
                     // leaves the pin signal; the snapshot rides behind it.
                     val flush = worker.submit {
@@ -785,14 +786,14 @@ internal object DebugLogging {
             // The queue refusing work is the one case where the task simply
             // never runs; say so rather than leaving a silently absent section
             // that reads like a feature that was never wired up.
-            runCatching { SnoozeDebugLog.warning("debug-log worker refused a deferred task", e) }
+            runCatching { SnoozeDebugLog.failure(e, "debug-log worker refused a deferred task") }
         } catch (e: Error) {
             // Submission can fail fatally too — an OutOfMemoryError creating the
             // thread. Reporting that and returning normally would hide it from
             // the uncaught-exception handler and leave the process running
             // compromised, and the task body's own Error handling never gets to
             // run because the body never started (Codex, PR #125).
-            runCatching { SnoozeDebugLog.warning("debug-log worker submission hit a fatal error", e) }
+            runCatching { SnoozeDebugLog.failure(e, "debug-log worker submission hit a fatal error") }
             throw e
         }
     }

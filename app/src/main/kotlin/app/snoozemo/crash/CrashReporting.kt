@@ -124,7 +124,7 @@ internal object CrashReporting {
                 }
             }
         }.onFailure {
-            SnoozeDebugLog.warning("crash reporting setup was refused a worker", it)
+            SnoozeDebugLog.failure(it, "crash reporting setup was refused a worker")
         }
     }
 
@@ -194,7 +194,7 @@ internal object CrashReporting {
                 }
                 val preApplied: Boolean? = if (!enabled) false else null
                 val persisted = runCatching { store.setEnabled(enabled) }
-                    .onFailure { SnoozeDebugLog.warning("crash reporting setting could not be saved", it) }
+                    .onFailure { SnoozeDebugLog.failure(it, "crash reporting setting could not be saved") }
                     .getOrDefault(false)
                 lastSaveRefused = !persisted
                 val effective = store.isEnabled()
@@ -222,7 +222,7 @@ internal object CrashReporting {
         }.onFailure {
             // Never leave the tap unanswered: the screen is holding the user's
             // requested value and waiting for this callback to reconcile it.
-            SnoozeDebugLog.warning("crash reporting toggle was refused a worker", it)
+            SnoozeDebugLog.failure(it, "crash reporting toggle was refused a worker")
             lastSaveRefused = true
             onSaveOutcome?.invoke()
             onApplied(false)

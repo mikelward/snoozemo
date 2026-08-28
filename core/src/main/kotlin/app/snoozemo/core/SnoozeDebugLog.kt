@@ -123,9 +123,50 @@ object SnoozeDebugLog {
     private val TIMESTAMP: DateTimeFormatter =
         DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXX")
 
-    fun event(message: String) = record('D', message, throwable = null)
+    /**
+     * Records one line.
+     *
+     * [format] is a hard-coded format string — a source literal, never a built
+     * value — with one `%s` per argument. That split is what makes the log
+     * safe to mirror off the device later: the literal cannot name anything of
+     * the user's, and each argument is carried or withheld on its own by
+     * [logArgumentMayLeaveDevice]. The on-device line always renders every
+     * argument in full.
+     *
+     * Interpolating into [format] defeats it. The type system cannot enforce
+     * that, so it is a rule: pass values as arguments.
+     */
+    fun event(format: String, vararg args: Any?) = record('D', format, args, throwable = null)
 
-    fun warning(message: String, throwable: Throwable? = null) = record('W', message, throwable)
+    /**
+     * A warning with no exception behind it. Same contract as [event].
+     *
+     * A warning that *does* have an exception goes to [failure]. The throwable
+     * is a separate parameter on a separately-named function on purpose: an
+     * overload taking it alongside `vararg args` would silently bind it as a
+     * formatting argument, so it would render into the text and be findable
+     * only in production.
+     */
+    fun warning(format: String, vararg args: Any?) {
+        val throwable = args.filterIsInstance<Throwable>().firstOrNull()
+        if (throwable != null) {
+            // Rerouted *without* it in the arguments. Left there it has no
+            // `%s` to fill, so it renders through `toString()` — restoring the
+            // exception message [typesAndFrames] exists to exclude, which a
+            // platform exception can fill with an SSID (Codex, PR #129).
+            failure(
+                throwable,
+                "$format [throwable passed to warning(); use failure()]",
+                *args.filterNot { it === throwable }.toTypedArray(),
+            )
+            return
+        }
+        record('W', format, args, throwable = null)
+    }
+
+    /** A warning carrying the exception behind it. Same contract as [event]. */
+    fun failure(throwable: Throwable, format: String, vararg args: Any?) =
+        record('W', format, args, throwable)
 
     /** The captured lines, oldest first. */
     fun snapshot(): List<String> = synchronized(buffer) { buffer.toList() }
@@ -145,7 +186,15 @@ object SnoozeDebugLog {
         sinks.clear()
     }
 
-    private fun record(level: Char, message: String, throwable: Throwable?) {
+    /**
+     * Renders and records one entry.
+     *
+     * [format] and [args] are kept apart to here rather than formatted at the
+     * call site, so a redacted rendering is derivable when there is something
+     * to derive it for. Nothing is: every sink is on-device, and this builds
+     * only the full entry.
+     */
+    private fun record(level: Char, format: String, args: Array<out Any?>, throwable: Throwable?) {
         // The unlocked check is the cheap common case; the locked one below is
         // the correct one. Both exist so a disabled log costs nothing on the
         // arm path while a toggle racing a recorder still cannot land an
@@ -154,7 +203,9 @@ object SnoozeDebugLog {
         // Contained whole rather than per step: recording runs on the arm path
         // and inside failure handling, so nothing it does may escape — a lost
         // log line is the accepted cost, a lost snooze is not.
-        val entry = runCatching { render(level, message, throwable) }.getOrElse { return }
+        val entry = runCatching {
+            render(level, formatLogMessage(format, args, redactSensitive = false), throwable)
+        }.getOrElse { return }
         synchronized(buffer) {
             if (!recording) return
             if (buffer.size >= MAX_ENTRIES) buffer.removeFirst()
@@ -224,7 +275,7 @@ object SnoozeDebugLog {
  * answer "did the test fire correctly"; the position answers "where do you
  * live", which no bug report needs.
  */
-fun ActiveSnooze.logSummary(): String {
+fun ActiveSnooze.logSummary(): LogSummary {
     val anchor = anchor
     val fix = if (anchor.lat != null && anchor.lon != null) {
         "fix accuracy=${anchor.fixAccuracyM ?: "unknown"}m"
@@ -232,5 +283,14 @@ fun ActiveSnooze.logSummary(): String {
         "no fix"
     }
     val ssid = if (anchor.ssid != null) "ssid captured" else "no ssid"
-    return "snooze(started=$startedAt capAt=$capExpiresAt mode=$mode anchor[$ssid, $fix])"
+    val shape = "mode=$mode anchor[$ssid, $fix]"
+    // A [LogSummary] rather than a String, so the composite is not forced to
+    // choose between going off device whole and being withheld whole. The
+    // times are sanctioned on device and are the diagnostic there; off device
+    // they are when someone was asleep or in a cinema, which AGENTS.md's
+    // *Privacy* rule names as the user's, so only the shape travels.
+    return LogSummary(
+        full = "snooze(started=$startedAt capAt=$capExpiresAt $shape)",
+        mirrored = "snooze($shape)",
+    )
 }

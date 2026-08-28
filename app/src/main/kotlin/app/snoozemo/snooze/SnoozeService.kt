@@ -10,6 +10,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import app.snoozemo.core.safe
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.Anchor
 import app.snoozemo.core.Attempt
@@ -425,7 +426,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // again with nothing lost.
         val access = runCatching { zen.policyAccess() }.getOrElse {
             Log.e(TAG, "Reading policy access failed; leaving the snooze as it is.", it)
-            SnoozeDebugLog.warning("policy access unreadable; leaving the snooze as it is", it)
+            SnoozeDebugLog.failure(it, "policy access unreadable; leaving the snooze as it is")
             return
         }
         when (PolicyAccessChange.resolve(access, controller.active != null)) {
@@ -1748,8 +1749,16 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // along where one exists; it is the floor-safe rendering (never the
         // SSID, coordinates, or place name).
         SnoozeDebugLog.event(
-            "state → $state" + (reason?.let { " ($it)" } ?: "") +
-                (snooze?.let { "; ${it.logSummary()}" } ?: ""),
+            "state → %s%s%s%s",
+            state,
+            reason?.let { safe(" ($it)") } ?: safe(""),
+            // Its own argument rather than part of the summary: a LogSummary
+            // carries two renderings and picks between them itself, so folding
+            // the separator into a string would collapse it back to one
+            // (Codex, PR #129 — the conversion to format-plus-arguments had
+            // dropped the separator entirely, running the two together).
+            if (snooze != null) safe("; ") else safe(""),
+            snooze?.logSummary() ?: safe(""),
         )
         when (state) {
             // The one transition on the arm path, between the tap and the rule
@@ -2311,7 +2320,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     }
 
     override fun onZenFailure(failure: ZenFailure, whileArming: Boolean) {
-        SnoozeDebugLog.warning("zen write refused: $failure (whileArming=$whileArming)")
+        SnoozeDebugLog.warning("zen write refused: %s (whileArming=%s)", failure, whileArming)
         notifications.showFailure(failure, whileArming)
         // A release that didn't land leaves a marker describing something that
         // never happened, and the next ending would be explained by it

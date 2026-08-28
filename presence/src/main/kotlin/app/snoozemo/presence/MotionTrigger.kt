@@ -104,7 +104,7 @@ internal class MotionTrigger(
                 // would spend more than the escalation it is buying. Said,
                 // not swallowed — what the user loses is departure latency,
                 // which is exactly what a stuck snooze's report must show.
-                SnoozeDebugLog.warning("motion trigger refused; the backstop and the cap still bound it", it)
+                SnoozeDebugLog.failure(it, "motion trigger refused; the backstop and the cap still bound it")
                 unavailable = true
             }
             .getOrNull()

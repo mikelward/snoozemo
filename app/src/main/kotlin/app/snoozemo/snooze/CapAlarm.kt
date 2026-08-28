@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
 import android.util.Log
+import app.snoozemo.core.safe
 import app.snoozemo.core.endReason
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.Attempt
@@ -250,13 +251,13 @@ object CapAlarm {
             // the exit that holds when everything else has failed, so "was one
             // ever scheduled" is the first question a stuck snooze raises.
             // Cheap enough for the arm path: an in-memory append, no IPC.
-            SnoozeDebugLog.event("alarm armed: $action")
+            SnoozeDebugLog.event("alarm armed: %s", safe(action))
             true
         }.getOrElse {
             // Never silent, and never assumed away: the caller aborts the arm on
             // this, and the user's phone is the thing at risk if it doesn't.
             Log.e(TAG, "Arming the $action alarm failed; refusing to snooze without it.", it)
-            SnoozeDebugLog.warning("alarm refused: $action", it)
+            SnoozeDebugLog.failure(it, "alarm refused: %s", safe(action))
             false
         }
     }
@@ -390,7 +391,7 @@ class CapAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         // Which wake-up fired, and when — the alarm half of "did the cap fire,
         // and did the alarm or the in-service check get there first" (§4.6).
-        SnoozeDebugLog.event("alarm fired: ${intent?.action}")
+        SnoozeDebugLog.event("alarm fired: %s", safe(intent?.action))
         if (intent?.action == SnoozeService.ACTION_ERASE_RETRY) {
             // Not a cap. Nothing to release here — the release already
             // succeeded; only the record is left over. The service holds the
@@ -458,7 +459,7 @@ class CapAlarmReceiver : BroadcastReceiver() {
             SnoozeBackstop.adoptRetryBudget(left)
             if (!SnoozeService.restore(context)) {
                 if (left > 0) {
-                    SnoozeDebugLog.warning("presence retry refused again; re-arming ($left left)")
+                    SnoozeDebugLog.warning("presence retry refused again; re-arming (%s left)", left)
                     rearmPresenceRetry(context, attemptsLeft = left - 1)
                 } else {
                     SnoozeDebugLog.warning("presence retries exhausted; the cap bounds the snooze")
@@ -597,7 +598,7 @@ internal fun releaseDirectly(
         (outcome is ZenOutcome.NotApplied && outcome.reason.nothingLeftToRelease)
     // The no-service exits are exactly the ones that leave no other trace — the
     // service never ran, so no transition was recorded (§4.6).
-    SnoozeDebugLog.event("no-service release ($reason): released=$released")
+    SnoozeDebugLog.event("no-service release (%s): released=%s", reason, released)
     if (released) {
         // The marker first — before the notification, the tile, and the erase.
         // Everything after this line is IPC that can throw or be killed, and
@@ -1232,7 +1233,7 @@ internal fun discardForeignRecord(
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action !in HANDLED_ACTIONS) return
-        SnoozeDebugLog.event("boot/update wake-up: ${intent?.action}")
+        SnoozeDebugLog.event("boot/update wake-up: %s", safe(intent?.action))
         val store = ActiveSnoozeStore(context)
 
         // Before anything else, because these are the two moments it matters:

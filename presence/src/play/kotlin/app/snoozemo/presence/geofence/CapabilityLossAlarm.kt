@@ -39,14 +39,14 @@ internal object CapabilityLossAlarm {
             // so a refused arm only costs the prompt wake, not the decision
             // itself — the next thing that starts the service (the cap, a
             // tap, a reboot) finds the store and ends the snooze anyway.
-            SnoozeDebugLog.warning("capability-loss alarm refused; the store still carries the decision", it)
+            SnoozeDebugLog.failure(it, "capability-loss alarm refused; the store still carries the decision")
         }
     }
 
     fun cancel(context: Context) {
         val alarmManager = context.getSystemService(AlarmManager::class.java)
         runCatching { alarmManager.cancel(pendingIntent(context)) }
-            .onFailure { SnoozeDebugLog.warning("capability-loss alarm cancel failed", it) }
+            .onFailure { SnoozeDebugLog.failure(it, "capability-loss alarm cancel failed") }
     }
 
     private fun pendingIntent(context: Context): PendingIntent =

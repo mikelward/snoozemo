@@ -113,7 +113,7 @@ internal object CrashReporter {
             }
             flushed
         }.getOrElse {
-            SnoozeDebugLog.warning("crash reporting: could not flush the SDK's opt-out to disk", it)
+            SnoozeDebugLog.failure(it, "crash reporting: could not flush the SDK's opt-out to disk")
             false
         }
 
