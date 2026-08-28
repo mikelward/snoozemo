@@ -11,14 +11,6 @@ import kotlinx.coroutines.CancellationException
 /**
  * How many prior process exits to read. Enough to cover "what happened around
  * the time the snooze misbehaved" without turning startup into a log dump.
- *
- * Note this reaches back further than the log's own two-run retention
- * (`SPEC.md` §4.6): these come from Android's history, which the system keeps
- * independently, so a shared report can describe endings older than the two
- * runs of the log itself (Codex, PR #125). That is deliberate — the failures
- * worth diagnosing here happen once a week or less, and a single record would
- * usually cover only a restart nobody was asking about — and it is disclosed in
- * `docs/PRIVACY.md` rather than left to be inferred from the retention promise.
  */
 private const val MAX_EXIT_RECORDS = 5
 
