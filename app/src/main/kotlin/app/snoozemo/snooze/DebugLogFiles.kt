@@ -594,6 +594,19 @@ internal object DebugLogging {
     private var sink: DebugFileSink? = null
 
     /**
+     * Whether [installNow] got as far as applying the stored setting to
+     * [SnoozeDebugLog]'s recording gate.
+     *
+     * Distinct from "installation ran": [installNow] contains its whole body in
+     * `runCatching`, so a preferences read that throws leaves it returning
+     * normally with recording still at its permissive default. Work deferred
+     * via [afterRecordingGateApplied] must not run in that window — the user's
+     * Off setting would not be in force, and Settings still offers Share.
+     */
+    @Volatile
+    private var gateApplied = false
+
+    /**
      * The application context [install] was last called with, kept so a read
      * that finds [sink] still null can retry the installation rather than
      * only reporting that it couldn't check.
@@ -718,6 +731,73 @@ internal object DebugLogging {
     }
 
     /**
+     * Queues [task] on the same single-threaded worker [install] uses, so it
+     * runs *after* the stored setting has been applied to the recording gate.
+     *
+     * This exists because `install()` only enqueues its work: on the calling
+     * thread it returns before the gate is set, and [SnoozeDebugLog] starts
+     * with recording on. Anything that collects and records on its own thread
+     * can therefore win that race and record while the user's setting says Off
+     * (Codex, PR #125). FIFO ordering on this worker is what rules that out —
+     * cheaper and harder to get wrong than re-reading the store.
+     *
+     * FIFO alone proves only that installation was *attempted*. [installNow]
+     * contains its body in a `runCatching`, so a preferences read that throws
+     * leaves it returning normally with recording still permissive — so this
+     * also declines to run [task] unless [gateApplied] says the stored setting
+     * actually took effect. Failing closed is the right way round: not knowing
+     * whether the user's choice is in force is not a reason to collect anyway.
+     *
+     * And when that setting turned out to be **Off**, [task] is skipped rather
+     * than run with its writes discarded. `gateApplied` means "the choice was
+     * read", not "recording is on"; running the work regardless would leave the
+     * app gathering what the user asked it not to, which is the opt-out failing
+     * in substance while succeeding on paper.
+     *
+     * Call only after [install]. A task queued before it would run first and
+     * inherit exactly the race this avoids.
+     */
+    fun afterRecordingGateApplied(task: () -> Unit) {
+        try {
+            worker.execute {
+                if (!gateApplied) {
+                    // Fail closed. Not knowing whether the user's choice is in
+                    // force is not a reason to collect anyway, and the reason
+                    // this ran at all is worth a line — a silently absent
+                    // section otherwise reads like a feature never wired up.
+                    runCatching {
+                        SnoozeDebugLog.warning("deferred task skipped: recording gate never applied")
+                    }
+                    return@execute
+                }
+                if (!SnoozeDebugLog.isRecording) {
+                    // The gate applied and said Off. Skipping the task, not just
+                    // discarding what it writes: [gateApplied] means the stored
+                    // choice was read, and running the work anyway would have the
+                    // app still gathering what the user asked it not to, with only
+                    // the writes dropped (Codex, PR #125). No line here — the log
+                    // is off, and one would be the very thing being declined.
+                    return@execute
+                }
+                task()
+            }
+        } catch (e: RuntimeException) {
+            // The queue refusing work is the one case where the task simply
+            // never runs; say so rather than leaving a silently absent section
+            // that reads like a feature that was never wired up.
+            runCatching { SnoozeDebugLog.warning("debug-log worker refused a deferred task", e) }
+        } catch (e: Error) {
+            // Submission can fail fatally too — an OutOfMemoryError creating the
+            // thread. Reporting that and returning normally would hide it from
+            // the uncaught-exception handler and leave the process running
+            // compromised, and the task body's own Error handling never gets to
+            // run because the body never started (Codex, PR #125).
+            runCatching { SnoozeDebugLog.warning("debug-log worker submission hit a fatal error", e) }
+            throw e
+        }
+    }
+
+    /**
      * [install]'s body, on the worker thread. Separate so the crash-pin reads
      * below can retry it inline when they find [sink] null — they already run
      * on this same single-threaded worker, so they must call this directly
@@ -731,6 +811,13 @@ internal object DebugLogging {
             // collecting — and drops whatever was buffered before this
             // read — rather than only not persisting (Codex, PR #62).
             SnoozeDebugLog.setRecording(enabled)
+            // Only now is the user's stored choice actually in force. Anything
+            // that defers itself behind installation needs to know that this
+            // line was reached, not merely that installNow ran: the read above
+            // can throw, and the runCatching around this block would then
+            // return normally with recording still at its permissive default
+            // (Codex, PR #125).
+            gateApplied = true
             val fileSink = DebugFileSink(app)
             // Captured for the same reason [setEnabled]'s own
             // dispatch does: a manual toggle racing this startup

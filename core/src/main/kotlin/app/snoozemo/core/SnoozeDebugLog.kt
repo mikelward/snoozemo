@@ -90,6 +90,18 @@ object SnoozeDebugLog {
         }
     }
 
+    /**
+     * Whether entries are currently being recorded.
+     *
+     * For callers deciding whether to do the *work* that would produce an
+     * entry, not merely whether the entry would be kept. Gathering diagnostics
+     * the gate will discard is wasted effort on a path that neighbours the arm
+     * path, and on an opted-out install it means the app still collected what
+     * the user asked it not to — even if nothing was written (Codex, PR #125).
+     */
+    val isRecording: Boolean
+        get() = recording
+
     fun addSink(sink: Sink) {
         sinks.addIfAbsent(sink)
     }
