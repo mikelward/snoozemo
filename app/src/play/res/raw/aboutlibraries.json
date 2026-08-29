@@ -2020,7 +2020,7 @@
         },
         {
             "uniqueId": "com.google.android.gms:play-services-base",
-            "artifactVersion": "18.5.0",
+            "artifactVersion": "18.9.0",
             "name": "play-services-base",
             "description": "",
             "developers": [
@@ -2050,7 +2050,7 @@
         },
         {
             "uniqueId": "com.google.android.gms:play-services-location",
-            "artifactVersion": "21.3.0",
+            "artifactVersion": "21.4.0",
             "name": "play-services-location",
             "description": "",
             "developers": [
