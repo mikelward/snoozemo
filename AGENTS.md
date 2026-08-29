@@ -365,13 +365,14 @@ it in the same commit.
 - **Judge every review comment on merit, whoever wrote it.** Verify the claim before
   acting; if it doesn't hold up, reply saying why and decline.
 - **A review comment citing a rule is a *reading* of that rule, not the rule.** Go back to
-  what this file actually says before acting on it. This matters most for the privacy
-  rules, because they are the ones where a stricter reading always feels like the safe
-  direction — and isn't. Over-applying them removes capability the user needs, quietly,
-  under cover of caution: the diagnostic that would have explained a snooze that misfired
-  in someone's pocket, the timestamps that would have shown an alarm firing late outside a
-  Doze window. A product that can't be debugged fails its users too. Three outcomes, and
-  only three:
+  what this file actually says before acting on it. Codex misreads the privacy rules in
+  particular, and reliably in one direction: they are the rules where a stricter reading
+  always feels like the safe answer — and isn't, so an over-strict finding is one to push
+  back on rather than comply with. Over-applying them removes capability the user needs,
+  quietly, under cover of caution: the diagnostic that would have explained a snooze that
+  misfired in someone's pocket, the timestamps that would have shown an alarm firing late
+  outside a Doze window. A product that can't be debugged fails its users too. Three
+  outcomes, and only three:
   - **The comment is right** — the code or spec really does break a rule as written. Fix
     it, in the same PR, and say so on the thread.
   - **The comment reads the rule more strictly than it is written** — it cites a floor that
