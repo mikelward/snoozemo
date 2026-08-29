@@ -786,12 +786,191 @@ jobs:
             screenshots=${{ needs.screenshot-tests.result }}
             sync=${{ (needs.sync-screenshots.result == 'skipped' && needs.screenshot-tests.result == 'success') && 'success' || needs.sync-screenshots.result }}
 
+  release-build:
+    name: Build the release AAB
+    # The signed AAB, built in parallel with `build` and `screenshot-tests`
+    # rather than after them.
+    #
+    # This used to be a run of steps inside `deploy`, which needs both of those
+    # jobs — so on every push to main the release compile and R8 started only
+    # once the slowest of them had finished, adding its full ~4 min to the
+    # critical path for work that depends on nothing they produce. Splitting the
+    # build from the publish lets it overlap them; `deploy` still needs both, so
+    # nothing reaches Play until the tests and screenshots are green.
+    #
+    # Gated as `deploy` is — main-push only, `environment: production` for the
+    # keystore — plus `docs_only`, which `deploy` gets transitively from its
+    # `needs:` and this job would otherwise miss: a docs-only push would build
+    # and sign an AAB that nothing then publishes.
+    #
+    # No `concurrency` here. That guard on `deploy` is about the release-notes
+    # range base and the Play upload order; two AAB builds overlapping cost
+    # runner time and nothing else.
+    if: |
+      github.ref == 'refs/heads/main' && github.event_name == 'push' &&
+      needs.classify.outputs.docs_only != 'true'
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      HAS_RELEASE_KEYSTORE: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' }}
+      HAS_FIREBASE_CONFIG: ${{ secrets.GOOGLE_SERVICES_JSON != '' }}
+    outputs:
+      # Whether a signed AAB was actually produced. `deploy` gates its publish
+      # steps on this: they used to read `env.RELEASE_KEYSTORE_FILE`, which the
+      # keystore decode writes into *this* job's environment and cannot cross a
+      # job boundary — left as-is, every publish step would have silently
+      # skipped, which is precisely the failure `Require a release keystore`
+      # below exists to make impossible.
+      signed: ${{ steps.bundle.outputs.signed }}
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up JDK
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654  # v5.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2  # v5
+
+      - name: Require a release keystore
+        # A push to main must end in a signed AAB. Without the keystore secret
+        # every step below skips on its own condition and the job goes green
+        # having built and published nothing -- indistinguishable, from the
+        # outside, from a release that worked. Fail here instead, naming what
+        # is missing, so a secret that was renamed, expired, or lost in a move
+        # to the `production` environment is caught on the push that broke it
+        # rather than the next time someone looks for a build that never came.
+        #
+        # Forks are exempt. They have no secrets by design, and building
+        # unsigned is a supported state here -- failing their main pushes would
+        # turn that into a red build. The `build` job keeps its release compile
+        # in exactly that case, so R8 still runs for them.
+        if: env.HAS_RELEASE_KEYSTORE != 'true' && github.event.repository.fork != true
+        run: |
+          echo "::error::A push to main must produce a signed AAB, but RELEASE_KEYSTORE_BASE64 is unset or empty. Set it together with RELEASE_KEYSTORE_PASSWORD, RELEASE_KEY_ALIAS and RELEASE_KEY_PASSWORD, or this release would publish nothing."
+          exit 1
+
+      - name: Materialize release keystore
+        # Decoded whenever the keystore secret is present, so the signed AAB
+        # can be downloaded from CI artifacts for the one-time manual seed
+        # upload Play Console requires (docs/play-store-internal-track.md).
+        # The decoded file is validated with keytool so wrong base64 or a
+        # wrong password fails here with a clear error rather than at signing
+        # time.
+        if: env.HAS_RELEASE_KEYSTORE == 'true'
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+        run: |
+          missing=""
+          [ -z "$RELEASE_KEYSTORE_PASSWORD" ] && missing="$missing RELEASE_KEYSTORE_PASSWORD"
+          [ -z "$RELEASE_KEY_PASSWORD" ]      && missing="$missing RELEASE_KEY_PASSWORD"
+          [ -z "$RELEASE_KEY_ALIAS" ]         && missing="$missing RELEASE_KEY_ALIAS"
+          if [ -n "$missing" ]; then
+            echo "::error::RELEASE_KEYSTORE_BASE64 is set but these companion secrets are missing or empty:$missing"
+            exit 1
+          fi
+          printf '%s' "${RELEASE_KEYSTORE_BASE64}" | base64 -d > "${RUNNER_TEMP}/release.keystore"
+          if ! keytool -list -keystore "${RUNNER_TEMP}/release.keystore" -storepass "$RELEASE_KEYSTORE_PASSWORD" >/dev/null 2>&1; then
+            echo "::error::Decoded release keystore is not a valid keystore or RELEASE_KEYSTORE_PASSWORD is wrong."
+            exit 1
+          fi
+          echo "RELEASE_KEYSTORE_FILE=${RUNNER_TEMP}/release.keystore" >> "${GITHUB_ENV}"
+
+      - name: Materialize Firebase config
+        # Turns crash reporting on for the AAB that actually ships (SPEC.md
+        # §12, docs/crashlytics.md). Optional like every other secret in this
+        # job: without it the build still succeeds and Crashlytics stays
+        # dormant — the app's own gate then reports the reporter unavailable
+        # and Settings offers no switch — so a fork or a repo that has not set
+        # the secret up gets a green run rather than a red one nobody reads.
+        #
+        # Not a credential: google-services.json ships inside every Play build
+        # and identifies the project rather than authenticating to it. It is a
+        # secret here only because the repo deliberately does not track it, so
+        # a fork's builds cannot file crashes into this project's console.
+        if: env.RELEASE_KEYSTORE_FILE != '' && env.HAS_FIREBASE_CONFIG == 'true'
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${GOOGLE_SERVICES_JSON}" > app/google-services.json
+          # A truncated or mis-pasted secret would otherwise fail deep inside
+          # the Google Services plugin with a message about a missing client.
+          # Check the two keys the plugin actually reads, so the error names
+          # the secret instead.
+          if ! jq -e '.project_info and .client' app/google-services.json > /dev/null; then
+            echo "::error::GOOGLE_SERVICES_JSON is set but is not a valid google-services.json (no project_info/client)."
+            exit 1
+          fi
+
+      - name: Build release AAB
+        # Gated only on the keystore being present — a signed AAB is useful on
+        # its own (a downloadable artifact for the seed upload). The release
+        # signingConfig only attaches when all four RELEASE_KEYSTORE_* /
+        # RELEASE_KEY_* variables are set (app/build.gradle.kts), which the
+        # decode step above guarantees whenever it sets RELEASE_KEYSTORE_FILE —
+        # it fails first if any of the other three is empty. Without them Play
+        # would reject the AAB anyway.
+        #
+        # The `play` flavor only: it is the only flavor any Play track ships
+        # (SPEC.md §3.4) — `direct` is the sideload/F-Droid fallback and has
+        # no Play listing to upload to.
+        id: bundle
+        if: env.RELEASE_KEYSTORE_FILE != ''
+        env:
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+        run: |
+          ./gradlew :app:bundlePlayRelease
+          # Read by `deploy` as needs.release-build.outputs.signed. Set
+          # after the build so it means "a signed AAB exists", not
+          # "the keystore decoded".
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload signed AAB as workflow artifact
+        # Downloadable from the Actions UI for the one-time manual seed
+        # upload to Play Console, and for re-uploading a release by hand.
+        if: env.RELEASE_KEYSTORE_FILE != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: app-release-aab
+          path: app/build/outputs/bundle/playRelease/app-play-release.aab
+          if-no-files-found: error
+          retention-days: 30
+
+
   deploy:
+    # The name is load-bearing, not descriptive. "Build release notes" below
+    # selects `.name == "Build and release"` twice against the Actions API —
+    # once to find the last run that actually published (the release-notes
+    # range base), once to see whether an earlier attempt of this same run
+    # already uploaded. Renaming the job silently breaks both against every
+    # run recorded after the rename: the walk never finds a post-rename
+    # publish, so notes repeat already-shipped subjects, and a rerun retries a
+    # versionCode Play has seen. So it keeps saying "Build" even though the
+    # build moved to `release-build` — renaming it means updating both
+    # selectors to accept the old name and the new one, which is its own
+    # change (TODO.md).
     name: Build and release
-    # Production build job (TODO.md Phase 6, docs/play-store-internal-track.md).
-    # Builds and publishes a signed AAB for the manual seed upload Play
-    # requires, and — once PLAY_SERVICE_ACCOUNT_JSON is configured — uploads
-    # it to the Play internal track automatically. Gated three ways:
+    # Production publish job (TODO.md Phase 6, docs/play-store-internal-track.md).
+    # Publishes the signed AAB that `release-build` produced: it composes the
+    # release notes and — once PLAY_SERVICE_ACCOUNT_JSON is configured —
+    # uploads to the Play internal track. It runs no Gradle at all; the build
+    # moved to `release-build` so it could overlap the tests. Gated three ways:
     #   1. `if:` — a push to main, never a PR. `workflow_dispatch` on this
     #      workflow always carries a required `pr` input tied to the
     #      screenshot-refresh flow (see the trigger comment above), so it is
@@ -802,6 +981,9 @@ jobs:
     #      `main` so the boundary is enforced by GitHub, not only by `if:`.
     #   3. `needs:` — runs only once build and screenshot-tests both pass, so
     #      a failing test or a screenshot drift on main blocks the release.
+    #      `release-build` joins them because this job publishes its artifact;
+    #      it builds in parallel with them, and this `needs:` is what keeps an
+    #      untested build from reaching Play.
     #
     # The Play secret below is optional and its steps gate on their own
     # presence, so a repo with a keystore but no Play credentials still gets a
@@ -829,12 +1011,11 @@ jobs:
       group: deploy-main-release
       cancel-in-progress: false
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [build, screenshot-tests]
+    needs: [build, screenshot-tests, release-build]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
     env:
-      HAS_RELEASE_KEYSTORE: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' }}
       HAS_PLAY_SA: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
       HAS_FIREBASE_CONFIG: ${{ secrets.GOOGLE_SERVICES_JSON != '' }}
     permissions:
@@ -849,15 +1030,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Set up JDK
-        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654  # v5.2.0
-        with:
-          distribution: temurin
-          java-version: "21"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2  # v5
 
       - name: Build release notes
         # Walks every commit in this push oldest-first and collects the
@@ -1285,109 +1457,15 @@ jobs:
             printf '%s\n' "$delim"
           } >> "$GITHUB_ENV"
 
-      - name: Require a release keystore
-        # A push to main must end in a signed AAB. Without the keystore secret
-        # every step below skips on its own condition and the job goes green
-        # having built and published nothing -- indistinguishable, from the
-        # outside, from a release that worked. Fail here instead, naming what
-        # is missing, so a secret that was renamed, expired, or lost in a move
-        # to the `production` environment is caught on the push that broke it
-        # rather than the next time someone looks for a build that never came.
-        #
-        # Forks are exempt. They have no secrets by design, and building
-        # unsigned is a supported state here -- failing their main pushes would
-        # turn that into a red build. The `build` job keeps its release compile
-        # in exactly that case, so R8 still runs for them.
-        if: env.HAS_RELEASE_KEYSTORE != 'true' && github.event.repository.fork != true
-        run: |
-          echo "::error::A push to main must produce a signed AAB, but RELEASE_KEYSTORE_BASE64 is unset or empty. Set it together with RELEASE_KEYSTORE_PASSWORD, RELEASE_KEY_ALIAS and RELEASE_KEY_PASSWORD, or this release would publish nothing."
-          exit 1
-
-      - name: Materialize release keystore
-        # Decoded whenever the keystore secret is present, so the signed AAB
-        # can be downloaded from CI artifacts for the one-time manual seed
-        # upload Play Console requires (docs/play-store-internal-track.md).
-        # The decoded file is validated with keytool so wrong base64 or a
-        # wrong password fails here with a clear error rather than at signing
-        # time.
-        if: env.HAS_RELEASE_KEYSTORE == 'true'
-        env:
-          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
-          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
-        run: |
-          missing=""
-          [ -z "$RELEASE_KEYSTORE_PASSWORD" ] && missing="$missing RELEASE_KEYSTORE_PASSWORD"
-          [ -z "$RELEASE_KEY_PASSWORD" ]      && missing="$missing RELEASE_KEY_PASSWORD"
-          [ -z "$RELEASE_KEY_ALIAS" ]         && missing="$missing RELEASE_KEY_ALIAS"
-          if [ -n "$missing" ]; then
-            echo "::error::RELEASE_KEYSTORE_BASE64 is set but these companion secrets are missing or empty:$missing"
-            exit 1
-          fi
-          printf '%s' "${RELEASE_KEYSTORE_BASE64}" | base64 -d > "${RUNNER_TEMP}/release.keystore"
-          if ! keytool -list -keystore "${RUNNER_TEMP}/release.keystore" -storepass "$RELEASE_KEYSTORE_PASSWORD" >/dev/null 2>&1; then
-            echo "::error::Decoded release keystore is not a valid keystore or RELEASE_KEYSTORE_PASSWORD is wrong."
-            exit 1
-          fi
-          echo "RELEASE_KEYSTORE_FILE=${RUNNER_TEMP}/release.keystore" >> "${GITHUB_ENV}"
-
-      - name: Materialize Firebase config
-        # Turns crash reporting on for the AAB that actually ships (SPEC.md
-        # §12, docs/crashlytics.md). Optional like every other secret in this
-        # job: without it the build still succeeds and Crashlytics stays
-        # dormant — the app's own gate then reports the reporter unavailable
-        # and Settings offers no switch — so a fork or a repo that has not set
-        # the secret up gets a green run rather than a red one nobody reads.
-        #
-        # Not a credential: google-services.json ships inside every Play build
-        # and identifies the project rather than authenticating to it. It is a
-        # secret here only because the repo deliberately does not track it, so
-        # a fork's builds cannot file crashes into this project's console.
-        if: env.RELEASE_KEYSTORE_FILE != '' && env.HAS_FIREBASE_CONFIG == 'true'
-        env:
-          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
-        run: |
-          set -euo pipefail
-          printf '%s' "${GOOGLE_SERVICES_JSON}" > app/google-services.json
-          # A truncated or mis-pasted secret would otherwise fail deep inside
-          # the Google Services plugin with a message about a missing client.
-          # Check the two keys the plugin actually reads, so the error names
-          # the secret instead.
-          if ! jq -e '.project_info and .client' app/google-services.json > /dev/null; then
-            echo "::error::GOOGLE_SERVICES_JSON is set but is not a valid google-services.json (no project_info/client)."
-            exit 1
-          fi
-
-      - name: Build release AAB
-        # Gated only on the keystore being present — a signed AAB is useful on
-        # its own (a downloadable artifact for the seed upload). The release
-        # signingConfig only attaches when all four RELEASE_KEYSTORE_* /
-        # RELEASE_KEY_* variables are set (app/build.gradle.kts), which the
-        # decode step above guarantees whenever it sets RELEASE_KEYSTORE_FILE —
-        # it fails first if any of the other three is empty. Without them Play
-        # would reject the AAB anyway.
-        #
-        # The `play` flavor only: it is the only flavor any Play track ships
-        # (SPEC.md §3.4) — `direct` is the sideload/F-Droid fallback and has
-        # no Play listing to upload to.
-        if: env.RELEASE_KEYSTORE_FILE != ''
-        env:
-          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
-        run: ./gradlew :app:bundlePlayRelease
-
-      - name: Upload signed AAB as workflow artifact
-        # Downloadable from the Actions UI for the one-time manual seed
-        # upload to Play Console, and for re-uploading a release by hand.
-        if: env.RELEASE_KEYSTORE_FILE != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      - name: Download the release AAB
+        # Built by `release-build`, in parallel with the tests rather than after
+        # them. Restored to the path Gradle would have written it to, so the
+        # publish step's `releaseFiles` is unchanged.
+        if: needs.release-build.outputs.signed == 'true'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: app-release-aab
-          path: app/build/outputs/bundle/playRelease/app-play-release.aab
-          if-no-files-found: error
-          retention-days: 30
+          path: app/build/outputs/bundle/playRelease
 
       - name: Compose Play Store release notes
         # The upload-google-play action takes a directory of whatsnew-<locale>
@@ -1398,7 +1476,7 @@ jobs:
         # RELEASE_NOTES_SKIP=true (every commit in the push was housekeeping)
         # the gate below skips this and the upload step.
         if: |
-          env.RELEASE_KEYSTORE_FILE != '' &&
+          needs.release-build.outputs.signed == 'true' &&
           env.HAS_PLAY_SA == 'true' &&
           env.RELEASE_NOTES_SKIP != 'true'
         run: |
@@ -1429,7 +1507,7 @@ jobs:
         # Skips loudly rather than failing: a red main on every push until a
         # variable is set is noise, but a silent skip would look like a
         # successful release. The warning names what to do.
-        if: env.RELEASE_KEYSTORE_FILE != '' && env.HAS_PLAY_SA == 'true'
+        if: needs.release-build.outputs.signed == 'true' && env.HAS_PLAY_SA == 'true'
         env:
           DATA_SAFETY_DECLARED: ${{ vars.PLAY_DATA_SAFETY_DECLARED }}
         run: |
@@ -1454,7 +1532,7 @@ jobs:
         # confirmed. See docs/play-store-internal-track.md for the Play Console
         # / service account setup this depends on.
         if: |
-          env.RELEASE_KEYSTORE_FILE != '' &&
+          needs.release-build.outputs.signed == 'true' &&
           env.HAS_PLAY_SA == 'true' &&
           env.RELEASE_NOTES_SKIP != 'true' &&
           env.PLAY_UPLOAD_BLOCKED != 'true'
@@ -1466,3 +1544,4 @@ jobs:
           tracks: internal
           status: completed
           whatsNewDirectory: ${{ env.PLAY_WHATSNEW_DIR }}
+

@@ -3863,3 +3863,15 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
       default branch requiring `ci.yml`'s always-reporting `gate`
       job and the `codex` status, plus conversation resolution and
       up-to-date branches, with the auto-merge setting enabled.
+
+- [ ] **`deploy`'s display name is load-bearing and now inaccurate.** The job
+      is still called `Build and release` after the release build moved to
+      `release-build`, because `Build release notes` selects
+      `.name == "Build and release"` against the Actions API in two places:
+      the release-notes range base, and the guard that stops a rerun
+      re-uploading a versionCode. Renaming it blinds both to every run
+      recorded after the rename — notes repeat shipped subjects, and a rerun
+      gets rejected by Play. Renaming properly means accepting both names in
+      the selectors for as long as any pre-rename publish is still reachable
+      by the walk, then dropping the old one — the same staged-rename shape
+      used for the `gate` → `lanes` check. Caught by Codex on PR #133.
