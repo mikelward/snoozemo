@@ -566,11 +566,22 @@ form that still reads, and verified on a device rather than in a preview.
 
 ## Translations
 
-English first, translations in a second PR — never the same PR. Propose new English copy in
-chat and get explicit approval before translating. New base strings land with a per-string
-`tools:ignore="MissingTranslation"` and a `<!-- TODO: translate -->` comment; the follow-up
-translation PR fans the approved copy out to every locale and removes both. Escape
-apostrophes (`\'`) in any locale's string resources.
+**The rule: the maintainer approves English copy before anything is translated.** Propose
+new copy in chat and wait for sign-off. Unsettled copy — anything autopilot wrote, anything
+the maintainer wants to see on a device first — is not worth translating yet, since
+rewording one string throws away every locale's work on it. Leave it with the deferral
+markers below and fan it out once it is decided.
+
+**Where the translation lands is not part of the rule**: the same PR as its approved
+English, or a follow-up, both correct. An English string changed alongside its locale
+entries is not a violation and is not to be flagged as one.
+
+Deferral markers: the new base string carries a per-string
+`tools:ignore="MissingTranslation"` and a `<!-- TODO: translate -->` comment, both removed
+when the approved copy is fanned out. A *reworded existing* key needs no `tools:ignore` —
+that check fires only for a key **absent** from a locale — but a deferred rewording still
+takes the `TODO` comment, the only record that its locales are stale. Escape apostrophes
+(`\'`) in any locale's string resources.
 
 ## Remote build environments (Cursor Cloud and Claude Code on the web)
 
