@@ -3345,7 +3345,17 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   2026-08-13). One vague fix is ordinary; three at the 90-second checking rate is about four and a
   half minutes of location saying nothing. Pure tuning, and the field measurement that would settle
   it is the same recorded walk the departure test is waiting on.
-- **The screenshot refresh commit now re-triggers CI via `workflow_dispatch`**
+- **Superseded (2026-08-29): the screenshot refresh commit now pushes with a PAT**,
+  which retriggers the whole `pull_request` round naturally, so nothing dispatches any
+  more. The dispatch had to go rather than merely being tidied away: it reached exactly
+  one workflow, so any required check living outside `ci.yml` never reported on a
+  refreshed head and the pull request would wait on it forever. `zizmor` is that check
+  as soon as the ruleset lists it — the ruleset half is still pending here, so this is
+  prevention and a prerequisite rather than a live fix, but clothescast, where `zizmor`
+  is already required, hit exactly this on its PR #1166. The record of the dispatch fix
+  it replaced is kept below.
+
+- **The screenshot refresh commit re-triggered CI via `workflow_dispatch`**
   (Codex, PR #15; resolved in PR #43, forced by the `gate` check becoming required — a
   refreshed head with no checks would sit blocked forever, not just under-verified). A
   push made with `GITHUB_TOKEN` deliberately starts no workflow run, but a *dispatch*
