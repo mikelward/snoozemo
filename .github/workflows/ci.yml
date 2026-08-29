@@ -73,6 +73,25 @@ on:
       - 'tile/**'
       - '.github/workflows/**'
 
+concurrency:
+  # A PR branch shares one group and cancels superseded runs: without that,
+  # every force-push — routine here, since review fixes are folded into the
+  # commit they belong to rather than stacked — pays for the run it just
+  # obsoleted.
+  #
+  # A push to main gets a group of its OWN, keyed by commit. Putting main runs
+  # in a shared group is unsafe even with cancel-in-progress false, because
+  # that flag governs the RUNNING run, not the queue: GitHub holds at most one
+  # pending run per group, so a third push to main evicts the second while it
+  # waits, and that commit reaches `deploy` never rather than late. The
+  # publication itself is already serialized where it belongs — the `deploy`
+  # job's own `deploy-main-release` group — so nothing here needs to queue
+  # main runs to protect it.
+  group: ci-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || 'branch' }}
+  # Redundant given the per-commit group above (a group of one has nothing to
+  # cancel), kept because it states the intent the group is enforcing.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 # Explicitly empty, not omitted: every job below declares its own downscoped
 # block, so this grants nothing itself — it exists so a future job that
 # forgets its own block gets no ambient token instead of silently inheriting
