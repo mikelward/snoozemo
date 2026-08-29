@@ -2961,6 +2961,20 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
+- **A discard's completion is not observable, so a failed deletion cannot be
+  surfaced** (Codex, PR #131, accepted in part). `FirebaseCrashlytics
+  .deleteUnsentReports()` returns `void` — the internal
+  `CrashlyticsCore.deleteUnsentReports()` does return a `Task<Void>`, but the
+  public facade discards it — so there is nothing to await and no failure to
+  show the user. What the code *can* guarantee is that the held reports are
+  never sent: `reportActionProvided` is a single-shot
+  `TaskCompletionSource` and `trySetResult` no-ops once completed, so
+  discarding before enabling claims that decision permanently. The policy is
+  worded to that guarantee ("never sent", "discarded when you turn the switch
+  on") rather than to a moment by which the bytes are gone. Revisiting means
+  the manual reporting flow, where `checkForUnsentReports()` does give a
+  `Task` to wait on.
+
 - **A crash captured while reporting was off is discarded on *every* off→on
   crossing, not only the very first** (autopilot, 2026-08-28). A period spent
   switched off is a period the user did not agree to, whether they had never
