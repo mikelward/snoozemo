@@ -1,15 +1,15 @@
 # Snoozemo privacy policy
 
-**Last updated: 2026-08-25. Covers Snoozemo v1 for Android.**
+**Last updated: 2026-08-29. Covers Snoozemo v1 for Android.**
 
 ## The short version
 
-**Snoozemo sends one thing automatically, and it is a crash report.** There is no account
-to create, no analytics, and no advertising. If the app crashes, the Google Play version
-sends the crash — what the code was doing when it fell over, your device model, and your
-Android and app version — so the bug can be fixed. **You can turn that off** in Settings,
-and the version distributed outside Google Play cannot send it at all. Details under
-**Crash reports**.
+**Snoozemo sends one thing, and only if you ask it to: a crash report.** There is no
+account to create, no analytics, and no advertising. The Google Play version can send a
+crash — what the code was doing when it fell over, your device model, and your Android and
+app version — so the bug can be fixed, but **it is off until you turn it on** in Settings.
+The version distributed outside Google Play cannot send it at all. Details under **Crash
+reports**.
 
 **Where you are is never part of that, and never leaves your phone.** Snoozemo does need to
 know where you are — that is the whole point of "stay quiet until I leave here" — but that
@@ -21,9 +21,9 @@ it goes, covered under **The debug log**.
 
 ## What leaves your phone
 
-**One thing, automatically: a crash report, and only from the Google Play version.** It is
-described under **Crash reports** below, it contains nothing about where you are, and you
-can turn it off.
+**One thing, and only once you switch it on: a crash report, and only from the Google Play
+version.** It is described under **Crash reports** below, it contains nothing about where
+you are, and it is off until you turn it on.
 
 Our Google Play Data Safety declaration says so: Snoozemo declares **crash logs**,
 **diagnostics**, and the **installation identifier** described below — collected for app
@@ -67,6 +67,13 @@ do. If the app crashes while it is off, the reporting library still writes the r
 your phone — it is never sent, and it is discarded when you turn the switch on, rather
 than being released. Turning the switch back off likewise stops anything further being
 sent and deletes any report already waiting to go.
+
+**One exception, if you are updating from a version where crash reporting was on by
+default.** The reporting library keeps its own copy of the on/off setting, and it starts
+before any of Snoozemo's own code, so on that single first launch after the update it can
+still send a report it was already holding. Snoozemo turns it off and clears what it holds
+as soon as it runs, and from the next launch onward it starts off. A fresh install is never
+in this position, because the library was never on.
 
 **The version distributed outside Google Play has no crash reporting at all** — no switch,
 because there is nothing to switch. It cannot open a network connection.
