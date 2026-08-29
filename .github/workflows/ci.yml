@@ -182,6 +182,31 @@ jobs:
         # module — and the tests run behind it.
         run: ./gradlew :core:verifyNoAndroid :core:test
 
+      - name: Prove that guard actually fails
+        # A guard against a *false pass* cannot be proven by a passing run, and
+        # this one passed for months while enforcing nothing: it read resolved
+        # artifacts through a lenient view, an AAR cannot resolve in a JVM
+        # module, and the view swallowed exactly that failure. So the step above
+        # went green with `androidx.core:core-ktx` on :core.
+        #
+        # This runs the same task against the same module with a real Android
+        # dependency injected, and requires it to fail *and* to name what it
+        # found -- a failure for any other reason would be its own false pass.
+        run: |
+          set +e
+          output=$(./gradlew :core:verifyNoAndroid -PverifyNoAndroidSelfTest 2>&1)
+          status=$?
+          set -e
+          echo "$output"
+          if [ "$status" -eq 0 ]; then
+            echo "::error::verifyNoAndroid passed with an Android dependency on :core, so it proves nothing."
+            exit 1
+          fi
+          if ! printf '%s' "$output" | grep -q 'androidx.core:core-ktx'; then
+            echo "::error::verifyNoAndroid failed, but without naming the injected dependency."
+            exit 1
+          fi
+
       - name: Build release APKs
         # The only R8 coverage this repo has. AGP disables optimization and
         # obfuscation for debuggable builds outright, so a minified debug APK
