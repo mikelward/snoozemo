@@ -25,17 +25,21 @@ on:
   # required check as satisfied.
   pull_request:
     types: [opened, synchronize, reopened, edited]
-  # Exists for exactly one caller: the screenshot job's refresh step, whose
-  # `ci: refresh recorded screenshots` push is made with `GITHUB_TOKEN` and
-  # therefore starts no workflow run on its own (GitHub's loop-prevention
-  # rule). A dispatch made with that same token is the documented exception,
-  # so the step starts this workflow on the head it just pushed — otherwise
-  # the required `gate` check would exist only on the refreshed commit's
-  # parent and the PR could never satisfy branch protection. Dispatched runs
-  # are non-PR events, so `classify` sends them down the code lane and every
-  # heavy job runs against the refreshed head. (GitHub only dispatches
-  # workflows it can see on the default branch, so this trigger becomes
-  # effective once it lands on main.)
+  # No automated caller any more. It existed for the screenshot job's refresh
+  # step, whose `ci: refresh recorded screenshots` push was made with
+  # `GITHUB_TOKEN` and therefore started no workflow run on its own (GitHub's
+  # loop-prevention rule), leaving the required checks on the refreshed
+  # commit's parent. `sync-screenshots` pushes with a PAT instead, which
+  # retriggers the whole `pull_request` round naturally — and had to, because
+  # a dispatch reaches only this workflow, so any required check living
+  # outside it (`zizmor`, once the ruleset lists it) would never report on a
+  # refreshed head and the pull request would wait on it forever. That is
+  # what clothescast's PR #1166 hit, where `zizmor` is already required.
+  #
+  # Kept as a manual stand-in: dispatching with a `pr` is still a valid way
+  # to re-report a PR's verdict by hand. Dispatched runs are non-PR events,
+  # so `classify` sends them down the code lane and every heavy job runs
+  # against the named head.
   #
   # The `pr` input is REQUIRED so a dispatched run can never produce a weaker
   # verdict than the PR run it stands in for: without it, `docs_only` would be
@@ -494,11 +498,15 @@ jobs:
   # own Gradle code — see that repo's README for the structural reasoning
   # (`docs/fork-safe-ci.md` has the full migration this is milestone 1 of).
   #
-  # dispatch-workflow, not push-token: this repo still runs plain
-  # `pull_request`, where ci-commit-artifact's own validation treats a
-  # GITHUB_TOKEN push + dispatch as safe (the workflow file that runs is
-  # already the PR branch's own copy, so dispatching onto it grants no new
-  # trust). push-token is milestone 2, once CI_COMMIT_ARTIFACT_TOKEN exists.
+  # push-token, not dispatch-workflow (milestone 2, now that
+  # CI_COMMIT_ARTIFACT_TOKEN exists): a GITHUB_TOKEN-authored push starts no
+  # workflow run at all, so a dispatch was needed to give the refreshed head
+  # checks of its own — but a dispatch reaches exactly one workflow, and this
+  # repo's required set spans more than `ci.yml`. `zizmor` lives in its own
+  # file and would never report on a snapshot commit, leaving the PR wedged on
+  # a required check that can never arrive. A fine-grained PAT pushes as an
+  # ordinary authenticated push, which fires the normal `pull_request` round
+  # over every workflow, so nothing needs dispatching.
   #
   # The @main reference is deliberate: this account's own repo, gated behind
   # its own CI and Codex review rather than direct pushes to main, and the
@@ -540,8 +548,12 @@ jobs:
       # comment-marker stays unset ('', the default): this repo posts its own
       # richer visual diff comment instead (post-screenshot-diff below), not
       # the hub's plain status line.
-      dispatch-workflow: ci.yml
-      pr-number: ${{ github.event.pull_request.number }}
+    secrets:
+      # Named for the shared PAT convention across every caller of
+      # mikelward/ci-commit-artifact, not for anything screenshot-specific.
+      # Contents: read and write is the only permission it needs — the hub
+      # uses this token for the push alone and `github.token` for comments.
+      push-token: ${{ secrets.CI_COMMIT_ARTIFACT_TOKEN }}
 
   # Embeds every snapshot this PR adds, removes, or changes, pinned to commit
   # SHAs, into a single auto-updated PR comment (marker: <!-- screenshot-diff
@@ -972,9 +984,9 @@ jobs:
     # uploads to the Play internal track. It runs no Gradle at all; the build
     # moved to `release-build` so it could overlap the tests. Gated three ways:
     #   1. `if:` — a push to main, never a PR. `workflow_dispatch` on this
-    #      workflow always carries a required `pr` input tied to the
-    #      screenshot-refresh flow (see the trigger comment above), so it is
-    #      not a stand-in for a manual release trigger here.
+    #      workflow always carries a required `pr` input, so it reports for
+    #      that pull request (see the trigger comment above) and is not a
+    #      stand-in for a manual release trigger here.
     #   2. `environment: production` — the secrets below live in the
     #      `production` environment (repo Settings -> Environments →
     #      production), whose deployment branches should be restricted to
