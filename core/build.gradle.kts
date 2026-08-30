@@ -30,7 +30,7 @@ dependencies {
     // The version is inert — composite substitution matches on group and name
     // and swaps in the local build before anything resolves remotely. It is
     // written here only because Gradle's DSL wants a coordinate.
-    api("app.mikelward.androidlog:logging-core:0.0")
+    api("com.mikelward.androidlog:logging-core:0.0")
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
 
