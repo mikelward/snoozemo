@@ -1528,8 +1528,15 @@ the point is that every other line of the app is worthless if it isn't true.
       2. **Degrade and offer `Resume tracking`, scoped to what it can actually do** — a fix plus
          a Wi-Fi check per tap, during the exemption. Not continuous tracking, so the copy must
          not promise it, and a phone stays quiet between taps on the cap alone.
-      3. **Degrade to Wi-Fi-only with no button**, where the anchor has an SSID — the one case
-         that genuinely keeps working without background location, and needs no exemption at all.
+      3. ~~Degrade to Wi-Fi-only with no button, where the anchor has an SSID.~~ **Struck: it
+         does not work** (Codex, PR #146, verified against §6.4 and `AnchorWifiTracker`).
+         `ACCESS_FINE_LOCATION` is while-in-use, so an SSID read from a true background state
+         comes back as the redaction placeholder — and the tracker reads redacted as *not
+         associated*, deliberately (D7: an unvouched suppressor must not hold a snooze quiet).
+         With no foreground service on `play`, every background wake would report a loss and
+         escalate to grace while the phone sat on its own network. Wi-Fi is not an independent
+         fallback here; it needs the same exemption option 2 does, and is worth listing only as
+         part of what a tap restores.
       Whichever is chosen, `SPEC.md` §8.1 and §8.3 both need rewriting: they share the premise.
 - [ ] Reboot: re-assert the rule, degraded mode, cap continues from the *original* start
       time. `On restart: resume / end` setting, defaulting to resume (`SPEC.md` §8.3).
