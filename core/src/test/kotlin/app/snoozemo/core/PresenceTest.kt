@@ -571,6 +571,58 @@ class PresenceTest {
         )
     }
 
+    /**
+     * "Evidence of health must be newer than the failure it claims is over"
+     * (SPEC.md §6.1) on the **fresh-fix** path, not only the stale one
+     * (Codex, PR #142).
+     *
+     * In one process the two boundaries move together — a useless
+     * observation advances `latestEvidenceMs` and `lastUnusableAtMs` alike —
+     * so this is a no-op there. A restarted monitor separates them on
+     * purpose: `latestEvidenceMs` is seeded to the arm moment, because
+     * raising it to the restart would drop the held geofence exit the restart
+     * was woken to deliver, while a restored degradation's floor is the
+     * restart. A reading banked in between is fresh by the evidence test and
+     * still says nothing about whether the trouble is over.
+     */
+    @Test
+    fun `a fix older than the failures does not clear a degradation it predates`() {
+        val degraded = PresenceState(
+            atAnchorWifi = false,
+            // The seam a restart produces: evidence believed from early on,
+            // failures known to be later.
+            latestEvidenceMs = 0L,
+            lastUnusableAtMs = 600_000L,
+            degradation = DegradationCause.NO_LOCATION_FIX,
+        )
+
+        // Fresh by the evidence test, and precise enough to place anyone.
+        val step = Presence.advance(degraded, atHome(300), tracked)
+
+        assertEquals(
+            "a reading from before the failures cannot retract them",
+            DegradationCause.NO_LOCATION_FIX,
+            step.state.degradation,
+        )
+        // The presence half is still believed — only the health claim is withheld.
+        assertEquals(PresencePhase.RESTING, step.state.phase)
+    }
+
+    /** And a reading that genuinely post-dates the failures still clears it. */
+    @Test
+    fun `a fix newer than the failures clears the degradation as before`() {
+        val degraded = PresenceState(
+            atAnchorWifi = false,
+            latestEvidenceMs = 0L,
+            lastUnusableAtMs = 600_000L,
+            degradation = DegradationCause.NO_LOCATION_FIX,
+        )
+
+        val step = Presence.advance(degraded, atHome(900), tracked)
+
+        assertNull("location answered after the trouble", step.state.degradation)
+    }
+
     @Test
     fun `a run of bad fixes is forgiven once a real one arrives`() {
         val signals = arrayOf(vague(0), vague(60), vague(120), atHome(180))

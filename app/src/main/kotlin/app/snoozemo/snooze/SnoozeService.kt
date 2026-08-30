@@ -276,7 +276,15 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         val startedAt = snooze.startedAt
         val seed = presenceSeedFor(snooze)
         presenceJob = presenceScope.launch {
-            presenceMonitor.start(snooze.anchor, seed, startedAt.toEpochMilli()).collect { update ->
+            // The record's own cause travels into the restart (Codex, PR
+            // #141): the monitor's state dies with the process, so without it
+            // every wake starts at "healthy" and reports a recovery nothing saw.
+            presenceMonitor.start(
+                snooze.anchor,
+                seed,
+                startedAt.toEpochMilli(),
+                snooze.degradation,
+            ).collect { update ->
                 val running = controller.active
                 if (running == null || running.startedAt != startedAt) return@collect
                 controller.onPresenceUpdate(update)

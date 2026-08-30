@@ -1,6 +1,7 @@
 package app.snoozemo.presence
 
 import app.snoozemo.core.Anchor
+import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.PresenceMonitor
 import app.snoozemo.core.PresenceUpdate
 import app.snoozemo.core.TrackingMode
@@ -19,8 +20,14 @@ import kotlinx.coroutines.flow.emptyFlow
  */
 class DurationOnlyPresenceMonitor : PresenceMonitor {
 
-    override fun start(anchor: Anchor, sinceElapsedRealtimeMs: Long, armedAtEpochMs: Long): Flow<PresenceUpdate> =
-        emptyFlow()
+    override fun start(
+        anchor: Anchor,
+        sinceElapsedRealtimeMs: Long,
+        armedAtEpochMs: Long,
+        // Ignored, and honestly so: this monitor watches nothing, so it has
+        // no level to seed and never reports a recovery to be wrong about.
+        restoredDegradation: DegradationCause?,
+    ): Flow<PresenceUpdate> = emptyFlow()
 
     override fun stop() = Unit
 

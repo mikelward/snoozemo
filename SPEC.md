@@ -1251,6 +1251,38 @@ to say where anyone is can still be the thing that says location is working agai
 because the next thing that happens may be rejoining the anchor's network, and that suppresses
 location entirely (§6.7).
 
+**A restart resumes the degradation it left, rather than starting healthy.** The monitor's own
+levels live in the process, and on the `play` flavor the process is reclaimed between wakes — so a
+rebuilt watch that began at "nothing is wrong" would send a first update saying exactly that, and
+the card would drop from a degraded line to a plain one moments after being reposted, on no
+evidence at all. Worse than a moment's optimism: the engine infers `NO_LOCATION_FIX` by counting
+misses, so re-deriving the truth costs a whole fresh run of failures, not one probe. The snooze
+record carries the cause across the restart and the monitor seeds it back — each cause into the
+slot whose refutation actually fits it, since a services-off fact and an inference from counted
+misses are answered by different evidence.
+
+**The floor a restored degradation gets is the restart, not the arm**, and the difference is the
+ordinary case rather than a corner of one: a snooze that arms healthy, banks a good reading ten
+minutes in, and only then starts failing leaves a cached fix that post-dates the arm and pre-dates
+the trouble. A restarted process cannot vouch for a reading it never saw arrive, so only one that
+does arrive to it can retract the failures. Two boundaries therefore separate at a restart — what
+counts as *fresh evidence* is still the arm moment, because raising it would discard the held
+departure the restart was woken to deliver — which is why the rule below has to hold on both the
+stale and the fresh path, and not only where a reading is old enough to be obviously suspect.
+
+Two smaller consequences follow from the same "what does this process actually know" question. The
+**run of failures continues across the restart** — only the process ended — so a resumed
+degradation resumes with its threshold already crossed, or the reason would keep naming the flavor
+that failed *before* the restart while a wake that manages one probe can never re-cross it.
+
+**Only the engine's own inferences are resumed; a platform-layer cause is not.** The record carries
+the cause without its origin, and "location services are off" can come from either of the two
+mechanisms whose different refutations §6.1 keeps apart — so a resumed one can claim neither, and
+every way of resolving that ambiguity toward recovery overstates. Such an outage therefore loses
+its *reason* across a process death and the engine re-derives what it can, which is the
+understating direction and what the app did before. Resuming it safely needs the origin recorded
+alongside the cause (`TODO.md`).
+
 **Evidence of health must be newer than the failure it claims is over.** The same cached and batched
 delivery that makes the rule above necessary can also hand over a reading captured *before* the
 trouble started; accepting that would restore full tracking on evidence older than the problem, and

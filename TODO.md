@@ -904,33 +904,37 @@ the point is that every other line of the app is worthless if it isn't true.
         show the reason, so the app screen and the notification can disagree in wording. Left out
         to keep this change to the surface §8.1 actually names; it needs a `SnoozeStatus`
         signature change and a screenshot pass.
-        - [ ] **A restart promotes a degraded snooze back to full before it re-derives the
-          problem** (Codex, PR #141; deferred to its own PR by the same review). After process
-          death — the common case on `play`, which runs no foreground service — the monitor
-          builds a fresh `PresenceFeed`, whose `PresenceState.degradation` starts null, and
-          `registrationDegradation`/`servicesDegradation` start null with it. The first update
-          out of the restarted monitor therefore carries `degradation = null`, which
-          `modeFor` reads as full tracking and `onPresenceUpdate` now reads as a cause
-          recovery — so the restored `Timer only — no location` becomes a plain `Snoozing`
-          moments after the card is reposted, on no evidence that anything recovered.
-          **The mode half predates this PR** (`moved` compared modes alone and the promotion
-          already happened); what this PR adds is the reason following the mode it already
-          followed, which is consistent but inherits the same wrong answer.
-          **Why it is worse than a moment's optimism**: the engine infers `NO_LOCATION_FIX`
-          by *counting* misses (`DEGRADED_AFTER_USELESS_OBSERVATIONS`), and a fresh feed's
-          count starts at zero — so re-deriving the truth takes a fresh run of failures, not
-          one probe. A phone somewhere with no fixes can oscillate across restarts and read
-          as healthy for most of the snooze.
-          **Why it is not a one-liner**, and so not folded in here: the fix is to seed the
-          restart, and each cause belongs in a different slot under the two-slot refutation
-          rule (Codex, PR #75) — `LOCATION_SERVICES_OFF` into `servicesDegradation`, where a
-          delivered fix refutes it; `NO_LOCATION_FIX`/`FIXES_TOO_VAGUE` into the feed, where a
-          usable fix does. That needs a `PresenceMonitor.start` parameter (the restored cause
-          is in hand at `SnoozeService.kt`'s call site, and a default keeps the `direct` stub
-          and the fakes compiling), and a seed for `lastUnusableAtMs` alongside it, or
-          `staleFix` will let a cached reading from *before* the restart clear a degradation
-          it says nothing about — precisely the PR #33 case, reopened by the restart boundary.
-          Tests in `PresenceFeedTest`, the monitor's suite, and `SnoozeControllerTest`.
+        - [x] **A restart promoted a degraded snooze back to full before it re-derived the
+          problem** (Codex, PR #141; **landed 2026-08-30** in the follow-up PR that deferral
+          named). After process death — the common case on `play`, which runs no foreground
+          service — the monitor built a fresh `PresenceFeed` whose degradation started null,
+          with both platform slots null beside it, so its first update read as a recovery
+          nothing observed and the restored `Timer only — no location` became a plain
+          `Snoozing` moments after the card was reposted. Worse than a moment's optimism,
+          because the engine infers `NO_LOCATION_FIX` by *counting* misses and a fresh feed's
+          count starts at zero: re-deriving the truth cost a fresh run of failures, not one
+          probe. The mode half predated PR #141 — `modeFor` maps a null cause to the anchor's
+          own capability — so both were fixed together.
+          **What landed**: `PresenceMonitor.start` carries the record's cause; the geofence
+          monitor routes it by slot under PR #75's refutation rule; a seeded feed takes **the
+          restart moment** as its staleness floor and resumes with the failure threshold
+          already crossed. The floor forced `latestEvidenceMs` (still the arm moment, or a
+          held geofence exit is dropped — PR #73) and `lastUnusableAtMs` (the restart) apart,
+          which in turn moved SPEC's "evidence of health must be newer than the failure" test
+          onto the fresh-fix path in `Presence.fixArrived`, where it had never been enforced.
+          `SPEC.md` §6.1 records all of it.
+          - [ ] **A services outage still loses its reason across a restart** (Codex, PR #142;
+            maintainer, 2026-08-30: out of scope, the happy path is what matters). Only the
+            engine's own inferences are resumed. `LOCATION_SERVICES_OFF` is not: the record
+            carries the cause without its origin, and it reaches both platform slots, so a
+            resumed one can claim neither refutation. Three attempts inside PR #142 each
+            overstated — the registration slot and a clear-on-registration both let
+            `addGeofences` promote to healthy though it can accept a fence the platform cannot
+            monitor, and the services slot is cleared by the first `FixArrived` in `deliver`,
+            cached or not. Today's behavior is `main`'s: the reason is lost, the engine
+            re-derives one, the watch is unaffected. A real fix needs the slot origin persisted
+            (a durable field with the grace deadline's epoch-frame problem) *and* the restart
+            floor on that `deliver` clear.
         - [x] **The *mode* was wrong too, during the grace period** (Codex, PR #31; landed
           2026-08-23). `modeFor` picked `WIFI_ONLY` whenever the anchor *had* an SSID, so while
           the grace period ran — Wi-Fi gone, location vague — the notification claimed Wi-Fi was

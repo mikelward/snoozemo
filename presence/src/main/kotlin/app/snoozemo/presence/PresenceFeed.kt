@@ -52,6 +52,49 @@ internal class PresenceFeed(
      * [seedGraceDeadlineMs] is null.
      */
     seedConfirmationDeferralUsed: Boolean = false,
+    /**
+     * The engine-inferred degradation this snooze already carries, restored
+     * from its record (Codex, PR #141). The monitor's own state dies with the
+     * process, and on `play` that happens on every wake — so without this a
+     * restart begins at "healthy", and its first update carries a synthesized
+     * null that the controller reads as a recovery nothing actually observed.
+     * The card then drops from `Timer only — no location` to a plain
+     * `Snoozing` moments after being reposted, and because [Presence] infers
+     * that level by *counting* misses, re-deriving the truth costs a whole
+     * fresh run of failures rather than one probe.
+     *
+     * Only the engine's own inferences belong here. A platform-layer cause
+     * (services off, the fence unavailable) is refuted by different evidence
+     * and lives in the monitor's own slots — seeding it here would put it
+     * behind the wrong refutation (PR #75's two-slot rule).
+     *
+     * Ignored without [seedDegradationAtMs]: a level with no floor is worse
+     * than no level, so the pair is all-or-nothing rather than silently
+     * half-applied.
+     */
+    seedDegradation: app.snoozemo.core.DegradationCause? = null,
+    /**
+     * **When this restart happened**, in the same elapsed-realtime frame as
+     * the signals — the staleness floor a seeded [seedDegradation] gets, and
+     * required for one to take effect at all (Codex, PR #142).
+     *
+     * `Presence.staleFix` clears a degradation on the first reading newer
+     * than `lastUnusableAtMs`, which a rebuilt feed leaves null — so without
+     * a floor any cached reading clears a restored level trivially. The arm
+     * moment is **not** that floor, and the difference is the ordinary case:
+     * a snooze that arms healthy, banks a good fix ten minutes in, and only
+     * then starts failing leaves a cached reading that post-dates the arm and
+     * pre-dates the trouble. Believing it restores `FULL` on evidence older
+     * than the problem — PR #33's case, which is precisely what seeding the
+     * level was meant to stop.
+     *
+     * The restart moment is the conservative floor and needs nothing
+     * persisted: this process cannot vouch for anything it did not see
+     * arrive, so only a reading it actually received clears the level. It
+     * errs toward keeping a degradation, which is the safe direction
+     * (SPEC.md §6.1 — overstating health is the dangerous one).
+     */
+    seedDegradationAtMs: Long? = null,
 ) {
 
     /**
@@ -83,6 +126,25 @@ internal class PresenceFeed(
         graceDeadlineMs = seedGraceDeadlineMs,
         // Only meaningful with a deadline to bound; a fresh arm has neither.
         confirmationDeferralUsed = seedGraceDeadlineMs != null && seedConfirmationDeferralUsed,
+        // Both or neither, so a level can never stand without the floor that
+        // makes it survivable (see [seedDegradationAtMs]).
+        degradation = seedDegradation.takeIf { seedDegradationAtMs != null },
+        lastUnusableAtMs = seedDegradationAtMs.takeIf { seedDegradation != null },
+        // The run of failures continues; only the process ended (Codex, PR
+        // #142). `Presence.useless` updates an already-standing cause only
+        // once the count reaches the threshold, so a restored level with a
+        // counter starting at zero would keep asserting the *old* flavor —
+        // and on `play`, where a wake takes one resting probe and the process
+        // is then reclaimed, the count can reset before it ever gets there.
+        // The card would say `weak location signal` for the rest of a snooze
+        // during which nothing arrived at all. Restoring the level means the
+        // threshold was already crossed, so it is seeded as crossed and the
+        // next failure names the flavor that actually just failed.
+        uselessObservations = if (seedDegradation != null && seedDegradationAtMs != null) {
+            Presence.DEGRADED_AFTER_USELESS_OBSERVATIONS
+        } else {
+            0
+        },
     )
 
     /** What the engine currently wants from location (SPEC.md §6.7). */
