@@ -598,7 +598,14 @@ takes the `TODO` comment, the only record that its locales are stale. Escape apo
   `./gradlew lint` (lint), `./gradlew clean`.
 - **`:core` also has a sandbox-friendly inner build**: `cd core && ../gradlew test` runs it
   through `core/settings.gradle.kts`, which needs no `google()` — an offramp for when the
-  outer build's AGP plugin markers can't resolve (ported from clothescast).
+  outer build's AGP plugin markers can't resolve (ported from clothescast). It includes the
+  `mikelward/androidlog` composite build too, because `:core` depends on `logging-core` and
+  the coordinate is deliberately unpublished — without that the offramp fails at
+  `:compileKotlin` rather than falling back. It includes that library's **`logging-core/`
+  directory, not its repository root**: `includeBuild` configures every project in the
+  included build, so including the root would evaluate `:logging-android` and resolve the
+  AGP plugin marker from `google()`, failing the offramp on exactly what it exists to
+  avoid.
 - **No emulator practicality**: KVM is unavailable in the remote environments. Beyond
   speed, an emulator cannot answer this app's real questions anyway — whether
   `setAutomaticZenRuleState` actually silences the device, what a geofence's exit latency
