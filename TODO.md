@@ -494,7 +494,9 @@ the point is that every other line of the app is worthless if it isn't true.
       *cause* stopping at the controller (needs approved copy **and** the plumbing to carry the
       cause to it) — plus the on-device verification the whole item is gated on. The
       mode-changed listener that re-registers the fence promptly when location services return
-      has since landed (below), closing the recovery half. Phase 3 also still owes the §6.7 significant-motion trigger, its own item below.
+      has since landed (below), closing the recovery half, and so has the §6.7 significant-motion
+      trigger — with the resting cadence it pairs with now settled as the backstop's on `play`
+      (`SPEC.md` §6.7), so that item is closed too.
       - [x] **The engine above the interface**: `Presence`, a pure state machine in `:core` over
         (state, signal, anchor). Owns escalation and de-escalation, the §6.7 duty cycle, the
         degraded-tracking report, and the §6.6 grace period. Landed with `PresenceTest` (37),
@@ -954,10 +956,11 @@ the point is that every other line of the app is worthless if it isn't true.
         is *not* a fourth wake-up source. But motion is not therefore all deferred: it has two
         separate uses, and only one is a product decision. As an explicit end condition
         (`until I move`) it sits in Phase 6's fallback table, gated on hardware item 2. As a
-        §6.7 duty-cycle input it is v1 spec and still unbuilt — its own item above. The
+        §6.7 duty-cycle input it is v1 spec, and that half has since been built and closed —
+        its own item below. The
         residuals here stay residuals: best-effort bounds the design accepts, each with its
         own recorded slice.
-- [ ] **The significant-motion trigger that drives the §6.7 duty cycle** (found by Codex on
+- [x] **The significant-motion trigger that drives the §6.7 duty cycle** (found by Codex on
       the 2026-08-25 status audit). `Presence` already handles `PresenceSignal.SignificantMotion`
       — suppressed while associated with the anchor's Wi-Fi, escalating to `CHECKING` otherwise —
       and `PresenceTest` covers it, but **nothing produces the signal**: there is no
@@ -997,7 +1000,15 @@ the point is that every other line of the app is worthless if it isn't true.
       mid-snooze — and said in the log, because a snooze escalating only on the backstop's
       cadence is a real difference a stuck-snooze report has to explain. Tests:
       `MotionTriggerTest` (9), over a manual registrar.
-      **The 10-minute resting poll is deliberately NOT in that commit — it needs a decision.**
+      **The 10-minute resting poll: decided — `play` does not get one** (maintainer, 2026-08-30).
+      The resting cadence on `play` is the §6.10 backstop's (~30 min); the 10-minute figure stays
+      with `direct`'s foreground service from Phase 7. `SPEC.md` §6.7 records it with the reasoning.
+      The third option below — schedule the alarm only where the motion trigger is unavailable —
+      was explicitly declined: the sensor is near-universal, so the alarm would exist for a rare
+      device while complicating the duty cycle for every device, and such a device still has the
+      geofence and the Wi-Fi watch untouched. **Nothing left to build here** — `play` already
+      behaves this way, since nothing ever scheduled the poll; what changed is that the spec now
+      says so on purpose rather than by omission. The discussion that led there:
       §6.7 pairs the armed trigger with a 10-minute sanity poll and nothing schedules one:
       `CheckingFixes.sanityCheck()` runs only on a transition into `SANITY` or on a `SanityPoke`,
       and the only poke source is the 30-minute `SnoozeBackstop`. The reason this is not a
