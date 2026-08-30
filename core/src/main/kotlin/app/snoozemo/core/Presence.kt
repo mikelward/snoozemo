@@ -80,6 +80,59 @@ sealed interface PresenceSignal {
      * own time, so an alarm the state has since moved on from is harmless.
      */
     data class GraceElapsed(override val atElapsedRealtimeMs: Long) : PresenceSignal
+
+    /**
+     * The location grant these sensors run on is gone — revoked mid-snooze,
+     * downgraded to coarse, or never granted in the background
+     * ([DegradationCause.isGrantLoss]).
+     *
+     * A sensor-layer fact like every other signal here, not a conclusion:
+     * what it says is that the platform has stopped answering, and the
+     * engine decides what follows. What follows is that **Wi-Fi stops being
+     * evidence**. An SSID read needs the same grant, and a background read
+     * without it comes back as the redaction placeholder, which the Wi-Fi
+     * watch reports as [AnchorWifiLost] — so under a dead grant the engine
+     * is told the anchor's network went away whether or not it did, and a
+     * §6.6 grace period armed on that would end the snooze five minutes
+     * after the *permission* changed. That is the ending the maintainer's
+     * 2026-08-30 decision exists to prevent, arriving by a different door.
+     *
+     * So this clears any running deadline and refuses to arm another until
+     * something proves the grant is back — a fix arriving, or the anchor's
+     * SSID being nameable again. The snooze keeps running on the duration
+     * cap, which is mandatory, so the fallback is bounded by construction.
+     *
+     * Nothing else moves: this is not evidence about *where* the user is, so
+     * it must not escalate, de-escalate, or advance the staleness bar.
+     */
+    data class LocationAccessLost(override val atElapsedRealtimeMs: Long) : PresenceSignal
+
+    /**
+     * The location grant is back, proven rather than inferred
+     * ([LocationAccessLost]'s only refutation).
+     *
+     * The monitor says this, and nothing in the engine works it out for
+     * itself, because nothing in the engine can (Codex, PR #150). Two
+     * plausible engine-side proofs were tried and both were wrong:
+     *
+     * - **A fix arriving.** Location hands out cached and queued readings, so
+     *   one captured *before* the revocation can be delivered after it — the
+     *   same trap `lastUnusableAtMs` exists for, one layer down. It would
+     *   clear the latch on evidence older than the problem.
+     * - **The anchor's SSID being nameable.** True proof for a revoked grant,
+     *   false for a missing *background* one: opening the app makes the SSID
+     *   readable under the while-in-use grant it still holds, and the moment
+     *   it goes back to the background the read is redacted again. The latch
+     *   would clear on a foreground glance and the next loss would arm a
+     *   grace period the card is still promising the cap for.
+     *
+     * A successful geofence registration is neither: it requires
+     * `ACCESS_BACKGROUND_LOCATION` outright on API 29+, so it can only
+     * succeed with both grants actually held, and it is the same evidence
+     * that already refutes the monitor's own registration level. One proof,
+     * one refutation, no second judge.
+     */
+    data class LocationAccessRestored(override val atElapsedRealtimeMs: Long) : PresenceSignal
 }
 
 /**
@@ -262,6 +315,21 @@ data class PresenceState(
      */
     val confirmationDeferralUsed: Boolean = false,
     /**
+     * Whether the location grant is currently known to be gone
+     * ([PresenceSignal.LocationAccessLost]), which suppresses the §6.6 grace
+     * period until something proves otherwise.
+     *
+     * Deliberately **not** persisted, unlike [graceDeadlineMs]. It mirrors a
+     * platform fact the monitor re-derives on every restart — its
+     * registration attempt is refused again and re-reports the cause — so
+     * persisting it would be a second copy of the same truth, kept behind a
+     * different refutation, which is exactly the two-slot mistake PR #75
+     * exists to prevent. Losing it across a process death errs toward arming
+     * a grace period that should not be armed, which the re-derivation
+     * corrects within one registration attempt.
+     */
+    val locationAccessLost: Boolean = false,
+    /**
      * Whether this engine has already concluded the snooze is over.
      *
      * Terminal by construction: every later signal is ignored and re-reports
@@ -432,7 +500,45 @@ object Presence {
             is PresenceSignal.GraceElapsed -> graceElapsed(state, signal.atElapsedRealtimeMs, anchor)
             is PresenceSignal.AnchorWifiPresentUnconfirmed ->
                 anchorWifiPresentUnconfirmed(state, anchor)
+            is PresenceSignal.LocationAccessLost -> locationAccessLost(state, anchor)
+            is PresenceSignal.LocationAccessRestored ->
+                // Nothing else moves, for the same reason the loss moves
+                // nothing else: it is a fact about the platform, not about
+                // where the user is. The degradation it accompanies is the
+                // monitor's own level and is withdrawn by the monitor.
+                step(state.copy(locationAccessLost = false), null, anchor)
         }
+    }
+
+    /**
+     * Records that the location grant is gone and calls off any grace period
+     * running on it (see [PresenceSignal.LocationAccessLost]).
+     *
+     * Not staleness-checked, and that is the one place this signal
+     * deliberately differs from the sensor readings around it. [isStale]
+     * exists to stop an old *observation of where the user was* overriding a
+     * newer one; this observes the platform's own configuration, which has no
+     * position to be out of date about. Applying the bar would also drop the
+     * signal precisely when it matters most — the queued delivery after a
+     * newer Wi-Fi loss is the case where the deadline is already armed.
+     */
+    private fun locationAccessLost(state: PresenceState, anchor: Anchor): PresenceStep {
+        val next = state.copy(
+            locationAccessLost = true,
+            // The premise is withdrawn, not merely paused: the deadline this
+            // clears was armed by a Wi-Fi loss that may only ever have been
+            // the redaction placeholder. Cleared through the same fields a
+            // genuine recovery clears, so the monitor's `deliver` persists
+            // the null and `GraceAlarm.reconcile` cancels the real alarm —
+            // a mode line that said `Timer only` while an alarm still ended
+            // the snooze would be worse than saying nothing.
+            graceDeadlineMs = null,
+            confirmationDeferralUsed = false,
+            awaitingAssociationConfirmation = false,
+        )
+        // No event: nothing about presence changed, and the degradation this
+        // reflects is reported by the monitor's own platform level.
+        return step(next, null, anchor)
     }
 
     /**
@@ -499,6 +605,15 @@ object Presence {
             wifiLostAtMs = null,
             graceDeadlineMs = null,
             checkingSinceMs = null,
+            // `locationAccessLost` deliberately survives this (Codex, PR
+            // #150). A nameable SSID proves a *revoked* grant is back and
+            // proves nothing about a missing background one: the app in the
+            // foreground reads the SSID fine under a while-in-use grant, and
+            // redacted again the moment it isn't. Clearing here would lift
+            // the suppressor on a glance at the app, and the next background
+            // read would arm a grace period while the card still promised
+            // the cap. Only [PresenceSignal.LocationAccessRestored] clears
+            // it.
             // The definitive result the pending-confirmation flag was waiting
             // on: the user is back on the anchor's network, and the deadline
             // just cleared, so there is nothing left to defer — and the
@@ -560,6 +675,13 @@ object Presence {
     }
 
     private fun fixArrived(state: PresenceState, fix: Fix, anchor: Anchor): PresenceStep {
+        // Deliberately does **not** clear `locationAccessLost` (Codex, PR
+        // #150). A reading can be cached or queued from before the
+        // revocation, so treating its arrival as proof the grant returned
+        // repeats `lastUnusableAtMs`'s own lesson one layer down — see
+        // [PresenceSignal.LocationAccessRestored], which is the only thing
+        // that clears it.
+
         // An anchor with nothing usable to measure against is Wi-Fi-only mode
         // (SPEC.md §8.4), not a tracking failure — so a fix here is ignored
         // rather than counted as a useless observation. Counting it would report
@@ -802,7 +924,13 @@ object Presence {
             // — the failure the grace period exists to bound, reachable by the
             // ordinary route of walking out of a building.
             graceDeadlineMs = state.graceDeadlineMs
-                ?: if (nowDegraded && state.wifiLostAtMs != null && anchor.ssid != null) {
+                // `graceSuppressed` asked here too, not only in `graceFrom`:
+                // this branch arms a deadline of its own, so the guard has to
+                // be on both or it is on neither (Codex, PR #150).
+                ?: if (
+                    nowDegraded && state.wifiLostAtMs != null && anchor.ssid != null &&
+                    !graceSuppressed(state)
+                ) {
                     atMs + WIFI_GRACE.toMillis()
                 } else {
                     null
@@ -888,8 +1016,28 @@ object Presence {
      * there was never a signal to lose, and a deadline armed off a network the
      * snooze does not depend on would end it for no reason.
      */
+    /**
+     * Whether anything may arm a §6.6 deadline at all right now.
+     *
+     * **There are two arming sites, and a guard on one of them is not a
+     * guard** (Codex, PR #150). The first version of the grant suppressor
+     * checked only [graceFrom], leaving `useless`'s own
+     * degradation-triggered branch to arm a countdown under a dead grant by
+     * a different route — the same premature ending, reached three failed
+     * fixes later instead of on the Wi-Fi loss. So the question is asked in
+     * one named place that both sites call, and a third arming site that
+     * forgets to ask is a grep away from being found.
+     *
+     * Wi-Fi is not evidence while the grant is gone: the SSID reads as
+     * absent *because* the permission does, and the phone may never have
+     * moved (maintainer, 2026-08-30). Only
+     * [PresenceSignal.LocationAccessRestored] lifts this.
+     */
+    private fun graceSuppressed(state: PresenceState): Boolean = state.locationAccessLost
+
     private fun graceFrom(atMs: Long, state: PresenceState, anchor: Anchor): Long? = when {
         anchor.ssid == null -> null
+        graceSuppressed(state) -> null
         anchor.hasUsableFix && state.degradation == null -> null
         else -> atMs + WIFI_GRACE.toMillis()
     }

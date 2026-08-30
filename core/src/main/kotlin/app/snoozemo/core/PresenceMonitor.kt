@@ -227,6 +227,29 @@ enum class DegradationCause {
      * (flagged by Codex on PR #71).
      */
     NOTHING_WATCHING,
+
+    ;
+
+    /**
+     * Whether this cause is a **missing location grant** rather than a
+     * runtime failure of location itself.
+     *
+     * The two differ in what the fallback may claim. A runtime failure
+     * leaves Wi-Fi intact, so an anchor with an SSID can honestly fall back
+     * to it; a missing grant takes Wi-Fi with it, because reading an SSID
+     * needs `ACCESS_FINE_LOCATION` too — there is no separate Wi-Fi
+     * permission — and a background read under a while-in-use grant comes
+     * back redacted, which `AnchorWifiTracker` treats as *not associated* by
+     * design (D7). So under a grant loss the Wi-Fi signal does not merely
+     * stop helping: it actively reports a departure with the phone sitting
+     * on its own network.
+     *
+     * Asked in two places that must agree — the mode the controller claims,
+     * and whether the engine may arm a §6.6 grace period — so it is one
+     * predicate rather than the same pair of `==` tests written twice.
+     */
+    val isGrantLoss: Boolean
+        get() = this == NO_LOCATION_IN_BACKGROUND || this == LOCATION_PERMISSION_GONE
 }
 
 /**

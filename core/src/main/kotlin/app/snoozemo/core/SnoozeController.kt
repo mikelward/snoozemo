@@ -610,7 +610,7 @@ class SnoozeController(
      * so the mode stays `WIFI_ONLY` without anyone having to remember not to
      * claim `FULL`.
      *
-     * [graceActive] is checked first, ahead of [degradation] (Codex, PR #31,
+     * [graceActive] is checked ahead of most of [degradation] (Codex, PR #31,
      * flagged as the *mode's* half of the same bug the missing signal was
      * the cause's half of): grace can start the instant Wi-Fi is lost, for an
      * anchor with no usable fix to confirm anything with, which is before
@@ -618,33 +618,39 @@ class SnoozeController(
      * moved off null. Waiting for [degradation] there would report `WIFI_ONLY`
      * — Wi-Fi is what's tracking this — for the first moments of a grace
      * period that exists precisely because nothing is.
+     *
+     * A missing grant is the exception and sits above it, because it is the
+     * one cause that invalidates the Wi-Fi signal itself rather than merely
+     * failing alongside it — see the body.
      */
     private fun modeFor(degradation: DegradationCause?, graceActive: Boolean, anchor: Anchor): TrackingMode {
         val computed = when {
+            // A missing *grant* outranks even a running grace period, and is
+            // the one cause that does (Codex, PR #149, deferred there; fixed
+            // now that the engine clears the deadline to match). Under a dead
+            // grant the SSID reads as absent because the *permission* is,
+            // which is plausibly what started the grace period in the first
+            // place — so `WIFI_GRACE` would say Wi-Fi is bounding a departure
+            // that may never have happened.
+            //
+            // Ordering this above `graceActive` was unsafe until
+            // `PresenceSignal.LocationAccessLost` existed: the card would
+            // have read `Timer only`, promising the cap, while the grace
+            // alarm still ended the snooze minutes later. Both halves land
+            // together — the monitor delivers that signal on the same
+            // classification, so by the time this line is reached the
+            // deadline is cleared, persisted and the alarm canceled.
+            //
+            // Nor is there any falling back to Wi-Fi below (maintainer,
+            // 2026-08-30; Codex raised the same point on PR #146). Reading an
+            // SSID needs `ACCESS_FINE_LOCATION` and location services on —
+            // there is no separate Wi-Fi permission — so `WIFI_ONLY` here
+            // would not merely overstate the mode: it would report a
+            // departure on every wake with the phone sitting on its own
+            // network.
+            degradation?.isGrantLoss == true -> TrackingMode.DURATION_ONLY
             graceActive && anchor.ssid != null -> TrackingMode.WIFI_GRACE
             degradation == null -> TrackingMode.from(anchor)
-            // Below `graceActive`, and that is a known gap rather than an
-            // oversight (Codex, PR #149; tracked in TODO.md). A grant lost
-            // while a grace period is already running keeps `WIFI_GRACE` and
-            // so keeps its deadline, where the honest answer is duration-only.
-            // Reordering these two lines alone would make it worse: the card
-            // would read `Timer only`, promising the cap, while the grace
-            // alarm still ended the snooze minutes later. The fix needs the
-            // engine's grace deadline cleared too, which is a separate change.
-            //
-            // A missing *grant* takes Wi-Fi with it, so these two never fall
-            // back to it however good the anchor is (maintainer, 2026-08-30;
-            // Codex raised the same point on PR #146). Reading an SSID needs
-            // `ACCESS_FINE_LOCATION` and location services on — there is no
-            // separate Wi-Fi permission — and a background read under a
-            // while-in-use grant comes back as the redaction placeholder,
-            // which `AnchorWifiTracker` treats as *not associated* by design
-            // (D7). So `WIFI_ONLY` here would not merely overstate the mode:
-            // it would report a departure on every wake with the phone sitting
-            // on its own network.
-            degradation == DegradationCause.LOCATION_PERMISSION_GONE ||
-                degradation == DegradationCause.NO_LOCATION_IN_BACKGROUND ->
-                TrackingMode.DURATION_ONLY
             // Every other degradation leaves Wi-Fi *only if there was an SSID*;
             // claiming `WIFI_ONLY` for an anchor with no network would tell the
             // user tracking is better than it is.

@@ -80,6 +80,17 @@ class GeofencePresenceMonitor(
             PackageManager.PERMISSION_GRANTED
 
     /**
+     * Both grants geofencing needs, read live. `minSdk` is 35, so
+     * `ACCESS_BACKGROUND_LOCATION` is always a real, separately-grantable
+     * permission here — there is no pre-29 case where holding fine implies
+     * it.
+     */
+    private fun hasGeofencingGrants(): Boolean =
+        hasFineLocation() &&
+            appContext.checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+
+    /**
      * Closes the running flow; null while none runs. Atomic for the same
      * reason the bridge's slot is: a replacement's start races the old flow's
      * teardown, and a check-then-null could evict the replacement's handle —
@@ -685,7 +696,23 @@ class GeofencePresenceMonitor(
                     // Unavailable events keep the services slot said
                     // independently (Codex, PR #75).
                     registrationDegradation.set(failure.cause)
-                    send(PresenceUpdate(event = null, degradation = null))
+                    if (failure.cause.isGrantLoss) {
+                        // Through `deliver`, not `send`, and the slot is set
+                        // first so this update already carries the cause.
+                        // The engine has to hear about a dead grant because
+                        // a §6.6 grace period is engine state the platform
+                        // slots do not touch: without this the mode line
+                        // would say `Timer only` while the deadline armed by
+                        // a redacted SSID read kept counting, and the alarm
+                        // ended the snooze minutes later (Codex, PR #149).
+                        // `deliver` is also what makes the cancellation
+                        // durable — the cleared deadline is persisted and
+                        // `GraceAlarm.reconcile` cancels the real alarm on
+                        // the same pass — which a bare `trySend` could not.
+                        deliver(PresenceSignal.LocationAccessLost(readElapsedRealtimeMs()))
+                    } else {
+                        send(PresenceUpdate(event = null, degradation = null))
+                    }
                 }
                 is GeofenceRegistrationFailure.Fatal -> failCapability(failure.cause)
             }
@@ -797,6 +824,30 @@ class GeofencePresenceMonitor(
                         // #75).
                         if (registrationDegradation.getAndSet(null) != null) {
                             SnoozeDebugLog.event("geofence re-registered; registration level cleared")
+                            // The engine's grace suppressor is refuted by
+                            // exactly this and nothing else (Codex, PR #150).
+                            // Geofencing needs `ACCESS_BACKGROUND_LOCATION`
+                            // outright on API 29+, so a registration the
+                            // platform accepted is proof both grants are
+                            // actually held — which neither a delivered fix
+                            // (it can be cached from before the revocation)
+                            // nor a nameable SSID (readable in the foreground
+                            // under a while-in-use grant) can show.
+                            //
+                            // Emitted from the *proof*, never gated on which
+                            // cause happens to be sitting in the slot (Codex,
+                            // PR #150, and a regression the gated version
+                            // introduced). A repair while location services
+                            // are off overwrites this slot with
+                            // `LOCATION_SERVICES_OFF` — see `deliver` — so a
+                            // grant restored during an outage would find a
+                            // non-grant cause here and skip the restoration,
+                            // stranding the latch for the life of the snooze.
+                            // Nothing could then arm grace, and a user who
+                            // really left would be silenced to the cap: the
+                            // too-quiet direction, which is the one principle
+                            // 1 refuses. The engine no-ops when the latch is
+                            // already clear, so emitting always is free.
                             // A registration that just succeeded is proof the
                             // grant is back, and it is the only such proof
                             // that arrives on its own — the burst cannot
@@ -808,6 +859,9 @@ class GeofencePresenceMonitor(
                             // from, and sit snoozed to the cap (Codex, PR
                             // #149). Safe against a teardown racing it:
                             // `resume` refuses on a closed instance.
+                            deliver(
+                                PresenceSignal.LocationAccessRestored(readElapsedRealtimeMs()),
+                            )
                             resumeChecking()
                             // The restate carries the *feed's* level, not a
                             // synthesized null: this update arrives outside
@@ -952,6 +1006,34 @@ class GeofencePresenceMonitor(
                         ssid,
                         readElapsedRealtimeMs,
                     ) { deliver(it) }
+                }
+                // Asked *before* the bridge attaches, for the same reason
+                // the Wi-Fi watch is built before it (Codex, PR #150). A
+                // grant revoked while the process was dead is not known to
+                // this monitor until `addGeofences` is refused, which is
+                // asynchronous and lands well after the attach — and the
+                // attach can replay a `GraceElapsed` held from the outage,
+                // which resolves `Departed` and shuts the engine down
+                // (`PresenceState.resolved` ignores every later signal). The
+                // refusal would then arrive at a snooze that had already
+                // ended on the deadline this whole change exists to suppress.
+                // A live permission read costs two binder-free lookups and
+                // gets the fact in ahead of the replay.
+                //
+                // Scoped to an anchor that will actually register a fence,
+                // deliberately. A Wi-Fi-only anchor never reaches
+                // `addGeofences`, so it would have no way to *lift* a latch
+                // set here — and under a while-in-use grant that would
+                // suppress grace for the rest of a snooze whose user really
+                // did leave. That gap stays open and tracked rather than
+                // half-closed in the too-quiet direction (TODO.md).
+                if (anchor.hasUsableFix && !hasGeofencingGrants()) {
+                    SnoozeDebugLog.warning(
+                        "a location grant is missing at restore; suppressing grace before the replay",
+                    )
+                    reportRegistration(
+                        GeofenceRegistrationFailure.fromSecurityException(hasFineLocation()),
+                    )
                 }
                 bridge = GeofenceSignalBridge.attach { observation ->
                     when (observation) {
