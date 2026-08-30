@@ -469,6 +469,15 @@ purpose: it is always literally `"Here"` today (saved/named places are unbuilt �
 places"), and the notification doesn't show it either, so surfacing it here first would only read
 as filler.
 
+**Including the degraded reason, on the same line and in the same words** (landed 2026-08-30). The
+mode line joins its cause exactly as §4.3's card does — `Timer only — no location` — from the same
+mapping, so the two surfaces cannot drift into phrasing one snooze two ways. Reason enough on its
+own: the ongoing notification is swipeable, silenceable by the user's own channel settings, and
+sometimes simply not the surface they opened, so a screen that showed only `Timer only` would read
+as a setting somebody chose rather than as the thing that went wrong. The same three causes earn a
+line and the same modes append it — `FULL` carries no cause by construction, `WIFI_GRACE` already
+names what matters — which is stated once in §4.3 and holds here.
+
 **And it says so when no snooze is running** (landed 2026-08-25): the same line reads `Not
 snoozing`. Idle used to render as an empty gap, which made "nothing is running" and "the record
 hasn't been read yet" look identical — the only thing separating them was whether the Snooze

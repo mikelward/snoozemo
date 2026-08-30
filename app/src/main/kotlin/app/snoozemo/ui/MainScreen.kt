@@ -20,8 +20,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.snoozemo.R
+import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.TrackingMode
+import app.snoozemo.degradationReasonRes
 import app.snoozemo.tile.R as TileR
 import java.time.Duration
 
@@ -48,6 +50,10 @@ fun MainScreen(
     // a clock reading behind them.
     trackingMode: TrackingMode?,
     remaining: Duration?,
+    // Why the mode degraded, where there is a reason worth naming. Null on a
+    // healthy snooze by construction, and also null for the causes that earn
+    // no line of their own ([degradationReasonRes]).
+    degradation: DegradationCause?,
     lastOutcome: String?,
     /** Whether a crashed run is currently pinned (SPEC.md §4.6) — the crash banner's own state. */
     crashPending: Boolean,
@@ -140,7 +146,7 @@ fun MainScreen(
         // first would only read as filler.
         when {
             snoozing == true && trackingMode != null && remaining != null ->
-                SnoozeStatus(trackingMode, remaining)
+                SnoozeStatus(trackingMode, remaining, degradation)
             snoozing == false -> NotSnoozingStatus()
             // Nothing yet: either the record is still being read, or it read
             // as running but without the mode and cap the line reports. Same
@@ -231,21 +237,39 @@ private fun NotSnoozingStatus() {
  *
  * The mode line reuses the ongoing notification's own copy
  * (`ongoing_ends_when_you_leave` / `ongoing_wifi_only` / `ongoing_wifi_grace` /
- * `ongoing_timer_only`)
- * and the remaining-time line reuses the tile's (`tile_remaining_hours` /
- * `tile_remaining_minutes`, `:tile` module) — the same two facts stated the
- * same way everywhere they already appear, rather than a third phrasing.
+ * `ongoing_timer_only`), the degraded reason joined to it reuses that
+ * notification's join too (`ongoing_degraded_reason`, and the same
+ * [degradationReasonRes] mapping behind it), and the remaining-time line
+ * reuses the tile's (`tile_remaining_hours` / `tile_remaining_minutes`,
+ * `:tile` module) — the same facts stated the same way everywhere they
+ * already appear, rather than a third phrasing.
+ *
+ * Why a degraded snooze says why here and not only in the notification: the
+ * notification can be swiped away, silenced by the user's own channel
+ * settings, or simply not the surface they opened. `Timer only` on its own
+ * reads as a choice someone made; `Timer only — no location` reads as the
+ * thing that went wrong, which is the difference principle 2 is about.
  */
 @Composable
-private fun SnoozeStatus(mode: TrackingMode, remaining: Duration) {
+private fun SnoozeStatus(mode: TrackingMode, remaining: Duration, degradation: DegradationCause?) {
+    val body = when (mode) {
+        TrackingMode.FULL -> stringResource(R.string.ongoing_ends_when_you_leave)
+        TrackingMode.WIFI_ONLY -> stringResource(R.string.ongoing_wifi_only)
+        TrackingMode.WIFI_GRACE -> stringResource(R.string.ongoing_wifi_grace)
+        TrackingMode.DURATION_ONLY -> stringResource(R.string.ongoing_timer_only)
+    }
+    // Same two modes the notification appends to, for the same reasons: FULL
+    // carries no cause by construction, and WIFI_GRACE already names the thing
+    // that matters and resolves in minutes.
+    val reason = when (mode) {
+        TrackingMode.WIFI_ONLY, TrackingMode.DURATION_ONLY ->
+            degradationReasonRes(degradation)?.let { stringResource(it) }
+        TrackingMode.FULL, TrackingMode.WIFI_GRACE -> null
+    }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
-            text = when (mode) {
-                TrackingMode.FULL -> stringResource(R.string.ongoing_ends_when_you_leave)
-                TrackingMode.WIFI_ONLY -> stringResource(R.string.ongoing_wifi_only)
-                TrackingMode.WIFI_GRACE -> stringResource(R.string.ongoing_wifi_grace)
-                TrackingMode.DURATION_ONLY -> stringResource(R.string.ongoing_timer_only)
-            },
+            text = reason?.let { stringResource(R.string.ongoing_degraded_reason, body, it) }
+                ?: body,
             style = MaterialTheme.typography.titleMedium,
         )
         Text(text = remainingText(remaining), style = MaterialTheme.typography.bodyMedium)

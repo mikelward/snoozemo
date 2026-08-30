@@ -17,6 +17,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.TrackingMode
 import com.github.takahirom.roborazzi.captureRoboImage
@@ -64,6 +65,7 @@ class MainScreenScreenshotTest {
                 snoozing = null,
                 trackingMode = null,
                 remaining = null,
+                degradation = null,
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
@@ -102,6 +104,7 @@ class MainScreenScreenshotTest {
                 snoozing = false,
                 trackingMode = null,
                 remaining = null,
+                degradation = null,
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
@@ -144,6 +147,7 @@ class MainScreenScreenshotTest {
                 snoozing = false,
                 trackingMode = null,
                 remaining = null,
+                degradation = null,
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
@@ -172,6 +176,7 @@ class MainScreenScreenshotTest {
                 snoozing = false,
                 trackingMode = null,
                 remaining = null,
+                degradation = null,
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
@@ -211,6 +216,7 @@ class MainScreenScreenshotTest {
                 snoozing = false,
                 trackingMode = null,
                 remaining = null,
+                degradation = null,
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
@@ -254,6 +260,7 @@ class MainScreenScreenshotTest {
                 snoozing = null,
                 trackingMode = null,
                 remaining = null,
+                degradation = null,
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
@@ -288,6 +295,7 @@ class MainScreenScreenshotTest {
                 snoozing = true,
                 trackingMode = TrackingMode.FULL,
                 remaining = Duration.ofHours(3).plusMinutes(40),
+                degradation = null,
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
@@ -325,6 +333,7 @@ class MainScreenScreenshotTest {
                 snoozing = true,
                 trackingMode = TrackingMode.WIFI_ONLY,
                 remaining = Duration.ofMinutes(45),
+                degradation = null,
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
@@ -355,6 +364,7 @@ class MainScreenScreenshotTest {
                 snoozing = true,
                 trackingMode = TrackingMode.DURATION_ONLY,
                 remaining = Duration.ofHours(8),
+                degradation = null,
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
@@ -374,6 +384,152 @@ class MainScreenScreenshotTest {
         composeRule.onNodeWithText("8h 0m left").assertExists()
     }
 
+    /**
+     * The reason travels with the mode, not just to the notification.
+     *
+     * `Timer only` alone reads like a setting someone chose. Joined to its
+     * cause it reads as the thing that went wrong, which is the whole point of
+     * saying it (principle 2) — and the user may well have arrived here
+     * *because* the notification was swiped away or silenced.
+     */
+    @Test
+    fun `a degraded snooze says why`() {
+        capture("main-screen-snoozing-timer-only-degraded.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.DURATION_ONLY,
+                remaining = Duration.ofHours(8),
+                degradation = DegradationCause.NO_LOCATION_FIX,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        // Verbatim, and one node rather than two: the same joined line the
+        // ongoing notification renders (`ongoing_degraded_reason`), so the two
+        // surfaces cannot drift into phrasing the same snooze differently.
+        composeRule.onNodeWithText("Timer only \u2014 no location").assertExists()
+        composeRule.onNodeWithText("Timer only").assertDoesNotExist()
+        composeRule.onNodeWithText("8h 0m left").assertExists()
+    }
+
+    /** Wi-Fi-only degrades for its own reasons and names them the same way. */
+    @Test
+    fun `a Wi-Fi-only snooze names its cause too`() {
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.WIFI_ONLY,
+                remaining = Duration.ofMinutes(45),
+                degradation = DegradationCause.FIXES_TOO_VAGUE,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Wi-Fi only \u2014 weak location signal").assertExists()
+    }
+
+    /**
+     * A cause that earns no line leaves the mode exactly as it was.
+     *
+     * `NOTHING_WATCHING` is the app's own wiring rather than anything the user
+     * did or can act on, so `Timer only` already says everything true about it
+     * — appending a clause here would spend the user's attention on a fact
+     * they cannot use.
+     */
+    @Test
+    fun `a cause with no line of its own leaves the mode alone`() {
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.DURATION_ONLY,
+                remaining = Duration.ofHours(8),
+                degradation = DegradationCause.NOTHING_WATCHING,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Timer only").assertExists()
+    }
+
+    /**
+     * A tracked snooze never grows a reason, whatever the record carries.
+     *
+     * `SnoozeController.modeFor` maps a null degradation straight to the
+     * anchor's capability, so `FULL` with a cause should not arise — but the
+     * mode gate is what makes that unrepresentable on screen rather than
+     * merely unlikely, and this is the test that holds it there.
+     */
+    @Test
+    fun `a tracked snooze appends nothing`() {
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.FULL,
+                remaining = Duration.ofHours(3),
+                degradation = DegradationCause.NO_LOCATION_FIX,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Ends when you leave").assertExists()
+    }
+
     @Test
     fun `a first run leads with the tile`() {
         var added = 0
@@ -387,6 +543,7 @@ class MainScreenScreenshotTest {
                 snoozing = false,
                 trackingMode = null,
                 remaining = null,
+                degradation = null,
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
@@ -426,6 +583,7 @@ class MainScreenScreenshotTest {
                 snoozing = false,
                 trackingMode = null,
                 remaining = null,
+                degradation = null,
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
@@ -455,6 +613,7 @@ class MainScreenScreenshotTest {
                 snoozing = false,
                 trackingMode = null,
                 remaining = null,
+                degradation = null,
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
@@ -483,6 +642,7 @@ class MainScreenScreenshotTest {
                 snoozing = false,
                 trackingMode = null,
                 remaining = null,
+                degradation = null,
                 lastOutcome = "Couldn't snooze",
                 crashPending = false,
                 shareFailed = false,
@@ -514,6 +674,7 @@ class MainScreenScreenshotTest {
                 snoozing = false,
                 trackingMode = null,
                 remaining = null,
+                degradation = null,
                 lastOutcome = null,
                 crashPending = true,
                 shareFailed = false,
@@ -551,6 +712,7 @@ class MainScreenScreenshotTest {
                 snoozing = false,
                 trackingMode = null,
                 remaining = null,
+                degradation = null,
                 lastOutcome = null,
                 crashPending = true,
                 shareFailed = false,
@@ -586,6 +748,7 @@ class MainScreenScreenshotTest {
                 snoozing = false,
                 trackingMode = null,
                 remaining = null,
+                degradation = null,
                 lastOutcome = null,
                 crashPending = true,
                 shareFailed = true,
@@ -618,6 +781,7 @@ class MainScreenScreenshotTest {
                 snoozing = false,
                 trackingMode = null,
                 remaining = null,
+                degradation = null,
                 lastOutcome = null,
                 crashPending = true,
                 shareFailed = false,
@@ -647,6 +811,7 @@ class MainScreenScreenshotTest {
                 snoozing = false,
                 trackingMode = null,
                 remaining = null,
+                degradation = null,
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
@@ -677,6 +842,7 @@ class MainScreenScreenshotTest {
                 snoozing = false,
                 trackingMode = null,
                 remaining = null,
+                degradation = null,
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
@@ -716,6 +882,7 @@ class MainScreenScreenshotTest {
                 snoozing = true,
                 trackingMode = TrackingMode.FULL,
                 remaining = Duration.ofHours(3).plusMinutes(40),
+                degradation = null,
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,

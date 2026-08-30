@@ -900,10 +900,13 @@ the point is that every other line of the app is worthless if it isn't true.
         its old meaning so the §6.6 grace deadline still arms once. `SPEC.md` §6.1 records the
         reversal, and `failures that alternate do not flap the level` was rewritten to assert the
         new value sequence while keeping the half that did not change — a level, never an event.
-        **Still open here**: `MainScreen` renders the mode from `TrackingMode` alone and does not
-        show the reason, so the app screen and the notification can disagree in wording. Left out
-        to keep this change to the surface §8.1 actually names; it needs a `SnoozeStatus`
-        signature change and a screenshot pass.
+        **And the app screen now says it too** (**landed 2026-08-30**, the follow-up this
+        deferral named). `MainScreen` rendered the mode from `TrackingMode` alone, so the screen
+        and the notification could describe one snooze two ways. `MainScreen` takes the record's
+        `degradation` and joins it to the mode from the same mapping the notification reads
+        (`degradationReasonRes`, shared rather than copied, so the two cannot drift). No default
+        on the new parameter, deliberately: forgetting it would silently drop the reason, which is
+        the failure the line exists to prevent, so every caller has to state it.
         - [x] **A restart promoted a degraded snooze back to full before it re-derived the
           problem** (Codex, PR #141; **landed 2026-08-30** in the follow-up PR that deferral
           named). After process death — the common case on `play`, which runs no foreground

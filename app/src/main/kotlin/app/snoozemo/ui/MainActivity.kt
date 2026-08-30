@@ -743,6 +743,7 @@ class MainActivity : ComponentActivity() {
                             snoozing = snoozing,
                             trackingMode = activeSnooze?.mode,
                             remaining = activeSnooze?.remaining(now),
+                            degradation = activeSnooze?.degradation,
                             lastOutcome = lastOutcome,
                             crashPending = crashPending,
                             shareFailed = shareFailed,
