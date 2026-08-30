@@ -3502,6 +3502,17 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   `ceiling` — already in the bundle — into the reseed instead of asking `ceilingAt`.
   Settle it together with the `startedAt` binding above; both are about a restored sheet
   trusting state the screen has not read back yet.
+  **And the same seam bites the fresh-arm path, not just restore** (Codex's eighth round,
+  same PR, also filed against a documentation-only commit). `offerSheetForThisArm` gates on
+  the record it just loaded and then seeds from `activeSnooze` — so an arm made while the
+  warm copy is stale (the screen has not caught up with a tile arm, say) passes the gate on
+  the real record and offers times against `now + DEFAULT_CAP`. Same wrong ceiling, same
+  outcome: a time past the real cap, which the service reports applied and ignores.
+  That makes the general statement of this whole family one line — **the ceiling must come
+  from the record that passed the gate, never from the warm copy** — and the fix for this
+  half is one argument: seed from `loaded.capExpiresAt`. Doing it properly means the
+  controller taking the record rather than a `ceilingAt` lambda, which is a signature change
+  across both hosts and is why it is not a one-liner.
 
 - **Rounding drops a wall clock that only exists on the other side of a spring-forward gap**
   (2026-08-25, Codex on PR #118, declined — the fifth consecutive finding on this surface).
