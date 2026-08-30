@@ -3340,7 +3340,22 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
   A fourth P1 on the same review — the legacy `cacheDir/debuglog` migration
   never retried on the Off toggle — needed no library change and is **fixed**
-  in `cc48be9`, with a test.
+  in `cc48be9`, with a test. A fifth — a pinned crash that this app's own
+  25,000-character render truncated away, consumed anyway — is **fixed** in
+  `6116cb1`, also with a test.
+
+- **Does `androidlog` get a row on the Licenses screen?** (Codex, PR #153, and
+  the same finding on clothescast#1176 before it.) `exportBundledLicenses`
+  keeps only `ModuleComponentIdentifier` artifacts, and an included-build
+  substitution resolves to a `ProjectComponentIdentifier`, so the shared logger
+  is filtered out of both `aboutlibraries.json` files even though it is
+  compiled into every APK. Declined on clothescast as the wrong place to settle
+  it: the screen attributes *other people's* work, `androidlog` is this
+  account's own code, and it carries no `LICENSE` — that decision is open in
+  its own `TODO.md`. So this is downstream of an unanswered question, not a bug
+  introduced here. If it does get a license, the filter needs extending to keep
+  included-build components under their substituted coordinates, in **both**
+  consuming apps — a fleet change, not a snoozemo one.
 
   - **An empty crash log now raises no banner.** A crash marker can land without
     the run's content ever reaching disk — process death between the two writes
