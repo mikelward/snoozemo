@@ -58,20 +58,19 @@ on:
   push:
     branches:
       - main
-    # Mirrors the lane's housekeeping rule (.github/lanes.conf): skip the
-    # main run only when every changed file is markdown outside the module
-    # trees. The later patterns re-include module paths, so a markdown build
-    # input (a packaged asset can be .md) still builds; dotfiles are no
-    # longer excluded — .gitignore and workflow edits are code.
-    paths:
-      - '**'
-      - '!**/*.md'
-      - 'app/**'
-      - 'core/**'
-      - 'dnd/**'
-      - 'presence/**'
-      - 'tile/**'
-      - '.github/workflows/**'
+    # No paths filter. There used to be one here mirroring .github/lanes.conf
+    # by hand — and it was right, which is the point: three of the four
+    # sibling repos that hand-translated the same policy got it wrong, and
+    # nothing checked any of them. `push classify` in lanes.conf now decides
+    # the same question from the policy itself, and the heavy jobs and deploy
+    # are already gated on `docs_only`, so a docs-only push to main starts a
+    # run and skips everything in it rather than never starting one.
+    #
+    # The engine refuses the range rather than guessing whenever it cannot
+    # prove the push added it: a force-push, a first push, a branch deletion
+    # (where the payload's `after` is all zeros but GITHUB_SHA is main's
+    # tip), a comparison that is not `ahead`, or a file list at the API's
+    # 300-file page cap. Every refusal takes the code lane.
 
 concurrency:
   # A PR branch shares one group and cancels superseded runs: without that,
