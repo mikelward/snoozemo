@@ -98,6 +98,88 @@ class CheckingFixesTest {
     }
 
     @Test
+    fun `a platform recovery asks again instead of serving out the backoff`() {
+        // The gap the mode-change watch alone could not close (Codex, PR
+        // #139): an outage that starts mid-check leaves the duty ACTIVE, so
+        // the resting probe is a no-op and the burst is the only thing that
+        // can ask.
+        fixes.start()
+        repeat(CheckingCadence.BACKOFF_AFTER) { round ->
+            requester.answer(FixOutcome.ServicesOff)
+            if (round < CheckingCadence.BACKOFF_AFTER - 1) {
+                scheduler.fire(CheckingCadence.CONFIRM_SPACING_MS)
+            }
+        }
+        assertTrue(scheduler.delayed.any { it.first == CheckingCadence.BACKOFF_SPACING_MS })
+        val asked = requester.pending.size
+
+        fixes.retryNow()
+
+        // Asked immediately, and the backoff that was pending is gone rather
+        // than left to fire a duplicate request later.
+        assertEquals(asked + 1, requester.pending.size)
+        assertTrue(scheduler.delayed.none { it.first == CheckingCadence.BACKOFF_SPACING_MS })
+    }
+
+    @Test
+    fun `a recovery paces the next request at the confirmation gap again`() {
+        fixes.start()
+        repeat(CheckingCadence.BACKOFF_AFTER) { round ->
+            requester.answer(FixOutcome.ServicesOff)
+            if (round < CheckingCadence.BACKOFF_AFTER - 1) {
+                scheduler.fire(CheckingCadence.CONFIRM_SPACING_MS)
+            }
+        }
+
+        fixes.retryNow()
+        requester.answer(FixOutcome.NothingRecoverable)
+
+        assertTrue(scheduler.delayed.any { it.first == CheckingCadence.CONFIRM_SPACING_MS })
+    }
+
+    @Test
+    fun `a recovery while a request is in flight forgives the backoff without asking twice`() {
+        // Cutting a live request short to ask again would spend two requests
+        // on one moment; its own answer is already arriving.
+        fixes.start()
+        repeat(CheckingCadence.BACKOFF_AFTER - 1) {
+            requester.answer(FixOutcome.ServicesOff)
+            scheduler.fire(CheckingCadence.CONFIRM_SPACING_MS)
+        }
+        val inFlight = requester.pending.size
+
+        fixes.retryNow()
+
+        assertEquals(inFlight, requester.pending.size)
+
+        // And that answer's follow-up is paced at the confirmation gap, not
+        // the backoff it would otherwise have crossed into.
+        requester.answer(FixOutcome.ServicesOff)
+        assertTrue(scheduler.delayed.any { it.first == CheckingCadence.CONFIRM_SPACING_MS })
+    }
+
+    @Test
+    fun `a recovery while resting is the probe's business, not the burst's`() {
+        fixes.retryNow()
+
+        assertEquals(0, requester.pending.size)
+    }
+
+    @Test
+    fun `a recovery after close asks nothing`() {
+        fixes.start()
+        fixes.close()
+        // The start's own request is still in the script's list — cancelling
+        // it does not un-ask it — so what this asserts is that no *further*
+        // request is made.
+        val asked = requester.pending.size
+
+        fixes.retryNow()
+
+        assertEquals(asked, requester.pending.size)
+    }
+
+    @Test
     fun `the ceiling settles a request that never answers`() {
         fixes.start()
 

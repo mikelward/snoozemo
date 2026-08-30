@@ -33,6 +33,24 @@ internal class CheckingCadence {
         consecutiveUnanswered++
     }
 
+    /**
+     * The platform layer these requests were failing against says it is
+     * working again — location switched back on (SPEC.md §8.4).
+     *
+     * Deliberately not [onFixDelivered] under another name, even though the
+     * effect is the same: no fix has arrived, and the reason the backoff is
+     * being forgiven is what the next reader needs. A backoff is a bound on
+     * asking a provider that is not answering; once the *reason* it was not
+     * answering is provably over, serving out five more minutes of it means
+     * a snooze reports degraded tracking long after the outage ended, which
+     * is the very latency this recovery path exists to remove. The bound
+     * still holds if the provider goes on failing — the count simply starts
+     * again from the recovery.
+     */
+    fun onPlatformRecovered() {
+        consecutiveUnanswered = 0
+    }
+
     /** How long to wait before the next one-shot. */
     val nextDelayMs: Long
         get() = if (consecutiveUnanswered >= BACKOFF_AFTER) {
