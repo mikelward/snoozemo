@@ -1,6 +1,7 @@
 package app.snoozemo.presence
 
 import app.snoozemo.core.Anchor
+import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.Fix
 import app.snoozemo.core.LocationDuty
 import app.snoozemo.core.PresenceEvent
@@ -29,6 +30,9 @@ class PresenceFeedTest {
     )
 
     private val armedAtMs = 1_000_000L
+
+    /** A restart well after the arm — the gap is where the trap lives. */
+    private val restartedAtMs = armedAtMs + 1_200_000L
 
     @Test
     fun `a geofence exit escalates and turns location on`() {
@@ -197,6 +201,224 @@ class PresenceFeedTest {
         val update = feed.accept(PresenceSignal.AnchorWifiAssociated(armedAtMs + 5_000))
 
         assertFalse("Wi-Fi is back; nothing left for the timer to bound", update.graceActive)
+    }
+
+    /**
+     * The restart case (Codex, PR #141). On `play` the process dies between
+     * wakes, so a monitor is rebuilt constantly; a feed that started every
+     * time at "healthy" would have its first update read as a recovery
+     * nothing observed, dropping the card from `Timer only — no location`
+     * back to a plain `Snoozing` moments after it was reposted.
+     */
+    @Test
+    fun `a restored degradation survives the restart that rebuilt the feed`() {
+        val feed = PresenceFeed(
+            anchor,
+            seedElapsedRealtimeMs = armedAtMs,
+            seedDegradation = DegradationCause.NO_LOCATION_FIX,
+            seedDegradationAtMs = restartedAtMs,
+        )
+
+        assertEquals(DegradationCause.NO_LOCATION_FIX, feed.degradation)
+
+        // A signal that says nothing about location must not promote it.
+        val update = feed.accept(PresenceSignal.AnchorWifiAssociated(armedAtMs + 5_000))
+
+        assertEquals(
+            "Wi-Fi is not evidence about location (SPEC.md §6.1)",
+            DegradationCause.NO_LOCATION_FIX,
+            update.degradation,
+        )
+    }
+
+    /**
+     * The half that would have been missed by seeding the level alone: a
+     * *cached* reading captured before the restart says nothing about whether
+     * the failures are over, and `Presence.staleFix` compares against
+     * `lastUnusableAtMs`, which a fresh feed leaves null — so every reading
+     * would clear a seeded level trivially. PR #33's case, reappearing at the
+     * restart boundary.
+     */
+    @Test
+    fun `a fix from before the restart does not clear a restored degradation`() {
+        val feed = PresenceFeed(
+            anchor,
+            seedElapsedRealtimeMs = armedAtMs,
+            seedDegradation = DegradationCause.FIXES_TOO_VAGUE,
+            seedDegradationAtMs = restartedAtMs,
+        )
+
+        val update = feed.accept(
+            PresenceSignal.FixArrived(
+                // Precise, and squarely at the anchor — it would clear the
+                // level on its merits. What disqualifies it is its age.
+                Fix(lat = 0.0, lon = 0.0, accuracyM = 10f, elapsedRealtimeMs = restartedAtMs - 5_000),
+            ),
+        )
+
+        assertEquals(
+            "evidence older than the restart cannot say the failures are over",
+            DegradationCause.FIXES_TOO_VAGUE,
+            update.degradation,
+        )
+    }
+
+    /** And the seed is not a trap: a genuinely fresh reading still clears it. */
+    @Test
+    fun `a fix taken after the restart clears a restored degradation`() {
+        val feed = PresenceFeed(
+            anchor,
+            seedElapsedRealtimeMs = armedAtMs,
+            seedDegradation = DegradationCause.FIXES_TOO_VAGUE,
+            seedDegradationAtMs = restartedAtMs,
+        )
+
+        val update = feed.accept(
+            PresenceSignal.FixArrived(
+                Fix(lat = 0.0, lon = 0.0, accuracyM = 10f, elapsedRealtimeMs = restartedAtMs + 30_000),
+            ),
+        )
+
+        assertNull("location answered; the level is withdrawn", update.degradation)
+    }
+
+    /** A fresh arm keeps the old shape — no seed, no staleness floor. */
+    @Test
+    fun `an unseeded feed starts healthy`() {
+        val feed = PresenceFeed(anchor, seedElapsedRealtimeMs = armedAtMs)
+
+        assertNull(feed.degradation)
+    }
+
+    /**
+     * The case that made the first floor wrong (Codex, PR #142). A snooze
+     * arms healthy, banks a good fix ten minutes in, and only *then* starts
+     * failing. The cached reading post-dates the arm and pre-dates the
+     * trouble, so an arm-moment floor believes it and restores `FULL` on
+     * evidence older than the problem — PR #33's case, which is the exact
+     * thing seeding the level was meant to stop.
+     */
+    @Test
+    fun `a fix banked between the arm and the failures cannot clear a restored level`() {
+        val feed = PresenceFeed(
+            anchor,
+            seedElapsedRealtimeMs = armedAtMs,
+            seedDegradation = DegradationCause.NO_LOCATION_FIX,
+            seedDegradationAtMs = restartedAtMs,
+        )
+
+        val update = feed.accept(
+            PresenceSignal.FixArrived(
+                Fix(
+                    lat = 0.0,
+                    lon = 0.0,
+                    accuracyM = 10f,
+                    // Comfortably after the arm, comfortably before the restart.
+                    elapsedRealtimeMs = armedAtMs + 600_000,
+                ),
+            ),
+        )
+
+        assertEquals(
+            "this process never saw it arrive, so it cannot vouch for it",
+            DegradationCause.NO_LOCATION_FIX,
+            update.degradation,
+        )
+    }
+
+    /**
+     * A level with no floor is worse than no level — it would be cleared by
+     * the first reading of any age — so the pair is all-or-nothing rather
+     * than silently half-applied.
+     */
+    @Test
+    fun `a seeded cause without a floor is refused rather than half-applied`() {
+        val feed = PresenceFeed(
+            anchor,
+            seedElapsedRealtimeMs = armedAtMs,
+            seedDegradation = DegradationCause.NO_LOCATION_FIX,
+        )
+
+        assertNull(feed.degradation)
+    }
+
+    /**
+     * The run of failures continues across a restart; only the process ended
+     * (Codex, PR #142). `Presence.useless` updates a standing cause only once
+     * the count reaches the threshold, so a restored level whose counter
+     * started at zero would keep asserting the old flavor — and on `play`,
+     * where a wake takes one resting probe before the process is reclaimed,
+     * the counter can reset before it ever gets there. The card would say
+     * `weak location signal` for the rest of a snooze in which nothing
+     * arrived at all.
+     */
+    @Test
+    fun `the next failure after a restart names the flavor that just failed`() {
+        val feed = PresenceFeed(
+            anchor,
+            seedElapsedRealtimeMs = armedAtMs,
+            seedDegradation = DegradationCause.FIXES_TOO_VAGUE,
+            seedDegradationAtMs = restartedAtMs,
+        )
+
+        // One failure, of the other kind — all a single wake gets to take.
+        val update = feed.accept(PresenceSignal.FixUnavailable(restartedAtMs + 30_000))
+
+        assertEquals(
+            "the threshold was crossed before the restart, not reset by it",
+            DegradationCause.NO_LOCATION_FIX,
+            update.degradation,
+        )
+    }
+
+    /** A fresh arm still has to earn its level the long way. */
+    @Test
+    fun `an unseeded feed still needs a full run of failures to degrade`() {
+        val feed = PresenceFeed(anchor, seedElapsedRealtimeMs = armedAtMs)
+
+        assertNull(feed.accept(PresenceSignal.FixUnavailable(armedAtMs + 10_000)).degradation)
+        assertNull(feed.accept(PresenceSignal.FixUnavailable(armedAtMs + 20_000)).degradation)
+        assertEquals(
+            DegradationCause.NO_LOCATION_FIX,
+            feed.accept(PresenceSignal.FixUnavailable(armedAtMs + 30_000)).degradation,
+        )
+    }
+
+    /**
+     * The other half of the resumed counter (Codex, PR #142). Seeding the
+     * threshold as crossed lets the next failure name the current flavor —
+     * but a *cached* inconclusive reading banked before the restart is not
+     * the current flavor, and would otherwise relabel `no location` as `weak
+     * location signal` while nothing had arrived at all, then survive further
+     * restarts saying it.
+     */
+    @Test
+    fun `a cached vague fix from before the restart cannot relabel the cause`() {
+        val feed = PresenceFeed(
+            anchor,
+            seedElapsedRealtimeMs = armedAtMs,
+            seedDegradation = DegradationCause.NO_LOCATION_FIX,
+            seedDegradationAtMs = restartedAtMs,
+        )
+
+        val update = feed.accept(
+            PresenceSignal.FixArrived(
+                // Too vague to place anyone, and banked after the arm but
+                // before the restart — fresh by the evidence test, silent
+                // about what is failing now.
+                Fix(
+                    lat = 0.0,
+                    lon = 0.0,
+                    accuracyM = 500f,
+                    elapsedRealtimeMs = armedAtMs + 600_000,
+                ),
+            ),
+        )
+
+        assertEquals(
+            DegradationCause.NO_LOCATION_FIX,
+            update.degradation,
+        )
     }
 
     @Test

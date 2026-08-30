@@ -7,6 +7,7 @@ import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.Anchor
+import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.ClockReading
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.PresenceMonitor
@@ -92,15 +93,24 @@ internal class FakePresenceMonitor : PresenceMonitor {
     val startedWith = mutableListOf<Anchor>()
     val startedSeeds = mutableListOf<Long>()
     val startedArmedAtEpochMs = mutableListOf<Long>()
+
+    /** What the service handed the monitor to restore with (Codex, PR #141). */
+    val startedDegradations = mutableListOf<DegradationCause?>()
     var stops: Int = 0
 
     /** Emit into this to stand in for the sensors. */
     val updates = MutableSharedFlow<PresenceUpdate>(extraBufferCapacity = 16)
 
-    override fun start(anchor: Anchor, sinceElapsedRealtimeMs: Long, armedAtEpochMs: Long): Flow<PresenceUpdate> {
+    override fun start(
+        anchor: Anchor,
+        sinceElapsedRealtimeMs: Long,
+        armedAtEpochMs: Long,
+        restoredDegradation: DegradationCause?,
+    ): Flow<PresenceUpdate> {
         startedWith += anchor
         startedSeeds += sinceElapsedRealtimeMs
         startedArmedAtEpochMs += armedAtEpochMs
+        startedDegradations += restoredDegradation
         return updates
     }
 

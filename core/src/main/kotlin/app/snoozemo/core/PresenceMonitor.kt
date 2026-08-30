@@ -42,8 +42,21 @@ interface PresenceMonitor {
      * restatement, so two calls for the same snooze can carry different
      * values of it, while [armedAtEpochMs] is set once, at genuine arm
      * time, and never recomputed.
+     *
+     * [restoredDegradation] is the cause the snooze record already carries,
+     * or null for a fresh arm — the monitor's own state does not survive the
+     * process, so without it a restart starts every level at null and its
+     * first update reads as a recovery nothing observed (Codex, PR #141).
+     * On `play` that restart is the ordinary case, not an edge one: there is
+     * no foreground service, so a monitor is rebuilt on every wake. A
+     * monitor that cannot act on it may ignore it.
      */
-    fun start(anchor: Anchor, sinceElapsedRealtimeMs: Long, armedAtEpochMs: Long): Flow<PresenceUpdate>
+    fun start(
+        anchor: Anchor,
+        sinceElapsedRealtimeMs: Long,
+        armedAtEpochMs: Long,
+        restoredDegradation: DegradationCause? = null,
+    ): Flow<PresenceUpdate>
 
     /**
      * Stops watching and releases everything `start` acquired — network

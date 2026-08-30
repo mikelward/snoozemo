@@ -169,9 +169,26 @@ data class PresenceState(
      * broken. That is the overstating direction, and the one this whole change
      * exists to prevent.
      *
-     * Only the stale path needs it: a reading new enough to be accepted for
-     * presence is already newer than every observation, since a failed one
-     * moves the evidence bar too.
+     * **Both fix paths consult it, and the reason the stale one used to be
+     * enough is worth keeping** (Codex, PR #142). A failed observation
+     * advances `latestEvidenceMs` and this boundary together, so within one
+     * process a reading fresh enough to be accepted for presence is newer
+     * than every failure by construction, and checking again on that path
+     * would be a no-op.
+     *
+     * A **restarted** monitor separates the two deliberately, which is what
+     * makes the check real. `latestEvidenceMs` is seeded to the snooze's arm
+     * moment — raising it to the restart would discard a held geofence exit
+     * the restart was woken to deliver (Codex, PR #73) — while a resumed
+     * degradation's boundary is the restart itself, since a process cannot
+     * vouch for a reading it never saw arrive. A fix banked after the arm and
+     * before the failures then lands in the gap: fresh by the evidence test,
+     * and still silent about whether the trouble is over.
+     *
+     * So `fixArrived` applies this boundary as well, and the check is not
+     * redundant however it reads in a single-process trace. Removing it
+     * restores the promotion described above, across exactly the restart this
+     * boundary is now seeded for.
      */
     val lastUnusableAtMs: Long? = null,
     /** When the anchor's Wi-Fi went away, or null if it is present or never was. */
@@ -554,6 +571,30 @@ object Presence {
 
         val outcome = Departure.consider(fix, anchor, state.progress)
         val accepted = state.copy(latestEvidenceMs = fix.elapsedRealtimeMs)
+        // SPEC.md §6.1's "evidence of health must be newer than the failure it
+        // claims is over", applied on this path too. It used to live only in
+        // [staleFix], which was enough while both boundaries moved together:
+        // a useless observation advances `latestEvidenceMs` and
+        // `lastUnusableAtMs` alike, so in one process a reading fresh enough
+        // to reach here is newer than the failure by construction and this is
+        // a no-op.
+        //
+        // A restarted monitor breaks that pairing deliberately (Codex, PR
+        // #142). `latestEvidenceMs` is seeded to the *arm* moment, because
+        // raising it to the restart would drop the held geofence exit the
+        // restart was woken to deliver (Codex, PR #73) — while a restored
+        // degradation's floor is the *restart*, since this process cannot
+        // vouch for a reading it never saw arrive. So a fix banked after the
+        // arm but before the failures began is fresh by the evidence test and
+        // still says nothing about whether the trouble is over; without this
+        // it would clear the level and restore FULL on evidence older than
+        // the problem.
+        val provesHealth = fix.elapsedRealtimeMs > (state.lastUnusableAtMs ?: Long.MIN_VALUE)
+        // Only the health half is withheld. The reading's *presence* half is
+        // legitimately fresh, so the phase, the departure progress and the
+        // grace period all still act on it.
+        val healthAfter = if (provesHealth) null else state.degradation
+        val uselessAfter = if (provesHealth) 0 else state.uselessObservations
         return when (outcome.verdict) {
             DepartureVerdict.DEPARTED -> departed(accepted, anchor)
 
@@ -561,13 +602,15 @@ object Presence {
                 val next = accepted.copy(
                     phase = PresencePhase.CHECKING,
                     progress = outcome.progress,
-                    uselessObservations = 0,
+                    uselessObservations = uselessAfter,
                     // Location answered, so the engine no longer believes it is
                     // broken — and that travels as a level, so nothing has to be
                     // said about it here. This reading proves the capability
                     // while settling nothing about presence, which used to be the
                     // one combination no event could express (Codex, PR #33).
-                    degradation = null,
+                    // Withheld when the reading pre-dates the failure it would
+                    // be claiming is over — see `provesHealth` above.
+                    degradation = healthAfter,
                     // Location is answering again, so the grace period's premise
                     // — that nothing can confirm a departure — no longer holds,
                     // and an alarm left armed would end the snooze on a timer
@@ -591,8 +634,10 @@ object Presence {
                 val next = accepted.copy(
                     phase = PresencePhase.RESTING,
                     progress = DepartureProgress.NONE,
-                    uselessObservations = 0,
-                    degradation = null,
+                    uselessObservations = uselessAfter,
+                    // Same withholding as above: presence is confirmed, but a
+                    // reading older than the failures does not retract them.
+                    degradation = healthAfter,
                     graceDeadlineMs = null,
                     checkingSinceMs = null,
                     // Presence is confirmed and the deadline cleared, so a
@@ -719,6 +764,11 @@ object Presence {
         // time the flavor of the failure changes.
         val nowDegraded = count >= DEGRADED_AFTER_USELESS_OBSERVATIONS &&
             state.degradation == null
+        // Whether this observation is part of the run the level describes,
+        // rather than one from before it that arrived late (see the
+        // `degradation` assignment below). Null means nothing has failed yet,
+        // so the first run is never held back.
+        val namesThisRun = atMs > (state.lastUnusableAtMs ?: Long.MIN_VALUE)
         val next = state.copy(
             uselessObservations = count,
             latestEvidenceMs = maxOfNullable(state.latestEvidenceMs, atMs),
@@ -727,7 +777,20 @@ object Presence {
             lastUnusableAtMs = maxOfNullable(state.lastUnusableAtMs, atMs),
             // Not `nowDegraded`: that one is false once a level already
             // stands, which is exactly the case this has to update.
-            degradation = if (count >= DEGRADED_AFTER_USELESS_OBSERVATIONS) {
+            //
+            // `namesThisRun` is the same boundary `fixArrived` applies before
+            // letting a reading retract a degradation, on the one path that
+            // did not have it (Codex, PR #142). An observation older than
+            // the standing failure cannot say what is failing *now* any more
+            // than it can say the failures are over. In one process it never
+            // fires — a useless observation advances this boundary as it
+            // sets it, so the next is always later — but a resumed level
+            // starts with the boundary at the restart and the counter
+            // already at the threshold, so a cached inconclusive reading
+            // banked before the restart would otherwise relabel
+            // `no location` as `weak location signal` while nothing had
+            // arrived at all, and survive further restarts saying it.
+            degradation = if (count >= DEGRADED_AFTER_USELESS_OBSERVATIONS && namesThisRun) {
                 cause
             } else {
                 state.degradation

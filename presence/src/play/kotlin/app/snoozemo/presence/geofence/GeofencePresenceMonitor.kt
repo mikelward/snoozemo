@@ -117,7 +117,12 @@ class GeofencePresenceMonitor(
         uptimeMillis = readElapsedRealtimeMs(),
     )
 
-    override fun start(anchor: Anchor, sinceElapsedRealtimeMs: Long, armedAtEpochMs: Long): Flow<PresenceUpdate> {
+    override fun start(
+        anchor: Anchor,
+        sinceElapsedRealtimeMs: Long,
+        armedAtEpochMs: Long,
+        restoredDegradation: DegradationCause?,
+    ): Flow<PresenceUpdate> {
         // Captured synchronously at the call, not inside the producer: the
         // whole point is telling a stop that happened after start() from one
         // that happened before the producer got to run.
@@ -179,6 +184,18 @@ class GeofencePresenceMonitor(
             anchor,
             seedElapsedRealtimeMs = sinceElapsedRealtimeMs,
             seedGraceDeadlineMs = restoredGraceDeadlineMs,
+            // Only the engine's own inferences (Codex, PR #141). A restored
+            // platform cause goes to the platform slot below instead, because
+            // the two are refuted by different evidence and PR #75 split them
+            // for exactly that reason.
+            seedDegradation = restoredDegradation.takeIf {
+                it == DegradationCause.NO_LOCATION_FIX || it == DegradationCause.FIXES_TOO_VAGUE
+            },
+            // This restart, not the arm: a cached fix banked after arming but
+            // before the failures began post-dates the arm moment and would
+            // clear the restored level on evidence older than the problem
+            // (Codex, PR #142).
+            seedDegradationAtMs = readElapsedRealtimeMs(),
             // The "defer at most once" bound has to survive the restart that
             // this restore *is* (Codex, PR #106): without it, a process death
             // inside the confirmation window would let the seed re-grant the
@@ -244,6 +261,30 @@ class GeofencePresenceMonitor(
         fun platformLevel(): DegradationCause? =
             servicesDegradation.get() ?: registrationDegradation.get()
 
+        // **Only the engine's own inferences are resumed across a restart**
+        // (maintainer, 2026-08-30, narrowing this change to the half that
+        // held up). A platform cause is not, and `LOCATION_SERVICES_OFF` is
+        // the one that would be: the record carries the cause without its
+        // origin, and that cause reaches *both* slots — a recoverable
+        // `addGeofences` refusal carries it, as does the "fence is now
+        // suspect" marker set when a delivered fix clears the services slot.
+        // Three attempts at resuming it anyway each ended in the overstating
+        // direction (Codex, PR #142): the registration slot and a
+        // clear-on-registration both let `addGeofences` — which can accept a
+        // fence the platform cannot monitor — promote the snooze to healthy,
+        // and the conservative services slot is cleared by the very first
+        // `FixArrived` in `deliver`, cached or not, ahead of any staleness
+        // test. Resuming it safely needs the origin persisted, which is a
+        // durable field with the grace deadline's epoch-frame problem, so it
+        // is its own change (TODO.md).
+        //
+        // The cost of not resuming it is what `main` already does: a services
+        // outage loses its *reason* across a process death, and the engine
+        // re-derives a level from its own next observations. That is the
+        // understating direction, and no worse than before this change.
+        // `NO_LOCATION_IN_BACKGROUND` and `NOTHING_WATCHING` are likewise not
+        // resumed — neither is a runtime failure this monitor can refute, and
+        // a durable capability loss already has its own restore path above.
         // Assigned once `repairFence` exists below; deliver() runs only after
         // setup, so the placeholder is never the one invoked.
         var repairOnRecovery: () -> Unit = {}

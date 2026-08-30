@@ -175,6 +175,35 @@ class SnoozeServicePresenceTest {
         assertEquals(listOf(expected), TestSnoozeService.presence.startedSeeds)
     }
 
+    /**
+     * The restart hand-off (Codex, PR #141). The monitor's own levels die with
+     * the process — on `play` that is every wake, not an edge case — so the
+     * record's cause is the only thing that can tell a restarted watch it is
+     * resuming a degraded snooze rather than a healthy one. Without it the
+     * first update carries a synthesized null and the card silently promotes.
+     */
+    @Test
+    fun `a restore hands the monitor the cause the record already carries`() {
+        armWatched()
+        val armed = ActiveSnoozeStore(appContext).load()!!
+        // Fresh arm: nothing degraded yet, so nothing to restore.
+        assertEquals(listOf<DegradationCause?>(null), TestSnoozeService.presence.startedDegradations)
+
+        val degraded = armed.copy(
+            mode = TrackingMode.DURATION_ONLY,
+            degradation = DegradationCause.FIXES_TOO_VAGUE,
+        )
+        TestSnoozeService.reset(now.plusSeconds(600))
+        TestSnoozeService.zen.outcome = ZenOutcome.Applied
+        startService(SnoozeService.ACTION_CHECK_CAP, record = degraded)
+        shadowOf(getMainLooper()).idle()
+
+        assertEquals(
+            listOf<DegradationCause?>(DegradationCause.FIXES_TOO_VAGUE),
+            TestSnoozeService.presence.startedDegradations,
+        )
+    }
+
     @Test
     fun `a snooze ended from a cold process still takes the watch down`() {
         // An `End now` on a fresh process adopts the record without ever
