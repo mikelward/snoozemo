@@ -150,33 +150,38 @@ fun MainScreen(
             // wrong direction to be wrong in.
             else -> Unit
         }
-        // Gated behind access being allowed, same as the old DebugScreen —
-        // not a design call this PR makes. TODO.md still tracks "how and when
-        // to show Snooze/End snooze" as open (maintainer, 2026-08-23): both
-        // buttons rendering only once access is allowed keeps this screen's
-        // change scoped to the split itself.
+        // Gated behind access being allowed, same as the old DebugScreen.
+        //
+        // **Exactly one of the two shows** (maintainer, 2026-08-22). The split
+        // is on `snoozing == false` rather than on `snoozing == true`, and the
+        // asymmetry is the whole design: `End snooze` is the one guaranteed
+        // way to un-silence the phone, so it may only disappear where the
+        // screen is *confident* nothing is running. Unknown — the record not
+        // read yet — keeps it, because a stale or unread belief must never be
+        // what stops someone turning their phone back on (SPEC.md §7: manual
+        // exit is always available, always instant, and `endSnooze` is
+        // idempotent, so offering it when nothing is running costs nothing).
+        //
+        // `Snooze` takes the opposite treatment for the same reason: it needs
+        // a confident "nothing is running" to appear at all, since offering to
+        // arm over a snooze the screen has not read yet is how a user loses
+        // the deadline they were promised. It used to render disabled in that
+        // state; showing the safety net instead says more with one button.
         if (access == PolicyAccess.GRANTED) {
-            Button(
-                onClick = onArm,
-                // Disabled until the record has actually been read. Unknown
-                // is not "nothing is running": offering to arm over a snooze
-                // the screen hasn't read yet is how the user loses the
-                // deadline they were promised. A button that is briefly
-                // inert costs a tap; the other direction costs the cap.
-                enabled = snoozing == false,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(stringResource(R.string.arm))
-            }
-            // Deliberately always enabled, even when we believe nothing is
-            // running. Manual exit is "always available, always instant"
-            // (SPEC.md §7), and endSnooze is idempotent — so a stale belief
-            // must never be what stops someone turning their phone back on.
-            OutlinedButton(
-                onClick = onRelease,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(stringResource(R.string.release))
+            if (snoozing == false) {
+                Button(
+                    onClick = onArm,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.arm))
+                }
+            } else {
+                OutlinedButton(
+                    onClick = onRelease,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.release))
+                }
             }
         }
         TextButton(
