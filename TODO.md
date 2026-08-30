@@ -3482,6 +3482,27 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   written, so this is the maintainer's call: take it as a follow-up PR, or fold it in and
   accept another round.
 
+- **A refusal settled during restore reseeds against the wrong cap**
+  (2026-08-30, Codex on PR #152, deferred there — the seventh round, filed against a
+  documentation-only commit, which is the clearest evidence yet that this seam is not
+  converging). `MainActivity`'s `ceilingAt` reads the in-memory `activeSnooze`, and that
+  field is still null while `onCreate` is restoring — it is filled a moment later by the
+  record read. So if a `REFUSED` lands in the gap between the old activity's destruction
+  and the restore, `restore` takes it from `EndChoiceOutcome`, the refusal path reseeds,
+  and `ceilingFor(null, now)` hands back `now + DEFAULT_CAP` instead of the running
+  snooze's real cap. The `+` control can then offer a time past that cap; the service
+  honors anything past the cap by doing nothing and reports it applied, so the sheet
+  dismisses on a change that never happened. Quietly wrong, which principle 1 ranks
+  second-worst — bounded only by needing a rotation, a commit in flight, a refusal landing
+  inside that gap, and a sheet that had already sat past its own floor.
+  **The trampoline is not affected**: its `ceilingAt` loads the record from disk, so it
+  always has the real cap. This is the cost of the app screen's warm copy.
+  **Two candidate fixes**, neither obviously right, which is part of why it is deferred:
+  hold the buffered refusal until the record read lands, or carry the saved offer's own
+  `ceiling` — already in the bundle — into the reseed instead of asking `ceilingAt`.
+  Settle it together with the `startedAt` binding above; both are about a restored sheet
+  trusting state the screen has not read back yet.
+
 - **Rounding drops a wall clock that only exists on the other side of a spring-forward gap**
   (2026-08-25, Codex on PR #118, declined — the fifth consecutive finding on this surface).
   `getValidOffsets` is empty for a local time inside the gap, so that neighbor contributes no
