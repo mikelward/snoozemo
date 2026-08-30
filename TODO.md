@@ -1505,6 +1505,32 @@ the point is that every other line of the app is worthless if it isn't true.
 - [ ] Service killed and recreated: re-assert the zen rule, resume tracking, and where a
       background context can't get location, degrade to duration-only with a
       `Resume tracking` notification action (`SPEC.md` §8.1).
+      **Blocked on a maintainer decision: §8.1's premise does not survive the platform.**
+      §8.1 says the tap "fully restores tracking", on the ground that a notification action is a
+      documented while-in-use exemption. The exemption is real, but it buys *location fixes* for
+      its window — not a geofence. Geofencing requires `ACCESS_BACKGROUND_LOCATION` outright on
+      API 29+ (developer.android.com, "Set up for geofence monitoring", checked 2026-08-30), with
+      no foreground-context carve-out. So under a while-in-use-only grant the fence can never
+      register, from any context, and `Resume tracking` cannot restore what §8.1 promises.
+      Two further consequences fall out of the same fact:
+      - The state is **unreachable today**. Nothing emits `NO_LOCATION_IN_BACKGROUND`; the play
+        monitor classifies `GEOFENCE_INSUFFICIENT_LOCATION_PERMISSION` as
+        `Fatal(LOCATION_PERMISSION_REVOKED)`, which *ends* the snooze. So the copy that now
+        exists for it (`background location off`) currently cannot appear.
+      - Which of those two is right is the decision, and it is a fail-open call, so it is not
+        autopilot's and not a reviewer's. Ending is the safe direction (the phone un-silences);
+        degrading keeps a phone quiet on a fence nothing registered, bounded only by Wi-Fi and
+        the cap. §8.1 chose degrade, but chose it believing the tap restored the fence.
+      Three options, none of them cheap to take back:
+      1. **Keep ending it.** Deny background location and a `play` snooze ends at once, saying
+         the permission is gone. Honest, safe, and makes the whole while-in-use path a
+         non-feature — which may be right, since the fence is the product.
+      2. **Degrade and offer `Resume tracking`, scoped to what it can actually do** — a fix plus
+         a Wi-Fi check per tap, during the exemption. Not continuous tracking, so the copy must
+         not promise it, and a phone stays quiet between taps on the cap alone.
+      3. **Degrade to Wi-Fi-only with no button**, where the anchor has an SSID — the one case
+         that genuinely keeps working without background location, and needs no exemption at all.
+      Whichever is chosen, `SPEC.md` §8.1 and §8.3 both need rewriting: they share the premise.
 - [ ] Reboot: re-assert the rule, degraded mode, cap continues from the *original* start
       time. `On restart: resume / end` setting, defaulting to resume (`SPEC.md` §8.3).
 - [ ] Permission revoked mid-snooze — policy access or location — ends the snooze with a
