@@ -39,8 +39,7 @@ class DebugReportShareTest {
     fun setUp() {
         DebugReport.resetForTest()
         DebugLogging.resetForTest()
-        SnoozeDebugLog.clearSinksForTest()
-        SnoozeDebugLog.clearForTest()
+        SnoozeDebugLog.resetForTest()
         SnoozeDebugLog.setRecording(true)
         // Stated, not inherited. Every test here installs the file sink and
         // expects it to rotate; a sink installed under a *stored* setting of
@@ -54,8 +53,7 @@ class DebugReportShareTest {
     fun tearDown() {
         DebugReport.resetForTest()
         DebugLogging.resetForTest()
-        SnoozeDebugLog.clearSinksForTest()
-        SnoozeDebugLog.clearForTest()
+        SnoozeDebugLog.resetForTest()
         SnoozeDebugLog.setRecording(true)
     }
 
@@ -171,7 +169,7 @@ class DebugReportShareTest {
 
     @Test
     fun `the real payload collector runs cleanly under Robolectric and reports the truth`() {
-        SnoozeDebugLog.clearForTest()
+        SnoozeDebugLog.resetForTest()
         SnoozeDebugLog.event("the cap alarm was armed")
         var sharedText: String? = null
 

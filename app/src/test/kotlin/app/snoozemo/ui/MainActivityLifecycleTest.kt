@@ -3,6 +3,7 @@ package app.snoozemo.ui
 import android.app.Application
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
+import app.snoozemo.snooze.DebugLogStore
 import app.snoozemo.snooze.DebugLogging
 import app.snoozemo.snooze.DebugReport
 import java.io.File
@@ -99,6 +100,11 @@ class MainActivityLifecycleTest {
         dir.mkdirs()
         File(dir, "current.log").writeText("the run that crashed")
         File(dir, "current.log.crash").writeText("1")
+        // Steady state, not the upgrade start: the one-time purge of
+        // pre-migration files would delete this fixture before the rotation
+        // could pin it, which is exactly what it is for. This test is about
+        // what happens to a dismiss outcome afterward.
+        DebugLogStore(activity.applicationContext).markLegacyLogsPurged()
         DebugLogging.install(activity.applicationContext)
         DebugLogging.awaitIdleForTest()
         // Make both the rename and the copy fallback refuse, the same

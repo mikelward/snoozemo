@@ -1,11 +1,13 @@
 package app.snoozemo.snooze
 
 import app.snoozemo.core.SnoozeDebugLog
+import com.mikelward.androidlog.safe
 import java.io.File
 import java.nio.file.Files
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -24,8 +26,7 @@ class DebugFileSinkTest {
     fun setUp() {
         dir = Files.createTempDirectory("debuglog").toFile()
         originalHandler = Thread.getDefaultUncaughtExceptionHandler()
-        SnoozeDebugLog.clearForTest()
-        SnoozeDebugLog.clearSinksForTest()
+        SnoozeDebugLog.resetForTest()
     }
 
     @After
@@ -33,8 +34,7 @@ class DebugFileSinkTest {
         // start() chains a crash handler onto the process default; put the
         // original back so instances don't stack across tests.
         Thread.setDefaultUncaughtExceptionHandler(originalHandler)
-        SnoozeDebugLog.clearForTest()
-        SnoozeDebugLog.clearSinksForTest()
+        SnoozeDebugLog.resetForTest()
         dir.deleteRecursively()
     }
 
@@ -47,6 +47,148 @@ class DebugFileSinkTest {
             start(enabled)
             awaitIdleForTest()
         }
+
+    // --- the persisted file's budget ---
+
+    @Test
+    fun `an over-budget snapshot still opens with the zone-offset marker`() {
+        // The failure this guards is the one PR #128 reverted the marker
+        // scheme for: a trim that takes the anchor off the front leaves every
+        // local timestamp beneath it with nothing to read it against. The
+        // shared logger synthesizes the anchor after trimming, so the marker
+        // survives however much is dropped -- but only if the trim is the
+        // log's, not a character tail of the joined text.
+        val sink = startAndAwait()
+        SnoozeDebugLog.addSink(sink)
+        // The ring holds 300 entries and the persist budget is 150,000 chars,
+        // so overflowing it takes long entries rather than many.
+        val filler = "x".repeat(1_000)
+        repeat(300) { SnoozeDebugLog.event("%s", safe("$it $filler")) }
+        sink.awaitIdleForTest()
+
+        val text = file("current.log").readText()
+        assertTrue("the budget should actually have bitten", text.length <= 150_000)
+        assertTrue(
+            "the persisted log opens with its offset anchor, not a bare timestamp: " +
+                text.lineSequence().first(),
+            text.lineSequence().first().contains("timezone offset"),
+        )
+    }
+
+    // --- the one-time pre-migration purge ---
+
+    @Test
+    fun `purgeLegacy deletes the previous logger's files instead of rotating them`() {
+        dir.mkdirs()
+        file("current.log").writeText("a run rendered by the old full renderer")
+        file("previous.log").writeText("an older one, also full")
+        file("crash.log").writeText("a pinned full-rendered crash")
+
+        var purged: Boolean? = null
+        sink().apply {
+            start(enabled = true, purgeLegacy = true, onLegacyPurged = { purged = it })
+            awaitIdleForTest()
+        }
+
+        assertEquals(true, purged)
+        assertFalse("purged, not rotated", file("current.log").exists())
+        assertFalse("the previous slot goes too", file("previous.log").exists())
+        assertFalse("a pinned crash is still an old rendering", file("crash.log").exists())
+    }
+
+    @Test
+    fun `without purgeLegacy the same files rotate as usual`() {
+        dir.mkdirs()
+        file("current.log").writeText("the run that just ended")
+
+        var purged: Boolean? = null
+        sink().apply {
+            start(enabled = true, purgeLegacy = false, onLegacyPurged = { purged = it })
+            awaitIdleForTest()
+        }
+
+        assertNull("the callback belongs to the purge, not to every start", purged)
+        assertEquals("the run that just ended", file("previous.log").readText())
+    }
+
+    @Test
+    fun `a refused purge withholds the surviving run from sharing, not just from the flag`() {
+        // The gap the flag alone left: it stops the *next* process reading
+        // these files, and does nothing about this one, which goes on serving
+        // them to a share for as long as it lives (Codex, PR #151).
+        dir.mkdirs()
+        // An occupied directory refuses deletion the same way a failing
+        // filesystem does: delete() returns false rather than throwing.
+        File(file("crash.log"), "occupied").apply { parentFile!!.mkdirs() }.writeText("x")
+
+        var purged: Boolean? = null
+        val sink = sink().apply {
+            start(enabled = true, purgeLegacy = true, onLegacyPurged = { purged = it })
+            awaitIdleForTest()
+        }
+
+        assertEquals("the fixture must really refuse, or this proves nothing", false, purged)
+        assertTrue("the refusal is real: the file is still there", file("crash.log").exists())
+
+        var pinned: Boolean? = null
+        var checkSucceeded: Boolean? = null
+        sink.hasPinnedCrash { p, ok -> pinned = p; checkSucceeded = ok }
+        sink.awaitIdleForTest()
+        assertEquals("no banner onto a pre-migration crash", false, pinned)
+        assertEquals("and that is a real answer, not a failed check", true, checkSucceeded)
+
+        var text: String? = "unset"
+        var readSucceeded: Boolean? = null
+        sink.readPreviousOrCrash { t, _, ok -> text = t; readSucceeded = ok }
+        sink.awaitIdleForTest()
+        assertNull("the surviving run is withheld from the share", text)
+        assertEquals("reported as genuinely empty, so the share still goes out", true, readSucceeded)
+    }
+
+    @Test
+    fun `a purge that throws is reported and explained, not just logged to logcat`() {
+        // `deleteEverything()` reports a refusal by returning false, but it can
+        // also throw -- `dir` resolves lazily on first touch, and `delete()`
+        // can refuse that way. Left to the worker task's outer handler that
+        // reaches logcat only, so the report would omit the prior run with no
+        // explanation in it (Codex, PR #151).
+        var purged: Boolean? = null
+        DebugFileSink { throw java.io.IOException("cache dir unavailable") }.apply {
+            start(enabled = true, purgeLegacy = true, onLegacyPurged = { purged = it })
+            awaitIdleForTest()
+        }
+
+        assertEquals("a throw is 'not proven gone', same as a refusal", false, purged)
+        assertTrue(
+            "the reason belongs in the log the user shares, not only in logcat",
+            SnoozeDebugLog.snapshot().any { it.contains("could not be deleted") },
+        )
+    }
+
+    @Test
+    fun `a purge that succeeds reopens the prior-run slot`() {
+        // The gate must not be a one-way door: once the directory is provably
+        // clean, everything written after it is this version's own reduced
+        // output and shares normally.
+        dir.mkdirs()
+        file("current.log").writeText("a pre-migration run")
+
+        val sink = sink().apply {
+            start(enabled = true, purgeLegacy = true)
+            awaitIdleForTest()
+        }
+        SnoozeDebugLog.addSink(sink)
+        SnoozeDebugLog.event("after the purge")
+        sink.awaitIdleForTest()
+
+        // Nothing to read yet -- the purge emptied the previous slot -- but
+        // the gate is open, so this is the ordinary empty answer.
+        var readSucceeded: Boolean? = null
+        sink.readPreviousOrCrash { _, _, ok -> readSucceeded = ok }
+        sink.awaitIdleForTest()
+        assertEquals(true, readSucceeded)
+        assertTrue("and this run is still being persisted", file("current.log").exists())
+    }
 
     // --- rotation ---
 

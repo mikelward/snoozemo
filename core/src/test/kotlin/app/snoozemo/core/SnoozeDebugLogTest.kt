@@ -1,28 +1,32 @@
 package app.snoozemo.core
 
+import com.mikelward.androidlog.REDACTED_PLACEHOLDER
 import java.time.Instant
-import org.junit.After
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Before
 import org.junit.Test
 
+/**
+ * What stays this app's to test now that the log itself is
+ * [mikelward/androidlog](https://github.com/mikelward/androidlog).
+ *
+ * The buffer's bounds, the throwable rendering, the `warning`-misuse reroute,
+ * the offset markers, the sink fan-out and the disable semantics were all
+ * tested here and are all tested there, in several cases more thoroughly —
+ * the library covers suppressed exceptions, a throwable wrapped in `safe(...)`,
+ * an in-flight sink delivery racing a disable, and five offset-marker cases
+ * against the one this file had. Keeping copies is precisely the duplication
+ * that let four hand-maintained loggers drift apart, so they are not kept.
+ *
+ * Two things are still this repo's, and only these:
+ *
+ * 1. [logSummary] is snoozemo's own — the one sanctioned way to put a snooze
+ *    in the log, and the floor it holds is about *this* app's data.
+ * 2. A thin conformance check that [SnoozeDebugLog] really is wired to that
+ *    floor, so a future change to how it is constructed cannot quietly leave
+ *    the app logging in full while the library's own tests stay green.
+ */
 class SnoozeDebugLogTest {
-
-    @Before
-    fun reset() {
-        SnoozeDebugLog.clearForTest()
-        SnoozeDebugLog.clearSinksForTest()
-        SnoozeDebugLog.readMillis = { FIXED_MILLIS }
-    }
-
-    @After
-    fun restoreClock() {
-        SnoozeDebugLog.readMillis = System::currentTimeMillis
-        SnoozeDebugLog.clearForTest()
-        SnoozeDebugLog.clearSinksForTest()
-    }
 
     // --- the privacy floor (SPEC.md §4.6: absolute, and tested on its own) ---
 
@@ -46,155 +50,54 @@ class SnoozeDebugLogTest {
             placeName = "Cinema",
         )
 
-        val summary = snooze.logSummary()
+        val line = snooze.logSummary().value.toString()
 
-        // The floor holds in both renderings — it is absolute, not a matter of
-        // which audience is reading.
-        for ((audience, line) in listOf("on device" to summary.full, "off device" to summary.mirrored)) {
-            assertFalse("$audience: the SSID is banned", line.contains("ExampleWifi"))
-            assertFalse("$audience: the BSSID is banned", line.contains("02:00"))
-            assertFalse("$audience: the place name is banned", line.contains("Cinema"))
-            assertFalse("$audience: latitude is banned", line.contains("12.345678"))
-            assertFalse("$audience: longitude is banned", line.contains("87.654321"))
-            // What the summary is *for* survives either way: the mode, what
-            // the anchor has, and the fix's accuracy in meters.
-            assertTrue("$audience: the mode survives", line.contains("FULL"))
-            assertTrue("$audience: the anchor's shape survives", line.contains("ssid captured"))
-            assertTrue("$audience: the accuracy survives", line.contains("accuracy=12.5m"))
-        }
+        assertFalse("the SSID is banned", line.contains("ExampleWifi"))
+        assertFalse("the BSSID is banned", line.contains("02:00"))
+        assertFalse("the place name is banned", line.contains("Cinema"))
+        assertFalse("latitude is banned", line.contains("12.345678"))
+        assertFalse("longitude is banned", line.contains("87.654321"))
 
-        // The times are sanctioned on device and are the diagnostic there. Off
-        // device they say when someone was asleep or in a cinema, which the
-        // *Privacy* rule names as the user's — so only the shape travels.
-        assertTrue("the times are kept on device", summary.full.contains("2026-01-01T12:00:00Z"))
-        assertFalse("and withheld off it", summary.mirrored.contains("2026-01-01T12:00:00Z"))
+        // What the summary is *for*: the mode, what the anchor has, and the
+        // fix's accuracy in meters.
+        assertTrue("the mode survives", line.contains("FULL"))
+        assertTrue("the anchor's shape survives", line.contains("ssid captured"))
+        assertTrue("the accuracy survives", line.contains("accuracy=12.5m"))
+
+        // The times are in, deliberately (maintainer, 2026-08-30): not
+        // sensitive, and necessary for debugging a snooze that ended early or
+        // never ended. They used to be split into a second rendering withheld
+        // from anything leaving the device; that split is retired, so this
+        // pins the times as *present* where it once pinned them as withheld.
+        assertTrue("the start time is kept", line.contains("2026-01-01T12:00:00Z"))
+        assertTrue("the cap time is kept", line.contains("2026-01-01T20:00:00Z"))
+    }
+
+    // --- conformance: the floor is in force in this app, not just upstream ---
+
+    @Test
+    fun `an untagged String is withheld, because that is what an SSID arrives as`() {
+        // The library owns the type rule and tests it exhaustively. What this
+        // asserts is narrower and is the part the library cannot: that the
+        // instance this app actually logs through is subject to it. A base
+        // class swapped, or a constructor argument added in the wrong place,
+        // fails here and nowhere else.
+        SnoozeDebugLog.event("candidate=%s", "ExampleWifi")
+
+        val line = SnoozeDebugLog.snapshot().last { !it.contains("timezone offset") }
+        assertFalse("the SSID must not reach the log", line.contains("ExampleWifi"))
+        assertTrue("and its absence must be visible", line.contains(REDACTED_PLACEHOLDER))
     }
 
     @Test
-    fun `a throwable renders as types and frames, never its message`() {
-        // The message is where a platform exception quotes what it was given —
-        // which on the Wi-Fi and location stacks is exactly what the floor
-        // bans — and this log has no scrubber, so it must not be read at all.
-        val cause = IllegalStateException("ssid=ExampleWifi lat=12.345678")
-        val thrown = RuntimeException("place=Home", cause)
+    fun `a tagged value is carried, so the floor is a default and not a gag`() {
+        // The other direction, and it matters as much: a floor that withheld
+        // everything would pass a one-sided test while leaving the app unable
+        // to explain its own failures.
+        SnoozeDebugLog.event("mode=%s accuracy=%sm", TrackingMode.FULL, 12.5f)
 
-        SnoozeDebugLog.failure(thrown, "capture failed")
-
-        val entry = SnoozeDebugLog.snapshot().single()
-        assertFalse(entry.contains("ExampleWifi"))
-        assertFalse(entry.contains("12.345678"))
-        assertFalse(entry.contains("Home"))
-        assertTrue("the type is the diagnostic", entry.contains("java.lang.RuntimeException"))
-        assertTrue("the cause chain survives", entry.contains("Caused by: java.lang.IllegalStateException"))
-    }
-
-    @Test
-    fun `a throwable handed to warning is rerouted without re-rendering its message`() {
-        // warning() reroutes to failure() rather than letting the exception
-        // bind as a formatting argument. Leaving it in the arguments would put
-        // it back: with no `%s` to fill it renders through toString(), which
-        // carries the message typesAndFrames() exists to exclude.
-        val thrown = IllegalStateException("ssid=ExampleWifi")
-
-        SnoozeDebugLog.warning("wifi callback refused", thrown)
-
-        val entry = SnoozeDebugLog.snapshot().single()
-        assertFalse("the message must not come back through toString()", entry.contains("ExampleWifi"))
-        assertTrue("but the type still does", entry.contains("java.lang.IllegalStateException"))
-        assertTrue("and the mistake is named", entry.contains("use failure()"))
-    }
-
-    // --- recording mechanics ---
-
-    @Test
-    fun `entries carry a real timestamp with a zone offset`() {
-        SnoozeDebugLog.event("something happened")
-
-        val entry = SnoozeDebugLog.snapshot().single()
-        // The fixed instant, rendered in whatever zone the JVM runs in. No
-        // year — the log spans two runs — but the offset stays on every line,
-        // so one quoted on its own can still be placed (SPEC.md §4.6).
-        // Matching the shape rather than a literal keeps the test
-        // zone-independent.
-        assertTrue(
-            "expected a local timestamp with offset, got: $entry",
-            Regex("""^\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}(Z|[+-]\d{4}) D something happened$""")
-                .matches(entry),
-        )
-    }
-
-    @Test
-    fun `the buffer is bounded and drops the oldest`() {
-        repeat(SnoozeDebugLog.MAX_ENTRIES + 5) { SnoozeDebugLog.event("entry $it") }
-
-        val lines = SnoozeDebugLog.snapshot()
-        assertEquals(SnoozeDebugLog.MAX_ENTRIES, lines.size)
-        assertTrue("the oldest entries fall off the front", lines.first().endsWith("entry 5"))
-        assertTrue(lines.last().endsWith("entry ${SnoozeDebugLog.MAX_ENTRIES + 4}"))
-    }
-
-    @Test
-    fun `one entry cannot dominate the buffer`() {
-        SnoozeDebugLog.event("x".repeat(SnoozeDebugLog.MAX_ENTRY_CHARS * 3))
-
-        val entry = SnoozeDebugLog.snapshot().single()
-        assertTrue(entry.length <= SnoozeDebugLog.MAX_ENTRY_CHARS + "…(truncated)".length)
-        assertTrue(entry.endsWith("…(truncated)"))
-    }
-
-    @Test
-    fun `a cyclic cause chain terminates`() {
-        val a = RuntimeException("a")
-        val b = RuntimeException("b", a)
-        a.initCause(b)
-
-        SnoozeDebugLog.failure(a, "cycle")
-
-        // Reaching the assertion is the test; a cycle would never get here.
-        assertEquals(1, SnoozeDebugLog.snapshot().size)
-    }
-
-    @Test
-    fun `recording off means off, and clears what was already collected`() {
-        // Off has to stop *collection*, not only persistence: gating the file
-        // sink alone left the buffer filling through the disabled period, and
-        // a later re-enable would have written all of it to disk (Codex,
-        // PR #62). Sinks only see what recording hands them, so this one gate
-        // covers the logcat mirror too.
-        val mirrored = mutableListOf<String>()
-        SnoozeDebugLog.addSink { mirrored.add(it) }
-        SnoozeDebugLog.event("collected while on")
-
-        SnoozeDebugLog.setRecording(false)
-        SnoozeDebugLog.event("collected while off")
-        SnoozeDebugLog.setRecording(true)
-        SnoozeDebugLog.event("collected after re-enable")
-
-        val lines = SnoozeDebugLog.snapshot()
-        assertEquals("disabling empties the buffer as well as gating it", 1, lines.size)
-        assertTrue(lines.single().endsWith("collected after re-enable"))
-        assertEquals(
-            "no sink hears anything while recording is off",
-            listOf("collected while on", "collected after re-enable"),
-            mirrored.map { it.substringAfter(" D ") },
-        )
-    }
-
-    @Test
-    fun `each entry reaches every sink, and a throwing sink stops nothing`() {
-        val seen = mutableListOf<String>()
-        SnoozeDebugLog.addSink { throw IllegalStateException("sink broken") }
-        SnoozeDebugLog.addSink { seen.add(it) }
-
-        SnoozeDebugLog.event("fanned out")
-
-        assertEquals(1, seen.size)
-        assertTrue(seen.single().endsWith("fanned out"))
-        assertEquals("the buffer keeps it too", 1, SnoozeDebugLog.snapshot().size)
-    }
-
-    private companion object {
-        /** 2026-01-01T12:00:00Z, so the timestamp test is deterministic. */
-        const val FIXED_MILLIS = 1_767_268_800_000L
+        val line = SnoozeDebugLog.snapshot().last { !it.contains("timezone offset") }
+        assertTrue("an enum is carried", line.contains("FULL"))
+        assertTrue("a number is carried", line.contains("12.5"))
     }
 }

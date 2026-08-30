@@ -7,7 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
 import android.util.Log
-import app.snoozemo.core.safe
+import com.mikelward.androidlog.safe
 import app.snoozemo.core.endReason
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.Attempt

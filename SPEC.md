@@ -831,12 +831,23 @@ bounded to two runs, and reaches nobody without an explicit share. That is what 
 exception" in §12 is for.
 
 Timestamps carry the local date, time and zone offset, and no year: `08-28
-19:00:00.123+1000`. The year says nothing a log bounded to two runs needs, while the offset
-stays on every entry because a line is read in isolation as often as in sequence — grepped,
-quoted into a bug report, or arriving alone — and one that cannot place itself is worth less
-than the characters it saves. Announcing the offset only when it changes was tried and
-reverted: it saved five more characters per line and put the marker at the mercy of every
-truncation point the log has (`PR #128`).
+19:00:00.123`. The year says nothing a log bounded to two runs needs.
+
+The offset is announced as its own marker line — at the head of the log and again wherever it
+changes — rather than repeated on every entry. **That reverses `PR #128`, which tried the
+marker and reverted it**, and the reason the reversal is safe is that the mechanism is not the
+one #128 tried. There the marker was a stored line like any other, so every truncation point
+the log has could drop it and orphan the local timestamps beneath it. In the shared logger
+(`mikelward/androidlog`) the offset is a property of each retained line, and the markers are
+**synthesized at render time** — one ahead of the oldest surviving line and one at every change
+within the window — so no amount of eviction or trimming can leave timestamps without an offset
+to read them against. The trim is anchor-aware and charges each marker against its own budget,
+which is what keeps that guarantee true of the persisted file and not just the buffer.
+
+The cost #128 was paying for is gone with it: a line read in isolation — grepped, or quoted
+into a bug report — no longer carries its own offset. That is the deliberate trade. A log
+bounded to two runs is read as a run far more often than a line is lifted out of one, and the
+per-line offset was being paid on every entry to serve the rarer case.
 
 **The floor is absolute and is not a matter of judgment**: never raw coordinates, never a full
 SSID or BSSID, never a user-typed place name. Distance and accuracy answer "did the test fire
