@@ -19,6 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import app.snoozemo.PlayUpdateState
 import app.snoozemo.R
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.PolicyAccess
@@ -37,8 +38,11 @@ import java.time.Duration
  * from [SettingsScreen]. This screen states only what is *missing*, not how to
  * fix every capability in place.
  */
+// `internal`, like `SettingsScreen` and `LicensesScreen`: nothing outside
+// this module composes it, and taking `PlayUpdateState` — itself internal —
+// means a public signature would not compile.
 @Composable
-fun MainScreen(
+internal fun MainScreen(
     access: PolicyAccess?,
     tileAdded: Boolean?,
     tileBannerDismissed: Boolean,
@@ -63,6 +67,13 @@ fun MainScreen(
     dismissFailed: Boolean,
     /** Whether a share is already running, disabling the banner's Share button. */
     sharing: Boolean = false,
+    /**
+     * What Play last said about a waiting update, dismissal already folded in.
+     * `NotAvailable` on `direct`, where the checker is a no-op.
+     */
+    playUpdate: PlayUpdateState = PlayUpdateState.NotAvailable,
+    /** Whether the last Restart tap on the update banner was refused. */
+    playUpdateRestartFailed: Boolean = false,
     // Only SetupRowId.TILE is ever relevant here — this banner has no other
     // capability to fail — but the type is shared with the other screens'
     // failure-routing rather than narrowed to a Boolean, so a caller reading
@@ -77,6 +88,9 @@ fun MainScreen(
     onRelease: () -> Unit,
     onShareDebugLog: () -> Unit,
     onDismissCrash: () -> Unit,
+    onStartPlayUpdate: () -> Unit = {},
+    onCompletePlayUpdate: () -> Unit = {},
+    onDismissPlayUpdate: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -129,6 +143,21 @@ fun MainScreen(
                 onDismiss = onDismissTileBanner,
                 failure = stringResource(R.string.failure_could_not_add_tile)
                     .takeIf { settingsFailure == SetupRowId.TILE },
+            )
+        }
+        // Same banner `SettingsScreen` shows, for the same reason `CrashBanner`
+        // is on every screen: which screen the user happens to land on is not
+        // something this feature should have to reason about, and this is the
+        // one they land on by default. Below the tile banner rather than above
+        // it — a missing tile blocks the product's whole first impression,
+        // where an update is worth acting on but nothing is broken without it.
+        (playUpdate as? PlayUpdateState.Available)?.takeIf { it.shouldPrompt }?.let { update ->
+            PlayUpdateBanner(
+                progress = update.progress,
+                restartFailed = playUpdateRestartFailed,
+                onUpdate = onStartPlayUpdate,
+                onRestart = onCompletePlayUpdate,
+                onDismiss = onDismissPlayUpdate,
             )
         }
         // One slot, always saying which of the two states the screen is in

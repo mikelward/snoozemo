@@ -418,7 +418,8 @@ without finishing it is a trap, not onboarding. `LicensesScreen` is a leaf off `
 foot (§4.7), and the only screen reached from exactly one place — which is why Back there returns
 to Settings rather than to `MainScreen`.
 
-`SettingsScreen` also carries the **update banner** (landed 2026-08-23, `play` flavor only —
+**Both `SettingsScreen` and `MainScreen` carry the update banner** (landed 2026-08-23, extended
+to the home screen 2026-08-30, `play` flavor only —
 §3.4's `direct` flavor is never distributed through Play, so it has nothing to check for): when
 Play has a newer Snoozemo waiting, a card offers to fetch it, tracks the download, and then offers
 the **restart** that installs it. Always the *flexible* kind — background download, install on a
@@ -427,6 +428,12 @@ Dismiss silences that build and only that build, and only while there is still s
 once the update has downloaded, Restart is the only way to finish it, so the banner drops Dismiss
 rather than let a tap strand a fetch already paid for. The check asks the installed Play Store app,
 so it sends nothing of the user's anywhere and needs no permission of its own.
+
+It sits on the home screen for the same reason the crash banner does: which screen the user lands
+on is not something the feature should have to reason about, and `MainScreen` is the one they land
+on by default — an update offered only behind Settings is offered only to whoever was already
+going there. Below the tile banner rather than above it, because a missing tile blocks the
+product's whole first impression while an update is worth acting on with nothing broken meanwhile.
 
 The screen leads with a **banner** urging the tile, dismissed **once and forever**, above a tile
 **entry that is permanent** (maintainer, 2026-08-13) — the banner lives on `MainScreen`, the entry

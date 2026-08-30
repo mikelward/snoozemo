@@ -17,6 +17,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import app.snoozemo.PlayUpdateState
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.TrackingMode
@@ -454,6 +455,80 @@ class MainScreenScreenshotTest {
         }
 
         composeRule.onNodeWithText("Wi-Fi only \u2014 weak location signal").assertExists()
+    }
+
+    /**
+     * The update banner rides on this screen too.
+     *
+     * Same reasoning `CrashBanner` already follows: which screen the user
+     * happens to land on is not something the feature should have to reason
+     * about, and this is the one they land on by default — an update offered
+     * only behind Settings is offered to whoever was already going there.
+     */
+    @Test
+    fun `a waiting update is offered here as well`() {
+        var started = 0
+
+        capture("main-screen-update-available.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                playUpdate = PlayUpdateState.Available(versionCode = 5),
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+                onStartPlayUpdate = { started++ },
+            )
+        }
+
+        composeRule.onNodeWithText("Update available").assertExists()
+        composeRule.onNodeWithText("Update").performClick()
+        assertEquals(1, started)
+    }
+
+    /** A dismissed update stays dismissed here, exactly as on Settings. */
+    @Test
+    fun `a dismissed update is not offered again`() {
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                playUpdate = PlayUpdateState.Available(versionCode = 5, isDismissed = true),
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Update available").assertDoesNotExist()
     }
 
     /**

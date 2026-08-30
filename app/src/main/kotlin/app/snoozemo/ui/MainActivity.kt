@@ -744,6 +744,8 @@ class MainActivity : ComponentActivity() {
                             trackingMode = activeSnooze?.mode,
                             remaining = activeSnooze?.remaining(now),
                             degradation = activeSnooze?.degradation,
+                            playUpdate = displayedPlayUpdate,
+                            playUpdateRestartFailed = playUpdateRestartFailed,
                             lastOutcome = lastOutcome,
                             crashPending = crashPending,
                             shareFailed = shareFailed,
@@ -758,6 +760,9 @@ class MainActivity : ComponentActivity() {
                             onRelease = ::endFromScreen,
                             onShareDebugLog = ::shareDebugLog,
                             onDismissCrash = ::dismissCrash,
+                            onStartPlayUpdate = ::startPlayUpdate,
+                            onCompletePlayUpdate = ::completePlayUpdate,
+                            onDismissPlayUpdate = ::dismissPlayUpdate,
                         )
                         Screen.PERMISSIONS -> {
                             // Falls back to whoever opened this screen —
