@@ -13,14 +13,19 @@ import app.snoozemo.core.DegradationCause
  * to words lives in one place. A second copy is how the two drift into
  * disagreeing about a phone the user is holding.
  *
- * Only three causes earn a line, and the omissions are deliberate rather than
- * unfinished:
- * - `NO_LOCATION_IN_BACKGROUND` recovers by an action the user has to take,
- *   and no UI offers it yet — naming the state without the way out would be
- *   worse than the mode alone. It gets its line with that affordance, not
- *   before.
- * - `NOTHING_WATCHING` is the app's own wiring, not anything the user did or
- *   can act on; `Timer only` already says everything true about it.
+ * `NOTHING_WATCHING` is the one cause that still earns no line, and that is
+ * deliberate rather than unfinished: it is the app's own wiring, not anything
+ * the user did or can act on, so `Timer only` already says everything true
+ * about it.
+ *
+ * `NO_LOCATION_IN_BACKGROUND` was held back on the same reasoning until
+ * 2026-08-30 — naming a state whose way out no UI offers seemed worse than
+ * the mode alone — and the maintainer reversed it, on the ground that naming
+ * the missing *permission* is itself most of the way out: a user told
+ * `background location off` knows what to grant, where `Timer only` alone
+ * tells them nothing. The rest of that way out is still owed: granting it does
+ * not restart tracking until the `Resume tracking` affordance exists
+ * (`TODO.md`).
  */
 @StringRes
 fun degradationReasonRes(cause: DegradationCause?): Int? = when (cause) {
@@ -29,7 +34,9 @@ fun degradationReasonRes(cause: DegradationCause?): Int? = when (cause) {
     // location works but cannot place you where you are standing.
     DegradationCause.NO_LOCATION_FIX -> R.string.ongoing_cause_no_fix
     DegradationCause.FIXES_TOO_VAGUE -> R.string.ongoing_cause_weak_signal
-    DegradationCause.NO_LOCATION_IN_BACKGROUND,
+    // Names the permission rather than the symptom, because the permission is
+    // the thing the user can act on.
+    DegradationCause.NO_LOCATION_IN_BACKGROUND -> R.string.ongoing_cause_no_background
     DegradationCause.NOTHING_WATCHING,
     null,
     -> null

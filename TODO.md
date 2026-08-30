@@ -879,10 +879,13 @@ the point is that every other line of the app is worthless if it isn't true.
         rather than refusing the record; `SnoozeController.onPresenceUpdate` now treats a *cause*
         change as news even when the mode holds — without that the card would assert the wrong
         reason until the mode happened to move; and `SnoozeNotifications` appends it.
-        **Two causes deliberately get no line**: `NO_LOCATION_IN_BACKGROUND` needs the `Resume
+        **Two causes deliberately got no line**: `NO_LOCATION_IN_BACKGROUND` needs the `Resume
         tracking` affordance that no UI offers yet, and naming a state without its way out is
         worse than the mode alone; `NOTHING_WATCHING` is the app's own wiring, which `Timer only`
-        already describes. `WIFI_GRACE` is excluded as a mode, since its own string already names
+        already describes. **The first of those was reversed on 2026-08-30** (maintainer): naming
+        the missing permission — `background location off` — is itself most of the way out, since
+        it tells the user what to grant where `Timer only` alone tells them nothing. Only
+        `NOTHING_WATCHING` stays silent now. `WIFI_GRACE` is excluded as a mode, since its own string already names
         what matters. `SPEC.md` §4.3 records all of it.
         **One trade-off taken knowingly**: an existing test asserted that a cause change under one
         mode reported nothing, to stop the record and card being rewritten on every update. That

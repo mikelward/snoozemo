@@ -214,6 +214,8 @@
     <string name="ongoing_cause_no_fix" tools:ignore="MissingTranslation">no location</string>
     <!-- TODO: translate -->
     <string name="ongoing_cause_weak_signal" tools:ignore="MissingTranslation">weak location signal</string>
+    <!-- TODO: translate -->
+    <string name="ongoing_cause_no_background" tools:ignore="MissingTranslation">background location off</string>
     <string name="action_end_now">End now</string>
     <string name="action_extend">+30 min</string>
     <string name="ended_departure">Snooze ended — you left</string>

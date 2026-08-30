@@ -457,6 +457,43 @@ class MainScreenScreenshotTest {
     }
 
     /**
+     * The screen picks up a newly-speaking cause for free.
+     *
+     * `degradationReasonRes` is shared with the notification, so adding
+     * `NO_LOCATION_IN_BACKGROUND` there reached this screen with no change
+     * here — which is the point of sharing it, and worth an assertion so a
+     * later split of the two mappings fails loudly rather than silently.
+     */
+    @Test
+    fun `the background-location cause reaches this screen too`() {
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.DURATION_ONLY,
+                remaining = Duration.ofHours(8),
+                degradation = DegradationCause.NO_LOCATION_IN_BACKGROUND,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Timer only \u2014 background location off").assertExists()
+    }
+
+    /**
      * A cause that earns no line leaves the mode exactly as it was.
      *
      * `NOTHING_WATCHING` is the app's own wiring rather than anything the user

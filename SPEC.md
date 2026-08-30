@@ -543,13 +543,21 @@ you where you are standing, which is not a fault at all. A line that reads ident
 is the degraded report failing at the one job §8.1 gives it. So the reason is appended to the mode:
 `Timer only — weak location signal`.
 
-Three causes earn a line — `location is off`, `no location`, `weak location signal` — and the
-omissions are deliberate. `NO_LOCATION_IN_BACKGROUND` recovers by an action the user has to take
-and no UI offers it yet; naming the state without the way out is worse than the mode alone, so it
-gets its line with that affordance and not before. `NOTHING_WATCHING` is the app's own wiring, not
-anything the user did or can act on, and `Timer only` already says everything true about it.
-`WIFI_GRACE` is excluded too: `Wi-Fi lost — ending soon` already names what matters, and a second
-clause on a state that resolves in minutes costs length for nothing.
+Four causes earn a line — `location is off`, `no location`, `weak location signal`, `background
+location off`. `NOTHING_WATCHING` does not, and that omission is deliberate: it is the app's own
+wiring, not anything the user did or can act on, and `Timer only` already says everything true
+about it. `WIFI_GRACE` is excluded as a mode for the same kind of reason: `Wi-Fi lost — ending
+soon` already names what matters, and a second clause on a state that resolves in minutes costs
+length for nothing.
+
+**`NO_LOCATION_IN_BACKGROUND` was the fifth, and its silence was reversed** (maintainer,
+2026-08-30). It had been held back on the rule that naming a state without its way out is worse
+than the mode alone — this one recovers only through a `Resume tracking` affordance no UI offers
+yet. What that reasoning missed is that *naming the missing permission is itself most of the way
+out*: a user told `background location off` knows what to grant, where `Timer only` alone tells
+them nothing and reads as a choice somebody made. The rest of the way out is still owed, and
+honestly so — granting the permission does not restart tracking until `Resume tracking` exists
+(`TODO.md`), so the line is a true diagnosis with an incomplete remedy rather than a false one.
 
 The reason travels **on the snooze record**, not beside it, because the card is reposted from a
 restored record after every process death — a reason held only in memory would come back missing
