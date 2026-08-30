@@ -786,8 +786,8 @@ cannot be diagnosed.
 **An on-device log, on by default** (maintainer, 2026-08-11), with a setting to turn it off.
 Nothing in it leaves the device unless the user hands it over: it is not attached to a crash report
 — the only thing that transmits (§12) — so sharing goes through the system share sheet (and a
-copy-to-clipboard fallback), which makes every send an explicit act with a visible destination. Retention is bounded — the current run
-plus the previous one, rotated at start, in `cacheDir`, which is excluded from backup.
+copy-to-clipboard fallback), which makes every send an explicit act with a visible destination. Retention is bounded — the current
+run plus a few recent ones, rotated at start, in `cacheDir`, which is excluded from backup.
 
 On-by-default is the decision because off-by-default has a cost that only looks small: the failures
 worth diagnosing here — an early release, a stuck snooze, a crash — are **unpredictable and
@@ -795,13 +795,16 @@ unrepeatable**, so a log that starts off guarantees the *first* occurrence of ea
 captured, and asks the user to reproduce a bug that happens once a week in their pocket. The
 conservative-looking default is the one that makes the product undebuggable in practice.
 
-What it costs is bounded and stated: two runs of coarse state and reasons, on the user's own device,
-under the floor below, behind a setting, and shared only by an explicit act. Simmo's log is
-always-on for the same reason. The alternative — a privacy gain measured in "two files that never
-leave the phone" — buys less than it gives up.
+What it costs is bounded and stated: a handful of recent runs of coarse state and reasons, on the
+user's own device, under the floor below, behind a setting, and shared only by an explicit act. The
+count is a retention setting, not a promise — it is the shared logger's, one number for every app
+using it — and the protections that carry the weight are the floor, the device boundary and the
+explicit share, none of which move with it. Simmo's log is always-on for the same reason. The
+alternative — a privacy gain measured in "a few files that never leave the phone" — buys less than
+it gives up.
 
-**Turning the setting off deletes what was kept**, immediately: the current run, the previous run,
-and any pinned crash. Stopping new writes while leaving the old files sitting in `cacheDir` would be
+**Turning the setting off deletes what was kept**, immediately: the current run and every earlier
+one still held, pinned crashes included. Stopping new writes while leaving the old files sitting in `cacheDir` would be
 a privacy control that doesn't do the thing its name promises — and worse, those files would no
 longer rotate, so they would outlive every log the feature normally keeps. The cost is real and
 accepted: an unshared crash report is lost at that moment. That is the right way round, because the
@@ -845,11 +848,11 @@ arithmetic that goes wrong across a DST boundary (§13), or a user who reports "
 — none of those can be reconstructed from intervals alone, and a log that cannot answer *when* is
 not worth keeping. The times of a user's snoozes are listed as user data in AGENTS.md's *Privacy*
 rule, which is why the log's other protections carry the weight instead: it stays on the device,
-bounded to two runs, and reaches nobody without an explicit share. That is what the "one sanctioned
+keeps only recent runs, and reaches nobody without an explicit share. That is what the "one sanctioned
 exception" in §12 is for.
 
 Timestamps carry the local date, time and zone offset, and no year: `08-28
-19:00:00.123`. The year says nothing a log bounded to two runs needs.
+19:00:00.123`. The year says nothing a log this short-lived needs.
 
 The offset is announced as its own marker line — at the head of the log and again wherever it
 changes — rather than repeated on every entry. **That reverses `PR #128`, which tried the
@@ -863,8 +866,8 @@ to read them against. The trim is anchor-aware and charges each marker against i
 which is what keeps that guarantee true of the persisted file and not just the buffer.
 
 The cost #128 was paying for is gone with it: a line read in isolation — grepped, or quoted
-into a bug report — no longer carries its own offset. That is the deliberate trade. A log
-bounded to two runs is read as a run far more often than a line is lifted out of one, and the
+into a bug report — no longer carries its own offset. That is the deliberate trade. This log
+is read as a run far more often than a line is lifted out of one, and the
 per-line offset was being paid on every entry to serve the rarer case.
 
 **The floor is absolute and is not a matter of judgment**: never raw coordinates, never a full
@@ -892,18 +895,24 @@ by a tap, never lost. This is the boundary the rule above draws: every screen a 
 not every screen that exists. Only a crash raises it — an ordinary process death, a
 force-stop, or an app update does not, since those runs' logs stay shareable without nagging.
 
-A crashed run is **pinned, not rotated**: the crash handler leaves a marker, the next start moves
-that run to a distinct crash-suffixed name, and ordinary rotation does not overwrite it. Without
-that, a restart between the crash and the user's tap would push the crashed run out of the
-`previous` slot and the banner would offer a log that had already been overwritten — and this app
-restarts a lot, since a snooze can outlive several process deaths.
+A crashed run is **marked, not overwritten**: the crash handler leaves a marker, the next start
+moves that run aside under a crash-suffixed name, and ordinary rotation never writes over it.
+Without that, a restart between the crash and the user's tap would leave the banner offering a log
+that had already gone — and this app restarts a lot, since a snooze can outlive several process
+deaths.
 
-**The pin holds the `previous` slot; it is not a third run.** The two-run bound is the privacy
-bound, so it holds unchanged: while a crash is pinned, an ordinary run that would have rotated into
-`previous` is **discarded instead of displacing it**. That is the right way round — an unread crash
-explains a failure, and the uneventful run after it explains nothing. Sharing consumes the pin;
-Dismiss renames the file off the crash-suffixed name, after which it is an ordinary `previous` run,
-shareable from settings and rotated away like any other. A later crash pins again.
+**A crashed run does not displace an ordinary one.** Prior runs are kept side by side up to the
+shared logger's retention count, so a crash and the uneventful restarts after it coexist and a
+report carries them oldest-first. That replaces an earlier single-slot design in which an ordinary
+run was *discarded* while a crash was pinned, to hold a two-run bound; nothing needs discarding
+once there is more than one slot. Sharing consumes the runs the report was built from; Dismiss
+takes a run off the crash-suffixed name, after which it is an ordinary prior run, shareable from
+settings and pruned by age like any other. A later crash marks again.
+
+**An empty crash log raises no banner.** A crash marker can land without the run's own content ever
+reaching disk — process death between the two writes — and a banner offering a report with nothing
+in it is worse than silence. The cost is real: a crash that left no content is not announced. It is
+accepted because the banner's whole promise is that there is something to send.
 
 The log lives in `cacheDir`, which the system may reclaim under storage pressure, so a pinned crash
 can disappear before the user acts on it — and a user who switched logging off has none to begin
@@ -2664,7 +2673,7 @@ doesn't mention shows up as a row with no rationale behind it.
 - Coordinates never leave the device. The v1 anchor is discarded when the snooze ends.
 - Snooze history (if added) is local, off by default, and clearable.
 - **The debug log (§4.6) is the one sanctioned exception, and a narrow one.** It is on by default
-  (maintainer, 2026-08-11) with a setting to switch it off, on-device, bounded to two runs, and
+  (maintainer, 2026-08-11) with a setting to switch it off, on-device, holding only recent runs, and
   leaves the device only when the user shares it through the system share sheet — the default is
   about what is recorded *on the user's own phone*, not about anything leaving it. Its floor is absolute: coarse state, reasons, distance from the anchor in
   meters, and fix accuracy — never raw coordinates, never a full SSID or BSSID, never a place name

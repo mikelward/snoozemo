@@ -18,6 +18,7 @@ import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.tile.TilePresenceStore
 import app.snoozemo.ui.locationTrackingNeedsBackgroundPermission
+import com.mikelward.androidlog.android.PreviousRun
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -59,7 +60,26 @@ internal object DebugReport {
      * that silently omitted the crash would lose the only evidence a banner
      * exists to protect, for a share that never actually carried it.
      */
-    data class Payload(val text: String, val pinConsumeSafe: Boolean)
+    data class Payload(
+        val text: String,
+        val pinConsumeSafe: Boolean,
+        /**
+         * The files [text] was actually built from, or null when it was built
+         * from none — a fallback payload, or a read that found nothing.
+         *
+         * Carried through rather than remembered anywhere: [share] hands it
+         * straight back to [DebugLogging.consumeCrashPin], so a delivered
+         * report deletes exactly what it contained. A single remembered slot
+         * is what let two overlapping shares have the earlier one destroy a
+         * run only the later had read, whose own delivery might still fail.
+         *
+         * Defaults to null so a caller that has no handle — a fallback
+         * payload, a test's own seam — says nothing rather than saying
+         * something wrong. Null means "consume nothing", which is the
+         * direction that loses no evidence.
+         */
+        val previousRun: PreviousRun? = null,
+    )
 
     /** How long [share] waits for [consumeCrashPin] before giving up on it for this attempt. */
     private const val CONSUME_PIN_TIMEOUT_MS = 2_000L
@@ -248,11 +268,12 @@ internal object DebugReport {
         payloadCollect: (Context) -> Payload = ::collectPayload,
         clipboardWrite: (Context, String) -> Boolean = ::copyToClipboard,
         chooserLaunch: (Context, String) -> Boolean = ::startShare,
-        consumeCrashPin: (onResult: (Boolean) -> Unit) -> Unit = DebugLogging::consumeCrashPin,
+        consumeCrashPin: (run: PreviousRun?, onResult: (Boolean) -> Unit) -> Unit =
+            DebugLogging::consumeCrashPin,
     ): Result {
         val payload = runCatching { payloadCollect(context) }
             .onFailure { Log.e(TAG, "Building the debug report failed; sharing a minimal fallback.", it) }
-            .getOrElse { Payload(fallbackPayload(it), pinConsumeSafe = false) }
+            .getOrElse { Payload(fallbackPayload(it), pinConsumeSafe = false, previousRun = null) }
         val text = payload.text
         // Delivery is serialized on deliveryLock, not just the outcome it
         // produces: two concurrent calls would otherwise both write the
@@ -316,7 +337,7 @@ internal object DebugReport {
         val (delivered, shouldConsumePin) = result
         if (shouldConsumePin) {
             val latch = CountDownLatch(1)
-            runCatching { consumeCrashPin { latch.countDown() } }
+            runCatching { consumeCrashPin(payload.previousRun) { latch.countDown() } }
                 .onFailure { Log.e(TAG, "Consuming the crash pin failed.", it) }
             if (!latch.await(CONSUME_PIN_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
                 Log.w(TAG, "Consuming the crash pin timed out.")
@@ -367,7 +388,11 @@ internal object DebugReport {
         // empty previous run (Codex, PR #89, third round). Confusing any of
         // these with a clean, complete report is exactly what would consume
         // a pin the shared text never actually carried.
-        return Payload(text, pinConsumeSafe = !previousRunOmitted)
+        return Payload(
+            text,
+            pinConsumeSafe = !previousRunOmitted,
+            previousRun = previousRunRead.run,
+        )
     }
 
     /** Whether [collectPayload]'s read couldn't confirm the pin's content actually reached the report. */
@@ -395,11 +420,14 @@ internal object DebugReport {
      * a real, still-pinned file that couldn't be read).
      */
     private data class PreviousRunRead(
-        val text: String?,
+        /** The handle, kept so a delivered report can consume exactly these files. */
+        val run: PreviousRun?,
         val wasCrash: Boolean,
         val timedOut: Boolean,
         val readSucceeded: Boolean,
-    )
+    ) {
+        val text: String? get() = run?.text
+    }
 
     /**
      * Bridges [DebugLogging.readPreviousOrCrash]'s callback so [collectPayload]
@@ -413,9 +441,9 @@ internal object DebugReport {
      */
     private fun blockingReadPreviousOrCrash(): PreviousRunRead {
         val latch = CountDownLatch(1)
-        var result = Triple<String?, Boolean, Boolean>(null, false, true)
-        DebugLogging.readPreviousOrCrash { text, wasCrash, readSucceeded ->
-            result = Triple(text, wasCrash, readSucceeded)
+        var result = Triple<PreviousRun?, Boolean, Boolean>(null, false, true)
+        DebugLogging.readPreviousOrCrash { run, wasCrash, readSucceeded ->
+            result = Triple(run, wasCrash, readSucceeded)
             latch.countDown()
         }
         val completed = latch.await(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)

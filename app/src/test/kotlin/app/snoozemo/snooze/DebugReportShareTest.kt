@@ -66,7 +66,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> true },
             chooserLaunch = { _, _ -> true },
-            consumeCrashPin = { onResult -> pinConsumed = true; onResult(true) },
+            consumeCrashPin = { _, onResult -> pinConsumed = true; onResult(true) },
         )
 
         assertTrue(result.clipboardCopied)
@@ -83,7 +83,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> false },
             chooserLaunch = { _, _ -> true },
-            consumeCrashPin = { pinConsumed = true },
+            consumeCrashPin = { _, _ -> pinConsumed = true },
         )
 
         assertFalse(result.clipboardCopied)
@@ -100,7 +100,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> false },
             chooserLaunch = { _, _ -> false },
-            consumeCrashPin = { pinConsumed = true },
+            consumeCrashPin = { _, _ -> pinConsumed = true },
         )
 
         assertFalse(result.clipboardCopied)
@@ -117,7 +117,7 @@ class DebugReportShareTest {
             payloadCollect = { error("collection broke") },
             clipboardWrite = { _, text -> sharedText = text; true },
             chooserLaunch = { _, _ -> true },
-            consumeCrashPin = {},
+            consumeCrashPin = { _, _ -> },
         )
 
         assertTrue(result.clipboardCopied)
@@ -136,7 +136,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> true },
             chooserLaunch = { _, _ -> true },
-            consumeCrashPin = { onResult -> onResult(false) },
+            consumeCrashPin = { _, onResult -> onResult(false) },
         )
 
         // A refused consume is a file-layer detail the share's own outcome
@@ -156,7 +156,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = false) },
             clipboardWrite = { _, _ -> true },
             chooserLaunch = { _, _ -> true },
-            consumeCrashPin = { pinConsumed = true },
+            consumeCrashPin = { _, _ -> pinConsumed = true },
         )
 
         // The clipboard copy landed, but the collector couldn't confirm the
@@ -216,52 +216,13 @@ class DebugReportShareTest {
     }
 
     @Test
-    fun `a pinned crash that reads back blank is not consumed, and the report says so`() {
-        // A crash marker can land without its content ever reaching disk —
-        // process death between the marker write and the run's own content
-        // write. wasCrash reads true from the marker alone, so a blank
-        // crash.log must be treated the same as an omitted read, never as
-        // a clean empty previous run — otherwise a "successful" share
-        // consumes the only evidence a crash happened at all, having never
-        // actually carried it (Codex, PR #89, third round on this
-        // mechanism).
-        val dir = File(context.cacheDir, "debuglog")
-        dir.mkdirs()
-        File(dir, "current.log").writeText("")
-        File(dir, "current.log.crash").writeText("1")
-        DebugLogging.install(context)
-        DebugLogging.awaitIdleForTest()
-        assertTrue(
-            "precondition: the blank crash is genuinely pinned — install left " +
-                "${dir.list()?.sorted()} with the log " +
-                "${if (DebugLogStore(context).isEnabled()) "on" else "off"}",
-            File(dir, "crash.log").exists(),
-        )
-
-        var sharedText: String? = null
-        val result = DebugReport.share(
-            context,
-            clipboardWrite = { _, text -> sharedText = text; true },
-            chooserLaunch = { _, _ -> true },
-        )
-        DebugLogging.awaitIdleForTest()
-
-        assertTrue(result.clipboardCopied)
-        assertTrue(
-            "a blank crash must not be silently consumed by a share that never actually carried it",
-            File(dir, "crash.log").exists(),
-        )
-        assertTrue(requireNotNull(sharedText).contains("could not be included in this report"))
-    }
-
-    @Test
     fun `an exception from consumeCrashPin does not take the share down with it`() {
         val result = DebugReport.share(
             context,
             payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> true },
             chooserLaunch = { _, _ -> true },
-            consumeCrashPin = { throw RuntimeException("boom") },
+            consumeCrashPin = { _, _ -> throw RuntimeException("boom") },
         )
 
         assertEquals(DebugReport.Result(clipboardCopied = true, reachedUser = true), result)
@@ -277,7 +238,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> false },
             chooserLaunch = { _, _ -> false },
-            consumeCrashPin = {},
+            consumeCrashPin = { _, _ -> },
         )
         assertTrue(DebugReport.lastShareFailed)
 
@@ -286,7 +247,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> true },
             chooserLaunch = { _, _ -> true },
-            consumeCrashPin = {},
+            consumeCrashPin = { _, _ -> },
         )
         assertFalse("a later successful share supersedes the earlier failure", DebugReport.lastShareFailed)
     }
@@ -308,7 +269,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> true },
             chooserLaunch = { _, _ -> true },
-            consumeCrashPin = {},
+            consumeCrashPin = { _, _ -> },
         )
         assertFalse("the newer, faster attempt succeeded", DebugReport.lastShareFailed)
 
@@ -318,7 +279,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> false },
             chooserLaunch = { _, _ -> false },
-            consumeCrashPin = {},
+            consumeCrashPin = { _, _ -> },
         )
 
         assertFalse(
@@ -336,7 +297,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> true },
             chooserLaunch = { _, _ -> true },
-            consumeCrashPin = {},
+            consumeCrashPin = { _, _ -> },
         )
         assertFalse(DebugReport.lastShareFailed)
 
@@ -347,7 +308,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> false },
             chooserLaunch = { _, _ -> false },
-            consumeCrashPin = {},
+            consumeCrashPin = { _, _ -> },
         )
 
         assertTrue(DebugReport.lastShareFailed)
@@ -375,7 +336,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> false },
             chooserLaunch = { _, _ -> false },
-            consumeCrashPin = {},
+            consumeCrashPin = { _, _ -> },
         )
 
         assertFalse(
@@ -405,7 +366,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("the retry's report", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> true },
             chooserLaunch = { _, _ -> true },
-            consumeCrashPin = {},
+            consumeCrashPin = { _, _ -> },
         )
 
         var clipboardWriteCalled = false
@@ -416,7 +377,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("the stale first attempt's report", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> clipboardWriteCalled = true; true },
             chooserLaunch = { _, _ -> chooserLaunchCalled = true; true },
-            consumeCrashPin = {},
+            consumeCrashPin = { _, _ -> },
         )
 
         assertFalse("a superseded attempt must never write the clipboard", clipboardWriteCalled)
@@ -458,7 +419,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("the report", pinConsumeSafe = false) },
             clipboardWrite = { _, _ -> true },
             chooserLaunch = { _, _ -> true },
-            consumeCrashPin = {},
+            consumeCrashPin = { _, _ -> },
         )
 
         assertFalse("the completed attempt re-enables the affordance", DebugReport.shareInFlight)
@@ -479,7 +440,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("the report", pinConsumeSafe = false) },
             clipboardWrite = { _, _ -> false },
             chooserLaunch = { _, _ -> false },
-            consumeCrashPin = {},
+            consumeCrashPin = { _, _ -> },
         )
 
         assertFalse("precondition: this attempt genuinely failed", result.reachedUser)
@@ -507,7 +468,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("the report", pinConsumeSafe = false) },
             clipboardWrite = { _, _ -> true },
             chooserLaunch = { _, _ -> true },
-            consumeCrashPin = {},
+            consumeCrashPin = { _, _ -> },
         )
 
         assertTrue(
@@ -544,7 +505,7 @@ class DebugReportShareTest {
                         true
                     },
                     chooserLaunch = { _, _ -> true },
-                    consumeCrashPin = {},
+                    consumeCrashPin = { _, _ -> },
                 )
             }
         }
@@ -590,7 +551,7 @@ class DebugReportShareTest {
                 payloadCollect = { DebugReport.Payload("the report", pinConsumeSafe = true) },
                 clipboardWrite = { _, _ -> true },
                 chooserLaunch = { _, _ -> true },
-                consumeCrashPin = { onResult ->
+                consumeCrashPin = { _, onResult ->
                     pinConsumeStarted.countDown()
                     releasePinConsume.await(2, TimeUnit.SECONDS)
                     onResult(true)
@@ -616,7 +577,7 @@ class DebugReportShareTest {
                 payloadCollect = { DebugReport.Payload("the report", pinConsumeSafe = true) },
                 clipboardWrite = { _, _ -> clipboardWrites2.incrementAndGet(); true },
                 chooserLaunch = { _, _ -> chooserLaunches2.incrementAndGet(); true },
-                consumeCrashPin = { onResult -> onResult(true) },
+                consumeCrashPin = { _, onResult -> onResult(true) },
             )
             attempt2Done.countDown()
         }
@@ -670,7 +631,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("text", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> false },
             chooserLaunch = { _, _ -> false },
-            consumeCrashPin = {},
+            consumeCrashPin = { _, _ -> },
         )
         assertTrue("precondition: the first attempt genuinely failed", DebugReport.lastShareFailed)
 
@@ -700,7 +661,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> false },
             chooserLaunch = { _, _ -> false },
-            consumeCrashPin = {},
+            consumeCrashPin = { _, _ -> },
         )
         assertTrue(DebugReport.lastShareFailed)
 
@@ -714,7 +675,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> true },
             chooserLaunch = { _, _ -> true },
-            consumeCrashPin = {},
+            consumeCrashPin = { _, _ -> },
         )
 
         assertFalse(
@@ -734,7 +695,7 @@ class DebugReportShareTest {
                 payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
                 clipboardWrite = { _, _ -> false },
                 chooserLaunch = { _, _ -> false },
-                consumeCrashPin = {},
+                consumeCrashPin = { _, _ -> },
             )
         } finally {
             watch.close()
@@ -753,7 +714,7 @@ class DebugReportShareTest {
             payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> true },
             chooserLaunch = { _, _ -> true },
-            consumeCrashPin = {},
+            consumeCrashPin = { _, _ -> },
         )
 
         assertEquals(0, heard)

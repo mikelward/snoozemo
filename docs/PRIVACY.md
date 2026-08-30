@@ -103,7 +103,7 @@ All of this lives in Snoozemo's private app storage, which other apps cannot rea
 | Why a snooze failed to start, when it failed while you were not looking | So a tap that quietly did nothing tells you what went wrong, rather than leaving you to guess | Erased when your next snooze starts and makes it moot. It is kept even after the message is shown, in case the message never arrived — if it was waiting on notification permission, showing it is what clears it |
 | A note that Do Not Disturb may still be on after Snoozemo lost track of it | So Snoozemo keeps trying to turn its own rule back off, instead of leaving your phone quiet with nothing watching | Erased when the rule is confirmed off, or when a new snooze takes the rule over — seeing the warning is not enough |
 | Whether you have turned crash reports off | So the choice sticks, and nothing is sent while it is off. It is a single yes/no, stored on the phone, and never sent anywhere itself | Until you uninstall |
-| A short technical log of what the snooze machinery did, and when — see **The debug log** below | So a snooze that ended early, or never ended, can be explained after the fact | The current run of the app and the one before it; deleted immediately if you turn the log off |
+| A short technical log of what the snooze machinery did, and when — see **The debug log** below | So a snooze that ended early, or never ended, can be explained after the fact | The current run of the app and a few recent ones; deleted immediately if you turn the log off |
 
 There is no history: Snoozemo does not keep a record of past snoozes, past places, or past
 Wi-Fi networks. When a snooze ends, the record of it — including the location it was
@@ -216,9 +216,10 @@ number says whether the departure test worked; where you were is not in the log 
 
 **Where it lives and how long**: in Snoozemo's private cache on your phone, which other
 apps cannot read, Android's backup does not copy, and Android may clear on its own under
-storage pressure. Two runs of the app are kept — the current one and the one before it —
-except that a run that ended in a crash is kept in place of the previous run until it is
-dealt with, so the evidence of a crash is not overwritten by a restart.
+storage pressure. The current run of the app is kept along with a few recent ones, and the
+oldest are dropped as newer runs replace them. A run that ended in a crash is set aside
+under its own name and is never written over by a restart, so the evidence of a crash
+survives until you share it or dismiss it.
 
 **It is on by default**, because the failures worth diagnosing happen once and without
 warning — a log that starts off guarantees the first one is the one nobody captured.
@@ -240,8 +241,8 @@ Not Disturb access, notifications, and location are currently granted, whether l
 services and battery saver are on, and whether the Quick Settings tile has been added — all
 facts that commonly explain why a snooze misbehaved, none of them anything you typed. If the
 app's previous run ended in a crash, that run's log is included too, labeled as a crash, and
-sharing it (or dismissing the banner without sharing) clears it the same way the two-run
-limit above does.
+sharing it (or dismissing the banner without sharing) clears it the same way the limit above
+does.
 
 **The crash banner appears only after a crash** — an ordinary close, a force-stop, or an app
 update never raises it — and only until you share or dismiss it. The floor above is unchanged
