@@ -230,6 +230,13 @@ class DebugLoggingTest {
     @Test
     fun `watchCrashPinOutcome fires once a real sink's consume completes too`() {
         DebugLogging.install(context)
+        // Drained before the watch is registered, deliberately: `install`
+        // queues the sink's own first crash derivation, which publishes
+        // through this same watch. Registering while that is still in flight
+        // leaves the count depending on which lands first — 0 or 1 by
+        // scheduling, which is a test that passes most of the time.
+        DebugLogging.awaitIdleForTest()
+
         var fired = 0
         val watch = DebugLogging.watchCrashPinOutcome { fired++ }
 

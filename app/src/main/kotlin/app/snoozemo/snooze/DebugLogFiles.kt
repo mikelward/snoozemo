@@ -482,20 +482,24 @@ internal object DebugLogging {
                 if (installed != null) {
                     if (run != null) runCatching { installed.clearPreviousRun(run) }
                     runCatching { installed.acknowledgeCrashBanner() }
-                    // No notification here: the sink's crash listener is what
-                    // feeds the watch once one is installed, and lowering the
-                    // banner is exactly the change that fires it. Notifying
-                    // again from here would deliver the same completion twice.
-                } else {
-                    // Nothing is listening to a sink that does not exist, so
-                    // this is the only thing that can say the consume finished.
-                    // It matters because a configuration change can recreate
-                    // the activity while this is still on the worker, and the
-                    // `onResult` that started it closes over the instance that
-                    // is now gone — without this the screen would sit on stale
-                    // state until something else happened to refresh it.
-                    runCatching { onCrashPinOutcome?.invoke() }
                 }
+                // Unconditional, because "a consume completed" is its own event
+                // and not the same fact as "the pin state changed". The sink's
+                // crash listener reports the second; only this reports the
+                // first, and with nothing pinned there is no state change to
+                // report at all. It matters because a configuration change can
+                // recreate the activity while this is still on the worker, and
+                // the `onResult` that started it closes over the instance that
+                // is now gone — without this the screen sits on stale state
+                // until something else happens to refresh it.
+                //
+                // A consume that *does* lower the banner therefore notifies
+                // twice, which costs nothing: the observer re-reads the state
+                // rather than trusting a delivered value, so a duplicate is
+                // the same answer a second time. Making this conditional to
+                // avoid that is what left a test racing the install's own
+                // first derivation.
+                runCatching { onCrashPinOutcome?.invoke() }
                 onResult(true)
             }
         }.onFailure { onResult(false) }
