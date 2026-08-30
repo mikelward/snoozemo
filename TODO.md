@@ -4239,6 +4239,15 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
       matter how the push was made. Same self-clearing failure, same wasted cycle, and
       nothing the author can decline to do. It strengthens the case for fixing this in
       `gate` itself rather than by pushing more carefully.
+      **Better mitigation, when a body change *is* needed: edit the body first, then push**
+      (PR #150, 2026-08-30). `AGENTS.md` asks for the refresh *with* the push, which the
+      earlier reading took as "push, then edit" — and that is the ordering that lands the
+      cancelled run's red `gate` on the **current** head, where branch protection reads it.
+      Editing first fires the `edited` run against the *old* head, so when the push
+      supersedes it the failure is minted on a SHA nothing gates on, and the push's own run
+      is the newest on the head that matters. Same number of runs, same wasted cycle; the
+      noise just stops landing where it can be mistaken for a real failure. Does not help
+      the `sync-screenshots` case above, which the author does not control.
 
 - [ ] **`deploy`'s display name is load-bearing and now inaccurate.** The job
       is still called `Build and release` after the release build moved to
