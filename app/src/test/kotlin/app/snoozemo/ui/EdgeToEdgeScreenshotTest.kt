@@ -238,6 +238,7 @@ class EdgeToEdgeScreenshotTest {
             snoozing = false,
             trackingMode = null,
             remaining = null,
+            degradation = null,
             lastOutcome = null,
             crashPending = false,
                 shareFailed = false,
