@@ -81,6 +81,43 @@ data class EndCondition(
          * the seed is clamped down to [ceiling] rather than opening on a time
          * the service would refuse.
          */
+        /**
+         * The latest time the sheet may offer over [snooze]: the cap that
+         * snooze actually carries, not a fresh [ActiveSnooze.DEFAULT_CAP] from
+         * now.
+         *
+         * They coincide on a fresh arm and part company on a duplicate one —
+         * a second arm onto a running snooze is answered by *keeping* the one
+         * already running (SPEC.md §4.2), so the record the sheet is about can
+         * have started long ago. Seeded against a constant, the sheet would
+         * offer an hour over a snooze with ten minutes left.
+         *
+         * Takes the record rather than reading it, so each caller supplies it
+         * from wherever it already has one — a load on the tile path, the copy
+         * the app screen keeps warm — and neither puts a disk wait where this
+         * is decided (Codex, PR #150 discussion; principle 3).
+         */
+        fun ceilingFor(snooze: ActiveSnooze?, now: Instant): Instant =
+            snooze?.capExpiresAt ?: now.plus(ActiveSnooze.DEFAULT_CAP)
+
+        /**
+         * Whether there is a snooze **and** a time the sheet could set on it.
+         *
+         * The record alone is not enough. A cap already closer than
+         * [ActiveSnooze.MIN_CAP] leaves nothing to choose — the service
+         * declines anything inside that floor, and the only value above it is
+         * later than the cap, which the service honors by doing nothing and
+         * reports as applied. Either way the sheet would be a screen the user
+         * cannot answer.
+         *
+         * Fails closed on a missing record: no sheet over a correctly armed
+         * snooze is exactly what the setting being off would have given.
+         */
+        fun offersAChoice(snooze: ActiveSnooze?, now: Instant): Boolean {
+            val cap = snooze?.capExpiresAt ?: return false
+            return cap.isAfter(now.plus(ActiveSnooze.MIN_CAP))
+        }
+
         fun seededAt(now: Instant, ceiling: Instant, zone: ZoneId): EndCondition {
             val floor = now.plus(ActiveSnooze.MIN_CAP)
             val seed = roundToHalfHour(now.plus(SEED_AHEAD), zone)

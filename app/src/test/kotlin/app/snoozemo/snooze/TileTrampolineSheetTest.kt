@@ -199,13 +199,13 @@ class TileTrampolineSheetTest {
 
         // Two taps of `+`, then a rotation. Reseeding would silently undo the
         // only work the user has done on this screen.
-        val stepped = requireNotNull(activity.endCondition).stepUp().stepUp()
-        activity.endCondition = stepped
+        val stepped = requireNotNull(activity.sheet.endCondition).stepUp().stepUp()
+        activity.sheet.endCondition = stepped
 
         controller.recreate()
         shadowOf(getMainLooper()).idle()
 
-        assertEquals(stepped.endsAt, controller.get().endCondition?.endsAt)
+        assertEquals(stepped.endsAt, controller.get().sheet.endCondition?.endsAt)
     }
 
     @Test
@@ -254,7 +254,7 @@ class TileTrampolineSheetTest {
         // with every control inert (Codex, PR #118).
         ActiveSnoozeStore(appContext).save(snoozeFixture(now))
         val controller = tapTileController()
-        controller.get().committing = true
+        controller.get().sheet.committing = true
 
         // Reported from the gap itself rather than staged beforehand: this
         // fires after the old activity is destroyed — taking its watch with it
@@ -301,7 +301,7 @@ class TileTrampolineSheetTest {
         ActiveSnoozeStore(appContext).save(snoozeFixture(now, capIn = alreadyRunning))
 
         val activity = tapTile()
-        val condition = requireNotNull(activity.endCondition)
+        val condition = requireNotNull(activity.sheet.endCondition)
 
         assertEquals(
             "the ceiling is the cap this snooze carries, not a fresh eight hours",
@@ -327,7 +327,7 @@ class TileTrampolineSheetTest {
         val activity = tapTile()
 
         assertTrue("nothing to choose means nothing to ask", activity.isFinishing)
-        assertNull("and no sheet was seeded behind it", activity.endCondition)
+        assertNull("and no sheet was seeded behind it", activity.sheet.endCondition)
     }
 
     @Test
@@ -353,7 +353,7 @@ class TileTrampolineSheetTest {
 
         val activity = controller.get()
         assertFalse("a blank transparent window is the one thing this must not be", activity.isFinishing)
-        assertNotNull("the replacement has to make the decision the first one never got to", activity.endCondition)
+        assertNotNull("the replacement has to make the decision the first one never got to", activity.sheet.endCondition)
     }
 
     @Test
@@ -369,8 +369,8 @@ class TileTrampolineSheetTest {
 
         // Two taps of `+`, so a restored sheet is distinguishable from a
         // reseeded one: reseeding is what the second tap is owed.
-        val stepped = requireNotNull(controller.get().endCondition).stepUp().stepUp()
-        controller.get().endCondition = stepped
+        val stepped = requireNotNull(controller.get().sheet.endCondition).stepUp().stepUp()
+        controller.get().sheet.endCondition = stepped
 
         // The second tap, deliberately left un-drained so its decision is still
         // owed when the recreation happens.
@@ -384,7 +384,7 @@ class TileTrampolineSheetTest {
         assertEquals(
             "the second tap's decision has to reseed, not inherit the old offer",
             EndCondition.seededAt(now, now.plus(Duration.ofHours(7)), ZoneId.systemDefault()).endsAt,
-            controller.get().endCondition?.endsAt,
+            controller.get().sheet.endCondition?.endsAt,
         )
     }
 
