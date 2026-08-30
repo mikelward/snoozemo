@@ -1,8 +1,10 @@
 package app.snoozemo.presence.geofence
 
+import android.Manifest
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.SystemClock
 import app.snoozemo.core.Anchor
 import app.snoozemo.core.CapabilityLossCause
@@ -61,6 +63,21 @@ class GeofencePresenceMonitor(
 ) : PresenceMonitor {
 
     private val appContext = context.applicationContext
+
+    /**
+     * Whether the fine-location grant is still held, read live at the moment a
+     * refusal is classified.
+     *
+     * Both permission-shaped refusals arrive as the same answer from the
+     * platform — "insufficient location permission" — and only the live grant
+     * separates *background missing* from *location gone*, which are different
+     * things for the user to fix. Read at classification time rather than
+     * cached from arm, because a mid-snooze revocation is precisely the case
+     * this has to name (SPEC.md §8.2).
+     */
+    private fun hasFineLocation(): Boolean =
+        appContext.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
 
     /**
      * Closes the running flow; null while none runs. Atomic for the same
@@ -258,8 +275,23 @@ class GeofencePresenceMonitor(
         val servicesDegradation =
             java.util.concurrent.atomic.AtomicReference<DegradationCause?>(null)
 
+        // A missing *grant* outranks a services outage, and only that one
+        // exception to services-wins holds (Codex, PR #149, fourth pass).
+        // The services slot is refuted only by a delivered fix — and once the
+        // grant is gone no fix can ever arrive, so a latched services cause
+        // would outlive its own refutation and keep naming the wrong remedy
+        // ("turn location on" over "grant the permission") for the rest of the
+        // snooze. Worse than the label: `LOCATION_SERVICES_OFF` is not one of
+        // the causes the controller drops to duration-only for, so an anchor
+        // with an SSID would sit in `WIFI_ONLY` with no grant to read that
+        // SSID with — the exact claim this PR's `modeFor` guard exists to stop.
+        //
+        // The services slot is kept rather than cleared: if the grant returns
+        // while services are still off, the re-registration answers
+        // `GEOFENCE_NOT_AVAILABLE` and re-latches it anyway, so overriding is
+        // as self-healing as clearing and loses nothing meanwhile.
         fun platformLevel(): DegradationCause? =
-            servicesDegradation.get() ?: registrationDegradation.get()
+            platformLevelOf(registrationDegradation.get(), servicesDegradation.get())
 
         // **Only the engine's own inferences are resumed across a restart**
         // (maintainer, 2026-08-30, narrowing this change to the half that
@@ -617,6 +649,24 @@ class GeofencePresenceMonitor(
         // resting fix would spend §9's budget re-answering it. `NONE` also
         // covers the anchor nothing can measure against; `ACTIVE` means a
         // burst is already asking faster than a probe would.
+        // Recovery has to *re-drive* the duty, not merely unblock it (Codex,
+        // PR #149, second pass on the same mechanism). The burst is started by
+        // the duty reconciliation in `deliver`, which a registration success
+        // does not go through, and `settle`'s `stopWork` already left
+        // `running` false — so clearing the suspension alone leaves an active
+        // departure check with nothing asking for the confirming fix it needs,
+        // and an SSID-less anchor waits for an unrelated signal or the cap.
+        // Mirrors `deliver`'s own branch so the two cannot disagree about what
+        // a duty means.
+        fun resumeChecking() {
+            checkingFixes?.resume()
+            when (synchronized(feedLock) { feed.duty }) {
+                LocationDuty.ACTIVE -> checkingFixes?.start()
+                LocationDuty.SANITY -> checkingFixes?.sanityCheck()
+                LocationDuty.NONE -> Unit
+            }
+        }
+
         fun sanityProbe() {
             val duty = synchronized(feedLock) { feed.duty }
             if (duty == LocationDuty.SANITY) checkingFixes?.sanityCheck()
@@ -651,11 +701,20 @@ class GeofencePresenceMonitor(
             readElapsedRealtimeMs,
             ::deliver,
             onPermissionLost = {
-                // The recoverable/fatal split again, at the burst's boundary:
-                // a revoked grant mid-check ends the snooze, classified
-                // through the same tested mapping registration uses (flagged
-                // by Codex on PR #72 when it reported mere degradation).
-                reportRegistration(GeofenceRegistrationFailure.fromSecurityException())
+                // Classified through the same tested mapping registration
+                // uses, so the two paths cannot disagree about one grant.
+                //
+                // This used to end the snooze (Codex, PR #72, against a first
+                // version that degraded). The maintainer reversed it on
+                // 2026-08-30: the duration cap is mandatory, so duration-only
+                // is bounded by construction and ending early discards the
+                // user's snooze without buying safety the cap does not already
+                // give. PR #72's objection — that degrading leaves the snooze
+                // armed until its cap with nothing watching — is exactly what
+                // is now accepted, deliberately and with the card saying so.
+                reportRegistration(
+                    GeofenceRegistrationFailure.fromSecurityException(hasFineLocation()),
+                )
             },
             onServicesOff = {
                 // The recoverable side of the same split, said the moment it
@@ -738,6 +797,18 @@ class GeofencePresenceMonitor(
                         // #75).
                         if (registrationDegradation.getAndSet(null) != null) {
                             SnoozeDebugLog.event("geofence re-registered; registration level cleared")
+                            // A registration that just succeeded is proof the
+                            // grant is back, and it is the only such proof
+                            // that arrives on its own — the burst cannot
+                            // demonstrate recovery while it is the thing
+                            // suspended. Without this the fix requester stays
+                            // suspended for the life of the process, so an
+                            // anchor with no SSID could report `FULL` over a
+                            // repaired fence it can never confirm an exit
+                            // from, and sit snoozed to the cap (Codex, PR
+                            // #149). Safe against a teardown racing it:
+                            // `resume` refuses on a closed instance.
+                            resumeChecking()
                             // The restate carries the *feed's* level, not a
                             // synthesized null: this update arrives outside
                             // any signal, and a null here would promote a
@@ -756,7 +827,7 @@ class GeofencePresenceMonitor(
                         if (registrationAttempt.get() != attempt) return@addOnFailureListener
                         val code = (e as? ApiException)?.statusCode
                         val failure = if (code != null) {
-                            GeofenceRegistrationFailure.fromStatusCode(code)
+                            GeofenceRegistrationFailure.fromStatusCode(code, hasFineLocation())
                         } else {
                             GeofenceRegistrationFailure.Fatal(
                                 app.snoozemo.core.CapabilityLossCause.MONITORING_UNAVAILABLE,
@@ -773,7 +844,9 @@ class GeofencePresenceMonitor(
                 // call — fail open with the reason rather than watch
                 // nothing quietly.
                 SnoozeDebugLog.warning("geofence registration refused: permission gone")
-                reportRegistration(GeofenceRegistrationFailure.fromSecurityException())
+                reportRegistration(
+                    GeofenceRegistrationFailure.fromSecurityException(hasFineLocation()),
+                )
             }
         }
 
@@ -1177,6 +1250,39 @@ class GeofencePresenceMonitor(
     companion object {
         /** The one fence this app ever registers (one snooze, one place). */
         internal const val GEOFENCE_ID = "snoozemo-anchor"
+
+        /**
+         * Which of the two platform slots the controller is told about.
+         *
+         * Services normally wins: a refused registration says nothing about
+         * whether the subsystem works, while a services outage indicts it
+         * outright. **A missing grant is the one exception** (Codex, PR #149).
+         * The services slot is refuted only by a delivered fix, and once the
+         * grant is gone no fix can ever arrive — so a latched services cause
+         * would outlive its own refutation and keep naming the wrong remedy
+         * ("turn location on" over "grant the permission") for the rest of the
+         * snooze. Worse than the label: `LOCATION_SERVICES_OFF` is not a cause
+         * the controller drops to duration-only for, so an anchor with an SSID
+         * would sit in `WIFI_ONLY` with no grant to read that SSID with — the
+         * exact claim this PR's `modeFor` guard exists to stop.
+         *
+         * The services slot is kept rather than cleared: if the grant returns
+         * while services are still off, the re-registration answers
+         * `GEOFENCE_NOT_AVAILABLE` and re-latches it, so overriding is as
+         * self-healing as clearing and loses nothing meanwhile.
+         *
+         * Pulled out of [start]'s local scope purely so it can be asserted —
+         * the same reason [settlesHeldExit] is up here.
+         */
+        internal fun platformLevelOf(
+            registration: DegradationCause?,
+            services: DegradationCause?,
+        ): DegradationCause? = when (registration) {
+            DegradationCause.LOCATION_PERMISSION_GONE,
+            DegradationCause.NO_LOCATION_IN_BACKGROUND,
+            -> registration
+            else -> services ?: registration
+        }
 
         /**
          * Whether an update leaving the checking duty may retire the bridge's

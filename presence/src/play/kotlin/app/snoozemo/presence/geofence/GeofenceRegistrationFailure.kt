@@ -30,32 +30,70 @@ internal sealed interface GeofenceRegistrationFailure {
 
     companion object {
 
-        /** A `SecurityException` from the registration call: the grant is gone. */
-        fun fromSecurityException(): GeofenceRegistrationFailure =
-            Fatal(CapabilityLossCause.LOCATION_PERMISSION_REVOKED)
+        /**
+         * A `SecurityException` from the registration call: the grant went
+         * between the permission check and the call.
+         *
+         * Degrades rather than ends (maintainer, 2026-08-30) — see
+         * [permissionFailure] for which cause and why.
+         */
+        fun fromSecurityException(hasFineLocation: Boolean): GeofenceRegistrationFailure =
+            permissionFailure(hasFineLocation)
+
+        /**
+         * The one classification both permission-shaped refusals share.
+         *
+         * `addGeofences` answers "insufficient location permission" for two
+         * different states, and they need different things from the user:
+         * **fine location held, background not** — the ordinary while-in-use
+         * grant, where geofencing is unavailable outright on API 29+ — versus
+         * **fine location gone**, a revoked or downgraded grant. Telling them
+         * apart needs the live permission state, which is why this takes it
+         * rather than reading the status code alone.
+         *
+         * Both are **recoverable**. Until 2026-08-30 both ended the snooze, on
+         * the reading that tracking we cannot do is the ambiguous state D7 says
+         * to resolve toward ending. What that missed is that the duration cap
+         * is mandatory and user-set, so duration-only is bounded by
+         * construction — the backstop principle 1 names is already in place,
+         * and ending early only discards the snooze the user asked for. The
+         * card says which permission is missing either way, so this is a
+         * degradation the user can act on, not a silent one.
+         */
+        private fun permissionFailure(hasFineLocation: Boolean): GeofenceRegistrationFailure =
+            if (hasFineLocation) {
+                Recoverable(DegradationCause.NO_LOCATION_IN_BACKGROUND)
+            } else {
+                Recoverable(DegradationCause.LOCATION_PERMISSION_GONE)
+            }
 
         /**
          * Classifies an `ApiException` status code from `addGeofences`.
          *
-         * Only [GeofenceStatusCodes.GEOFENCE_NOT_AVAILABLE] is recoverable:
-         * it means geofencing is switched off underneath us — location
-         * services off is the ordinary cause — and flipping it back on is the
-         * user's to do, with the snooze still bounded by Wi-Fi and the cap
-         * meanwhile. The permission code is the grant gone by another name.
+         * Two codes are recoverable. [GeofenceStatusCodes.GEOFENCE_NOT_AVAILABLE]
+         * means geofencing is switched off underneath us — location services
+         * off is the ordinary cause — and flipping it back on is the user's to
+         * do. [GeofenceStatusCodes.GEOFENCE_INSUFFICIENT_LOCATION_PERMISSION]
+         * is a missing grant, split by [permissionFailure] into the two states
+         * it covers.
+         *
          * Everything else — too many fences, too many pending intents, rate
          * limiting, codes this build has never heard of — is treated as
          * monitoring unavailable, deliberately: pretending an unclassified
          * refusal will heal is how a phone stays silent on state nothing is
          * watching, and a snooze that ends early is the cheap side of that
-         * trade (principle 1). A retry ladder for genuinely transient codes
-         * is a refinement to add if the field shows one, not a default.
+         * trade (principle 1). That trade still holds *here* precisely because
+         * we cannot name the reason; the permission cases moved off it because
+         * we can. A retry ladder for genuinely transient codes is a refinement
+         * to add if the field shows one, not a default.
          */
-        fun fromStatusCode(statusCode: Int): GeofenceRegistrationFailure = when (statusCode) {
-            GeofenceStatusCodes.GEOFENCE_NOT_AVAILABLE ->
-                Recoverable(DegradationCause.LOCATION_SERVICES_OFF)
-            GeofenceStatusCodes.GEOFENCE_INSUFFICIENT_LOCATION_PERMISSION ->
-                Fatal(CapabilityLossCause.LOCATION_PERMISSION_REVOKED)
-            else -> Fatal(CapabilityLossCause.MONITORING_UNAVAILABLE)
-        }
+        fun fromStatusCode(statusCode: Int, hasFineLocation: Boolean): GeofenceRegistrationFailure =
+            when (statusCode) {
+                GeofenceStatusCodes.GEOFENCE_NOT_AVAILABLE ->
+                    Recoverable(DegradationCause.LOCATION_SERVICES_OFF)
+                GeofenceStatusCodes.GEOFENCE_INSUFFICIENT_LOCATION_PERMISSION ->
+                    permissionFailure(hasFineLocation)
+                else -> Fatal(CapabilityLossCause.MONITORING_UNAVAILABLE)
+            }
     }
 }

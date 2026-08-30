@@ -104,7 +104,7 @@ class SnoozeServicePresenceTest {
 
         emit(
             PresenceUpdate(
-                event = PresenceEvent.CapabilityLost(CapabilityLossCause.LOCATION_PERMISSION_REVOKED),
+                event = PresenceEvent.CapabilityLost(CapabilityLossCause.MONITORING_UNAVAILABLE),
                 degradation = null,
             ),
         )

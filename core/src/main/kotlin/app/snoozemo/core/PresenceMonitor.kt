@@ -193,11 +193,29 @@ enum class DegradationCause {
     LOCATION_SERVICES_OFF,
 
     /**
-     * Started from a background context, where a while-in-use grant yields no
-     * location and no unredacted SSID — the reboot and process-death case
-     * (SPEC.md §8.1, §8.3). Recovers when the user taps `Resume tracking`.
+     * A while-in-use grant with no background-location grant behind it, so
+     * the geofence cannot register at all (SPEC.md §8.1, §8.3). Geofencing
+     * requires `ACCESS_BACKGROUND_LOCATION` outright on API 29+, with no
+     * foreground-context carve-out, so this does not lift by being in the
+     * foreground and there is nothing for the user to tap that would fix it
+     * from inside the app — only granting the permission does.
      */
     NO_LOCATION_IN_BACKGROUND,
+
+    /**
+     * The location grant itself is gone — revoked mid-snooze, or downgraded to
+     * coarse (SPEC.md §8.2).
+     *
+     * A *degradation*, not a capability loss, since 2026-08-30 (maintainer):
+     * the duration cap is mandatory and user-set, so falling back to it is
+     * bounded by construction, and ending the snooze the moment tracking dies
+     * throws away the snooze the user asked for without buying any safety the
+     * cap does not already provide. Distinct from [NO_LOCATION_IN_BACKGROUND]
+     * because the two need different things from the user — grant location at
+     * all, versus grant it in the background — and a cause that collapses them
+     * is the failure PR #141 exists to prevent.
+     */
+    LOCATION_PERMISSION_GONE,
 
     /**
      * The anchor was captured but nothing is running to watch it, so the
@@ -211,15 +229,26 @@ enum class DegradationCause {
     NOTHING_WATCHING,
 }
 
-/** Why tracking became impossible. Each of these ends the snooze. */
+/**
+ * Why tracking became impossible. Each of these ends the snooze.
+ *
+ * **Losing location is no longer one of them** (maintainer, 2026-08-30). A
+ * revoked grant and a missing background grant both degrade to duration-only
+ * now — see [DegradationCause.LOCATION_PERMISSION_GONE] and
+ * [DegradationCause.NO_LOCATION_IN_BACKGROUND] — because the duration cap is
+ * mandatory, so the fallback is bounded and ending early buys nothing.
+ * What remains here is the case we cannot explain.
+ */
 enum class CapabilityLossCause {
-    /** The location permission was revoked or downgraded to coarse mid-snooze. */
-    LOCATION_PERMISSION_REVOKED,
-
     /**
      * The monitor could not be established or re-established at all — a geofence
-     * that will not register, a monitor that failed to restart after process
-     * death. Fail open rather than pretend to be watching.
+     * refused for a reason this build cannot classify, a monitor that failed to
+     * restart after process death. Fail open rather than pretend to be watching.
+     *
+     * Deliberately still fatal where the permission cases are not: those name a
+     * state the user can act on and a reason we can put on the card, while this
+     * one is "something refused and we don't know what", which is exactly the
+     * shape principle 1 says to resolve toward ending.
      */
     MONITORING_UNAVAILABLE,
 }
