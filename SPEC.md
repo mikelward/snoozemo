@@ -1579,6 +1579,26 @@ duration cap, hours later, for a user who left the building five minutes in. So 
 starts when location gives up rather than only when it never started, and it is called off the
 moment either signal answers again.
 
+**A dead location grant calls grace off rather than running it** (landed 2026-08-30). The grace
+period is a bet that Wi-Fi's silence means something, and under a missing location grant it does
+not: reading an SSID needs `ACCESS_FINE_LOCATION` too, and a background read without it comes back
+redacted, which the Wi-Fi watch reports as the anchor's network having gone away. So a snooze whose
+permission was revoked — or which never had the background grant — would be told the network
+vanished whether or not the phone moved, and would end five minutes after the *permission* changed.
+That is the ending §8.2's degrade-to-timer decision exists to prevent, arriving by another door. The
+monitor therefore tells the engine outright when it classifies a grant-shaped refusal, which clears
+any running deadline, cancels the real alarm, and arms no further one until something proves the
+grant is back. That proof is a geofence registration the platform accepts, and only that: it
+requires `ACCESS_BACKGROUND_LOCATION` outright on API 29+, so it cannot succeed unless both grants
+are genuinely held. The two proofs the engine could see for itself were tried and are both wrong —
+a delivered fix can be cached from before the revocation, and a nameable SSID proves a *revoked*
+grant is back while proving nothing about a missing background one, since the app reads the SSID
+fine in the foreground under a while-in-use grant and redacted again the moment it is not. One
+proof, refuting the same level the monitor already withdraws on it. The snooze runs on the duration cap in the meantime, which is mandatory, so
+the fallback is bounded by construction. The mode says `Timer only` and names the missing grant;
+without the cancellation it would say that while an alarm quietly ended the snooze anyway, which is
+why the two land together.
+
 **The deadline survives the process dying, which it does routinely with no foreground service**
 (landed 2026-08-23). The real countdown is a platform `AlarmManager` alarm, which is durable on
 its own; what is not is the engine's own memory of *why* — a service killed mid-grace and

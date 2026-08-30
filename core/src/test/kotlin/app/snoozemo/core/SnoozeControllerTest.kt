@@ -672,6 +672,41 @@ class SnoozeControllerTest {
     }
 
     @Test
+    fun `a lost grant outranks a running grace period`() {
+        // The one cause that sits above `graceActive` (Codex, PR #149).
+        // WIFI_GRACE says Wi-Fi is bounding a departure — but under a dead
+        // grant the SSID reads as absent because the *permission* is, which
+        // is plausibly what started the grace period at all, so the honest
+        // answer is the timer. Safe to say only because the engine clears
+        // the deadline on the same classification; a card promising the cap
+        // while an alarm still ended the snooze would be worse than this bug.
+        armFully()
+
+        for (cause in listOf(
+            DegradationCause.LOCATION_PERMISSION_GONE,
+            DegradationCause.NO_LOCATION_IN_BACKGROUND,
+        )) {
+            controller.onPresenceUpdate(update(degradation = cause, graceActive = true))
+
+            assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
+        }
+    }
+
+    @Test
+    fun `every other cause still yields to grace`() {
+        // Guards the narrowness of the line above: it must be the grant
+        // causes that outrank grace, not degradation in general, or PR #31's
+        // bug returns wearing the fix for PR #149's.
+        armFully()
+
+        controller.onPresenceUpdate(
+            update(degradation = DegradationCause.LOCATION_SERVICES_OFF, graceActive = true),
+        )
+
+        assertEquals(TrackingMode.WIFI_GRACE, controller.active?.mode)
+    }
+
+    @Test
     fun `arming with an unusable anchor arms degraded and says so`() {
         val vague = anchor.copy(fixAccuracyM = 500f)
 

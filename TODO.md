@@ -1510,22 +1510,34 @@ the point is that every other line of the app is worthless if it isn't true.
       not already give. Neither falls back to Wi-Fi: an SSID read needs the same grant.
       `SPEC.md` §8.1, §8.2 and §8.3 rewritten with the reasoning they replace.
       `Resume tracking` is **not** being built — §8.1 records why the design cannot work.
-- [ ] **A grant lost *during* an active Wi-Fi grace still ends the snooze** (Codex, PR #149,
-      deferred there). `modeFor` checks `graceActive` before any degradation — deliberately, per
-      PR #31: grace can start before the *counting* causes have accumulated, and reporting
-      `WIFI_ONLY` for the first moments of a grace period would say Wi-Fi is tracking when it is
-      exactly what stopped. The grant causes are known immediately, so that reasoning does not
-      cover them, and grace under a dead grant is meaningless anyway — the SSID reads as
-      not-associated *because* the grant is gone, which is plausibly what started the grace.
-      **Why the one-line reordering was not taken**: it would fix the mode line and leave the
-      grace *alarm* armed, so the card would read `Timer only` — which promises the cap — while
-      the alarm ended the snooze minutes later. A card that lies is worse than the honest
-      `Wi-Fi lost — ending soon` it replaces, so both halves land together or neither does.
-      The full fix needs the engine's `graceDeadlineMs` cleared when a grant cause is reported,
-      which is engine state the monitor's degradation slot does not touch today, plus a delivery
-      afterwards so `GraceAlarm.reconcile` cancels the alarm. Until then this sub-case behaves
-      as it did before PR #149 — no regression, and the mode stays honest; what is missing is
-      the *reason*, for a state that resolves in minutes.
+- [x] **A grant lost *during* an active Wi-Fi grace no longer ends the snooze** (Codex, PR #149,
+      deferred there; **landed** 2026-08-30). Both halves went in together, which is why the
+      one-line reordering was refused at the time: reporting `Timer only` while the grace alarm
+      still ended the snooze minutes later would have been a card that lies, worse than the honest
+      `Wi-Fi lost — ending soon` it replaced.
+      - The engine gained `PresenceSignal.LocationAccessLost`, a sensor-layer fact like the rest of
+        that list. It clears the running deadline and refuses to arm another, because Wi-Fi stops
+        being evidence under a dead grant — an SSID read needs the same permission, and a
+        background read without it returns the redaction placeholder, which the watch reports as a
+        loss. Without the refusal the very next redacted read would re-arm what the clear had just
+        withdrawn.
+      - The monitor delivers it from `reportRegistration` on the same classification that sets the
+        grant cause, through `deliver` rather than `send`, so the cleared deadline is persisted and
+        `GraceAlarm.reconcile` cancels the real alarm on the same pass.
+      - `modeFor` now puts a grant loss above `graceActive` — the one cause that does, since it is
+        the one that invalidates the Wi-Fi signal itself rather than merely failing beside it.
+      - The suppressor lifts only on `PresenceSignal.LocationAccessRestored`, which the monitor
+        sends when a geofence registration succeeds (Codex, PR #150, two findings). The engine
+        cannot judge this for itself: a delivered fix can be cached from before the revocation,
+        and a nameable SSID proves a revoked grant is back but not a missing background one — the
+        app reads the SSID fine in the foreground under a while-in-use grant. A registration the
+        platform accepts needs `ACCESS_BACKGROUND_LOCATION` outright on API 29+, so it is the one
+        proof that covers both. Leaving it latched forever would cost the snooze its five-minute
+        backstop for the rest of the cap, so the refutation has to exist — it just has to be the
+        real one.
+      - Not persisted, deliberately: the monitor re-derives it on every restart when its
+        registration is refused again, and a second durable copy behind a different refutation is
+        the two-slot mistake of PR #75. `SPEC.md` §6.6 carries the reasoning.
 - [ ] **The new degradation does not reach a Wi-Fi-only anchor at all** (Codex, PR #149,
       deferred there). An anchor with an SSID but no usable fix has `Presence.duty == NONE`
       always (`!anchor.hasUsableFix -> LocationDuty.NONE`), and `registerFence` returns early on
@@ -1537,6 +1549,14 @@ the point is that every other line of the app is worthless if it isn't true.
       Closing it needs a live grant check on the Wi-Fi-only path — a new detection site rather
       than a reclassification, since there is no platform refusal to classify there — plus test
       coverage for that anchor shape.
+- [ ] **The end-condition sheet never opens from the main screen's Snooze button** (maintainer,
+      2026-08-30; **follow-up PR, not #150**). Arming from the Quick Settings tile goes through
+      the trampoline and shows the sheet; arming from the button on `MainScreen` does not, so the
+      same action offers the end-condition choice from one entry point and silently takes the
+      default from the other. Same arm path, so whatever the trampoline does before showing the
+      sheet is what the button needs to do too — check that the service still starts within a
+      frame either way (`SPEC.md` §6.9, and the arm path is goal 1).
+
 - [ ] **Still open: should `MONITORING_UNAVAILABLE` degrade too?** The narrow reading of the
       2026-08-30 decision was taken: it covers the two *permission* causes, which name a state
       the user can act on. An unclassified geofence refusal still ends the snooze, since there is
@@ -1546,8 +1566,8 @@ the point is that every other line of the app is worthless if it isn't true.
       time. `On restart: resume / end` setting, defaulting to resume (`SPEC.md` §8.3).
 - [x] Permission revoked mid-snooze — **policy access** ends the snooze with a reason; **location**
       degrades to duration-only and names the missing grant (maintainer, 2026-08-30; `SPEC.md`
-      §8.2, rewritten). Two gaps tracked above: a Wi-Fi-only anchor never reaches it, and a grant
-      lost during an active grace still ends the snooze.
+      §8.2, rewritten). One gap left, tracked above: a Wi-Fi-only anchor never reaches it. The
+      grace-period gap is closed (`SPEC.md` §6.6).
 - [ ] The §8.5 table: airplane mode, location services off, double-arm, short trip and
       return, bad-accuracy anchor, battery saver, uninstall while snoozed.
 - [ ] **The read-back may end every snooze that spans a reboot** (Codex, PR #36) — the finding that

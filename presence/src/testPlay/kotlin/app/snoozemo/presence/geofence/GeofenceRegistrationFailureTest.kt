@@ -4,7 +4,9 @@ import app.snoozemo.core.CapabilityLossCause
 import app.snoozemo.core.DegradationCause
 import com.google.android.gms.location.GeofenceStatusCodes
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -71,6 +73,28 @@ class GeofenceRegistrationFailureTest {
         val revoked = GeofenceRegistrationFailure.fromSecurityException(hasFineLocation = false)
 
         assertNotEquals(background, revoked)
+    }
+
+    @Test
+    fun `both permission refusals are grant losses, and the services one is not`() {
+        // What the monitor branches on to decide whether the *engine* also
+        // hears about it (`PresenceSignal.LocationAccessLost`). Asserted
+        // against the classifier rather than the enum, because the pairing is
+        // what matters: a third permission-shaped cause added here without
+        // `isGrantLoss` would leave a grace period counting down under a dead
+        // grant, which is the bug that signal exists to fix.
+        for (fine in booleanArrayOf(true, false)) {
+            val failure = GeofenceRegistrationFailure.fromSecurityException(hasFineLocation = fine)
+
+            assertTrue(
+                (failure as GeofenceRegistrationFailure.Recoverable).cause.isGrantLoss,
+            )
+        }
+
+        // The counterexample, and the reason this is not simply "every
+        // recoverable cause": location switched off system-wide leaves the
+        // grant intact, so Wi-Fi is still evidence and grace still applies.
+        assertFalse(DegradationCause.LOCATION_SERVICES_OFF.isGrantLoss)
     }
 
     @Test

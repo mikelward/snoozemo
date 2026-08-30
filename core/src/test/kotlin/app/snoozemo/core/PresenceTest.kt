@@ -2,6 +2,7 @@ package app.snoozemo.core
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -94,6 +95,12 @@ class PresenceTest {
 
     private fun presentUnconfirmed(atSeconds: Long) =
         PresenceSignal.AnchorWifiPresentUnconfirmed(atSeconds * 1_000L)
+
+    private fun accessLost(atSeconds: Long) =
+        PresenceSignal.LocationAccessLost(atSeconds * 1_000L)
+
+    private fun accessRestored(atSeconds: Long) =
+        PresenceSignal.LocationAccessRestored(atSeconds * 1_000L)
 
     /**
      * The state a monitor rebuilds when the grace alarm restores a Wi-Fi-only
@@ -1219,5 +1226,216 @@ class PresenceTest {
 
         val backHome = Presence.advance(checking, atHome(60), tracked).state
         assertEquals(LocationDuty.SANITY, Presence.duty(backHome, tracked))
+    }
+
+    @Test
+    fun `losing the grant calls off a grace period already running`() {
+        // The ending the 2026-08-30 decision exists to prevent, arriving by
+        // the other door: the grant went away, the SSID read came back
+        // redacted, the watch reported a loss, and five minutes later the
+        // alarm would end a snooze during which the phone never moved.
+        val (events, state) = replay(
+            wifiOnly,
+            signals = arrayOf(associated(0), wifiLost(60), accessLost(90)),
+        )
+
+        assertNull("the deadline the redacted read armed is withdrawn", state.graceDeadlineMs)
+        assertTrue(state.locationAccessLost)
+        assertNull("nothing about presence changed, so nothing is reported", events.last())
+    }
+
+    @Test
+    fun `a wifi loss under a dead grant arms no new deadline`() {
+        // The half a one-line clear would have missed. The watch keeps
+        // reporting losses for as long as the grant is gone — every redacted
+        // read is one — so a deadline cleared once would simply be armed
+        // again by the next.
+        val (_, state) = replay(
+            wifiOnly,
+            signals = arrayOf(accessLost(0), wifiLost(60), wifiLost(120), noFix(180)),
+        )
+
+        assertNull("no countdown may start on a signal that is not evidence", state.graceDeadlineMs)
+    }
+
+    @Test
+    fun `a grant loss on a fully tracked anchor is equally barren`() {
+        // `graceFrom`'s other arm: an anchor with a usable fix earns a grace
+        // period once location has degraded, and a dead grant degrades it.
+        val (_, state) = replay(
+            tracked,
+            signals = arrayOf(accessLost(0), noFix(60), noFix(120), noFix(180), wifiLost(240)),
+        )
+
+        assertNotNull("location really has degraded", state.degradation)
+        assertNull("but the grant is why, so Wi-Fi is not evidence either", state.graceDeadlineMs)
+    }
+
+    @Test
+    fun `only a proven restoration lifts the suppressor`() {
+        // The monitor says so, from a geofence registration the platform
+        // accepted — which needs the background grant outright on API 29+, so
+        // it can only succeed with the permission genuinely back. Nothing the
+        // engine can observe for itself carries that weight.
+        val (_, state) = replay(
+            wifiOnly,
+            signals = arrayOf(accessLost(0), accessRestored(60), wifiLost(120)),
+        )
+
+        assertFalse(state.locationAccessLost)
+        assertEquals(
+            "a genuine later loss earns its countdown again",
+            120_000L + Presence.WIFI_GRACE.toMillis(),
+            state.graceDeadlineMs,
+        )
+    }
+
+    @Test
+    fun `a fix is not proof the grant came back`() {
+        // Codex, PR #150. Location hands out cached and queued readings, so
+        // one captured before the revocation can be delivered after it — the
+        // trap `lastUnusableAtMs` exists for, one layer down. Clearing on it
+        // would let the next redacted read arm a countdown while the card
+        // still promised the cap.
+        val (_, state) = replay(
+            wifiOnly,
+            signals = arrayOf(accessLost(600), vague(60), wifiLost(660)),
+        )
+
+        assertTrue("a reading older than the revocation proves nothing", state.locationAccessLost)
+        assertNull(state.graceDeadlineMs)
+    }
+
+    @Test
+    fun `a nameable SSID is not proof either`() {
+        // Codex, PR #150, and the subtler half: it *is* proof for a revoked
+        // grant and not for a missing background one. Opening the app makes
+        // the SSID readable under the while-in-use grant still held, and it
+        // is redacted again the moment the app goes back to the background —
+        // so the latch would lift on a glance at the app.
+        val (_, state) = replay(
+            wifiOnly,
+            signals = arrayOf(accessLost(0), associated(60), wifiLost(120)),
+        )
+
+        assertTrue(state.locationAccessLost)
+        assertNull("no countdown from a foreground glance", state.graceDeadlineMs)
+    }
+
+    @Test
+    fun `a grant loss moves nothing except the grace period`() {
+        // It is not evidence about where the user is, so it must not
+        // escalate, de-escalate, or advance the staleness bar — a signal that
+        // quietly bumped `latestEvidenceMs` would start discarding the real
+        // readings that follow it.
+        val (_, before) = replay(tracked, signals = arrayOf(associated(0), geofenceExit(60)))
+        val after = Presence.advance(before, accessLost(600), tracked).state
+
+        assertEquals(before.phase, after.phase)
+        assertEquals(before.latestEvidenceMs, after.latestEvidenceMs)
+        assertEquals(before.checkingSinceMs, after.checkingSinceMs)
+        assertEquals(before.degradation, after.degradation)
+    }
+
+    @Test
+    fun `the degradation-triggered arming path is guarded too`() {
+        // Codex, PR #150. `useless` arms a deadline of its own once the level
+        // moves, without going through `graceFrom` — so the first version of
+        // the suppressor left the exact premature ending reachable by a
+        // second route: grant lost, Wi-Fi lost, then three failed fixes, and
+        // a countdown starts five minutes from the third.
+        val (_, state) = replay(
+            tracked,
+            signals = arrayOf(accessLost(0), wifiLost(60), noFix(120), noFix(180), noFix(240)),
+        )
+
+        assertNotNull("the level really did move", state.degradation)
+        assertNotNull("and Wi-Fi really is gone", state.wifiLostAtMs)
+        assertNull("but no countdown may start under a dead grant", state.graceDeadlineMs)
+    }
+
+    @Test
+    fun `the same sequence does arm once the grant is proven back`() {
+        // The other direction, so the guard above cannot pass by suppressing
+        // grace unconditionally — which would be the too-quiet failure.
+        val (_, state) = replay(
+            tracked,
+            signals = arrayOf(
+                accessLost(0),
+                accessRestored(30),
+                wifiLost(60),
+                noFix(120),
+                noFix(180),
+                noFix(240),
+            ),
+        )
+
+        assertEquals(
+            "the degradation-triggered path arms normally again",
+            240_000L + Presence.WIFI_GRACE.toMillis(),
+            state.graceDeadlineMs,
+        )
+    }
+
+    @Test
+    fun `a grant loss established first stops a due deadline resolving`() {
+        // The cold-restore ordering (Codex, PR #150): a process woken by the
+        // grace alarm replays a due `GraceElapsed` the instant the bridge
+        // attaches. If the revocation is established first, the deadline it
+        // would resolve is already gone, so nothing ends — which is what the
+        // monitor's pre-attach permission read buys.
+        val restored = restoredWithGrace(deadlineSeconds = 60)
+
+        val afterLoss = Presence.advance(restored, accessLost(90), wifiOnly).state
+        val step = Presence.advance(afterLoss, graceElapsed(120), wifiOnly)
+
+        assertNull("nothing left to come due", afterLoss.graceDeadlineMs)
+        assertNotEquals(PresenceEvent.Departed, step.event)
+        assertFalse("and the snooze is still running", step.state.resolved)
+    }
+
+    @Test
+    fun `without that ordering the replay still ends the snooze`() {
+        // The counterexample that makes the test above mean something: the
+        // same due deadline, replayed before anything says the grant is gone,
+        // resolves `Departed` and shuts the engine down — which is why the
+        // monitor reads the permission before attaching rather than waiting
+        // for `addGeofences` to be refused.
+        val restored = restoredWithGrace(deadlineSeconds = 60)
+
+        val step = Presence.advance(restored, graceElapsed(120), wifiOnly)
+
+        assertEquals(PresenceEvent.Departed, step.event)
+    }
+
+    @Test
+    fun `a restoration with no loss standing changes nothing`() {
+        // What lets the monitor emit this from the *proof* rather than gating
+        // it on which cause happens to be in its slot (Codex, PR #150). The
+        // gated version could skip the restoration when a repair had
+        // overwritten the slot with a non-grant cause, stranding the latch for
+        // the life of the snooze — nothing could arm grace, and a user who
+        // really left would be silenced to the cap. Emitting always is only
+        // safe because it is inert when there is nothing to lift.
+        val (_, before) = replay(tracked, signals = arrayOf(associated(0), geofenceExit(60)))
+        val step = Presence.advance(before, accessRestored(90), tracked)
+
+        assertEquals(before, step.state)
+        assertNull(step.event)
+    }
+
+    @Test
+    fun `a late grant loss is not dropped as stale`() {
+        // Deliberately exempt from `isStale`, and this is the case that
+        // matters: the deadline is armed by the loss, so the report arriving
+        // after it is exactly when there is something to cancel. Applying the
+        // staleness bar would drop it precisely then.
+        val (_, state) = replay(
+            wifiOnly,
+            signals = arrayOf(associated(600), wifiLost(660), accessLost(0)),
+        )
+
+        assertNull(state.graceDeadlineMs)
+        assertTrue(state.locationAccessLost)
     }
 }
