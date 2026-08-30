@@ -1403,20 +1403,15 @@ the point is that every other line of the app is worthless if it isn't true.
         end times** above — unbuilt, waiting on the Play declarations. Not started: needs new copy
         (proposed in chat, approved, then translated — *Translations*) and touches the
         notification/tile too if adopted there, not just `MainScreen`.
-- [ ] **Only one of `Snooze` / `End snooze` should show at a time** (maintainer, 2026-08-22;
-      still open 2026-08-23 — the screen split above deliberately didn't touch this). Today both
-      buttons render together whenever DND access is granted (`MainScreen.kt`, after the split) —
-      `Snooze` merely disables itself while a snooze is running, but `End snooze` is *always* shown
-      and enabled, even when `snoozing == false`. That's not an oversight: the comment above it
-      cites `SPEC.md` §7 — manual exit is "always available, always instant," and `endSnooze` is
-      idempotent, so a stale or unread `snoozing` value must never be what blocks the one
-      guaranteed way to un-silence the phone. Hiding `End snooze` whenever `snoozing == false`
-      would reintroduce exactly that risk if the reading is ever wrong. Needs a real design
-      answer, not a blind toggle — options include showing `End snooze` only when `snoozing` is
-      `true` **or** still `null` (unknown defaults to showing the safety net, confidently-false
-      hides it), a single button that relabels itself by state, or leaving both gated behind
-      `access == GRANTED` as they are today. Whatever's chosen has to preserve the
-      idempotent-and-always-reachable guarantee.
+- [x] **Only one of `Snooze` / `End snooze` should show at a time** (maintainer, 2026-08-22;
+      **landed 2026-08-30 under autopilot** — see *Decisions needing review*). Both used to
+      render whenever DND access was granted, with `Snooze` merely disabling itself during a
+      snooze and `End snooze` always shown. The split is now on `snoozing == false`, not on
+      `snoozing == true`, and that asymmetry is the design: `End snooze` is the one guaranteed
+      way to un-silence the phone (`SPEC.md` §7, idempotent), so it may only vanish where the
+      screen is *confident* nothing is running — an unread record keeps it. `Snooze` takes the
+      opposite treatment, appearing only on that same confident reading, because arming over a
+      snooze the screen has not read is how a user loses their cap. `SPEC.md` §4.7 records it.
 - [x] **Resolved 2026-08-24 (maintainer) — granted-status text is one word app-wide: `Allow` /
       `Allowed`.** `PermissionsScreen` used to carry two — `Granted` for Do Not Disturb access
       (paired with its own `Grant` action, since that one is a Settings toggle, not a runtime
@@ -3156,6 +3151,19 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     a snooze that ends on a duration cap needs the same controller.
 
 ## Decisions needing review
+
+- **Which of `Snooze` / `End snooze` shows, decided under autopilot** (2026-08-30). The item
+  asked for "a real design answer, not a blind toggle" and listed three options; autopilot took
+  the one the item itself flagged as safe — show `End snooze` when `snoozing` is `true` **or**
+  `null`, and `Snooze` only on a confident `false`. That keeps the always-reachable guarantee
+  (`SPEC.md` §7) intact, since the exit is hidden only where the record has been read and found
+  empty, and it happens to yield exactly one button in every state rather than needing a
+  separate rule for that.
+  **The alternatives, and why not**: a single button that relabels itself by state reads well
+  but makes the unknown case incoherent — it would have to pick a label before knowing which
+  action it performs. Leaving both as they were is what the maintainer asked to change.
+  **Cheap to reverse**: one `if` in `MainScreen.kt` plus the assertions in
+  `MainScreenScreenshotTest`; no persistence, no API, and no behavior outside this screen.
 
 - **A discard's completion is not observable, so a failed deletion cannot be
   surfaced** (Codex, PR #131, accepted in part). `FirebaseCrashlytics

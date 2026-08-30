@@ -394,7 +394,12 @@ leads with — it is no longer true as a statement that the tile is the *only* w
 `LicensesScreen`, arrived later — §4.7). `MainScreen` is the
 tile-equivalent Arm/Release control: the app's title, a banner for the one required-and-missing
 capability (Do Not Disturb access — nothing on this screen can arm without it), the tile banner
-below, and the Snooze/End snooze/Settings controls. `PermissionsScreen` is the interstitial that
+below, and the Snooze/End snooze/Settings controls — **exactly one of Snooze and End snooze at a
+time**, split on a confident "nothing is running" rather than on a confident "something is". End
+snooze is the one guaranteed way back to a ringing phone (§7), so it disappears only where the
+screen has actually read the record and found nothing; while that reading is still unknown it
+stays, and Snooze — which could otherwise arm over a snooze the screen has not seen, costing the
+user the deadline they were promised — is the one that waits. `PermissionsScreen` is the interstitial that
 carries the DND, notification and location setup rows — reached automatically the first time DND
 access reads as missing (so a fresh install lands there rather than on a screen whose Arm button is
 disabled with nothing yet explaining why), and from `SettingsScreen`'s Permissions entry any time

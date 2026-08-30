@@ -192,7 +192,10 @@ class MainScreenScreenshotTest {
         // from which button happens to be enabled.
         composeRule.onNodeWithText("Not snoozing").assertExists()
         composeRule.onNodeWithText("Snooze").assertIsEnabled()
-        composeRule.onNodeWithText("End snooze").assertIsEnabled()
+        // The mirror of the running case (maintainer, 2026-08-22): confidently
+        // idle is the one state where the way out is hidden, because there is
+        // provably nothing to get out of.
+        composeRule.onNodeWithText("End snooze").assertDoesNotExist()
         composeRule.onNodeWithText("Settings").assertExists()
     }
 
@@ -226,6 +229,55 @@ class MainScreenScreenshotTest {
         composeRule.onNodeWithText("Snooze").assertIsEnabled()
     }
 
+    /**
+     * The state the whole asymmetry exists for, and the one no test covered
+     * (Codex, PR #143): access has finished loading but the snooze record has
+     * not, so `snoozing` is still `null`. `End snooze` has to be here — it is
+     * the guaranteed way back to a ringing phone (SPEC.md §7, and `endSnooze`
+     * is idempotent, so offering it over nothing costs nothing), and a stale
+     * or unread belief must never be what withholds it.
+     *
+     * Asserted rather than captured: the pixels are the idle screen's minus
+     * the status line, and what needs pinning is which control is reachable.
+     * Without this, flipping the split to `snoozing == true` would leave the
+     * suite green while deleting the manual exit for the length of a disk
+     * read — the failure this design was chosen to avoid, passing its own
+     * tests.
+     */
+    @Test
+    fun `granted but not yet read still offers the way out`() {
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = null,
+                trackingMode = null,
+                remaining = null,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("End snooze").assertIsEnabled()
+        // And `Snooze` is absent, not merely disabled: arming over a snooze
+        // this screen has not read is how the user loses their cap.
+        composeRule.onNodeWithText("Snooze").assertDoesNotExist()
+        // No idle claim either — the record has not been read, so "Not
+        // snoozing" would be a guess over a snooze that may well be running.
+        composeRule.onNodeWithText("Not snoozing").assertDoesNotExist()
+    }
+
     @Test
     fun `a running snooze cannot be armed over`() {
         capture("main-screen-snoozing.png") {
@@ -251,7 +303,10 @@ class MainScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("Snooze").assertIsNotEnabled()
+        // Exactly one button, and on a running snooze it is the way out
+        // (maintainer, 2026-08-22). `Snooze` used to render here disabled;
+        // the state it would have communicated is already on the card above.
+        composeRule.onNodeWithText("Snooze").assertDoesNotExist()
         composeRule.onNodeWithText("End snooze").assertIsEnabled()
         composeRule.onNodeWithText("Ends when you leave").assertExists()
         composeRule.onNodeWithText("3h 40m left").assertExists()
