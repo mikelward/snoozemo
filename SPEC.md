@@ -633,6 +633,24 @@ Dismissing the sheet — or never seeing it — leaves you correctly snoozed.**
 The trampoline activity (§6.9) already sits on the arm path. It starts the service first, then
 renders a compact bottom sheet. Arming never waits on the UI, so the one-tap path survives.
 
+**Every way of arming offers the sheet, not just the tile** (2026-08-30). It was the tile's alone,
+so the same action asked when it came from the shade and silently took the default cap when it came
+from the app screen's `Snooze` button — a split the user has no way to predict and no way to see.
+Both now drive one shared flow, so the setting, the times offered, and what a refusal does cannot
+drift apart between them.
+
+What each surface keeps is only what genuinely differs. The tile arms from a transparent activity
+with nothing behind it, so it draws its own scrim; the app screen has a real screen to sit on and
+uses the platform's modal sheet. And the two learn the snooze's cap differently — the tile loads the
+record, the app screen already keeps it warm — which is why the ceiling is supplied to the flow
+rather than read by it: neither surface may put a disk wait in front of the sheet.
+
+The app screen also cannot decide at the moment of the tap, because the service has only just been
+asked to arm and the record that says what cap to offer against does not exist yet. It waits for the
+next record it reads — which it reads off the main thread anyway — and opens the sheet on the first
+frame it can be honest on. A cap already inside the floor still offers nothing (§7's `MIN_CAP`), on
+either path.
+
 #### v1
 
 ```

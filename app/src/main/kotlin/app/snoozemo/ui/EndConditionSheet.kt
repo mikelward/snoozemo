@@ -1,6 +1,7 @@
 package app.snoozemo.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -190,5 +191,79 @@ private fun Stepper(
         modifier = Modifier.semantics { contentDescription = description },
     ) {
         Text(text = symbol, style = MaterialTheme.typography.titleMedium)
+    }
+}
+
+/**
+ * [instant] as the user's own phone writes a time — their 12/24-hour setting,
+ * their locale, their zone.
+ *
+ * Through `DateFormat.getTimeFormat` rather than a fixed pattern: a sheet
+ * offering "14:00" to someone whose phone says "2:00 PM" everywhere else reads
+ * as a different app's screen.
+ *
+ * Shared by both hosts, so the tile and the app screen cannot format the same
+ * offer two ways.
+ */
+internal fun formatSheetTime(context: android.content.Context, instant: java.time.Instant): String =
+    android.text.format.DateFormat.getTimeFormat(context)
+        .format(java.util.Date(instant.toEpochMilli()))
+
+/**
+ * The §4.4 sheet as the app screen shows it: the platform's own bottom sheet.
+ *
+ * The tile's trampoline draws the same content over a hand-built scrim
+ * instead, and the difference is the surface, not the sheet — that one sits on
+ * a transparent activity with nothing behind it, while this one has a real
+ * screen to sit on and a modal sheet is what a user expects there.
+ *
+ * Dismissing leaves the user correctly snoozed (§4.4), and they are: the
+ * snooze is already running on its default cap, so the sheet only ever refines
+ * it. Dismissal is refused while a commit is out, so the sheet cannot go away
+ * out from under the answer it is waiting for.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+internal fun EndConditionBottomSheet(
+    condition: app.snoozemo.core.EndCondition,
+    formattedTime: String,
+    committing: Boolean,
+    failed: Boolean,
+    onChooseTime: () -> Unit,
+    onDismiss: () -> Unit,
+    onStepDown: () -> Unit,
+    onStepUp: () -> Unit,
+) {
+    // `onDismissRequest` cannot veto a swipe (Codex, PR #152): the sheet
+    // animates itself to `Hidden` and *then* calls back, so declining there
+    // leaves the sheet gone with the controller still committed — and a
+    // `REFUSED` outcome would update a sheet nobody can see, which is exactly
+    // the failure message §4.2 says must reach a user who denied
+    // notifications. `confirmValueChange` is the veto that actually holds:
+    // refused there, the sheet never leaves the screen.
+    val state = androidx.compose.material3.rememberModalBottomSheetState(
+        confirmValueChange = { value ->
+            value != androidx.compose.material3.SheetValue.Hidden || !committing
+        },
+    )
+    androidx.compose.material3.ModalBottomSheet(
+        sheetState = state,
+        onDismissRequest = { if (!committing) onDismiss() },
+    ) {
+        EndConditionSheetContent(
+            condition = condition,
+            formattedTime = formattedTime,
+            onChooseTime = onChooseTime,
+            // The departure row commits by changing nothing: tracking is
+            // already armed and the default cap is already the backstop, so
+            // "until I leave" is the snooze exactly as it stands (§4.4).
+            onChooseDeparture = onDismiss,
+            onStepDown = onStepDown,
+            onStepUp = onStepUp,
+            failed = failed,
+            committing = committing,
+            tracksDeparture = app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE,
+            modifier = androidx.compose.ui.Modifier.navigationBarsPadding(),
+        )
     }
 }

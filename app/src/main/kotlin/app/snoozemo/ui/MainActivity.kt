@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ViewModelProvider
 import app.snoozemo.BuildConfig
 import app.snoozemo.PlayUpdateChecker
 import app.snoozemo.PlayUpdateState
@@ -49,6 +50,7 @@ import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.PolicyAccessAction
 import app.snoozemo.core.PolicyAccessChange
+import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.StaleRuleClaim
 import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenRuleState
@@ -58,10 +60,15 @@ import app.snoozemo.crash.CrashReporting
 import app.snoozemo.snooze.DebugLogStore
 import app.snoozemo.snooze.DebugLogging
 import app.snoozemo.snooze.EndSheetSetting
+import app.snoozemo.core.EndCondition
+import java.time.Instant
+import app.snoozemo.snooze.EndChoiceController
+import app.snoozemo.snooze.EndChoiceOutcome
 import app.snoozemo.snooze.EndSheetStore
 import app.snoozemo.snooze.DebugReport
 import app.snoozemo.snooze.LocationPromptStore
 import app.snoozemo.snooze.NotificationPromptStore
+import app.snoozemo.snooze.RecreationMarker
 import app.snoozemo.snooze.PlayUpdateStore
 import app.snoozemo.snooze.SnoozeClock
 import app.snoozemo.snooze.SnoozeNotifications
@@ -77,6 +84,11 @@ private const val TAG = "MainActivity"
 private const val KEY_SCREEN = "screen"
 private const val KEY_PERMISSIONS_ORIGIN = "permissionsOrigin"
 private const val KEY_ROUTED_TO_PERMISSIONS_ONCE = "routedToPermissionsOnce"
+private const val KEY_SHEET_COMMITTING = "sheetCommitting"
+private const val KEY_SHEET_FAILED = "sheetFailed"
+private const val KEY_SHEET_ENDS_AT = "sheetEndsAt"
+private const val KEY_SHEET_FLOOR = "sheetFloor"
+private const val KEY_SHEET_CEILING = "sheetCeiling"
 
 /** How often [MainActivity.now] advances while visible — see its own comment. */
 private const val TICK_INTERVAL_MS = 60_000L
@@ -127,6 +139,55 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var zen: ZenController
     private lateinit var store: ActiveSnoozeStore
+
+    /**
+     * Generation guard for [offerSheetForThisArm], the same shape
+     * [refreshSnoozing] uses and for the same reason: two arms in quick
+     * succession finish their reads in whatever order the disk returns them,
+     * and the older answer must not open a sheet over the newer arm.
+     */
+    private var latestSheetOffer = 0
+
+    /**
+     * Bumped whenever a sheet goes up, so a record read that started *before*
+     * it cannot tear it back down. `refreshSnoozing`'s reads finish in
+     * whatever order the disk returns them, and one that began before an arm
+     * carries a record from before that arm — a `null` that would otherwise
+     * read as "the snooze this sheet is refining is gone".
+     */
+    private var sheetGeneration = 0
+
+    /** Read-only view of [sheetGeneration], so a test can pin a read to an arm. */
+    @androidx.annotation.VisibleForTesting
+    internal val sheetGenerationForTest: Int
+        get() = sheetGeneration
+
+    /**
+     * Where [offerSheetForThisArm]'s disk reads run. A seam only so a test can
+     * make them synchronous — production always hands them to a thread, since
+     * neither the setting file nor the record belongs in front of a frame.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal var runOffMainThread: (() -> Unit) -> Unit = { work -> Thread(work).start() }
+
+    /**
+     * The end-condition sheet, driven by the same controller the tile uses
+     * (SPEC.md §4.4). Arming from this screen used to skip it entirely, so the
+     * same action asked when it came from the shade and silently took the
+     * default cap when it came from the button.
+     *
+     * The ceiling comes from [activeSnooze], the copy this screen already keeps
+     * warm — no disk read in front of the sheet.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal val sheet = EndChoiceController(
+        ceilingAt = { at -> EndCondition.ceilingFor(activeSnooze, at) },
+        chooseEnd = { endsAt -> SnoozeService.chooseEnd(this, endsAt) },
+        watchOutcome = EndChoiceOutcome::watch,
+        // Nothing to finish: clearing the offer is what closes this sheet,
+        // unlike the trampoline where the activity *is* the sheet.
+        onDismiss = {},
+    )
     private lateinit var promptStore: NotificationPromptStore
     private lateinit var locationPromptStore: LocationPromptStore
     private lateinit var tileStore: TilePresenceStore
@@ -160,7 +221,8 @@ class MainActivity : ComponentActivity() {
      * beyond "running", and re-deriving them separately would be a second read
      * of the same file the [refreshSnoozing] load already did.
      */
-    private var activeSnooze by mutableStateOf<ActiveSnooze?>(null)
+    @androidx.annotation.VisibleForTesting
+    internal var activeSnooze by mutableStateOf<ActiveSnooze?>(null)
 
     /**
      * The clock reading `MainScreen`'s status line computes [activeSnooze]'s
@@ -711,12 +773,32 @@ class MainActivity : ComponentActivity() {
         // every fresh instance; navigation position has no such source of
         // truth to re-derive from, so it is the one thing here that needs
         // actual persisting.
+        // **Whether this is a rotation or a relaunch after a process death**,
+        // which `savedInstanceState` cannot answer — it is non-null either way
+        // — and which the sheet's restore needs opposite answers for.
+        // `RecreationMarker` is a retained `ViewModel`: Android hands one to
+        // the replacement activity down the configuration-relaunch path and
+        // clears the store on any other destroy, so finding one that has
+        // already been through `onCreate` means a configuration change and
+        // nothing else. The trampoline reads the same marker for the same
+        // reason; see its `onCreate`.
+        //
+        // Read before it is set, and set unconditionally, so a fresh launch
+        // leaves the marker ready for whatever recreation comes next. In
+        // memory only — no disk, nothing in front of the first frame.
+        val wasRecreatedByConfiguration =
+            ViewModelProvider(this)[RecreationMarker::class.java].let { marker ->
+                val already = marker.created
+                marker.created = true
+                already
+            }
         savedInstanceState?.let {
             screen = Screen.entries.firstOrNull { s -> s.name == it.getString(KEY_SCREEN) } ?: screen
             permissionsOrigin =
                 Screen.entries.firstOrNull { s -> s.name == it.getString(KEY_PERMISSIONS_ORIGIN) }
                     ?: permissionsOrigin
             routedToPermissionsOnce = it.getBoolean(KEY_ROUTED_TO_PERMISSIONS_ONCE, routedToPermissionsOnce)
+            restoreSheet(it, configurationChange = wasRecreatedByConfiguration)
         }
         store = ActiveSnoozeStore(applicationContext)
         promptStore = NotificationPromptStore(applicationContext)
@@ -834,6 +916,29 @@ class MainActivity : ComponentActivity() {
                             LicensesScreen(onBack = { screen = Screen.SETTINGS })
                         }
                     }
+                    // The end-condition sheet (SPEC.md §4.4), when the arm
+                    // came from this screen's `Snooze` button rather than the
+                    // tile. A `ModalBottomSheet` rather than the trampoline's
+                    // hand-built scrim: that one is drawn over a transparent
+                    // activity with nothing behind it, while here there is a
+                    // real screen to sit on and the platform's own sheet is
+                    // what a user expects over one.
+                    //
+                    // Dismissing leaves the user correctly snoozed — §4.4 —
+                    // and they are: the snooze is already running on its
+                    // default cap, so the sheet only ever refines it.
+                    sheet.endCondition?.let { condition ->
+                        EndConditionBottomSheet(
+                            condition = condition,
+                            formattedTime = formatSheetTime(this@MainActivity, condition.endsAt),
+                            committing = sheet.committing,
+                            failed = sheet.commitFailed,
+                            onChooseTime = { sheet.commit(condition.endsAt) },
+                            onDismiss = sheet::dismiss,
+                            onStepDown = sheet::stepDown,
+                            onStepUp = sheet::stepUp,
+                        )
+                    }
                     // The one disclosure this app shows: SPEC.md §12 requires it
                     // precede the background-location prompt specifically (Play's
                     // restricted-permission declaration), so it appears as a
@@ -869,6 +974,69 @@ class MainActivity : ComponentActivity() {
         outState.putString(KEY_SCREEN, screen.name)
         outState.putString(KEY_PERMISSIONS_ORIGIN, permissionsOrigin.name)
         outState.putBoolean(KEY_ROUTED_TO_PERMISSIONS_ONCE, routedToPermissionsOnce)
+        // The sheet survives a rotation, chosen time and all: stepping to a
+        // time is the only work the user has done there, and dropping it would
+        // leave them on the default cap having answered.
+        outState.putBoolean(KEY_SHEET_COMMITTING, sheet.committing)
+        outState.putBoolean(KEY_SHEET_FAILED, sheet.commitFailed)
+        sheet.endCondition?.let {
+            outState.putLong(KEY_SHEET_ENDS_AT, it.endsAt.toEpochMilli())
+            outState.putLong(KEY_SHEET_FLOOR, it.floor.toEpochMilli())
+            outState.putLong(KEY_SHEET_CEILING, it.ceiling.toEpochMilli())
+        }
+    }
+
+    /** Puts a sheet that survived a configuration change back as it was. */
+    private fun restoreSheet(state: Bundle, configurationChange: Boolean) {
+        val saved = if (state.containsKey(KEY_SHEET_ENDS_AT)) {
+            EndCondition(
+                endsAt = Instant.ofEpochMilli(state.getLong(KEY_SHEET_ENDS_AT)),
+                floor = Instant.ofEpochMilli(state.getLong(KEY_SHEET_FLOOR)),
+                ceiling = Instant.ofEpochMilli(state.getLong(KEY_SHEET_CEILING)),
+            )
+        } else {
+            null
+        }
+        if (saved != null) sheetGeneration++
+        sheet.restore(
+            condition = saved,
+            wasCommitting = state.getBoolean(KEY_SHEET_COMMITTING),
+            failed = state.getBoolean(KEY_SHEET_FAILED),
+            configurationChange = configurationChange,
+        )
+    }
+
+    /**
+     * Drops a restored or open sheet the running record can no longer honor.
+     *
+     * `onSaveInstanceState` cannot tell a rotation from a process death, so a
+     * saved sheet comes back either way — and after a process death the snooze
+     * it was refining may be long over, ended by a departure or by its own cap
+     * while nothing of this app was running. Putting that sheet back unchecked
+     * offers times against a snooze that no longer exists; the first tap would
+     * come back `GONE` and dismiss, which is a screen answering a question it
+     * should never have asked (Codex, PR #152).
+     *
+     * The same check covers the live case for free: a snooze that ends *under*
+     * an open sheet now takes the sheet with it rather than waiting for a tap
+     * to discover it. Whatever ended it has posted its own card, so nothing
+     * here is silent (SPEC.md §7).
+     *
+     * Two things it will not do. It never touches a sheet with a commit in
+     * flight — that answer is coming and settles the sheet itself, and a
+     * dismissal underneath it would lose exactly the refusal message §4.2
+     * says must reach a user who denied notifications. And it ignores a record
+     * read that began before the sheet went up, since such a read predates the
+     * arm the sheet belongs to.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun reconcileSheet(record: ActiveSnooze?, seenAtGeneration: Int) {
+        if (sheet.endCondition == null || sheet.committing) return
+        if (seenAtGeneration != sheetGeneration) return
+        val wallNow = Instant.ofEpochMilli(SnoozeClock.read().wallMillis)
+        if (EndCondition.offersAChoice(record, wallNow)) return
+        SnoozeDebugLog.event("end-condition sheet dropped: the snooze it offered times for is over")
+        sheet.dismiss()
     }
 
     override fun onStart() {
@@ -1025,6 +1193,7 @@ class MainActivity : ComponentActivity() {
         // already ended — with nothing to correct it until the next record
         // change. Bumped and checked on the main thread only.
         val refresh = ++latestSnoozingRefresh
+        val sheetAt = sheetGeneration
         Thread {
             val loaded = store.load()
             runOnUiThread {
@@ -1033,6 +1202,7 @@ class MainActivity : ComponentActivity() {
                 val changed = snoozing != running
                 snoozing = running
                 activeSnooze = loaded
+                reconcileSheet(loaded, sheetAt)
                 // Reconciling policy access reads whether a snooze is running,
                 // so the pass in onStart ran before this was known. Re-run it
                 // now that it is: access revoked while the service was dead has
@@ -1425,6 +1595,11 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        // The outcome channel holds a lambda reaching this activity, so an
+        // unclosed watch outlives the sheet it was answering and leaks the
+        // activity with it. Idempotent, and a no-op on the ordinary session
+        // that never opened a sheet at all.
+        sheet.close()
         // One checker per activity instance, so drop its install listener
         // here or Play's update manager would retain a dead one — capturing
         // this activity — on every recreation. Idempotent, and guarded like
@@ -1658,9 +1833,63 @@ class MainActivity : ComponentActivity() {
      * has spent the user's exit on a snooze that is still going.
      */
     private fun armFromScreen() {
-        if (SnoozeService.arm(this)) return
+        if (SnoozeService.arm(this)) {
+            offerSheetForThisArm()
+            return
+        }
         Log.e(TAG, "Starting the service to arm was refused.")
         lastOutcome = getString(R.string.failure_could_not_start)
+    }
+
+    /**
+     * Offers the §4.4 sheet for the arm just requested — **one shot, no debt**.
+     *
+     * The trampoline reads the record once after its own service start and
+     * shows no sheet where the arm has not landed; this does the same, which
+     * is the point of the change. An earlier version held a "sheet owed" flag
+     * until a record turned up, and that flag had no way to expire: an arm the
+     * service accepted but failed to complete — no policy access, a zen rule
+     * that would not go on — left it set for the life of the screen, and the
+     * *next* record from anywhere, a tile arm included, opened a sheet nobody
+     * had asked this screen for (Codex, PR #152). A one-shot read cannot go
+     * stale, and where it loses the race it fails exactly as the tile does: no
+     * sheet, over a snooze correctly armed on its cap.
+     *
+     * Both reads are off the main thread — the setting is a disk-backed file
+     * and the record may still be loading, and neither belongs in front of a
+     * frame. After the service start, never before it (SPEC.md §6.9).
+     *
+     * No keyguard test, unlike the tile's: this screen is in front of an
+     * unlocked phone by definition.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun offerSheetForThisArm() {
+        val offer = ++latestSheetOffer
+        // **Posted, and the post is load-bearing** — the same ordering the
+        // trampoline's own decision uses. `startService` only enqueues
+        // `onStartCommand`, which runs on this looper and is what writes the
+        // record; reading straight away would race it, and on a fresh arm the
+        // read would win and find nothing, so the sheet would almost never
+        // appear at all. Posting puts this behind that message.
+        window.decorView.post {
+            runOffMainThread {
+                val ask = EndSheetStore(this).isEnabled()
+                val loaded = if (ask) store.load() else null
+                runOnUiThread {
+                    // A newer arm has since been made; this answer is stale.
+                    if (offer != latestSheetOffer) return@runOnUiThread
+                    // No record: this arm did not land, so there is nothing to
+                    // refine and nothing left owed.
+                    if (loaded == null) return@runOnUiThread
+                    // The wall clock, because the record's cap and the times
+                    // the sheet offers are both written in that frame.
+                    val wallNow = Instant.ofEpochMilli(SnoozeClock.read().wallMillis)
+                    if (!EndCondition.offersAChoice(loaded, wallNow)) return@runOnUiThread
+                    sheetGeneration++
+                    sheet.seed(wallNow)
+                }
+            }
+        }
     }
 
     /**
