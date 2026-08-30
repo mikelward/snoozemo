@@ -4107,6 +4107,13 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
       call, and it may belong in `mikelward/lanes` rather than here.
       **Cheap partial mitigation meanwhile**: when a push needs no body change, don't make
       one; a lone `synchronize` runs uncancelled and goes green.
+      **That mitigation does not cover a UI-touching PR** (observed on PR #144,
+      2026-08-30). `sync-screenshots` auto-commits `ci: refresh recorded screenshots` to
+      the branch, which is itself a `synchronize` — so any PR that records a new snapshot
+      gets its second run from CI rather than from the author, and cancels the first no
+      matter how the push was made. Same self-clearing failure, same wasted cycle, and
+      nothing the author can decline to do. It strengthens the case for fixing this in
+      `gate` itself rather than by pushing more carefully.
 
 - [ ] **`deploy`'s display name is load-bearing and now inaccurate.** The job
       is still called `Build and release` after the release build moved to
