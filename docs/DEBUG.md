@@ -64,15 +64,21 @@ New methods on `DebugFileSink`, all enqueued on its existing FIFO worker (never 
 caller) and answering through a callback, the same shape `DebugLogging.setEnabled` already
 uses:
 
-- `hasPinnedCrash(onResult: (Boolean) -> Unit)` — `crash.exists()`.
-- `readPreviousOrCrash(onResult: (text: String?, wasCrash: Boolean) -> Unit)` — the pin holds
-  the `previous` slot (SPEC.md §4.6), so exactly one of `previous.log` / `crash.log` can be
-  present at a time; read whichever exists.
-- `consumeCrashPin(onResult: (Boolean) -> Unit)` — the rename that both Dismiss and a landed
-  Share perform: `crash.log` → `previous.log` (falling back to copy+delete, same as
-  `rotate()`'s own fallback), after which it is an ordinary previous run — shareable, and
-  rotated away like any other (SPEC.md §4.6, "the pin holds the previous slot"). Idempotent:
-  a `crash.log` that is already gone is a no-op, not a failure.
+- `hasPinnedCrash(onResult: (pinned: Boolean, checkSucceeded: Boolean) -> Unit)` — whether an
+  unacknowledged crash run is still on disk, and whether the check could be made at all.
+- `readPreviousOrCrash(onResult: (run: PreviousRun?, wasCrash: Boolean, readSucceeded: Boolean) -> Unit)`
+  — the unshared prior runs, oldest first, as the shared logger's handle. Several are kept side
+  by side (SPEC.md §4.6), so a crashed run does not displace an ordinary one; a crashed run
+  carries its own suffix rather than occupying a single `previous` slot. **The handle is passed
+  to the caller and never held here**: it is what lets a delivered report consume exactly the
+  files it was built from, so two overlapping shares cannot have the first destroy a run only
+  the second had read.
+- `consumeCrashPin(run: PreviousRun?, onResult: (Boolean) -> Unit)` — what a landed Share
+  performs: clears exactly the files behind `run`, then acknowledges the banner. A null handle
+  consumes nothing, which is the safe direction for a caller that was given nothing.
+- `dismissCrashPin()` — Dismiss without sending. Takes the run off its crash-suffixed name,
+  after which it is an ordinary prior run: still shareable, pruned by age like any other. A
+  refusal leaves the banner **up**, by construction rather than by a second code path.
 
 `DebugLogging` gets thin pass-throughs (`hasPinnedCrash`, `readPreviousOrCrash`,
 `consumeCrashPin`) that no-op safely (`onResult` with the "nothing to report" answer) when no

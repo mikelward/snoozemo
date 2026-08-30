@@ -1159,11 +1159,13 @@ the point is that every other line of the app is worthless if it isn't true.
       watching a phone. Records state transitions and their reasons, which wake-up source fired, the
       departure test's distance and accuracy arithmetic, tracking-mode changes, cap arming and
       firing, and permission state. On by default with a setting to turn it off (maintainer,
-      2026-08-11), on-device, current run plus previous, rotated at start, in `cacheDir`. The floor is absolute and needs a test of its own: **no raw coordinates,
+      2026-08-11), on-device, the current run plus a few recent ones, rotated at start, in
+      `cacheDir`. The floor is absolute and needs a test of its own: **no raw coordinates,
       no full SSID/BSSID, no user-typed place name** ever reach it.
       **Landed as the recording half**: `SnoozeDebugLog` in `:core` (bounded buffer, sinks, real
-      timestamps with zone offset, the floor test) and `DebugFileSink` in `:app` (the §4.6
-      rotation, the crash pin holding the `previous` slot, off-deletes-everything), wired to the
+      timestamps with zone offset, the floor test) and, since the retirement, the shared
+      `DebugFileSink` from `mikelward/androidlog` (§4.6 rotation, a crashed run set aside under
+      its own name rather than holding a single `previous` slot, off-deletes-everything), wired to the
       state transitions, end reasons, zen refusals, policy-access decisions, cap arming and
       firing, clock changes, and the no-service releases. `docs/PRIVACY.md` now describes it.
       Ported from Simmo's `DebugLog`/`DebugFileSink` with §4.6's differences. Three pieces land

@@ -719,4 +719,45 @@ class DebugReportShareTest {
 
         assertEquals(0, heard)
     }
+
+    /**
+     * A crash the read delivered intact can still miss the report: the render
+     * keeps only the newest 25,000 characters of the prior runs, and a pinned
+     * crash can be an older one of several. Consuming the pin on that share
+     * would lower the banner over a report that never carried the crash
+     * (Codex, PR #153).
+     *
+     * Arranged with a prior run far past the bound so the render is certain to
+     * cut, and a crash pinned -- the exact combination the guard is about.
+     */
+    @Test
+    fun `a crash the report had to truncate away is not consumed`() {
+        val dir = context.cacheDir
+        File(dir, "androidlog.log").writeText((1..4_000).joinToString("\n") { "line $it padding padding" })
+        File(dir, "androidlog.log.crash").writeText("1")
+        DebugLogging.install(context)
+        DebugLogging.awaitIdleForTest()
+
+        var pinnedBefore: Boolean? = null
+        DebugLogging.hasPinnedCrash { pinned, _ -> pinnedBefore = pinned }
+        DebugLogging.awaitIdleForTest()
+        assertEquals("precondition: a crash is pinned", true, pinnedBefore)
+
+        val result = DebugReport.share(
+            context,
+            clipboardWrite = { _, _ -> true },
+            chooserLaunch = { _, _ -> true },
+        )
+        DebugLogging.awaitIdleForTest()
+
+        assertTrue(result.clipboardCopied)
+        var pinnedAfter: Boolean? = null
+        DebugLogging.hasPinnedCrash { pinned, _ -> pinnedAfter = pinned }
+        DebugLogging.awaitIdleForTest()
+        assertEquals(
+            "a share whose render dropped part of the prior runs must leave the banner up",
+            true,
+            pinnedAfter,
+        )
+    }
 }

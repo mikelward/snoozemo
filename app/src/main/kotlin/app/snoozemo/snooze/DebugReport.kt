@@ -395,9 +395,30 @@ internal object DebugReport {
         )
     }
 
-    /** Whether [collectPayload]'s read couldn't confirm the pin's content actually reached the report. */
+    /**
+     * Whether [collectPayload]'s read couldn't confirm the pin's content actually reached the report.
+     *
+     * The last clause is about this app's *own* rendering rather than the read:
+     * a report keeps only the newest [MAX_PREVIOUS_RUN_CHARS] of the prior runs,
+     * and a pinned crash can be an older one of several. Newer ordinary runs can
+     * then push it out of the tail entirely — read perfectly, then dropped here —
+     * and consuming the pin on that share would lower the banner over a report
+     * that never carried the crash (Codex, PR #153). The text is opaque, so the
+     * question asked is the one that can be answered: did the render drop *any*
+     * of what was read? If it did, and a crash is pinned, the crash may be what
+     * went, and the safe direction is to leave the banner up for a later share.
+     */
     private val PreviousRunRead.omitted: Boolean
-        get() = timedOut || !readSucceeded || (wasCrash && text.isNullOrBlank())
+        get() = timedOut || !readSucceeded || (wasCrash && text.isNullOrBlank()) ||
+            (wasCrash && renderDroppedPartOfPreviousRun)
+
+    /** Whether the report's own bound cut anything off what [text] carried. */
+    private val PreviousRunRead.renderDroppedPartOfPreviousRun: Boolean
+        get() {
+            val full = text?.trimEnd() ?: return false
+            val rendered = boundedLogTail(full.split("\n"), MAX_PREVIOUS_RUN_CHARS).joinToString("\n")
+            return rendered != full
+        }
 
     /**
      * A minimal payload for when [collectPayload] itself throws — the one
