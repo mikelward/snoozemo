@@ -3339,6 +3339,26 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     a screen picking their values back up after a restart, were removed with
     them — there is no signal left for them to assert. They come back with the
     listener.
+  **Contested by Codex on PR #153, and now the maintainer's call.** Two P1s
+  against exactly this deferral, and the first is right in a way the entry
+  above understated: the opt-out persists, `MainActivity.setDebugLog` clears
+  the warning, and the user is told a **privacy control** succeeded while
+  `androidlog.log` may still be on disk. `TODO.md` records a decision; it does
+  not protect a user. The second P1 is milder than it reads — a refused
+  `acknowledgeCrashBanner()` leaves the banner **up** by construction in the
+  shared sink, so the dismissal does not falsely report success; what is lost
+  is the *explanation* for a banner the user can see did not clear.
+
+  The fix is the same additive library change either way, and the sink already
+  holds the answer (`purgeFailed` / `purgeFailure`, set inside `onCleared`'s
+  worker task) — this is publication, not detection. The fork:
+  **(1)** hold #153 until `androidlog` grows the storage listener, then wire
+  both indicators to it, so neither ever regresses; **(2)** land #153 now and
+  follow immediately, accepting a window where the purge warning does not
+  fire. Recommended: **(1)**, since the interim ships a control that reports a
+  success it has not verified. Not resolved here in either direction — the
+  threads stay open and #153 stays unmerged until it is answered.
+
   - **An empty crash log now raises no banner.** A crash marker can land without
     the run's content ever reaching disk — process death between the two writes
     — and the library declines to raise a banner over a report with nothing in
