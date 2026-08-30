@@ -452,6 +452,12 @@ tasks.register("exportBundledLicenses") {
 
 dependencies {
     implementation(project(":core"))
+    // The shared debug log's Android half: the file sink, its crash record, and
+    // the share. `:core` already brings `logging-core` through its own `api`;
+    // this is the part that needs a Context. mikelward/androidlog, tracked
+    // @main through the composite build in settings.gradle.kts — the version
+    // here is inert, substitution swaps in the local build before it resolves.
+    implementation("com.mikelward.androidlog:logging-android:0.0")
     implementation(project(":dnd"))
     implementation(project(":presence"))
     implementation(project(":tile"))

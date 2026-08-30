@@ -3303,6 +3303,52 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
+- **Guessed under autopilot: retire `DebugLogFiles.kt` now and accept a window
+  without the on-screen cleanup-failure warning** (2026-08-30). The library reports
+  a failed opt-out purge *into the log* and holds the line until one can land;
+  this app reports it **on screen** as `debugLogCleanupFailed`, put there by
+  Codex on PR #89 because a refused delete leaves real files on disk while the
+  switch and every other signal read as if Off fully succeeded.
+  **Only that one indicator is affected.** `debugLogSaveFailed` is fed by
+  `lastSaveRefused = !persisted` — the *preferences* write outcome from
+  `DebugLogStore.setEnabled`, not the file mirror — so it is untouched by the
+  sink swap and keeps working throughout.
+  **Decided:** take the library as it stands, and add a caller-visible signal to
+  it afterward — `saveFailing` / `purgeFailed` plus `addStorageListener`,
+  mirroring the `unacknowledgedCrash` + `addCrashListener` shape it already
+  uses for the crash banner. Then rewire `debugLogCleanupFailed` onto it.
+  **The alternative** was to land that library change first and keep the
+  indicators unbroken throughout, at the cost of a second ordering round-trip
+  through `@main`.
+  **Why it is reversible, and cheap:** the library addition is purely additive,
+  so nothing here has to be redone to adopt it — the indicators are rewired, not
+  rebuilt. And the window costs no user anything: this app is not on Play yet
+  (Phase 8), so the warnings have nobody to fail today. What the interim does
+  lose is a developer's live signal on a handset that the log has stopped
+  persisting; the failure is still recorded in the log itself either way.
+
+  **What the retirement actually cost, once it landed.** Two things beyond the
+  indicator above, both from the shared sink behaving differently rather than
+  worse, and both recorded here rather than argued away:
+
+  - **`lastDismissFailed` lost its source too**, for the same reason as
+    `debugLogCleanupFailed`: the library's `acknowledgeCrashBanner` and
+    `clearPreviousRun` report their trouble into the log rather than to the
+    caller. It is rewired by the same `addStorageListener` addition. Nine tests
+    asserting the two flags, and two `MainActivityLifecycleTest` cases asserting
+    a screen picking their values back up after a restart, were removed with
+    them — there is no signal left for them to assert. They come back with the
+    listener.
+  - **An empty crash log now raises no banner.** A crash marker can land without
+    the run's content ever reaching disk — process death between the two writes
+    — and the library declines to raise a banner over a report with nothing in
+    it. This app used to raise it and then refuse to *consume* it, which
+    protected the same evidence one step later. The library's answer is the
+    better one at the banner, but it is a silent case where this app previously
+    said something, so it is written into `SPEC.md` §4.6 rather than left to be
+    rediscovered. `DebugReport`'s own refusal to consume an omitted read is
+    unchanged and still covered.
+
 - **Deferred, from Codex on PR #151: `runCatching` in `DebugLogFiles.kt` catches
   `Error` as well as the storage exceptions it means to handle.** Raised against
   the purge's new inner guard, but it is the file's pattern rather than that one

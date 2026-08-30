@@ -171,13 +171,13 @@ class DebugLoggingTest {
         // Same reasoning as hasPinnedCrash above: a pinned crash from a
         // previous run cannot be told apart from "genuinely nothing to
         // report" if this process never got as far as checking.
-        var text: String? = "not yet read"
+        var run: com.mikelward.androidlog.android.PreviousRun? = null
         var wasCrash: Boolean? = null
         var readSucceeded: Boolean? = null
-        DebugLogging.readPreviousOrCrash { t, c, s -> text = t; wasCrash = c; readSucceeded = s }
+        DebugLogging.readPreviousOrCrash { r, c, s -> run = r; wasCrash = c; readSucceeded = s }
         DebugLogging.awaitIdleForTest()
 
-        assertEquals(null, text)
+        assertEquals(null, run)
         assertEquals(false, wasCrash)
         assertEquals(false, readSucceeded)
     }
@@ -185,7 +185,7 @@ class DebugLoggingTest {
     @Test
     fun `consumeCrashPin reports success before install — nothing to consume`() {
         var consumed: Boolean? = null
-        DebugLogging.consumeCrashPin { consumed = it }
+        DebugLogging.consumeCrashPin(null) { consumed = it }
         DebugLogging.awaitIdleForTest()
 
         assertEquals(true, consumed)
@@ -197,7 +197,7 @@ class DebugLoggingTest {
         DebugLogging.awaitIdleForTest()
 
         var consumed: Boolean? = null
-        DebugLogging.consumeCrashPin { consumed = it }
+        DebugLogging.consumeCrashPin(null) { consumed = it }
         DebugLogging.awaitIdleForTest()
 
         // No crash pinned in this run — a real sink answers the same
@@ -217,7 +217,7 @@ class DebugLoggingTest {
         val watch = DebugLogging.watchCrashPinOutcome { fired++ }
 
         try {
-            DebugLogging.consumeCrashPin {}
+            DebugLogging.consumeCrashPin(null) {}
             DebugLogging.awaitIdleForTest()
         } finally {
             watch.close()
@@ -233,7 +233,7 @@ class DebugLoggingTest {
         val watch = DebugLogging.watchCrashPinOutcome { fired++ }
 
         try {
-            DebugLogging.consumeCrashPin {}
+            DebugLogging.consumeCrashPin(null) {}
             DebugLogging.awaitIdleForTest()
         } finally {
             watch.close()
@@ -247,7 +247,7 @@ class DebugLoggingTest {
         var fired = 0
         DebugLogging.watchCrashPinOutcome { fired++ }.close()
 
-        DebugLogging.consumeCrashPin {}
+        DebugLogging.consumeCrashPin(null) {}
         DebugLogging.awaitIdleForTest()
 
         assertEquals(0, fired)
@@ -263,107 +263,12 @@ class DebugLoggingTest {
         val second = DebugLogging.watchCrashPinOutcome { secondHeard++ }
         first.close()
 
-        DebugLogging.consumeCrashPin {}
+        DebugLogging.consumeCrashPin(null) {}
         DebugLogging.awaitIdleForTest()
         second.close()
 
         assertEquals("the old instance's deferred close must not evict the replacement", 0, firstHeard)
         assertEquals(1, secondHeard)
-    }
-
-    @Test
-    fun `disabling the log fires watchCrashPinOutcome once the deleted pin's fate is known`() {
-        // Turning the switch off deletes any pinned crash along with
-        // everything else (SPEC.md §4.6), but that delete is queued
-        // asynchronously on the sink's own worker — without wiring this
-        // through, a crash banner already on screen kept offering to share
-        // a file that no longer existed (Codex, PR #89).
-        val dir = File(context.cacheDir, "debuglog")
-        dir.mkdirs()
-        File(dir, "current.log").writeText("the run that crashed")
-        File(dir, "current.log.crash").writeText("1")
-        DebugLogging.install(context)
-        DebugLogging.awaitIdleForTest()
-        assertTrue(
-            "precondition: rotation pinned the crash — ${afterInstall(dir)}",
-            File(dir, "crash.log").exists(),
-        )
-
-        var pinned: Boolean? = null
-        val watch = DebugLogging.watchCrashPinOutcome {
-            DebugLogging.hasPinnedCrash { p, _ -> pinned = p }
-        }
-
-        try {
-            DebugLogging.setEnabled(context, false) {}
-            DebugLogging.awaitIdleForTest()
-            // The watch's own re-read (`hasPinnedCrash`) is itself queued
-            // asynchronously from inside the delete's own completion — a
-            // second drain is what waits for that nested hop too.
-            DebugLogging.awaitIdleForTest()
-        } finally {
-            watch.close()
-        }
-
-        assertFalse("crash.log is gone", File(dir, "crash.log").exists())
-        assertEquals("the watch's own re-read must see the pin is gone", false, pinned)
-    }
-
-    @Test
-    fun `a leftover retried at an already-Off install also sets lastDisableCleanupFailed`() {
-        // A process restart under a setting that was already Off is exactly
-        // when a leftover from an earlier refused delete gets retried — not
-        // only the interactive toggle path (Codex, PR #89).
-        DebugLogStore(context).setEnabled(false)
-        val dir = File(context.cacheDir, "debuglog")
-        dir.mkdirs()
-        File(File(dir, "crash.log"), "occupied").apply { parentFile!!.mkdirs() }.writeText("x")
-
-        DebugLogging.install(context)
-        DebugLogging.awaitIdleForTest()
-
-        assertTrue(DebugLogging.lastDisableCleanupFailed)
-    }
-
-    @Test
-    fun `a refused delete during disable sets lastDisableCleanupFailed, not silent success`() {
-        // Off is supposed to mean nothing is kept (SPEC.md §4.6); a refused
-        // delete must not read the same as a clean one, or nothing tells
-        // the user their delete request only partly landed (Codex, PR #89).
-        val dir = File(context.cacheDir, "debuglog")
-        dir.mkdirs()
-        // An occupied directory refuses deletion the same way a failing
-        // filesystem does: delete() returns false rather than throwing.
-        File(File(dir, "crash.log"), "occupied").apply { parentFile!!.mkdirs() }.writeText("x")
-        DebugLogging.install(context)
-        DebugLogging.awaitIdleForTest()
-        assertFalse(DebugLogging.lastDisableCleanupFailed)
-
-        DebugLogging.setEnabled(context, false) {}
-        DebugLogging.awaitIdleForTest()
-
-        assertTrue(DebugLogging.lastDisableCleanupFailed)
-    }
-
-    @Test
-    fun `a successful re-enable clears a prior disable's cleanup failure`() {
-        // Without this, lastDisableCleanupFailed never resets once set —
-        // only a disable ever writes it — so it would resurface at any
-        // later restart even though the switch has been back On for a
-        // while and nothing is actually wrong (Codex, PR #89).
-        val dir = File(context.cacheDir, "debuglog")
-        dir.mkdirs()
-        File(File(dir, "crash.log"), "occupied").apply { parentFile!!.mkdirs() }.writeText("x")
-        DebugLogging.install(context)
-        DebugLogging.awaitIdleForTest()
-        DebugLogging.setEnabled(context, false) {}
-        DebugLogging.awaitIdleForTest()
-        assertTrue("precondition: the disable left a real leftover", DebugLogging.lastDisableCleanupFailed)
-
-        DebugLogging.setEnabled(context, true) {}
-        DebugLogging.awaitIdleForTest()
-
-        assertFalse(DebugLogging.lastDisableCleanupFailed)
     }
 
     @Test
@@ -397,109 +302,7 @@ class DebugLoggingTest {
     }
 
     @Test
-    fun `a quick re-enable still notifies the crash-pin watch once the earlier delete completes`() {
-        // The bug this guards: gating onCrashPinOutcome on the same
-        // disableGeneration check that guards lastDisableCleanupFailed
-        // suppressed the pin-state notification too — a crash.log the
-        // disable's own delete genuinely removed would leave crashPending
-        // stuck true on screen, since nothing else re-reads hasPinnedCrash
-        // while the activity stays on the same screen (Codex, PR #89, third
-        // round on this field).
-        val dir = File(context.cacheDir, "debuglog")
-        dir.mkdirs()
-        File(dir, "current.log").writeText("the run that crashed")
-        File(dir, "current.log.crash").writeText("1")
-        DebugLogging.install(context)
-        DebugLogging.awaitIdleForTest()
-        assertTrue(
-            "precondition: the crash is pinned — ${afterInstall(dir)}",
-            File(dir, "crash.log").exists(),
-        )
-
-        var fired = 0
-        val watch = DebugLogging.watchCrashPinOutcome { fired++ }
-        try {
-            // Same no-await, no-race-needed shape as the cleanup-failure
-            // test above: both DebugLogging-worker tasks (and the
-            // generation bump) are guaranteed to land before the sink's
-            // own delete actually completes.
-            DebugLogging.setEnabled(context, false) {}
-            DebugLogging.setEnabled(context, true) {}
-            DebugLogging.awaitIdleForTest()
-        } finally {
-            watch.close()
-        }
-
-        assertTrue(
-            "the crash-pin watch must still fire once the superseded delete finishes, " +
-                "even though its own cleanup-failure verdict is discarded",
-            fired > 0,
-        )
-        assertFalse("the crash really was deleted by the disable's own delete", File(dir, "crash.log").exists())
-    }
-
-    // --- dismissCrashPin / watchDismissOutcome / lastDismissFailed (Codex,
-    // PR #89: a refused Dismiss tap must not look like it did nothing) ---
-
-    @Test
     fun `dismissCrashPin succeeds when nothing is pinned, before install`() {
-        DebugLogging.dismissCrashPin()
-        DebugLogging.awaitIdleForTest()
-
-        assertFalse(DebugLogging.lastDismissFailed)
-    }
-
-    @Test
-    fun `dismissCrashPin sets lastDismissFailed when the file layer refuses to consume`() {
-        val dir = File(context.cacheDir, "debuglog")
-        dir.mkdirs()
-        File(dir, "current.log").writeText("the run that crashed")
-        File(dir, "current.log.crash").writeText("1")
-        DebugLogging.install(context)
-        DebugLogging.awaitIdleForTest()
-        assertTrue(
-            "precondition: rotation pinned the crash — ${afterInstall(dir)}",
-            File(dir, "crash.log").exists(),
-        )
-        // Make both the rename and the copy fallback refuse, the same
-        // fixture DebugFileSinkTest's own refusal test uses.
-        File(File(dir, "previous.log"), "occupied").apply { parentFile!!.mkdirs() }.writeText("x")
-
-        DebugLogging.dismissCrashPin()
-        DebugLogging.awaitIdleForTest()
-
-        assertTrue(DebugLogging.lastDismissFailed)
-        assertTrue("the crash log survives a failed consume", File(dir, "crash.log").exists())
-    }
-
-    @Test
-    fun `dismissCrashPin's own retry resolves to its own outcome, not a stuck earlier one`() {
-        // dismissCrashPin clears lastDismissFailed synchronously before
-        // dispatching its own consume, so a config change or restart while
-        // a retry is still in flight can no longer reload a *previous*
-        // attempt's stale outcome (Codex, PR #89) — that synchronous
-        // ordering is a language guarantee, not something a threaded test
-        // can pin without racing the same worker it's asserting about, so
-        // this instead pins the deterministic, fully-awaited end state: a
-        // retry that succeeds must land on its own success, never leave
-        // the earlier failure standing.
-        val dir = File(context.cacheDir, "debuglog")
-        dir.mkdirs()
-        File(dir, "current.log").writeText("the run that crashed")
-        File(dir, "current.log.crash").writeText("1")
-        DebugLogging.install(context)
-        DebugLogging.awaitIdleForTest()
-        val blocker = File(dir, "previous.log")
-        File(blocker, "occupied").apply { parentFile!!.mkdirs() }.writeText("x")
-        DebugLogging.dismissCrashPin()
-        DebugLogging.awaitIdleForTest()
-        assertTrue(
-            "precondition: the first dismiss genuinely failed — ${afterInstall(dir)}",
-            DebugLogging.lastDismissFailed,
-        )
-
-        // Fix the fixture so the retry can actually succeed this time.
-        blocker.deleteRecursively()
         DebugLogging.dismissCrashPin()
         DebugLogging.awaitIdleForTest()
 
