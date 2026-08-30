@@ -92,6 +92,7 @@ class SnoozeNotificationsDegradationTest {
             DegradationCause.LOCATION_SERVICES_OFF,
             DegradationCause.NO_LOCATION_FIX,
             DegradationCause.FIXES_TOO_VAGUE,
+            DegradationCause.NO_LOCATION_IN_BACKGROUND,
         ).map { postedOngoing(TrackingMode.DURATION_ONLY, it) }
 
         assertEquals(lines.size, lines.toSet().size)
@@ -107,13 +108,16 @@ class SnoozeNotificationsDegradationTest {
     }
 
     /**
-     * Recovers by an action the user has to take, and no UI offers it yet —
-     * naming a state without its way out is worse than the mode alone.
+     * Names the missing permission, which is the thing the user can act on
+     * (maintainer, 2026-08-30, reversing the earlier decision to stay silent
+     * here). Granting it does not by itself restart tracking — that still
+     * wants `Resume tracking` (`TODO.md`) — but `Timer only` alone told the
+     * user nothing at all.
      */
     @Test
-    fun `the background-location cause deliberately renders no reason`() {
+    fun `the background-location cause names the permission`() {
         assertEquals(
-            stringOf(R.string.ongoing_timer_only),
+            expected(R.string.ongoing_timer_only, R.string.ongoing_cause_no_background),
             postedOngoing(TrackingMode.DURATION_ONLY, DegradationCause.NO_LOCATION_IN_BACKGROUND),
         )
     }
