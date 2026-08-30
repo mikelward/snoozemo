@@ -1565,6 +1565,30 @@ the point is that every other line of the app is worthless if it isn't true.
       (today `AnchorWifiTracker` folds the redaction placeholder into not-associated by design,
       D7), and pair it with a proof the read works again. That is a change to the tracker's
       contract, not a check bolted onto the monitor.
+- [ ] **A restored location grant is not noticed until the half-hour backstop** (Codex, PR #150,
+      sixth round on this seam; **stopped and handed to the maintainer rather than fixed there**).
+      Nothing in the monitor observes a *permission* change. `LocationModeWatch` watches location
+      services going on and off; `MainActivity`'s permission callbacks only refresh UI state. So
+      when a user re-grants location without touching the system location toggle, the fence is
+      re-registered only by `SnoozeBackstop`'s half-hour `WorkManager` wake — and until it fires,
+      `CheckingFixes` stays suspended and `locationAccessLost` keeps both grace-arming paths shut.
+      A user who leaves inside that window gets neither a fix nor the five-minute grace, so the
+      phone stays quiet until the cap.
+      - **The suspension is not new** — PR #149 introduced it and `resumeChecking` already waited
+        on the same repair. What PR #150 adds is that *grace* is suppressed during the window too,
+        so the gap widened from "no confirming fixes" to "no way to end early at all".
+      - **Why it was not fixed in #150.** Android broadcasts no permission change, so the trigger
+        has to come from the app layer — `MainActivity`'s permission result callbacks, or an
+        `onResume` re-check, calling `pokePresenceRepair()`. That is a new cross-module signal
+        path, and it arrived as the sixth review round on one seam; bolting it on at that point is
+        how the regression two rounds earlier happened. The bound is the backstop period and,
+        beyond it, the cap.
+      - **Options for the maintainer**: hook the existing permission callbacks (cheapest, but puts
+        presence knowledge in the UI layer); shorten the backstop while a grant cause stands (no
+        new coupling, more wakeups, still up to the shortened period); or have the app poke the
+        repair from `onResume` whenever a grant cause is recorded. The first is probably right,
+        since the user re-granting almost always happens in the app.
+
 - [ ] **The end-condition sheet never opens from the main screen's Snooze button** (maintainer,
       2026-08-30; **follow-up PR, not #150**). Arming from the Quick Settings tile goes through
       the trampoline and shows the sheet; arming from the button on `MainScreen` does not, so the
