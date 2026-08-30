@@ -12,9 +12,9 @@ the module split, the two flavors and CI are green, and so is the DND half: the 
 and ends a snooze, the record survives process death and reboots, and the duration cap holds
 across a clock change. On `play`, presence ends a snooze when you leave — three wake-up
 sources feeding one departure test — and degrades to duration-only, saying so, when the
-anchor supports nothing better; `direct` is duration-only until Phase 7. Phase 3's one remaining
-code item is the degradation *cause* reaching the user, which needs approved copy; everything else
-it owes is on-device verification (`TODO.md` Phase 3).
+anchor supports nothing better; `direct` is duration-only until Phase 7, and a degraded card now
+names its reason as well as its mode. What Phase 3 still owes is on-device verification
+(`TODO.md` Phase 3).
 Every rule below is live, screenshot tests included: the four screens (`MainScreen`,
 `PermissionsScreen`, `SettingsScreen`, `LicensesScreen`) each record through their own
 `*ScreenshotTest`, and a new one needs its own step in the CI allow-list or it records

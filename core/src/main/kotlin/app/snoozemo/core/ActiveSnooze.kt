@@ -142,6 +142,27 @@ data class ActiveSnooze(
      * can stamp, which does not restore.
      */
     val deviceStamp: String? = null,
+    /**
+     * Why tracking is below what the anchor supports, or null when nothing is
+     * degraded — the *reason* behind [mode], carried so the notification can
+     * say it (SPEC.md §8.1).
+     *
+     * [mode] alone cannot: `NO_LOCATION_FIX` and `FIXES_TOO_VAGUE` map to the
+     * same mode and mean completely different things to a user — location is
+     * broken, versus location is working but cannot be precise where you are
+     * standing — and the second is not a fault at all (Codex, PR #31). A line
+     * that reads the same either way is the degraded report failing at the one
+     * job it has.
+     *
+     * On the record rather than beside it, for the reason [armed] is: the
+     * notification is reposted from a restored record after every process
+     * death, and a reason held only in memory would come back missing while
+     * the mode it explains came back intact — the user told *that* something
+     * is degraded and never *what*, which is the state this field exists to
+     * end. Nullable, so a record written before this field existed reads as
+     * "no reason recorded" and simply renders the mode alone.
+     */
+    val degradation: DegradationCause? = null,
 ) {
     /**
      * How long is left before the cap fires, floored at zero. Never negative: an

@@ -205,6 +205,15 @@
     <string name="ongoing_wifi_only">Wi-Fi only</string>
     <string name="ongoing_wifi_grace">Wi-Fi lost — ending soon</string>
     <string name="ongoing_timer_only">Timer only</string>
+    <!-- The reason behind a degraded mode, joined to it. Approved 2026-08-30. -->
+    <!-- TODO: translate -->
+    <string name="ongoing_degraded_reason" tools:ignore="MissingTranslation">%1$s — %2$s</string>
+    <!-- TODO: translate -->
+    <string name="ongoing_cause_services_off" tools:ignore="MissingTranslation">location is off</string>
+    <!-- TODO: translate -->
+    <string name="ongoing_cause_no_fix" tools:ignore="MissingTranslation">no location</string>
+    <!-- TODO: translate -->
+    <string name="ongoing_cause_weak_signal" tools:ignore="MissingTranslation">weak location signal</string>
     <string name="action_end_now">End now</string>
     <string name="action_extend">+30 min</string>
     <string name="ended_departure">Snooze ended — you left</string>

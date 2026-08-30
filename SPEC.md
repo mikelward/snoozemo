@@ -522,6 +522,27 @@ because it looks current. `setUsesChronometer` against the absolute cap ticks by
 go stale. It also means the body says only what *kind* of snooze this is — `Ends when you leave`,
 `Wi-Fi only`, `Wi-Fi lost — ending soon`, `Timer only` — which is the part that actually needs words.
 
+**A degraded card names the reason, not just the mode** (maintainer, 2026-08-30). The mode alone
+cannot carry it: `NO_LOCATION_FIX` and `FIXES_TOO_VAGUE` collapse to the same mode and mean
+opposite things to a user — location is broken, versus location is working and simply cannot place
+you where you are standing, which is not a fault at all. A line that reads identically either way
+is the degraded report failing at the one job §8.1 gives it. So the reason is appended to the mode:
+`Timer only — weak location signal`.
+
+Three causes earn a line — `location is off`, `no location`, `weak location signal` — and the
+omissions are deliberate. `NO_LOCATION_IN_BACKGROUND` recovers by an action the user has to take
+and no UI offers it yet; naming the state without the way out is worse than the mode alone, so it
+gets its line with that affordance and not before. `NOTHING_WATCHING` is the app's own wiring, not
+anything the user did or can act on, and `Timer only` already says everything true about it.
+`WIFI_GRACE` is excluded too: `Wi-Fi lost — ending soon` already names what matters, and a second
+clause on a state that resolves in minutes costs length for nothing.
+
+The reason travels **on the snooze record**, not beside it, because the card is reposted from a
+restored record after every process death — a reason held only in memory would come back missing
+while the mode it explains came back intact, which is the exact half-told state this exists to end.
+It follows that a *cause* change is news even when the mode does not move; the alternative leaves
+the card asserting the wrong reason until the mode happens to change.
+
 **This card only alerts once.** It is reposted on every ARMED/CHECKING transition while a snooze
 runs — routine presence re-checks, not events the user needs alerted to — and the channel bypasses
 Snoozemo's own Do Not Disturb (§5.7), so a repost that re-sounded or re-vibrated on every re-check
@@ -1205,6 +1226,17 @@ comparison rather than a rule the engine has to remember.
 **A degradation must be withdrawn once tracking recovers.** One the app announced and then never
 took back is a false statement about its own state, and the kind that teaches the user to disbelieve
 the line that matters when it is true (principle 2).
+
+**The recorded cause tracks the failure happening now, not the one that started the run**
+(revised 2026-08-30; it used to hold whichever flavor crossed the threshold first). The original
+rule froze it deliberately, reasoning that the two causes lowered tracking identically and read the
+same to the user, so restating a changed one bought a rewritten notification for nothing. That
+stopped being true the moment the card began rendering them as different sentences (§4.3): frozen,
+a walk from a weak-signal spot into one with no fixes at all leaves the card saying `weak location
+signal` for the rest of the run, which is the stale reason §8.1 exists to prevent. The flapping
+that argument was guarding against is real and is accepted rather than denied — alternating
+failures now restate an alternating cause — but it stays a *level* and never an event, so the card
+is reposted silently and nothing alerts.
 
 **Health is about location, and Wi-Fi is not evidence about location.** Rejoining the anchor's
 network proves Wi-Fi works and says nothing whatever about whether location started working, so it

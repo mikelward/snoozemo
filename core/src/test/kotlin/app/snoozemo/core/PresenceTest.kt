@@ -538,6 +538,39 @@ class PresenceTest {
         )
     }
 
+    /**
+     * The cause follows the failures rather than freezing at whichever
+     * flavor crossed the threshold first (Codex, PR #141). It used to hold
+     * still, on the reasoning that both causes said the same thing to the
+     * user — which stopped being true when the ongoing card started
+     * rendering them as different sentences (SPEC.md §4.3). Walking from a
+     * weak-signal spot into one with no fixes at all is the ordinary route
+     * here, and a frozen level would keep saying `weak location signal`
+     * while nothing was arriving at all.
+     */
+    @Test
+    fun `the cause follows a run whose failures change flavor`() {
+        val from = PresenceState(atAnchorWifi = false)
+
+        assertEquals(
+            listOf(
+                null,
+                null,
+                DegradationCause.FIXES_TOO_VAGUE,
+                // Same unbroken run — no usable fix has intervened — so the
+                // count never resets, and each later sample restates the
+                // flavor that actually just failed.
+                DegradationCause.NO_LOCATION_FIX,
+                DegradationCause.FIXES_TOO_VAGUE,
+            ),
+            levels(
+                tracked,
+                from = from,
+                signals = arrayOf(vague(0), vague(60), vague(120), noFix(180), vague(240)),
+            ),
+        )
+    }
+
     @Test
     fun `a run of bad fixes is forgiven once a real one arrives`() {
         val signals = arrayOf(vague(0), vague(60), vague(120), atHome(180))
@@ -1043,28 +1076,48 @@ class PresenceTest {
         assertEquals(PresenceEvent.Departed, confirmed.event)
     }
 
+    /**
+     * **This test asserted the opposite until PR #141**, and the reversal is
+     * deliberate rather than a relaxation, so both halves of what it was
+     * protecting are still here.
+     *
+     * It used to pin the level *still* through alternating failures, reasoning
+     * that "both causes lower tracking the same way and say the same thing to
+     * the user" — true while the notification rendered the mode alone. It no
+     * longer is: the ongoing card renders `no location` and `weak location
+     * signal` as different sentences (SPEC.md §4.3), so a frozen level makes
+     * the card assert whichever flavor happened first for the rest of the run.
+     *
+     * What genuinely needed protecting was that this never becomes *news*, and
+     * that half is unchanged and asserted below: the value alternates, and not
+     * one of those samples emits an event. The controller reads the level off
+     * every update, so a changed cause reposts a silent card
+     * (`setOnlyAlertOnce`) rather than alerting — which is the cost the PR
+     * accepted openly, and the reason the engine may move the level per sample
+     * without waking anyone.
+     */
     @Test
-    fun `failures that alternate do not flap the level`() {
-        // Vague fixes and no fixes at all, interleaved. Moving the level on a
-        // changed cause would have the controller rewrite the record and the
-        // notification per sample — the flapping this engine exists to prevent,
-        // produced by its own reporting. Both causes lower tracking the same way
-        // and say the same thing to the user.
+    fun `failures that alternate restate the level without alerting`() {
+        val from = PresenceState(atAnchorWifi = false)
+        val signals = arrayOf(
+            vague(0), noFix(60), vague(120), noFix(180), vague(240), noFix(300),
+        )
+
         assertEquals(
             listOf(
                 null,
                 null,
                 DegradationCause.FIXES_TOO_VAGUE,
+                DegradationCause.NO_LOCATION_FIX,
                 DegradationCause.FIXES_TOO_VAGUE,
-                DegradationCause.FIXES_TOO_VAGUE,
-                DegradationCause.FIXES_TOO_VAGUE,
+                DegradationCause.NO_LOCATION_FIX,
             ),
-            levels(
-                tracked,
-                from = PresenceState(atAnchorWifi = false),
-                signals = arrayOf(vague(0), noFix(60), vague(120), noFix(180), vague(240), noFix(300)),
-            ),
+            levels(tracked, from = from, signals = signals),
         )
+
+        // The half that did not change: a level, never an event.
+        val (events, _) = replay(tracked, from = from, signals = signals)
+        assertEquals(List(signals.size) { null }, events)
     }
 
     @Test

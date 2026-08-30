@@ -687,16 +687,36 @@ object Presence {
         // captured before a declared timeout and delivered after it is dropped;
         // that is a reading the request had already given up on, and the next
         // one is along at the checking rate.
-        // Once per run of failures, whatever flavor they are (Codex, PR #31).
-        // Reporting again on a *changed* cause reads as more honest and is the
-        // opposite: fixes that alternate between arriving-useless and not
-        // arriving would emit an event per sample, each rewriting the persisted
-        // record and the ongoing notification — the flapping this file claims to
-        // prevent, produced by its own reporting. Both causes lower tracking the
-        // same way and say the same thing to the user; which one the last sample
-        // was belongs in the debug log (SPEC.md §4.6), not in a notification
-        // rewritten every 90 seconds. A usable fix clears the report, so the
-        // next run says whatever is true then.
+        // **The cause now follows the failures; it used to freeze** (Codex,
+        // PR #141, reversing PR #31's call here). The old rule kept whichever
+        // flavor first crossed the threshold until a usable fix cleared it,
+        // and its stated reason was that "both causes lower tracking the same
+        // way and say the same thing to the user" — so the distinction was
+        // debug-log detail (SPEC.md §4.6) and re-reporting it bought a
+        // notification rewrite for nothing.
+        //
+        // That premise is what changed. The two causes no longer say the same
+        // thing: the ongoing card renders `no location` for one and `weak
+        // location signal` for the other (SPEC.md §4.3), because they mean
+        // opposite things to a reader — something is broken, versus location
+        // works and cannot place you here. Frozen, the card asserts whichever
+        // was true first for the rest of a run, so walking from a weak-signal
+        // spot into one with no fixes at all leaves it saying `weak location
+        // signal` indefinitely. That is the stale reason §8.1 exists to
+        // prevent, and it also made the controller's own cause comparison
+        // unreachable through this path.
+        //
+        // The flapping cost is real and is accepted rather than dismissed:
+        // alternating samples now restate an alternating level, so the card
+        // can be rewritten at the checking cadence. It stays a *level*, never
+        // an event (see the `step` below), so nothing alerts — the repost is
+        // silent and costs a preferences write and a tile refresh, which is
+        // the price of the line not lying.
+        //
+        // `nowDegraded` deliberately keeps its old meaning — "the level just
+        // moved off null" — because the §6.6 grace deadline below arms on it,
+        // and that must fire once when tracking gives up, not again every
+        // time the flavor of the failure changes.
         val nowDegraded = count >= DEGRADED_AFTER_USELESS_OBSERVATIONS &&
             state.degradation == null
         val next = state.copy(
@@ -705,7 +725,13 @@ object Presence {
             // Moves forward only, so a re-delivered failure cannot pull the
             // boundary back and let an older reading through.
             lastUnusableAtMs = maxOfNullable(state.lastUnusableAtMs, atMs),
-            degradation = if (nowDegraded) cause else state.degradation,
+            // Not `nowDegraded`: that one is false once a level already
+            // stands, which is exactly the case this has to update.
+            degradation = if (count >= DEGRADED_AFTER_USELESS_OBSERVATIONS) {
+                cause
+            } else {
+                state.degradation
+            },
             // Location has just stopped being able to answer, so if Wi-Fi is
             // also gone the snooze is now unverifiable and the §6.6 grace period
             // starts here rather than never. Without this, a snooze that armed
