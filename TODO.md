@@ -1502,46 +1502,52 @@ the point is that every other line of the app is worthless if it isn't true.
         the point: they will land against something a test can reach.
       - Carries no user-visible change, so it is a `refactor:` commit — but the tests it makes
         possible are the deliverable, not the move.
-- [ ] Service killed and recreated: re-assert the zen rule, resume tracking, and where a
-      background context can't get location, degrade to duration-only with a
-      `Resume tracking` notification action (`SPEC.md` §8.1).
-      **Blocked on a maintainer decision: §8.1's premise does not survive the platform.**
-      §8.1 says the tap "fully restores tracking", on the ground that a notification action is a
-      documented while-in-use exemption. The exemption is real, but it buys *location fixes* for
-      its window — not a geofence. Geofencing requires `ACCESS_BACKGROUND_LOCATION` outright on
-      API 29+ (developer.android.com, "Set up for geofence monitoring", checked 2026-08-30), with
-      no foreground-context carve-out. So under a while-in-use-only grant the fence can never
-      register, from any context, and `Resume tracking` cannot restore what §8.1 promises.
-      Two further consequences fall out of the same fact:
-      - The state is **unreachable today**. Nothing emits `NO_LOCATION_IN_BACKGROUND`; the play
-        monitor classifies `GEOFENCE_INSUFFICIENT_LOCATION_PERMISSION` as
-        `Fatal(LOCATION_PERMISSION_REVOKED)`, which *ends* the snooze. So the copy that now
-        exists for it (`background location off`) currently cannot appear.
-      - Which of those two is right is the decision, and it is a fail-open call, so it is not
-        autopilot's and not a reviewer's. Ending is the safe direction (the phone un-silences);
-        degrading keeps a phone quiet on a fence nothing registered, bounded only by Wi-Fi and
-        the cap. §8.1 chose degrade, but chose it believing the tap restored the fence.
-      Three options, none of them cheap to take back:
-      1. **Keep ending it.** Deny background location and a `play` snooze ends at once, saying
-         the permission is gone. Honest, safe, and makes the whole while-in-use path a
-         non-feature — which may be right, since the fence is the product.
-      2. **Degrade and offer `Resume tracking`, scoped to what it can actually do** — a fix plus
-         a Wi-Fi check per tap, during the exemption. Not continuous tracking, so the copy must
-         not promise it, and a phone stays quiet between taps on the cap alone.
-      3. ~~Degrade to Wi-Fi-only with no button, where the anchor has an SSID.~~ **Struck: it
-         does not work** (Codex, PR #146, verified against §6.4 and `AnchorWifiTracker`).
-         `ACCESS_FINE_LOCATION` is while-in-use, so an SSID read from a true background state
-         comes back as the redaction placeholder — and the tracker reads redacted as *not
-         associated*, deliberately (D7: an unvouched suppressor must not hold a snooze quiet).
-         With no foreground service on `play`, every background wake would report a loss and
-         escalate to grace while the phone sat on its own network. Wi-Fi is not an independent
-         fallback here; it needs the same exemption option 2 does, and is worth listing only as
-         part of what a tap restores.
-      Whichever is chosen, `SPEC.md` §8.1 and §8.3 both need rewriting: they share the premise.
+- [x] **Degrade to duration-only when the location grant is missing, rather than ending**
+      (maintainer, 2026-08-30; **landed**). Both grant-shaped refusals — background never
+      granted, and location revoked or downgraded mid-snooze — now keep the snooze armed on the
+      duration cap and name which grant is missing, where both previously ended it. The cap is
+      mandatory, so the fallback is bounded by construction and ending bought no safety it did
+      not already give. Neither falls back to Wi-Fi: an SSID read needs the same grant.
+      `SPEC.md` §8.1, §8.2 and §8.3 rewritten with the reasoning they replace.
+      `Resume tracking` is **not** being built — §8.1 records why the design cannot work.
+- [ ] **A grant lost *during* an active Wi-Fi grace still ends the snooze** (Codex, PR #149,
+      deferred there). `modeFor` checks `graceActive` before any degradation — deliberately, per
+      PR #31: grace can start before the *counting* causes have accumulated, and reporting
+      `WIFI_ONLY` for the first moments of a grace period would say Wi-Fi is tracking when it is
+      exactly what stopped. The grant causes are known immediately, so that reasoning does not
+      cover them, and grace under a dead grant is meaningless anyway — the SSID reads as
+      not-associated *because* the grant is gone, which is plausibly what started the grace.
+      **Why the one-line reordering was not taken**: it would fix the mode line and leave the
+      grace *alarm* armed, so the card would read `Timer only` — which promises the cap — while
+      the alarm ended the snooze minutes later. A card that lies is worse than the honest
+      `Wi-Fi lost — ending soon` it replaces, so both halves land together or neither does.
+      The full fix needs the engine's `graceDeadlineMs` cleared when a grant cause is reported,
+      which is engine state the monitor's degradation slot does not touch today, plus a delivery
+      afterwards so `GraceAlarm.reconcile` cancels the alarm. Until then this sub-case behaves
+      as it did before PR #149 — no regression, and the mode stays honest; what is missing is
+      the *reason*, for a state that resolves in minutes.
+- [ ] **The new degradation does not reach a Wi-Fi-only anchor at all** (Codex, PR #149,
+      deferred there). An anchor with an SSID but no usable fix has `Presence.duty == NONE`
+      always (`!anchor.hasUsableFix -> LocationDuty.NONE`), and `registerFence` returns early on
+      the same test — so neither permission-classifying path is ever entered for it. A grant lost
+      on such a snooze surfaces only as a redacted SSID reading as `AnchorWifiLost`, which starts
+      grace and ends the snooze in minutes, exactly as before PR #149. Not a regression: it is
+      the old behavior, untouched. But it means the 2026-08-30 decision is delivered only for
+      anchors that have a fix, and the *most* Wi-Fi-dependent snoozes are the ones it misses.
+      Closing it needs a live grant check on the Wi-Fi-only path — a new detection site rather
+      than a reclassification, since there is no platform refusal to classify there — plus test
+      coverage for that anchor shape.
+- [ ] **Still open: should `MONITORING_UNAVAILABLE` degrade too?** The narrow reading of the
+      2026-08-30 decision was taken: it covers the two *permission* causes, which name a state
+      the user can act on. An unclassified geofence refusal still ends the snooze, since there is
+      no reason to put on the card. The maintainer's own argument — the cap bounds any
+      fallback — applies here as well, so this is worth a decision rather than an assumption.
 - [ ] Reboot: re-assert the rule, degraded mode, cap continues from the *original* start
       time. `On restart: resume / end` setting, defaulting to resume (`SPEC.md` §8.3).
-- [ ] Permission revoked mid-snooze — policy access or location — ends the snooze with a
-      reason (`SPEC.md` §8.2).
+- [x] Permission revoked mid-snooze — **policy access** ends the snooze with a reason; **location**
+      degrades to duration-only and names the missing grant (maintainer, 2026-08-30; `SPEC.md`
+      §8.2, rewritten). Two gaps tracked above: a Wi-Fi-only anchor never reaches it, and a grant
+      lost during an active grace still ends the snooze.
 - [ ] The §8.5 table: airplane mode, location services off, double-arm, short trip and
       return, bad-accuracy anchor, battery saver, uninstall while snoozed.
 - [ ] **The read-back may end every snooze that spans a reboot** (Codex, PR #36) — the finding that

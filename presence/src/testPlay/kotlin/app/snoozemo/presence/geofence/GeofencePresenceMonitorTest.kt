@@ -7,6 +7,9 @@ import app.snoozemo.core.PresenceEvent
 import java.time.Instant
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import app.snoozemo.core.DegradationCause
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -68,6 +71,47 @@ class GeofencePresenceMonitorTest {
     }
 
     @Test
+    fun `a services outage normally outranks a refused registration`() {
+        // The rule this PR does not change: a refused registration says
+        // nothing about whether the subsystem works, while a services outage
+        // indicts it outright.
+        assertEquals(
+            DegradationCause.LOCATION_SERVICES_OFF,
+            GeofencePresenceMonitor.platformLevelOf(
+                registration = DegradationCause.NOTHING_WATCHING,
+                services = DegradationCause.LOCATION_SERVICES_OFF,
+            ),
+        )
+    }
+
+    @Test
+    fun `a missing grant outranks a latched services outage`() {
+        // Codex, PR #149. The services slot clears only on a delivered fix,
+        // and no fix can arrive once the grant is gone — so without this the
+        // cause would outlive its own refutation, name the wrong remedy for
+        // the rest of the snooze, and (because `LOCATION_SERVICES_OFF` is not
+        // a duration-only cause) leave an SSID anchor claiming `WIFI_ONLY`
+        // with no grant to read that SSID with.
+        for (grant in listOf(
+            DegradationCause.LOCATION_PERMISSION_GONE,
+            DegradationCause.NO_LOCATION_IN_BACKGROUND,
+        )) {
+            assertEquals(
+                grant,
+                GeofencePresenceMonitor.platformLevelOf(
+                    registration = grant,
+                    services = DegradationCause.LOCATION_SERVICES_OFF,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `with neither slot set nothing is reported`() {
+        assertNull(GeofencePresenceMonitor.platformLevelOf(registration = null, services = null))
+    }
+
+    @Test
     fun `an ending answer leaves the settling to the end itself`() {
         // The update is only queued at this point; settling now would lose a
         // confirmed departure to a teardown that beats the collector.
@@ -77,7 +121,7 @@ class GeofencePresenceMonitorTest {
         assertFalse(
             GeofencePresenceMonitor.settlesHeldExit(
                 LocationDuty.SANITY,
-                PresenceEvent.CapabilityLost(CapabilityLossCause.LOCATION_PERMISSION_REVOKED),
+                PresenceEvent.CapabilityLost(CapabilityLossCause.MONITORING_UNAVAILABLE),
             ),
         )
     }

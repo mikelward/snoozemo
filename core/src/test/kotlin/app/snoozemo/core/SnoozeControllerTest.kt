@@ -617,17 +617,58 @@ class SnoozeControllerTest {
     }
 
     @Test
-    fun `losing the ability to track ends the snooze rather than staying armed`() {
-        // Fail open (SPEC.md D7): staying armed on state nothing can verify is
-        // how a phone stays silent with nothing left to release it.
+    fun `an unexplainable loss of tracking ends the snooze rather than staying armed`() {
+        // Fail open (SPEC.md D7) — and this is now the *only* capability loss
+        // left, deliberately. The permission cases moved to degradation on
+        // 2026-08-30 because we can name what is wrong and the cap bounds the
+        // fallback; this one is "something refused and we don't know what",
+        // where staying armed is how a phone stays silent with nothing left to
+        // release it.
         armFully()
 
         controller.onPresenceUpdate(
-            update(PresenceEvent.CapabilityLost(CapabilityLossCause.LOCATION_PERMISSION_REVOKED)),
+            update(PresenceEvent.CapabilityLost(CapabilityLossCause.MONITORING_UNAVAILABLE)),
         )
 
         assertEquals(SnoozeState.IDLE, controller.state)
         assertEquals(EndReason.LOST_CAPABILITY, listener.states.last { it.second != null }.second)
+    }
+
+    @Test
+    fun `a lost location grant degrades instead of ending`() {
+        // The reversal itself (maintainer, 2026-08-30). The duration cap is
+        // mandatory, so duration-only is bounded by construction; ending here
+        // discarded the user's snooze without buying safety the cap did not
+        // already give.
+        armFully()
+
+        controller.onPresenceUpdate(
+            update(event = null, degradation = DegradationCause.LOCATION_PERMISSION_GONE),
+        )
+
+        assertEquals(SnoozeState.ARMED, controller.state)
+        assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
+        assertEquals(DegradationCause.LOCATION_PERMISSION_GONE, controller.active?.degradation)
+    }
+
+    @Test
+    fun `a lost grant never falls back to Wi-Fi, even with an anchor SSID`() {
+        // Reading an SSID needs the same grant that just went — there is no
+        // separate Wi-Fi permission — and a background read under a
+        // while-in-use grant comes back redacted, which the tracker treats as
+        // *not associated*. WIFI_ONLY here would report departures with the
+        // phone on its own network.
+        armFully()
+        assertNotNull(controller.active?.anchor?.ssid)
+
+        for (cause in listOf(
+            DegradationCause.LOCATION_PERMISSION_GONE,
+            DegradationCause.NO_LOCATION_IN_BACKGROUND,
+        )) {
+            controller.onPresenceUpdate(update(event = null, degradation = cause))
+
+            assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
+        }
     }
 
     @Test

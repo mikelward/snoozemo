@@ -200,7 +200,7 @@ class CheckingFixesTest {
     }
 
     @Test
-    fun `a lost grant stops the burst for good and reports once`() {
+    fun `a lost grant stops the burst and reports once`() {
         fixes.start()
 
         requester.answer(FixOutcome.PermissionLost)
@@ -208,9 +208,64 @@ class CheckingFixesTest {
 
         assertEquals(1, permissionLost)
         assertTrue(signals.isEmpty())
-        // Dead means dead: the restart queued nothing.
+        // Suspended: the restart queued nothing while the grant is gone.
         assertTrue(requester.pending.isEmpty())
         assertTrue(scheduler.delayed.isEmpty())
+    }
+
+    @Test
+    fun `the burst comes back when the grant does`() {
+        // The regression this guards (Codex, PR #149): permission loss used to
+        // set the same permanent flag teardown uses, which was fine only while
+        // it *ended* the snooze. Now that the snooze survives, a burst that
+        // stayed dead would leave an anchor with no SSID unable to confirm a
+        // geofence exit for the life of the process — snoozed to the cap while
+        // a repaired registration reported `FULL`.
+        fixes.start()
+        requester.answer(FixOutcome.PermissionLost)
+
+        fixes.resume()
+        // `resume` unblocks the guard; it does not restart the burst, because
+        // `settle` already stopped it. Asserted rather than assumed: the first
+        // version of this test went straight to `start()`, which hid that the
+        // monitor's recovery path called only `resume()` and so left an active
+        // departure check with nothing asking (Codex, PR #149, second pass).
+        // The caller owes the restart, and this is where that contract lives.
+        assertTrue(requester.pending.isEmpty())
+
+        fixes.start()
+
+        assertTrue(requester.pending.isNotEmpty())
+    }
+
+    @Test
+    fun `resume cannot resurrect a closed burst`() {
+        // Teardown stays final, which is the half PR #72 needed: a resume
+        // racing a close must not leave background location running for as
+        // long as the process.
+        fixes.start()
+        fixes.close()
+        // The pre-close request is still on the script's list; what this
+        // asserts is that no *new* one is queued after the resume.
+        requester.pending.clear()
+
+        fixes.resume()
+        fixes.start()
+
+        assertTrue(requester.pending.isEmpty())
+    }
+
+    @Test
+    fun `the resting probe comes back with the grant too`() {
+        // `sanityCheck` guards on the same flag, so the backstop's own probe
+        // would stay suspended alongside the burst.
+        requester.answer(FixOutcome.PermissionLost.also { fixes.start() })
+        requester.pending.clear()
+
+        fixes.resume()
+        fixes.sanityCheck()
+
+        assertTrue(requester.pending.isNotEmpty())
     }
 
     @Test

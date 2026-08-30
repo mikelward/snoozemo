@@ -623,9 +623,31 @@ class SnoozeController(
         val computed = when {
             graceActive && anchor.ssid != null -> TrackingMode.WIFI_GRACE
             degradation == null -> TrackingMode.from(anchor)
-            // Losing location leaves Wi-Fi *only if there was an SSID*; claiming
-            // `WIFI_ONLY` for an anchor with no network would tell the user tracking
-            // is better than it is.
+            // Below `graceActive`, and that is a known gap rather than an
+            // oversight (Codex, PR #149; tracked in TODO.md). A grant lost
+            // while a grace period is already running keeps `WIFI_GRACE` and
+            // so keeps its deadline, where the honest answer is duration-only.
+            // Reordering these two lines alone would make it worse: the card
+            // would read `Timer only`, promising the cap, while the grace
+            // alarm still ended the snooze minutes later. The fix needs the
+            // engine's grace deadline cleared too, which is a separate change.
+            //
+            // A missing *grant* takes Wi-Fi with it, so these two never fall
+            // back to it however good the anchor is (maintainer, 2026-08-30;
+            // Codex raised the same point on PR #146). Reading an SSID needs
+            // `ACCESS_FINE_LOCATION` and location services on — there is no
+            // separate Wi-Fi permission — and a background read under a
+            // while-in-use grant comes back as the redaction placeholder,
+            // which `AnchorWifiTracker` treats as *not associated* by design
+            // (D7). So `WIFI_ONLY` here would not merely overstate the mode:
+            // it would report a departure on every wake with the phone sitting
+            // on its own network.
+            degradation == DegradationCause.LOCATION_PERMISSION_GONE ||
+                degradation == DegradationCause.NO_LOCATION_IN_BACKGROUND ->
+                TrackingMode.DURATION_ONLY
+            // Every other degradation leaves Wi-Fi *only if there was an SSID*;
+            // claiming `WIFI_ONLY` for an anchor with no network would tell the
+            // user tracking is better than it is.
             anchor.ssid != null -> TrackingMode.WIFI_ONLY
             else -> TrackingMode.DURATION_ONLY
         }

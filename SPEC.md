@@ -2133,11 +2133,17 @@ failure that gets the app deleted.
 ### 8.1 Service killed by the system
 
 Return `START_STICKY`. On recreate with a persisted active snooze: re-assert the zen rule state, and
-attempt to resume presence monitoring. If the recreate happened from a background context and
-location comes back denied (while-in-use restriction), degrade to duration-cap-only, update the
-notification to say so — `Snoozing at Home · location paused, ends in 3h 40m` — and add a
-`Resume tracking` action. Tapping a notification action is a documented while-in-use exemption, so
-that tap fully restores tracking.
+attempt to resume presence monitoring. If location comes back denied — a while-in-use grant with
+no background grant behind it — degrade to duration-only and say which grant is missing:
+`Timer only — background location off`.
+
+**There is no `Resume tracking` action, and the earlier design for one was wrong** (2026-08-30).
+It reasoned that a notification-action tap is a documented while-in-use exemption and so "fully
+restores tracking". The exemption is real but buys *location fixes* for its window, not a
+geofence: geofencing requires `ACCESS_BACKGROUND_LOCATION` outright on API 29+, with no
+foreground-context carve-out. Under a while-in-use grant the fence cannot register from any
+context, so no tap could have restored it. Naming the missing grant is what the user can act on;
+granting it is the fix, and there is nothing for the app to offer alongside.
 
 **Re-asserting is for resuming, never for ending.** A wake-up whose purpose is to *end* the snooze —
 the user's `End now`, or a boot that could not reschedule the cap — takes over the persisted record
@@ -2157,8 +2163,28 @@ but it turns a likely wrong state into an unlikely one, and the cap still bounds
 
 ### 8.2 Permission revoked mid-snooze
 
-`ACCESS_NOTIFICATION_POLICY` revoked, or location permission downgraded to coarse or denied: end
-the snooze, notify with the reason. Do not attempt to limp along silently.
+`ACCESS_NOTIFICATION_POLICY` revoked: end the snooze, notify with the reason. Nothing is silencing
+the phone any more, so there is nothing left to keep running.
+
+**Location revoked or downgraded to coarse no longer ends the snooze** (maintainer, 2026-08-30).
+It degrades to duration-only and says `Timer only — location permission off`. The old rule ended
+it, reasoning from D7 that tracking we cannot do is the ambiguous state to resolve toward ending.
+What that reasoning left out is the **duration cap**: it is mandatory and user-set (§4.4), so
+duration-only is bounded by construction — the backstop principle 1 names is already in place.
+Ending on top of it bought no safety the cap did not already give, and cost the user the snooze
+they asked for. The card names the missing grant, so this is a degradation the user can act on,
+not a silent limp.
+
+**Wi-Fi is not the fallback here, and cannot be.** Reading an SSID needs `ACCESS_FINE_LOCATION`
+and location services on (§6.4) — there is no separate Wi-Fi permission — so a revoked grant takes
+Wi-Fi with it, and a background read under a while-in-use grant returns the redaction placeholder,
+which the tracker reads as *not associated* by design. A `WIFI_ONLY` claim in either state would
+report a departure on every wake with the phone sitting on its own network. Both grant-shaped
+degradations therefore go straight to duration-only, whatever the anchor holds.
+
+**What still ends the snooze is the failure we cannot name.** A geofence refused for a reason this
+build cannot classify, or a monitor that will not restart, stays fatal: there is no reason to put
+on the card and nothing for the user to act on, which is exactly the shape D7 is about.
 
 Revocation is the case that makes §7's release rule matter. Turning the rule off is itself refused
 once access is gone — the platform has already deleted the rule — so a release path that retried on
@@ -2173,8 +2199,9 @@ the while-in-use exemption list — so a service started from boot gets no locat
 SSID. There is no way around this without `ACCESS_BACKGROUND_LOCATION`.
 
 Behavior on boot with an unexpired snooze: **re-arm the cap alarm first**, then re-assert the zen
-rule (this needs no location and works fine), start the service in degraded mode, and post the same
-`Resume tracking` notification as §8.1. The duration cap continues from its original start time —
+rule (this needs no location and works fine), and start the service in degraded mode, naming the
+missing grant exactly as §8.1 does. (Earlier revisions posted a `Resume tracking` action here too;
+§8.1 records why that design does not work.) The duration cap continues from its original start time —
 reboots do not extend a snooze.
 
 The cap comes first and is armed straight from the persisted record, without going through the

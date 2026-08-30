@@ -125,12 +125,43 @@ internal class CheckingFixes(
     private var dead = false
 
     /**
+     * The *recoverable* stop: a lost location grant, which used to end the
+     * snooze and no longer does (maintainer, 2026-08-30).
+     *
+     * Deliberately not [dead]. That flag is teardown — permanent by design, so
+     * a start already queued behind [close] cannot revive a burst with nobody
+     * left to close it (Codex, PR #72). Permission loss reused it while the
+     * comment's premise held: "the snooze this callback ends". It does not end
+     * the snooze any more, so reusing it would leave a *running* snooze unable
+     * to request another confirming fix for the rest of the process — and an
+     * anchor with no SSID cannot confirm a geofence exit without one, so it
+     * would sit snoozed until the cap while a repaired registration reported
+     * `FULL` (Codex, PR #149). Separate and clearable, so recovery can revive
+     * it while teardown stays final: [start] and [sanityCheck] check both, and
+     * [resume] can only ever clear this one.
+     */
+    @Volatile
+    private var suspended = false
+
+    /**
+     * Revives fix checking after the grant that suspended it comes back.
+     *
+     * Cannot resurrect a closed instance — [dead] is checked alongside this
+     * and nothing clears it — so a resume racing a teardown still finds the
+     * burst shut for good.
+     */
+    fun resume() {
+        if (dead) return
+        suspended = false
+    }
+
+    /**
      * Begins the burst; a burst already running, or an instance already
      * closed for good, is left alone.
      */
     fun start() {
         scheduler.post {
-            if (dead || running) return@post
+            if (dead || suspended || running) return@post
             // A resting probe still in flight is superseded, not run beside:
             // the burst asks immediately anyway, and letting both answer
             // would count one moment's failure twice against the engine's
@@ -175,7 +206,7 @@ internal class CheckingFixes(
      */
     fun retryNow() {
         scheduler.post {
-            if (dead || !running) return@post
+            if (dead || suspended || !running) return@post
             cadence.onPlatformRecovered()
             if (currentToken != null) return@post
             SnoozeDebugLog.event("checking: asking again now that the platform recovered")
@@ -200,7 +231,7 @@ internal class CheckingFixes(
      */
     fun sanityCheck() {
         scheduler.post {
-            if (dead || running || sanityToken != null) return@post
+            if (dead || suspended || running || sanityToken != null) return@post
             SnoozeDebugLog.event("backstop: taking one resting fix")
             val token = Any()
             sanityToken = token
@@ -242,7 +273,9 @@ internal class CheckingFixes(
                 onSignal(PresenceSignal.FixUnavailable(readElapsedRealtimeMs()))
             }
             FixOutcome.PermissionLost -> {
-                dead = true
+                // Suspended, not dead: the snooze survives this now, so the
+                // burst has to be revivable when the grant returns.
+                suspended = true
                 stopWork()
                 stopSanity()
                 onPermissionLost()
@@ -338,10 +371,11 @@ internal class CheckingFixes(
                 nothing()
             }
             FixOutcome.PermissionLost -> {
-                // Permanent, not a pause: the snooze this callback ends must
-                // not find a queued start reviving its burst. The stop comes
-                // first so the callback finds nothing still running behind it.
-                dead = true
+                // Suspended rather than dead — see [suspended]. The stop still
+                // comes first so the callback finds nothing running behind it;
+                // what changed is that a later [resume] can start it again,
+                // because this no longer ends the snooze.
+                suspended = true
                 stopWork()
                 onPermissionLost()
             }
