@@ -80,22 +80,22 @@ class TileTrampolineActivity : ComponentActivity() {
     private val endSheetStore by lazy { EndSheetStore(this) }
 
     /**
-     * The end-condition sheet's own state, or null while no sheet is up.
-     *
-     * Held here rather than inside the composable because a second tile tap
-     * arrives at [onNewIntent] in this same instance and re-seeds it — the arm
-     * it triggered is a *new* snooze, so the time the sheet is offering has to
-     * move with it rather than still naming an hour from the first tap.
+     * The sheet's state and commit lifecycle, shared with the app screen's
+     * `Snooze` button so the same action behaves the same either way
+     * (`EndChoiceController`). What stays here is what is genuinely this
+     * activity's: the transparent window, `singleInstance` re-entry, and the
+     * rotation handling below.
      */
     @VisibleForTesting
-    internal var endCondition by mutableStateOf<EndCondition?>(null)
-
-    /**
-     * Whether the service refused the time the user just chose. Shown in the
-     * sheet rather than dismissing, because a dismissal on a refused tap is
-     * indistinguishable from one on an accepted tap.
-     */
-    private var commitFailed by mutableStateOf(false)
+    internal val sheet = EndChoiceController(
+        // Loaded here rather than kept warm: this activity exists for one tap
+        // and reads it only after the service start, so a load is the honest
+        // shape — and the sheet is off by default, so most taps never reach it.
+        ceilingAt = { now -> EndCondition.ceilingFor(ActiveSnoozeStore(this).load(), now) },
+        chooseEnd = { endsAt -> SnoozeService.chooseEnd(this, endsAt) },
+        watchOutcome = EndChoiceOutcome::watch,
+        onDismiss = ::finish,
+    )
 
     /** Whether [setContent] has already run, so a re-seed doesn't re-set it. */
     private var sheetRendered = false
@@ -109,9 +109,6 @@ class TileTrampolineActivity : ComponentActivity() {
      */
     private var startAccepted = false
 
-    /** Committing choices while this is set; see [commit]. */
-    private var outcomeWatch: AutoCloseable? = null
-
     /**
      * Whether a posted [decide] is still owed an answer.
      *
@@ -124,17 +121,6 @@ class TileTrampolineActivity : ComponentActivity() {
      * what was drawn, not what is owed.
      */
     private var decisionPending = false
-
-    /**
-     * Whether a chosen time is with the service and unanswered. The rows are
-     * inert while it is, so a second tap can't stack a second commit on the
-     * first (and the sheet is about to dismiss on the usual path anyway).
-     *
-     * `internal` for the same reason [endCondition] is: the Robolectric test
-     * has no Compose rule to drive the row with, and a commit in flight across
-     * a rotation is a state worth covering.
-     */
-    internal var committing by mutableStateOf(false)
 
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -245,9 +231,9 @@ class TileTrampolineActivity : ComponentActivity() {
         outState.putBoolean(STATE_START_ACCEPTED, startAccepted)
         outState.putBoolean(STATE_AWAITING_PERMISSION, awaitingPermission)
         outState.putBoolean(STATE_SHEET_SHOWN, sheetRendered)
-        outState.putBoolean(STATE_COMMITTING, committing)
-        outState.putBoolean(STATE_COMMIT_FAILED, commitFailed)
-        endCondition?.let {
+        outState.putBoolean(STATE_COMMITTING, sheet.committing)
+        outState.putBoolean(STATE_COMMIT_FAILED, sheet.commitFailed)
+        sheet.endCondition?.let {
             outState.putLong(STATE_ENDS_AT, it.endsAt.toEpochMilli())
             outState.putLong(STATE_FLOOR, it.floor.toEpochMilli())
             outState.putLong(STATE_CEILING, it.ceiling.toEpochMilli())
@@ -322,13 +308,14 @@ class TileTrampolineActivity : ComponentActivity() {
     private fun restore(state: Bundle) {
         startAccepted = state.getBoolean(STATE_START_ACCEPTED)
         awaitingPermission = state.getBoolean(STATE_AWAITING_PERMISSION)
-        commitFailed = state.getBoolean(STATE_COMMIT_FAILED)
-        if (state.containsKey(STATE_ENDS_AT)) {
-            endCondition = EndCondition(
+        val savedCondition = if (state.containsKey(STATE_ENDS_AT)) {
+            EndCondition(
                 endsAt = Instant.ofEpochMilli(state.getLong(STATE_ENDS_AT)),
                 floor = Instant.ofEpochMilli(state.getLong(STATE_FLOOR)),
                 ceiling = Instant.ofEpochMilli(state.getLong(STATE_CEILING)),
             )
+        } else {
+            null
         }
         // Owed a decision, whether or not a sheet was drawn before it. Posted
         // again against the same intent and *without* touching the service,
@@ -341,13 +328,28 @@ class TileTrampolineActivity : ComponentActivity() {
         // Nothing drawn yet: the decision above is the whole of what happens
         // next, and without it this activity would sit blank and transparent
         // for as long as the user left it there.
-        if (!state.getBoolean(STATE_SHEET_SHOWN)) return
+        if (!state.getBoolean(STATE_SHEET_SHOWN)) {
+            // Nothing was drawn, so there is no sheet to put back — but the
+            // saved offer still belongs to the controller, since a decision
+            // owed above can render it without reseeding.
+            sheet.restore(
+                savedCondition,
+                wasCommitting = false,
+                failed = state.getBoolean(STATE_COMMIT_FAILED),
+                // This whole path runs only under `marker().created` — see
+                // `onCreate`. A process restore re-dispatches the tap instead
+                // of restoring, so a commit reached here is always live.
+                configurationChange = true,
+            )
+            return
+        }
         renderSheet()
-        if (!state.getBoolean(STATE_COMMITTING)) return
-
-        committing = true
-        val alreadyAnswered = EndChoiceOutcome.takePending()
-        if (alreadyAnswered != null) onCommitOutcome(alreadyAnswered) else watchForOutcome()
+        sheet.restore(
+            condition = savedCondition,
+            wasCommitting = state.getBoolean(STATE_COMMITTING),
+            failed = state.getBoolean(STATE_COMMIT_FAILED),
+            configurationChange = true,
+        )
     }
 
     /**
@@ -491,32 +493,6 @@ class TileTrampolineActivity : ComponentActivity() {
     }
 
     /**
-     * The latest time the sheet may offer: the cap the running snooze actually
-     * carries, not a fresh eight hours from now.
-     *
-     * They coincide on a fresh arm and part company on a duplicate one. The
-     * tile arms from its own snapshot, and a stale "not snoozing" one sends a
-     * second `ACTION_ARM` that [SnoozeService] answers by *keeping* the snooze
-     * already running (§4.2) — so the record this sheet is about can be one
-     * that started long ago. Seeded against a constant, the sheet would offer
-     * an hour over a snooze with ten minutes left, and `applyChosenEnd` would
-     * answer `APPLIED` — correctly, since a chosen time no earlier than the cap
-     * is honored by doing nothing — and dismiss. The user is shown 14:00 and
-     * gets 12:10 (Codex, PR #118).
-     *
-     * Reading the record here is not a §6.9 violation: this runs in the posted
-     * block, after `startService`, and [shouldOfferSheet] has already read the
-     * same warmed file to decide there is a snooze at all.
-     *
-     * The default is the unreachable-in-practice fallback for a record that
-     * vanished between those two reads — a cap-driven end landing in between.
-     * The service re-clamps whatever is committed either way, so the worst case
-     * is an offer it declines rather than one it wrongly accepts.
-     */
-    private fun sheetCeiling(now: Instant): Instant =
-        ActiveSnoozeStore(this).load()?.capExpiresAt ?: now.plus(ActiveSnooze.DEFAULT_CAP)
-
-    /**
      * The end-condition sheet (SPEC.md §4.4), once the snooze is already armed.
      *
      * **Nothing here is on the arm path.** It runs from the posted block, so
@@ -547,8 +523,7 @@ class TileTrampolineActivity : ComponentActivity() {
         // renders in: rounding against any other would put the seed on a half
         // hour the user is not being shown (Codex, PR #118). Reading it here is
         // an in-memory lookup, and this runs after the service is already away.
-        endCondition = EndCondition.seededAt(now, sheetCeiling(now), ZoneId.systemDefault())
-        commitFailed = false
+        sheet.seed(now)
         renderSheet()
     }
 
@@ -577,7 +552,7 @@ class TileTrampolineActivity : ComponentActivity() {
                 // for a user who denied notifications — which is the whole
                 // reason the sheet waits at all (Codex, PR #118). Both exits
                 // are covered, the scrim and the back gesture.
-                BackHandler(enabled = committing) {}
+                BackHandler(enabled = sheet.committing) {}
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.BottomCenter,
@@ -597,24 +572,24 @@ class TileTrampolineActivity : ComponentActivity() {
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null,
-                                enabled = !committing,
+                                enabled = !sheet.committing,
                                 onClick = ::finish,
                             ),
                     )
-                    endCondition?.let { condition ->
+                    sheet.endCondition?.let { condition ->
                         EndConditionSheetContent(
                             condition = condition,
                             formattedTime = formatTime(condition.endsAt),
-                            onChooseTime = { commit(condition.endsAt) },
+                            onChooseTime = { sheet.commit(condition.endsAt) },
                             // The departure row commits by changing nothing:
                             // tracking is already armed and the default cap is
                             // already the backstop, so "until I leave" is the
                             // snooze exactly as it stands (§4.4).
                             onChooseDeparture = ::finish,
-                            onStepDown = { endCondition = condition.stepDown() },
-                            onStepUp = { endCondition = condition.stepUp() },
-                            failed = commitFailed,
-                            committing = committing,
+                            onStepDown = sheet::stepDown,
+                            onStepUp = sheet::stepUp,
+                            failed = sheet.commitFailed,
+                            committing = sheet.committing,
                             tracksDeparture = PRESENCE_TRACKS_DEPARTURE,
                             modifier = Modifier.navigationBarsPadding(),
                         )
@@ -624,80 +599,11 @@ class TileTrampolineActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * Sends a chosen time to the service and **waits to hear what happened**
-     * before dismissing.
-     *
-     * A started service is not an applied change: the alarm can still refuse,
-     * the record can still fail to write, and the snooze can have ended in
-     * between. Dismissing on the start alone left the user believing a time they
-     * could no longer see had been taken — and the card those failures post is a
-     * notification, invisible to exactly the tile-first user who denied that
-     * permission and for whom the tile is the only surface there is (SPEC.md
-     * §4.2; Codex, PR #118).
-     *
-     * So the watch goes on **before** the start, since the service reports from
-     * `onStartCommand` on this same looper and an outcome delivered before the
-     * watch existed would be one nobody heard.
-     *
-     * Staying put on a failure matters twice over: the snooze is still running
-     * on the cap it had, so nothing is stranded, and the sheet is the one place
-     * the user is certain to be looking.
-     */
-    private fun commit(endsAt: Instant) {
-        if (committing) return
-        committing = true
-        commitFailed = false
-        // Discarded, not delivered: anything held here answers an *earlier*
-        // tap, and handing it to this one would report a fresh choice as
-        // already applied.
-        EndChoiceOutcome.takePending()
-        watchForOutcome()
-        if (!SnoozeService.chooseEnd(this, endsAt)) {
-            // Never dispatched, so no outcome is coming; settle this one here.
-            Log.e(TAG, "Starting the snooze service for a chosen end time was refused.")
-            onCommitOutcome(EndChoiceResult.REFUSED)
-        }
-    }
-
-    private fun watchForOutcome() {
-        outcomeWatch?.close()
-        outcomeWatch = EndChoiceOutcome.watch(::onCommitOutcome)
-    }
-
-    /** What the service said about the time the user chose. */
-    private fun onCommitOutcome(result: EndChoiceResult) {
-        outcomeWatch?.close()
-        outcomeWatch = null
-        committing = false
-        // `GONE` dismisses like `APPLIED`, and deliberately: the snooze ended
-        // under the sheet — a departure, the cap, a capability loss — so there
-        // is nothing left to refine and every later tap would fail the same
-        // way. Standing there offering a retry over a snooze that is already
-        // over is the dead end this case exists to avoid (Codex, PR #118).
-        // Whatever ended it has posted its own card.
-        if (result != EndChoiceResult.REFUSED) {
-            finish()
-            return
-        }
-        commitFailed = true
-        // A sheet left open long enough can be showing a time that has since
-        // fallen inside the floor, and the service declines those rather than
-        // quietly substituting a later one (Codex, PR #118). Declining alone
-        // would make the sheet a dead end — the same tap failing forever — so
-        // the offer is reseeded against the clock as it is now.
-        val now = Instant.ofEpochMilli(System.currentTimeMillis())
-        if (endCondition?.endsAt?.isBefore(now.plus(ActiveSnooze.MIN_CAP)) == true) {
-            endCondition = EndCondition.seededAt(now, sheetCeiling(now), ZoneId.systemDefault())
-        }
-    }
-
     override fun onDestroy() {
         super.onDestroy()
-        // The channel holds this activity's lambda, so an unclosed watch outlives
-        // the sheet it was answering and leaks the activity with it.
-        outcomeWatch?.close()
-        outcomeWatch = null
+        // The channel holds a lambda reaching this activity, so an unclosed
+        // watch outlives the sheet it was answering and leaks the activity.
+        sheet.close()
     }
 
     /**

@@ -1,0 +1,243 @@
+package app.snoozemo.snooze
+
+import androidx.annotation.VisibleForTesting
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import app.snoozemo.core.ActiveSnooze
+import app.snoozemo.core.EndCondition
+import app.snoozemo.core.SnoozeDebugLog
+import java.time.Instant
+import java.time.ZoneId
+
+/**
+ * The end-condition sheet's state and its commit lifecycle (SPEC.md §4.4),
+ * owned in one place so both ways of arming behave identically.
+ *
+ * **Why this is shared rather than copied** (maintainer, 2026-08-30). The
+ * sheet started life inside `TileTrampolineActivity`, which is where the tile
+ * arms — so a snooze armed from the app screen's `Snooze` button silently took
+ * the default cap while the tile offered the choice, for the same action.
+ * Closing that by writing the flow out a second time in `MainActivity` would
+ * have left two copies of a sequence that took a long review to settle, and
+ * the settings, the refusal handling and the outcome watching would have
+ * drifted apart the first time one of them was touched.
+ *
+ * What stays with each caller is what genuinely differs: the trampoline's
+ * transparent window, `singleInstance` re-entry and rotation handling; the app
+ * screen's ordinary composition. What lives here is everything neither of them
+ * has a reason to do differently.
+ *
+ * Not a `ViewModel`: the trampoline already keeps its own retained object for
+ * a quite different purpose (`RecreationMarker`), and a second one whose
+ * lifetime rules differed between the two hosts is the kind of subtlety this
+ * class exists to stop having two of. The host owns the instance and calls
+ * [close] when it is done.
+ */
+internal class EndChoiceController(
+    /**
+     * The latest time the sheet may offer, over the record as it stands now.
+     *
+     * A seam because each host holds the record somewhere different — the tile
+     * path loads it, the app screen keeps a warm copy — and neither should put
+     * a disk wait where this is read. Both pass it through
+     * [EndCondition.ceilingFor].
+     */
+    private val ceilingAt: (Instant) -> Instant,
+    /**
+     * Hands the chosen time to the service. False means it never dispatched,
+     * so no outcome is coming and this settles the commit itself.
+     */
+    private val chooseEnd: (Instant) -> Boolean,
+    /** Subscribes to what the service said; closed on every settled commit. */
+    private val watchOutcome: (onOutcome: (EndChoiceResult) -> Unit) -> AutoCloseable,
+    /** Called when the sheet has nothing left to ask and should go away. */
+    private val onDismiss: () -> Unit,
+    /** Now, injectable so the refusal re-seed is reachable from a JVM test. */
+    private val clock: () -> Instant = { Instant.ofEpochMilli(System.currentTimeMillis()) },
+    /** The zone the offered times are rounded in — the user's own. */
+    private val zone: () -> ZoneId = ZoneId::systemDefault,
+) {
+
+    /**
+     * The time currently on offer, or null while no sheet is up.
+     *
+     * Held here rather than inside the composable because a second arm can
+     * re-seed it under a sheet that is already showing — that arm is a *new*
+     * snooze, so the time being offered has to move with it rather than still
+     * naming an hour from the first tap.
+     */
+    var endCondition by mutableStateOf<EndCondition?>(null)
+        @VisibleForTesting internal set
+
+    /**
+     * Whether a chosen time is with the service and unanswered. The rows are
+     * inert while it is, so a second tap cannot stack a second commit on the
+     * first.
+     */
+    var committing by mutableStateOf(false)
+        // Settable from a test for the same reason [endCondition] is: a
+        // Robolectric host has no Compose rule to drive the row with, and a
+        // commit in flight across a configuration change is a state worth
+        // covering.
+        @VisibleForTesting internal set
+
+    /**
+     * Whether the service refused the time just chosen. Shown in the sheet
+     * rather than dismissing, because a dismissal on a refused tap is
+     * indistinguishable from one on an accepted tap.
+     */
+    var commitFailed by mutableStateOf(false)
+        private set
+
+    private var outcomeWatch: AutoCloseable? = null
+
+    /**
+     * Opens the sheet on a fresh offer, or moves an open one onto a new arm.
+     *
+     * Re-seeded on every arm rather than only the first: a second arm while
+     * the sheet is up armed a *new* snooze, so an hour from the first is no
+     * longer the offer being made.
+     */
+    fun seed(now: Instant = clock()) {
+        endCondition = EndCondition.seededAt(now, ceilingAt(now), zone())
+        commitFailed = false
+    }
+
+    fun stepUp() {
+        endCondition = endCondition?.stepUp()
+    }
+
+    fun stepDown() {
+        endCondition = endCondition?.stepDown()
+    }
+
+    /**
+     * Sends a chosen time to the service and **waits to hear what happened**
+     * before dismissing. A second tap while one is out is ignored.
+     *
+     * A started service is not an applied change: the alarm can still refuse,
+     * the record can still fail to write, and the snooze can have ended in
+     * between. Dismissing on the start alone left the user believing a time
+     * they could no longer see had been taken — and the card those failures
+     * post is a notification, invisible to exactly the tile-first user who
+     * denied that permission and for whom the tile is the only surface there
+     * is (SPEC.md §4.2; Codex, PR #118).
+     *
+     * So the watch goes on **before** the start, since the service reports
+     * from `onStartCommand` on the same looper and an outcome delivered before
+     * the watch existed would be one nobody heard.
+     *
+     * Staying put on a failure matters twice over: the snooze is still running
+     * on the cap it had, so nothing is stranded, and the sheet is the one place
+     * the user is certain to be looking.
+     */
+    fun commit(endsAt: Instant) {
+        if (committing) return
+        committing = true
+        commitFailed = false
+        // Discarded, not delivered: anything held here answers an *earlier*
+        // commit, and handing it to this one would report a fresh choice as
+        // already applied.
+        EndChoiceOutcome.takePending()
+        outcomeWatch?.close()
+        outcomeWatch = watchOutcome(::onOutcome)
+        if (!chooseEnd(endsAt)) {
+            SnoozeDebugLog.warning("the service refused to start for a chosen end time")
+            onOutcome(EndChoiceResult.REFUSED)
+        }
+    }
+
+    /** What the service said about the time the user chose. */
+    @VisibleForTesting
+    internal fun onOutcome(result: EndChoiceResult) {
+        outcomeWatch?.close()
+        outcomeWatch = null
+        committing = false
+        // `GONE` dismisses like `APPLIED`, and deliberately: the snooze ended
+        // under the sheet — a departure, the cap, a capability loss — so there
+        // is nothing left to refine and every later tap would fail the same
+        // way. Whatever ended it has posted its own card.
+        if (result != EndChoiceResult.REFUSED) {
+            dismiss()
+            return
+        }
+        commitFailed = true
+        // A sheet left open long enough can be showing a time that has since
+        // fallen inside the floor, and the service declines those rather than
+        // quietly substituting a later one. Declining alone would make the
+        // sheet a dead end — the same tap failing forever — so the offer is
+        // reseeded against the clock as it is now.
+        val now = clock()
+        if (endCondition?.endsAt?.isBefore(now.plus(ActiveSnooze.MIN_CAP)) == true) {
+            endCondition = EndCondition.seededAt(now, ceilingAt(now), zone())
+        }
+    }
+
+    /** Takes the sheet down without committing; the snooze stands as armed. */
+    fun dismiss() {
+        endCondition = null
+        commitFailed = false
+        onDismiss()
+    }
+
+    /**
+     * Puts a saved sheet back exactly where it was, the chosen time included
+     * — stepping to it is the only work the user has done here, and reseeding
+     * would silently undo it.
+     *
+     * Assigns rather than seeds. An answer that arrived while the host was
+     * being recreated is held by [EndChoiceOutcome] — no watch existed to
+     * receive it — so a commit in flight takes that first and settles.
+     *
+     * **[configurationChange] is the distinction the rest of this turns on,
+     * and it cannot be recovered from the bundle** (Codex, PR #152). Saved
+     * instance state looks identical after a rotation and after a process
+     * death, and the two need opposite answers, so the caller supplies it from
+     * a retained object — one Android hands to the replacement activity down
+     * the configuration-relaunch path and nowhere else.
+     *
+     * - **A configuration change**: the request is genuinely still in flight,
+     *   in a process that never went away. So the commit stays a commit — rows
+     *   inert, watch kept — and the answer settles it when it lands. Coming
+     *   back retryable here would let a second tap dispatch a *second* request
+     *   while the first was outstanding, and the outcome channel names no
+     *   request: the first answer would then arrive at the retry's watch and be
+     *   read as its own, so an old `APPLIED` could dismiss the sheet over a
+     *   newer choice the service had refused.
+     * - **A process death**: there is nothing left to hear from. The channel is
+     *   process-scoped so its held result is gone, and the request died with
+     *   the process. So the flag is dropped and no watch is kept — the sheet
+     *   comes back usable rather than waiting forever on an answer that cannot
+     *   come, which with the swipe veto keyed off the same flag would leave it
+     *   neither answerable nor closable. Nothing is in flight to correlate
+     *   against, so nothing can be mistaken for it either.
+     */
+    fun restore(
+        condition: EndCondition?,
+        wasCommitting: Boolean,
+        failed: Boolean,
+        configurationChange: Boolean,
+    ) {
+        endCondition = condition
+        commitFailed = failed
+        if (!wasCommitting) return
+        val alreadyAnswered = EndChoiceOutcome.takePending()
+        if (alreadyAnswered != null) {
+            committing = true
+            onOutcome(alreadyAnswered)
+            return
+        }
+        // Process death: nothing is coming, so leave it retryable and unwatched.
+        if (!configurationChange) return
+        committing = true
+        outcomeWatch?.close()
+        outcomeWatch = watchOutcome(::onOutcome)
+    }
+
+    /** Drops the outcome watch. Idempotent. */
+    fun close() {
+        outcomeWatch?.close()
+        outcomeWatch = null
+    }
+}
