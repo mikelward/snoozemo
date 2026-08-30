@@ -247,8 +247,9 @@ the end time the notification offers you.
 apps cannot read, Android's backup does not copy, and Android may clear on its own under
 storage pressure. The current run of the app is kept along with a few recent ones, and the
 oldest are dropped as newer runs replace them. A run that ended in a crash is set aside
-under its own name and is never written over by a restart, so the evidence of a crash
-survives until you share it or dismiss it.
+under its own name and is never written over by a restart, so a restart cannot lose it.
+Dismissing the banner takes that name off it — the crash stops being announced — but the
+log itself stays, as an ordinary recent run, until it ages out or you turn the log off.
 
 **It is on by default**, because the failures worth diagnosing happen once and without
 warning — a log that starts off guarantees the first one is the one nobody captured.
@@ -270,11 +271,11 @@ Not Disturb access, notifications, and location are currently granted, whether l
 services and battery saver are on, and whether the Quick Settings tile has been added — all
 facts that commonly explain why a snooze misbehaved, none of them anything you typed. If the
 app's previous run ended in a crash, that run's log is included too, labeled as a crash, and
-sharing it (or dismissing the banner without sharing) clears it the same way the limit above
-does.
+sharing it deletes exactly the runs that report carried. Dismissing the banner instead
+deletes nothing: it stops the crash being announced, and the log ages out like any other.
 
 **The crash banner appears only after a crash** — an ordinary close, a force-stop, or an app
-update never raises it — and only until you share or dismiss it. The floor above is unchanged
+update never raises it — and only until you share the report or dismiss the banner. The floor above is unchanged
 for a shared report: never a raw coordinate, a full Wi-Fi network name or identifier, or a
 place name you typed, whatever the report contains otherwise.
 
