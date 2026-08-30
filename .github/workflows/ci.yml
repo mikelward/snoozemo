@@ -115,6 +115,11 @@ jobs:
       # Only consumed by `gate`/`lanes`'s dispatch-binding check below — the
       # heavy jobs' own skip decision comes from `docs_only` above.
       base_sha: ${{ steps.lane.outputs.base_sha }}
+      # The one androidlog revision every job in this run checks out. Not a
+      # pin: it is resolved fresh on every run, so `main` still arrives with
+      # nothing to bump. It exists only so the run's parallel jobs cannot
+      # resolve `main` separately and disagree with each other.
+      androidlog_sha: ${{ steps.androidlog.outputs.sha }}
     steps:
       - name: Check out repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
@@ -126,6 +131,26 @@ jobs:
         with:
           mode: classify
           pr: ${{ github.event.pull_request.number || inputs.pr }}
+
+      # After `Classify`, and skipped on the docs lane, deliberately. This is
+      # the one job every run reaches, `gate` is required, and a housekeeping
+      # PR uses the dependency not at all -- so resolving it first would let
+      # androidlog being briefly unreachable turn a documentation change red
+      # over something it never touches (Codex, PR #148). The condition matches
+      # the consumers exactly: `build`, `screenshot-tests` and `release-build`
+      # each carry the same `docs_only != 'true'`, so the output is empty only
+      # on runs where nothing reads it.
+      - name: Resolve the shared debug log's revision
+        id: androidlog
+        if: steps.lane.outputs.docs_only != 'true'
+        run: |
+          set -euo pipefail
+          sha="$(git ls-remote https://github.com/mikelward/androidlog.git refs/heads/main | cut -f1)"
+          if [ -z "$sha" ]; then
+            echo "::error::could not resolve mikelward/androidlog refs/heads/main" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build and unit test
@@ -153,6 +178,24 @@ jobs:
           # Don't leave the job's (pull-requests: write) token in .git/config
           # while Gradle runs PR-controlled build code; the one step that posts
           # to the PR gets the token via its own env instead.
+          persist-credentials: false
+
+      - name: Check out the shared debug log
+        # mikelward/androidlog, wired in as a composite build by
+        # settings.gradle.kts, which fails evaluation without it. The revision
+        # is `classify`'s, resolved once per run from that repo's default
+        # branch — so a run still takes whatever `main` is at the moment it
+        # starts, with no pin in this repo and nothing to bump. What sharing
+        # one value buys is that the jobs in a single run agree: `build`,
+        # `screenshot-tests` and `release-build` all start together off
+        # `classify`, so three independent resolutions of `main` can straddle
+        # a merge there and let `deploy` publish an AAB carrying library code
+        # the tests never ran against.
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: mikelward/androidlog
+          ref: ${{ needs.classify.outputs.androidlog_sha }}
+          path: .androidlog
           persist-credentials: false
 
       - name: Set up JDK
@@ -401,6 +444,24 @@ jobs:
           # This job holds no write credential to begin with (contents: read
           # above), but false anyway — nothing here should assume otherwise
           # just because the checkout step's default happens to agree today.
+          persist-credentials: false
+
+      - name: Check out the shared debug log
+        # mikelward/androidlog, wired in as a composite build by
+        # settings.gradle.kts, which fails evaluation without it. The revision
+        # is `classify`'s, resolved once per run from that repo's default
+        # branch — so a run still takes whatever `main` is at the moment it
+        # starts, with no pin in this repo and nothing to bump. What sharing
+        # one value buys is that the jobs in a single run agree: `build`,
+        # `screenshot-tests` and `release-build` all start together off
+        # `classify`, so three independent resolutions of `main` can straddle
+        # a merge there and let `deploy` publish an AAB carrying library code
+        # the tests never ran against.
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: mikelward/androidlog
+          ref: ${{ needs.classify.outputs.androidlog_sha }}
+          path: .androidlog
           persist-credentials: false
 
       - name: Set up JDK
@@ -886,6 +947,24 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out the shared debug log
+        # mikelward/androidlog, wired in as a composite build by
+        # settings.gradle.kts, which fails evaluation without it. The revision
+        # is `classify`'s, resolved once per run from that repo's default
+        # branch — so a run still takes whatever `main` is at the moment it
+        # starts, with no pin in this repo and nothing to bump. What sharing
+        # one value buys is that the jobs in a single run agree: `build`,
+        # `screenshot-tests` and `release-build` all start together off
+        # `classify`, so three independent resolutions of `main` can straddle
+        # a merge there and let `deploy` publish an AAB carrying library code
+        # the tests never ran against.
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: mikelward/androidlog
+          ref: ${{ needs.classify.outputs.androidlog_sha }}
+          path: .androidlog
           persist-credentials: false
 
       - name: Set up JDK

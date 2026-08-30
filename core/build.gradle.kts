@@ -24,6 +24,13 @@ dependencies {
     // `api`, not `implementation`: PresenceMonitor returns a Flow, so coroutines
     // are part of this module's public surface.
     api(libs.kotlinx.coroutines.core)
+    // The shared debug log. `api` for the same reason: `SnoozeDebugLog` extends
+    // `DebugLog`, and `safe(...)` / `sensitive(...)` are called from `:app`.
+    //
+    // The version is inert — composite substitution matches on group and name
+    // and swaps in the local build before anything resolves remotely. It is
+    // written here only because Gradle's DSL wants a coordinate.
+    api("app.mikelward.androidlog:logging-core:0.0")
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
 

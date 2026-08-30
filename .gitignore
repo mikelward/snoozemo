@@ -43,3 +43,6 @@ replay_pid*.log
 # Bytecode from the docs-tooling scripts (scripts/*.py); nothing here ships.
 __pycache__/
 *.pyc
+
+# mikelward/androidlog, checked out for the composite build (settings.gradle.kts).
+.androidlog/

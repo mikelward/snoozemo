@@ -42,4 +42,30 @@ dependencyResolutionManagement {
     }
 }
 
+// mikelward/androidlog, the same composite build the outer settings includes.
+//
+// It has to be here too, or this offramp stops being one: `:core` depends on
+// `logging-core`, the coordinate is deliberately unpublished, and without the
+// substitution `cd core && ../gradlew test` fails at `:compileKotlin` trying to
+// resolve `0.0` from Maven Central (Codex, PR #148).
+//
+// Paths are relative to THIS file's directory (`core/`), so they are one level
+// deeper than the outer build's: `../.androidlog` is the CI checkout at the
+// repo root, `../../androidlog` the sibling clone.
+//
+// It includes the library's `logging-core/` directory, NOT the repository root
+// the outer build includes. `includeBuild` configures every project in the
+// included build rather than only the one substitution selects, so including
+// the root here would evaluate `:logging-android` -- which applies AGP -- and
+// the root build script, which resolves the AGP plugin marker even under
+// `apply false`. Both come from `google()`, so this offramp would fail on
+// exactly the dependency it exists to avoid (Codex, PR #148; confirmed with an
+// `error(...)` probe in that module, which fired from this build). `logging-core/`
+// carries its own settings file for this, and is Android-free by construction --
+// `:logging-core:verifyNoAndroid` is what enforces that.
+val androidlog = listOf(file("../.androidlog"), file("../../androidlog"))
+    .firstOrNull { it.isDirectory }
+    ?: error("androidlog not found — git clone https://github.com/mikelward/androidlog ../../androidlog")
+includeBuild(androidlog.resolve("logging-core"))
+
 rootProject.name = "core"
