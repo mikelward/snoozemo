@@ -3503,6 +3503,14 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   case by case — the sheet needs an identity for the snooze it belongs to (`startedAt` is
   the obvious one) checked wherever it is seeded, restored or reconciled, instead of four
   separate guards each covering the path its own round happened to name.
+  **A fifth path, same shape** (tenth round, fourth in a row against a documentation-only
+  commit): background the screen right after tapping `Snooze` and the offer's worker finishes
+  while it is stopped — nothing invalidates the pending offer on `onStop` and the callback
+  does not check the lifecycle — so returning later reveals a sheet seeded at the old
+  callback's clock, whose `endsAt` may have elapsed. The controller does reseed a refusal, so
+  the user recovers after one refused tap rather than being stuck; the offer is still stale
+  when they first see it. Add the elapsed-offer case to the same fix: whatever identity the
+  sheet carries has to cover *when* it was seeded as well as *what* it was seeded against.
 
 - **Rounding drops a wall clock that only exists on the other side of a spring-forward gap**
   (2026-08-25, Codex on PR #118, declined — the fifth consecutive finding on this surface).
