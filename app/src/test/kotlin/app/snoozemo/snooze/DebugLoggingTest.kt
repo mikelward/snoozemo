@@ -1,5 +1,6 @@
 package app.snoozemo.snooze
 
+import android.content.Context
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import app.snoozemo.core.SnoozeDebugLog
@@ -355,6 +356,43 @@ class DebugLoggingTest {
         assertTrue(
             "and a reader created afterward sees it, so a restart will not re-purge",
             DebugLogStore(context).hasPurgedLegacyLogs(),
+        )
+    }
+
+    @Test
+    fun `turning the log off retries a legacy purge that startup could not finish`() {
+        // The migration runs once per process and records itself done only
+        // when the directory is actually gone, so a refusal at startup used to
+        // leave the old logger's full-rendered files in `cacheDir/debuglog`
+        // for the rest of the process -- including across the Off toggle whose
+        // whole promise is that what was kept is deleted immediately
+        // (SPEC.md 4.6; Codex, PR #153). The shared sink's own purge does not
+        // reach them: different directory, never read.
+        //
+        // Arranged by leaving the directory in place with the migration
+        // unrecorded, which is exactly the state a refused startup purge
+        // leaves behind.
+        val dir = File(context.cacheDir, "debuglog")
+        dir.mkdirs()
+        File(dir, "current.log").writeText("a line from the old logger")
+        // Cleared through the same preferences file the store reads, rather
+        // than through a test-only setter on production code: an earlier test
+        // in this class may already have recorded the migration against the
+        // shared app context.
+        context.getSharedPreferences("debug_log", Context.MODE_PRIVATE)
+            .edit().putBoolean("legacy_logs_purged", false).commit()
+        assertFalse(
+            "precondition: the migration reads as not yet done",
+            DebugLogStore(context).hasPurgedLegacyLogs(),
+        )
+        assertTrue("precondition: the legacy directory is there", dir.exists())
+
+        DebugLogging.setEnabled(context, false) {}
+        DebugLogging.awaitIdleForTest()
+
+        assertFalse(
+            "the Off toggle must not leave the old logger's files behind",
+            dir.exists(),
         )
     }
 

@@ -310,7 +310,7 @@ internal object DebugLogging {
             .getOrDefault(false)
         if (!gone) {
             runCatching {
-                SnoozeDebugLog.warning("logs from before this version could not be removed; retried at the next start")
+                SnoozeDebugLog.warning("logs from before this version could not be removed; retried when the log is turned off, and at the next start")
             }
         } else if (!recorded) {
             runCatching {
@@ -344,6 +344,20 @@ internal object DebugLogging {
                 val persisted = runCatching { DebugLogStore(app).setEnabled(enabled) }
                     .onFailure { runCatching { Log.w(TAG, "Saving the debug-log setting failed; the switch reverts.", it) } }
                     .getOrDefault(false)
+                if (persisted && !enabled) {
+                    // The startup migration is retried here, not only at the
+                    // next start. It runs once per process and records itself
+                    // done only when the directory is actually gone, so a
+                    // refusal at startup otherwise leaves the *old* logger's
+                    // full-rendered files sitting in `cacheDir/debuglog` for
+                    // the rest of the process — including across the very Off
+                    // toggle whose whole promise is that what was kept is
+                    // deleted immediately (SPEC.md §4.6; Codex, PR #153). The
+                    // shared sink's own purge does not reach them: it owns a
+                    // different directory and has never read these files.
+                    val store = DebugLogStore(app)
+                    if (!store.hasPurgedLegacyLogs()) purgeLegacyDirectory(app, store)
+                }
                 if (persisted) {
                     // Off gates recording itself, not just persistence: the
                     // buffer stops collecting and is emptied (Codex, PR #62) —
