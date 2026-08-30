@@ -3440,6 +3440,27 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   lost refinement in a rotation measured against tens of milliseconds). Option 1 above answers
   both cleanly and neither is worth paying for on its own, so they settle together.
 
+- **A restored sheet is not bound to the snooze it was offering times for**
+  (2026-08-30, Codex on PR #152, deferred there — the sixth round on this seam, and
+  the point at which it stopped converging). `MainActivity.reconcileSheet` asks only
+  whether *some* record still offers a choice, so a sheet left open while the activity
+  is stopped survives its own snooze ending and another being armed: the old chosen
+  time then applies to the new snooze. It cannot leave the phone silent — the service
+  validates any chosen time against the running snooze's own floor and cap — but it
+  applies a time to a snooze the user did not choose it for.
+  **The fix is small and named**: `ActiveSnooze.startedAt` identifies a snooze, so save
+  it in the bundle beside the offer and have `reconcileSheet` dismiss when the live
+  record's `startedAt` differs from the one the sheet was seeded against. Roughly a
+  bundle key, one field and one comparison, plus a test either side.
+  **Deferred rather than done because the seam has stopped converging, not because the
+  finding is wrong.** Six review rounds on this sheet lifecycle, each real, and three of
+  them on defects the previous round's own fix introduced: the standing sheet-owed marker,
+  the un-vetoable swipe dismissal, restore-into-permanent-commit, the stale restored
+  sheet, restore dropping single-flight, and now this. `reconcileSheet` — round four's
+  fix — is what round six is about. Patching on inside one PR is how the next round gets
+  written, so this is the maintainer's call: take it as a follow-up PR, or fold it in and
+  accept another round.
+
 - **Rounding drops a wall clock that only exists on the other side of a spring-forward gap**
   (2026-08-25, Codex on PR #118, declined — the fifth consecutive finding on this surface).
   `getValidOffsets` is empty for a local time inside the gap, so that neighbor contributes no
