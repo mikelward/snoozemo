@@ -492,9 +492,9 @@ the point is that every other line of the app is worthless if it isn't true.
       restore, collects its reports, clamps the claimed mode to `supportedModes`, and stops it
       with the snooze. What keeps the box open is code, not just verification: the degradation
       *cause* stopping at the controller (needs approved copy **and** the plumbing to carry the
-      cause to it) and the mode-changed listener that would re-register the fence promptly when
-      location services return — both below — plus the on-device verification the whole item is
-      gated on. Phase 3 also still owes the §6.7 significant-motion trigger, its own item below.
+      cause to it) — plus the on-device verification the whole item is gated on. The
+      mode-changed listener that re-registers the fence promptly when location services return
+      has since landed (below), closing the recovery half. Phase 3 also still owes the §6.7 significant-motion trigger, its own item below.
       - [x] **The engine above the interface**: `Presence`, a pure state machine in `:core` over
         (state, signal, anchor). Owns escalation and de-escalation, the §6.7 duty cycle, the
         degraded-tracking report, and the §6.6 grace period. Landed with `PresenceTest` (37),
@@ -541,15 +541,83 @@ the point is that every other line of the app is worthless if it isn't true.
         derived from the record's stored clock frame — is what retires the slot for every
         later snooze. The geofence itself is durable by design: `awaitClose` releases only
         in-process resources, and the fence comes down solely in `stop()`, when the snooze
-        actually ends — a background-limits service destroy leaves it watching. Still to come
-        in later slices: **re-registering the
-        fence promptly when location services come back on** (Codex, PR #70:
+        actually ends — a background-limits service destroy leaves it watching. **Re-registering the fence promptly when
+        location services come back on has landed** (Codex, PR #70:
         `GEOFENCE_NOT_AVAILABLE` at registration reports the §8.4 degradation correctly but
-        nothing watches for the recovery — the mode-changed listener belongs with the same
-        device-state watching the checking burst needs). **Bounded since the backstop landed**:
-        every restore re-registers, so the periodic wake heals this in roughly its cadence
-        rather than leaving the snooze degraded to the cap, as this note said before that slice.
-        A listener would make it prompt, which is the remaining value. Also still to come is
+        nothing watched for the recovery). It was already *bounded* by the backstop — every
+        restore re-registers, so the periodic wake healed an outage in roughly its cadence
+        rather than leaving the snooze degraded to the cap — and promptness was the remaining
+        value. `LocationModeWatch` (the lifecycle, over a `LocationModeRegistrar` seam) plus
+        `PlatformLocationModeWatch` (the `MODE_CHANGED_ACTION` receiver, which also answers the live
+        setting) now poke exactly what a
+        warm backstop wake pokes — re-register the fence, take one resting fix — the moment the
+        setting comes back on. The fence goes **unconditionally**, not gated on the
+        registration level the way `RepairPoke` is (Codex, PR #139, second pass): that gate's
+        premise is a live outage, which has provably ended here, and the case it hid is real —
+        a `GEOFENCE_NOT_AVAILABLE` broadcast sets only the *services* level, so a fence the
+        platform had stopped monitoring stayed unregistered until a backstop restore rebuilt
+        it. Plus plus an immediate retry of a *running* burst, which the
+        resting probe cannot cover (Codex, PR #139): an outage that begins during a
+        departure check leaves the duty `ACTIVE`, where the probe is a declared no-op and
+        three `ServicesOff` answers have already dropped the cadence to five minutes, so
+        without it the one snooze that most needs answering would get nothing from the
+        broadcast at all. `CheckingCadence.onPlatformRecovered` forgives a backoff the
+        outage earned — the bound still applies from the recovery on, if the provider goes
+        on failing — and `CheckingFixes.retryNow` asks now, leaving a request already in
+        flight alone so one moment never spends two requests. Reconciled from the monitor's own `send`, the one choke point
+        every platform level passes through, so it is armed while and only while there is an
+        outage to recover from, and a healthy snooze registers nothing. **The broadcast is not
+        sticky, so registering is not enough** (Codex, PR #139, third pass): an outage reported
+        late — a `GEOFENCE_NOT_AVAILABLE` observation arriving after the user already fixed the
+        setting is the ordinary case — leaves a mode change that has already happened and will
+        never be re-delivered. The watch therefore samples `isLocationEnabled` once immediately
+        after the handle is installed and treats "already on" exactly as it treats a broadcast.
+        Registering *first* is what makes that a closed window rather than a smaller one, the
+        same order and the same reason as `PlatformWifiWatch`'s initial read. It **decides nothing
+        new**, deliberately: a successful re-registration still clears the registration level and
+        only a delivered fix clears services-off, so a spurious firing costs one registration and
+        one fix request and can never promote a snooze on nothing. Both classes live in
+        `:presence`'s shared source set, like `MotionTrigger`, so Phase 7's `direct` monitor gets
+        them without a second implementation.
+        **The limit is the motion trigger's, and for the same underlying reason**:
+        `MODE_CHANGED_ACTION` is an implicit broadcast and is *not* on the API 26+ exemption list
+        (checked against the platform's own list, 2026-08-30), so there is no manifest form of it
+        and nothing delivers it to a dead process. On `play` the watch therefore lives as long as
+        the service does — covering the window where the app is actually running when the outage
+        ends, which is the arm-with-location-off case and the user who reaches for the setting on
+        the strength of the notification — and the backstop still covers the rest. On `direct`,
+        Phase 7's foreground service makes it cover the whole snooze. Tests:
+        `LocationModeWatchTest` (19) over a manual registrar, plus the burst half in
+        `CheckingCadenceTest` and `CheckingFixesTest`; `SPEC.md` §6.10 records the
+        decision. The recovery callback itself has no unit test — it lives inside
+        `callbackFlow` and needs Android and Play Services, the same reason
+        `CapabilityLossStore` is untested; only its pure helpers are reachable from
+        `GeofencePresenceMonitorTest`.
+      - **Two follow-ups this slice deliberately did not take, both recorded rather than
+        guessed.**
+        - **A snooze on the anchor's Wi-Fi still reports degraded after an outage ends, for up
+          to the backstop's cadence** (Codex, PR #139, second pass). The duty is `NONE` there,
+          so no fix is taken and the services level — which by design clears only on a
+          delivered fix — stands. Codex asked for a one-shot fix that ignores the suppressor;
+          declined, because `Presence.fixArrived` runs the §6.6 test on every fix whatever the
+          association says, and §6.6's unambiguous shortcut ends a snooze on a *single* reading
+          beyond radius + 500 m — so on a network spanning more ground than the anchor's radius
+          a fix taken only to tidy a label could end the snooze outright. Over-reporting
+          degradation is the safe direction; ending a snooze to correct the label is not. If the
+          maintainer wants the label prompt too, the cheap version is a narrower one: clear the
+          services level on the mode broadcast **only** when its origin was
+          `CheckingFixes.onServicesOff`, which reads the identical `isLocationEnabled` the
+          broadcast does — same proof, no fix, no D4 exception — and keep waiting for a fix when
+          the origin was `GeofenceObservation.Unavailable`, where "location is on" says nothing
+          about whether geofencing is.
+        - **A Wi-Fi-only anchor can strand the registration level permanently.** Pre-existing,
+          not introduced here: `deliver`'s recovery branch sets
+          `registrationDegradation = LOCATION_SERVICES_OFF` and calls `repairOnRecovery()` on
+          the fix that clears services-off, but `registerFence` early-returns for an anchor with
+          no usable fix, so nothing ever clears what it just set and the snooze reports degraded
+          until a restore rebuilds the monitor. One-line guard (`if (anchor.hasUsableFix)`
+          around the mark-suspect), left out of this PR to keep it minimal — an anchor with no
+          fence has no registration to be suspicious of. Also still to come is
         the on-device verification the whole item is gated on. The grace alarm for
         `graceDeadlineMs` landed with the Wi-Fi suppressor slice.
       - [x] **The grace deadline has to survive process death** (Codex, PR #31, re-flagged and

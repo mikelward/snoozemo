@@ -15,7 +15,9 @@ import app.snoozemo.core.PresenceSignal
 import app.snoozemo.core.PresenceUpdate
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.TrackingMode
+import app.snoozemo.presence.LocationModeWatch
 import app.snoozemo.presence.MotionTrigger
+import app.snoozemo.presence.PlatformLocationModeWatch
 import app.snoozemo.presence.PlatformMotionTrigger
 import app.snoozemo.presence.PlatformWifiWatch
 import app.snoozemo.presence.PresenceFeed
@@ -246,6 +248,21 @@ class GeofencePresenceMonitor(
         // setup, so the placeholder is never the one invoked.
         var repairOnRecovery: () -> Unit = {}
 
+        // What a location-services outage ending should poke, assigned once
+        // the repair and the probe below exist — the same placeholder shape
+        // `repairOnRecovery` uses, and for the same reason: the watch has to
+        // be built above `send`, which reconciles it, while what it pokes is
+        // defined further down. Nothing can invoke it before the assignment,
+        // since only a registered receiver fires it and only a reported
+        // degradation registers one.
+        var onLocationRecovered: () -> Unit = {}
+
+        // SPEC.md §8.4's recovery watch. Built here rather than beside the
+        // burst and the trigger because `send`, just below, is what
+        // reconciles it.
+        val locationModeWatch =
+            LocationModeWatch(PlatformLocationModeWatch(appContext)) { onLocationRecovered() }
+
         // A level like `registrationDegradation`/`servicesDegradation` above,
         // for the same reason: `send` is called from restates that never
         // touch the feed at all (a registration refusal, a recovery, a
@@ -261,6 +278,14 @@ class GeofencePresenceMonitor(
         val graceActiveMirror = java.util.concurrent.atomic.AtomicBoolean(false)
 
         fun send(update: PresenceUpdate) {
+            // Every path that sets or clears a platform level ends here — a
+            // refused registration, a services outage, a delivered fix, a
+            // successful repair — so this is the one place the recovery
+            // watch can be matched to the truth without a second call site
+            // to forget. Armed exactly while there is an outage to recover
+            // from, and restated on every send, so [LocationModeWatch
+            // .reconcile] is idempotent rather than this call conditional.
+            locationModeWatch.reconcile(platformLevel() != null)
             trySend(
                 PresenceUpdate(
                     event = update.event,
@@ -720,13 +745,61 @@ class GeofencePresenceMonitor(
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 synchronized(registrationLock) {
                     if (stopGeneration.get() == startGeneration && !isClosedForSend) {
-                        SnoozeDebugLog.event("backstop repair: re-registering the fence")
+                        SnoozeDebugLog.event("repair: re-registering the fence")
                         registerFence()
                     }
                 }
             }
         }
         repairOnRecovery = ::repairFence
+
+        // The prompt half of an outage's recovery (TODO.md, Phase 3; Codex,
+        // PR #70): `GEOFENCE_NOT_AVAILABLE` and a services outage both report
+        // themselves correctly, and until now nothing watched for the user
+        // switching location back on — the repair waited for the §6.10
+        // backstop's own cadence. This pokes exactly what a warm backstop
+        // wake pokes, the moment the platform says the outage is over.
+        //
+        // The fence first, and **unconditionally** — not gated on the
+        // registration level the way `RepairPoke` is (Codex, PR #139, second
+        // pass). That gate exists because re-registering *into* a live
+        // outage is IPC for nothing and risks a mis-mapped refusal ending the
+        // snooze mid-outage (PR #75); here the outage has provably ended, so
+        // its premise is gone. And the case it was hiding is real: a
+        // `GEOFENCE_NOT_AVAILABLE` broadcast sets only the *services* level,
+        // so a fence the platform had stopped monitoring was left unregistered
+        // until a backstop restore happened to rebuild it — the substantive
+        // half of this outage, waiting on the very cadence this watch exists
+        // to beat. `registerFence` is a no-op for an anchor with no fence, and
+        // re-registering a healthy one replaces it in place.
+        //
+        // Then a fix, by whichever route is already open. `sanityProbe` covers
+        // the resting snooze and is a declared no-op mid-check; `retryNow`
+        // covers exactly that gap — an outage that began *during* a departure
+        // check leaves the duty `ACTIVE`, where the probe does nothing and the
+        // burst's cadence has by then backed off to five minutes. They are
+        // mutually exclusive by their own guards, so calling both asks once,
+        // never twice.
+        //
+        // **Neither forces a fix past D4's suppressor**, and that is the one
+        // thing this callback deliberately does not do. On the anchor's Wi-Fi
+        // the duty is `NONE` and both routes decline, so the services level
+        // stands until real evidence arrives — over-reporting degradation,
+        // which is the safe direction, rather than clearing it on the
+        // broadcast alone (a fence the platform accepts is not a subsystem
+        // proven to work, PR #75). Asking anyway would not be a battery
+        // quibble: `Presence.fixArrived` runs the §6.6 test on every fix
+        // whatever the association says, and §6.6's unambiguous shortcut ends
+        // a snooze on a *single* reading beyond radius + 500 m — so on a
+        // network that spans more ground than the anchor's radius, a fix taken
+        // only to tidy a notification label could end the snooze outright,
+        // with no departure evidence prompting it. That is the trade D4 exists
+        // to refuse.
+        onLocationRecovered = {
+            repairFence()
+            checkingFixes?.retryNow()
+            sanityProbe()
+        }
 
         // The whole setup — bridge attachment included — runs as one section
         // under the registration lock, guarded by whether this flow has
@@ -937,6 +1010,11 @@ class GeofencePresenceMonitor(
             // phone with no live trigger is exactly the case the §6.10
             // backstop already covers.
             motionTrigger?.close()
+            // In-process like the burst and the trigger, and cheap to lose
+            // for the same reason: a restored monitor re-arms it from the
+            // level it recomputes, and an outage nobody is watching still
+            // heals at the backstop's cadence.
+            locationModeWatch.close()
             bridge?.close()
             // In-process like the burst: a restarted service re-registers its
             // own watch. The grace *alarm* is deliberately not canceled here

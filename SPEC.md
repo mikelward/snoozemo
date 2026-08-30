@@ -1744,6 +1744,39 @@ is the only detector Android leaves. The backstop is never load-bearing — the 
 floor and is armed independently — and it retires itself on a wake that finds no snooze, so a
 cancel lost to process death costs one empty wake, not a standing drain.
 
+**Recovering from a location-services outage is prompt where it can be, and the backstop's
+otherwise.** When location is switched off mid-snooze the fence stops being monitorable and
+fixes stop arriving (§8.4); the app says so and degrades, and the repair — re-register the
+fence, take one fix — is exactly what a backstop wake already performs. What was missing was
+anything listening for the outage *ending*, so a user who turned location back on waited up
+to the backstop's cadence to be properly watched again. Snoozemo now watches the
+location-mode broadcast while, and only while, it is holding such a degradation — sampling the
+setting once as it starts, since the broadcast is not sticky and an outage reported late leaves
+a change that has already happened — and pokes
+that same repair the moment the setting comes back on — the fence unconditionally, since the
+outage whose existence argued against re-registering into it has provably ended, and a
+`GEOFENCE_NOT_AVAILABLE` broadcast otherwise leaves a fence unregistered with only the
+services level to show for it. It decides nothing new: a re-registration that succeeds is what
+clears the registration level, and only a delivered fix clears services-off, so the watch can
+never promote a snooze on its own say-so.
+
+**It does not force a fix past D4's suppressor, deliberately.** On the anchor's Wi-Fi the duty
+is `NONE`, so no fix is taken and the services level stands until real evidence arrives — the
+snooze reports degraded tracking while it is in fact watched, which is over-reporting in the
+safe direction, and the backstop's own restore clears it. The alternative — one fix taken
+purely to clear the label — is not a battery quibble but a correctness one: §6.6's test runs on
+every fix whatever the association says, and its unambiguous shortcut ends a snooze on a
+*single* reading beyond radius + 500 m. On a network covering more ground than the anchor's
+radius that fix could end the snooze outright, with nothing having suggested a departure. D4
+exists to refuse exactly that trade, and a housekeeping probe is the weakest possible reason to
+make an exception to it. The broadcast
+is implicit and so undeliverable to a dead process, which sets the honest limit: on `play`
+this covers the window where the app is actually running — an arm with location off, or a
+user reaching for the setting on the strength of the notification — and the backstop still
+covers the rest; on `direct`, Phase 7's foreground service makes it cover the whole snooze.
+It costs nothing while a snooze is healthy, because a healthy snooze registers no watch at
+all.
+
 #### To-do: explicit fallback end conditions
 
 If, after measuring on hardware (see `TODO.md`, hardware verification item 2), geofencing is still unacceptable on Samsung, expose the two signals that

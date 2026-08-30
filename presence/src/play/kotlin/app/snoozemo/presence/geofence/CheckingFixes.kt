@@ -153,6 +153,39 @@ internal class CheckingFixes(
     }
 
     /**
+     * The platform layer the burst was failing against is working again —
+     * location switched back on (SPEC.md §8.4) — so ask now instead of
+     * serving out a backoff the outage earned.
+     *
+     * This is the burst's half of that recovery, and it exists because the
+     * resting probe cannot cover it (Codex, PR #139): an outage that starts
+     * *during* a departure check leaves the duty `ACTIVE`, where
+     * [sanityCheck] is a declared no-op, and three `ServicesOff` answers have
+     * by then dropped the cadence to five minutes. Without this, the moment
+     * the user switches location back on would do nothing at all for a
+     * snooze mid-check — the one state where confirming a departure is most
+     * urgent.
+     *
+     * A no-op while resting or closed: the resting case is the probe's, and
+     * a closed instance is over for good. A request already in flight is
+     * left alone — its own answer is arriving, and cutting it short to ask
+     * again would spend two requests on one moment — but the cadence is
+     * still forgiven, so that answer's follow-up is paced at the
+     * confirmation gap rather than the backoff.
+     */
+    fun retryNow() {
+        scheduler.post {
+            if (dead || !running) return@post
+            cadence.onPlatformRecovered()
+            if (currentToken != null) return@post
+            SnoozeDebugLog.event("checking: asking again now that the platform recovered")
+            nextRequest?.close()
+            nextRequest = null
+            requestOnce()
+        }
+    }
+
+    /**
      * Takes **one** resting fix outside any burst — the §6.10 backstop's
      * probe: a geofence that never fired says nothing, so each backstop wake
      * hands the engine one reading and lets the §6.6 test decide (SPEC.md

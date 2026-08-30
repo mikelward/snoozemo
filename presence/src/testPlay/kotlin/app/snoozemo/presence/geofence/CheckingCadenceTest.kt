@@ -36,6 +36,31 @@ class CheckingCadenceTest {
     }
 
     @Test
+    fun `a platform recovery forgives a backoff the outage earned`() {
+        // Location switched back on: the reason the provider was answering
+        // nothing is provably over, so serving out five more minutes of
+        // backoff would leave the snooze reporting degraded tracking long
+        // after the outage ended.
+        val cadence = CheckingCadence()
+        repeat(CheckingCadence.BACKOFF_AFTER) { cadence.onNothing() }
+
+        cadence.onPlatformRecovered()
+
+        assertEquals(CheckingCadence.CONFIRM_SPACING_MS, cadence.nextDelayMs)
+    }
+
+    @Test
+    fun `the bound still holds if the provider goes on failing after a recovery`() {
+        val cadence = CheckingCadence()
+        repeat(CheckingCadence.BACKOFF_AFTER) { cadence.onNothing() }
+        cadence.onPlatformRecovered()
+
+        repeat(CheckingCadence.BACKOFF_AFTER) { cadence.onNothing() }
+
+        assertEquals(CheckingCadence.BACKOFF_SPACING_MS, cadence.nextDelayMs)
+    }
+
+    @Test
     fun `the backoff threshold matches the engine's degradation threshold`() {
         // Backing off earlier would slow the very fixes the engine still
         // counts toward its own verdict; later would pay full rate after the

@@ -195,7 +195,8 @@ explainable, Snoozemo keeps a short technical log of what its machinery did.
 **What it records**: each step a snooze moves through and why, the reason a snooze ended,
 that the time-limit alarm was set and that it fired, when Do Not Disturb access got in the
 way, how far from the anchor a location fix said you were **in meters** and how accurate
-that fix claimed to be, whether the anchor's Wi-Fi was still connected as a yes or no, and
+that fix claimed to be, whether the anchor's Wi-Fi was still connected as a yes or no,
+whether your phone's location setting was switched off and when it came back on, and
 the app, Android version, and device model. Entries carry real times, because *when*
 something fired is usually the question.
 
