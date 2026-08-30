@@ -1589,8 +1589,13 @@ the point is that every other line of the app is worthless if it isn't true.
         repair from `onResume` whenever a grant cause is recorded. The first is probably right,
         since the user re-granting almost always happens in the app.
 
-- [ ] **The end-condition sheet never opens from the main screen's Snooze button** (maintainer,
-      2026-08-30; **follow-up PR, not #150**). Arming from the Quick Settings tile goes through
+- [x] **The end-condition sheet never opens from the main screen's Snooze button** (maintainer,
+      2026-08-30; **landed**). The flow moved into `EndChoiceController`, shared by the trampoline
+      and `MainActivity`, rather than being written out a second time — the maintainer picked that
+      over routing the button through the trampoline (a transparent `singleInstance` activity over
+      the app, untestable here) or duplicating it. `SPEC.md` §4.4 records the split and what each
+      surface still owns.
+      Superseded detail from when it was raised: Arming from the Quick Settings tile goes through
       the trampoline and shows the sheet; arming from the button on `MainScreen` does not, so the
       same action offers the end-condition choice from one entry point and silently takes the
       default from the other. Same arm path, so whatever the trampoline does before showing the
@@ -3419,6 +3424,21 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
   Not guessed here because option 1 is real design and the other two are admissions. Worth
   settling alongside the departure-row entry below, which needs the same post-arm signal.
+
+  **A second way to lose the same offer** (2026-08-30, Codex on PR #152, declined there with
+  this note). A configuration change *between* the accepted `arm()` and the posted read
+  completing takes the offer with it: the runnable and its generation guard belong to the
+  activity being destroyed, and the replacement restores no marker saying an offer was owed,
+  so an opted-in user gets the default cap with no sheet. Same window as above, same failure
+  shape — a miss that fails closed over a correctly armed snooze — and reached now from the
+  app screen as well as the tile.
+  Declined rather than fixed because the obvious fix is the mechanism this PR had just
+  deleted: a "sheet owed" marker outliving the arm that asked for it. Bounding its lifetime
+  makes it defensible but not safe — inside that window the *next* record from anywhere still
+  satisfies it, which is the round-two bug in miniature, and the cost of getting it wrong (a
+  sheet opening over a snooze this screen never armed) is worse than the cost of the gap (one
+  lost refinement in a rotation measured against tens of milliseconds). Option 1 above answers
+  both cleanly and neither is worth paying for on its own, so they settle together.
 
 - **Rounding drops a wall clock that only exists on the other side of a spring-forward gap**
   (2026-08-25, Codex on PR #118, declined — the fifth consecutive finding on this surface).

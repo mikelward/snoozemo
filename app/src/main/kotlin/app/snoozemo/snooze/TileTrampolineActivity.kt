@@ -31,6 +31,7 @@ import app.snoozemo.core.EndCondition
 import app.snoozemo.core.EndReason
 import app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE
 import app.snoozemo.ui.EndConditionSheetContent
+import app.snoozemo.ui.formatSheetTime
 import app.snoozemo.ui.SnoozemoTheme
 import java.time.Instant
 import java.time.ZoneId
@@ -579,7 +580,7 @@ class TileTrampolineActivity : ComponentActivity() {
                     sheet.endCondition?.let { condition ->
                         EndConditionSheetContent(
                             condition = condition,
-                            formattedTime = formatTime(condition.endsAt),
+                            formattedTime = formatSheetTime(this@TileTrampolineActivity, condition.endsAt),
                             onChooseTime = { sheet.commit(condition.endsAt) },
                             // The departure row commits by changing nothing:
                             // tracking is already armed and the default cap is
@@ -605,17 +606,6 @@ class TileTrampolineActivity : ComponentActivity() {
         // watch outlives the sheet it was answering and leaks the activity.
         sheet.close()
     }
-
-    /**
-     * [instant] as the user's own phone writes a time — their 12/24-hour setting,
-     * their locale, their zone.
-     *
-     * Through `DateFormat.getTimeFormat` rather than a fixed pattern: a sheet
-     * offering "14:00" to someone whose phone says "2:00 PM" everywhere else
-     * reads as a different app's screen.
-     */
-    private fun formatTime(instant: Instant): String =
-        DateFormat.getTimeFormat(this).format(Date(instant.toEpochMilli()))
 
     private companion object {
         const val STATE_DECISION_PENDING = "decision_pending"
