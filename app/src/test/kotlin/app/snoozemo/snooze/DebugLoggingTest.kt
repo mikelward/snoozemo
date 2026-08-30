@@ -26,8 +26,7 @@ class DebugLoggingTest {
     @Before
     fun setUp() {
         DebugLogging.resetForTest()
-        SnoozeDebugLog.clearSinksForTest()
-        SnoozeDebugLog.clearForTest()
+        SnoozeDebugLog.resetForTest()
         SnoozeDebugLog.setRecording(true)
         // Stated, not inherited — and this class is where the setting gets
         // written off, by the very first test, which never puts it back.
@@ -51,8 +50,7 @@ class DebugLoggingTest {
     @After
     fun tearDown() {
         DebugLogging.resetForTest()
-        SnoozeDebugLog.clearSinksForTest()
-        SnoozeDebugLog.clearForTest()
+        SnoozeDebugLog.resetForTest()
         SnoozeDebugLog.setRecording(true)
     }
 
@@ -533,4 +531,28 @@ class DebugLoggingTest {
 
         assertEquals(0, fired)
     }
+    @Test
+    fun `the migration marker is written synchronously so it survives the process`() {
+        // `apply()` reports nothing and lands later, so an unwritable store or a
+        // process death before the write left the flag clear with the legacy
+        // files already gone -- and the next start would then purge a directory
+        // holding this version's own reduced logs (Codex, PR #151). The write is
+        // synchronous now, and readable the instant it returns.
+        // No precondition that the flag starts clear: this class shares one
+        // app context, so an earlier test's `install` may already have purged
+        // and recorded it -- the same cross-test bleed `setUp` calls out for
+        // the enabled setting.
+        val store = DebugLogStore(context)
+
+        val persisted = store.markLegacyLogsPurged()
+
+        assertTrue("the write reports whether it reached disk", persisted)
+        // The signature is the point: a `Unit`-returning `apply()` gives the
+        // caller nothing to branch on, so the failure path could not exist.
+        assertTrue(
+            "and a reader created afterward sees it, so a restart will not re-purge",
+            DebugLogStore(context).hasPurgedLegacyLogs(),
+        )
+    }
+
 }

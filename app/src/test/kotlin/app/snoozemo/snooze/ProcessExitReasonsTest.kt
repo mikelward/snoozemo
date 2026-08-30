@@ -40,7 +40,7 @@ class ProcessExitReasonsTest {
         // PR #125). Draining first, then clearing, is what makes the ordering
         // explicit rather than probable.
         drainDebugLogWorker()
-        SnoozeDebugLog.clearForTest()
+        SnoozeDebugLog.resetForTest()
     }
 
     /**
@@ -65,7 +65,7 @@ class ProcessExitReasonsTest {
     @After
     fun stopRecording() {
         SnoozeDebugLog.setRecording(false)
-        SnoozeDebugLog.clearForTest()
+        SnoozeDebugLog.resetForTest()
     }
 
     private fun seedExit(

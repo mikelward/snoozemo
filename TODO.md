@@ -3257,6 +3257,26 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
+- **Deferred, from Codex on PR #151: `runCatching` in `DebugLogFiles.kt` catches
+  `Error` as well as the storage exceptions it means to handle.** Raised against
+  the purge's new inner guard, but it is the file's pattern rather than that one
+  call site — `runCatching` appears about twenty times here, including the outer
+  guard wrapping the whole worker task.
+  **Why the fix as prescribed would not have worked.** Narrowing only the inner
+  guard changes nothing observable: the `Error` would be caught by the outer
+  `runCatching` in the same task, logged as "Rotating the debug log failed", and
+  the process would continue exactly as it does now. It never reaches the
+  uncaught-exception path the finding is aiming for. Achieving that intent means
+  narrowing the outer guard too, which governs rotation generally and sits on the
+  start path.
+  **The real question, and why it is not autopilot's.** Whether a fatal `Error`
+  inside the logging subsystem should kill the app to produce a crash report, or
+  be contained so a broken logger never takes the product down with it. Principle
+  1 pulls one way and the error-handling rule pulls the other, and the answer
+  should be one pattern across the file rather than a single narrowed call site.
+  Nothing is silently swallowed today either way: the purge reports through
+  `onLegacyPurged`, logcat, and a line in the log itself.
+
 - **Move this app onto `mikelward/androidlog`, the shared debug log**
   (autopilot, 2026-08-30). This entry covers the wiring, which has landed; the
   logger swap itself is blocked on one maintainer question below.
@@ -3280,29 +3300,30 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     `DebugFileSink` was extracted from. The three levels here (`event`,
     `warning`, `failure`) already match the library exactly, so unlike
     clothescast there is no facade gymnastics — but see the question below.
-  - **Legacy log files must be deleted on migration, not read.** The reduced
-    rendering is not retroactive, so removing them is the only thing that stops
-    lines written under the old full rendering being readable.
+  - **Legacy log files must be deleted on migration, not read** — done in
+    PR #151. The reduced rendering is not retroactive, so removing them is the
+    only thing that stops lines written under the old full rendering being
+    readable. `DebugFileSink.start(purgeLegacy = true)` wipes the directory
+    ahead of the rotation on the first start after the move, and the flag
+    recording it is set only once the sink confirms the files are gone, so a
+    refused delete retries at the next start instead of being marked off.
 
-- **OPEN, for the maintainer: what happens to `logSummary()`'s two renderings?**
-  (raised 2026-08-30, not decided.) `ActiveSnooze.logSummary()` returns a
-  `LogSummary` whose halves differ by the snooze's timestamps:
-  `full = "snooze(started=… capAt=… mode=… anchor[…])"` against
-  `mirrored = "snooze(mode=… anchor[…])"`. The comment there gives the reason —
-  the times are the diagnostic on device, and off device they are when someone
-  was asleep or in a cinema.
-  The library **renders once, reduced, at ingestion**, deliberately, so that a
-  channel added later cannot widen what was already recorded. That makes "full
-  on device, reduced off device" no longer expressible, and `LogSummary` has no
-  equivalent there.
-  **The options:** record the shape only, losing the times from the on-device
-  log; or mark them `safe(...)`, keeping them and accepting they would travel
-  with any future shared report.
-  **Not autopilot's to guess** — it is a privacy trade-off, and the privacy
-  carve-out puts it with the maintainer. Note that nothing leaves the device
-  today either way: `redactSensitive = true` appears only in tests here, so the
-  protection is anticipatory rather than active. One production call site
-  (`SnoozeService`), so whichever way it goes the change is small.
+- **DECIDED: `logSummary()` keeps the times, as one `safe(...)` rendering**
+  (maintainer, 2026-08-30; raised the same day). The question was what happens
+  to the two renderings of `ActiveSnooze.logSummary()`, whose halves differed
+  by the snooze's timestamps — `full = "snooze(started=... capAt=... mode=...
+  anchor[...])"` against `mirrored = "snooze(mode=... anchor[...])"`. The
+  library **renders once, reduced, at ingestion**, deliberately, so that a
+  channel added later cannot widen what was already recorded; that made "full
+  on device, reduced off device" no longer expressible.
+  **The ruling: the times are not sensitive, and they are necessary for
+  debugging.** A snooze that ended early — or never ended — cannot be
+  diagnosed from `mode=` and the anchor's shape alone, and this app has no
+  automatic off-device mirror at all, so the only way they ever leave the
+  device is inside a report the user chose to share. So `logSummary()` returns
+  a single `safe(...)` string with `startedAt` and `capExpiresAt` in it, and
+  the comment that justified the split is retired with the split.
+  Landed in the logger swap (PR #151).
 
 - **Which of `Snooze` / `End snooze` shows, decided under autopilot** (2026-08-30). The item
   asked for "a real design answer, not a blind toggle" and listed three options; autopilot took

@@ -3,7 +3,8 @@ package app.snoozemo.snooze
 import android.content.Context
 import android.os.Build
 import android.util.Log
-import app.snoozemo.core.safe
+import com.mikelward.androidlog.safe
+import com.mikelward.androidlog.DebugLog
 import app.snoozemo.core.SnoozeDebugLog
 import java.io.File
 import java.util.concurrent.LinkedBlockingQueue
@@ -70,7 +71,7 @@ private const val CRASH_WRITE_TIMEOUT_MS = 250L
  */
 internal class DebugFileSink internal constructor(
     dirProvider: () -> File,
-) : SnoozeDebugLog.Sink {
+) : DebugLog.Sink {
 
     constructor(context: Context) : this({ File(context.applicationContext.cacheDir, DIR_NAME) })
 
@@ -103,6 +104,27 @@ internal class DebugFileSink internal constructor(
     private var enabled: Boolean = true
 
     /**
+     * Whether files written before the move to the shared logger may still be
+     * on disk — set the moment a purge is asked for, cleared only when one is
+     * proven to have emptied the directory.
+     *
+     * While it is set, [hasPinnedCrash] and [readPreviousOrCrash] report
+     * nothing to hand over. Retrying at the next process start is not enough
+     * on its own: a refused delete leaves `previous.log` or a pinned
+     * `crash.log` holding the old **full** rendering, and this process would
+     * go on serving it to a share for as long as it lives (Codex, PR #151).
+     *
+     * Set on the calling thread, ahead of the worker task that does the
+     * deleting, so a read racing in first is refused too — the same reason the
+     * mark has to be durable before the content it describes.
+     *
+     * Volatile rather than confined to the worker: it is written from
+     * [start]'s caller and read inside worker tasks.
+     */
+    @Volatile
+    private var legacyPurgePending: Boolean = false
+
+    /**
      * Rotates the just-ended run and installs the chained crash handler. Call
      * once per process, off the main thread ([DebugLogging.install]); register
      * as a sink afterward, so this run's first writes queue behind the
@@ -116,12 +138,89 @@ internal class DebugFileSink internal constructor(
      * here must reach the same place a refusal from the toggle does, not
      * read as success just because nothing was tapped this time (Codex,
      * PR #89).
+     *
+     * [purgeLegacy] deletes everything already on disk before rotating, for
+     * the one start that follows the move to the shared logger — those files
+     * hold the old full rendering and the reduced floor cannot be applied to
+     * them after the fact. [onLegacyPurged] fires with whether they are
+     * actually gone; it firing at all is the proof, so a caller that never
+     * hears must retry rather than assume.
      */
-    fun start(enabled: Boolean, onDisabled: (allDeleted: Boolean) -> Unit = {}) {
+    fun start(
+        enabled: Boolean,
+        purgeLegacy: Boolean = false,
+        onLegacyPurged: (purged: Boolean) -> Unit = {},
+        onDisabled: (allDeleted: Boolean) -> Unit = {},
+    ) {
         this.enabled = enabled
+        // Before the worker task, not inside it: until a purge is proven done
+        // this sink has nothing it may hand to a share, and a read that beats
+        // the delete to the worker must be refused as surely as one after a
+        // refusal.
+        if (purgeLegacy) legacyPurgePending = true
         runCatching {
             worker.execute {
                 runCatching {
+                    // Before the rotation, not after, and before anything this
+                    // run records: files left by the build before the shared
+                    // logger carry the *old* full rendering, and the reduced
+                    // floor is not retroactive. Rotating them would move an
+                    // unreduced run into `previous`, where a shared report
+                    // reads it (Codex, PR #151). Deleting is the only thing
+                    // that applies the new floor to them — re-rendering is
+                    // impossible, the arguments are long gone.
+                    //
+                    // Same worker task as the rotation it precedes, so there
+                    // is no ordering to get wrong. The outcome is reported
+                    // rather than assumed, and the caller records the purge as
+                    // done only on proof: a refused delete leaves a full-
+                    // rendered run on disk, so it has to be retried at the
+                    // next start rather than marked off.
+                    if (purgeLegacy) {
+                        // Caught here rather than left to the task's outer
+                        // handler, which only reaches logcat: a throw and a
+                        // returned `false` mean the same thing — not proven
+                        // gone — so they take the same path, and the one that
+                        // records the reason where the user's own report will
+                        // carry it must not be the one that gets skipped
+                        // (Codex, PR #151). `dir` resolves lazily on first
+                        // touch and `File.delete()` can refuse by throwing, so
+                        // this is a live path, not a defensive one.
+                        val purged = runCatching { deleteEverything() }
+                            .onFailure {
+                                runCatching {
+                                    Log.w(TAG, "Purging pre-migration debug logs threw.", it)
+                                }
+                            }
+                            .getOrDefault(false)
+                        // Cleared only on proof. A refusal leaves the gate
+                        // shut for the rest of this process, so nothing that
+                        // survived can reach a share before the next start
+                        // gets to try again.
+                        if (purged) {
+                            legacyPurgePending = false
+                        } else {
+                            runCatching {
+                                Log.w(
+                                    TAG,
+                                    "Pre-migration debug logs survived; withheld from sharing and retried at every start.",
+                                )
+                            }
+                            // And into the log itself, not only logcat, so the
+                            // report the user does share explains why it
+                            // carries no prior run. Safe to fan back through
+                            // the log here where a *write* failure would not
+                            // be: this fires once at start, so it cannot
+                            // recurse the way a failing write logging its own
+                            // failure would.
+                            runCatching {
+                                SnoozeDebugLog.warning(
+                                    "a log from before this version could not be deleted, so no prior run is shared",
+                                )
+                            }
+                        }
+                        runCatching { onLegacyPurged(purged) }
+                    }
                     // The captured parameter, not the field: this task decides
                     // what a *start under the stored setting* does, and a
                     // re-enable racing in before it runs must not turn a
@@ -316,8 +415,21 @@ internal class DebugFileSink internal constructor(
         if (!enabled) return
         runCatching {
             dir.mkdirs()
-            var text = SnoozeDebugLog.snapshot().joinToString("\n")
-            if (text.length > PERSIST_BUDGET_CHARS) text = text.takeLast(PERSIST_BUDGET_CHARS)
+            // Trimmed by the log, not by this file, because the trim has to
+            // know where the zone-offset anchors are. `snapshot()` synthesizes
+            // one ahead of its oldest line; taking a character tail of the
+            // joined text cuts that anchor off and leaves every local timestamp
+            // beneath it unreadable — the exact failure PR #128 reverted the
+            // per-change marker for, reintroduced here by the truncation rather
+            // than by the marker (Codex, PR #151). `boundedSnapshot` trims
+            // first and anchors after, and charges each anchor against the
+            // budget so the file still honors the ceiling it documents.
+            // Nothing is pinned in this app yet, so the reserve is zero; a
+            // later `pinnedEvent` caller has to raise it or its lines are the
+            // first thing the tail drops.
+            val text = SnoozeDebugLog
+                .boundedSnapshot(pinnedBudgetChars = 0, recentBudgetChars = PERSIST_BUDGET_CHARS)
+                .joinToString("\n")
             // Atomic replace: a kill mid-write leaves the prior complete
             // snapshot rather than a truncated file — surviving exactly that
             // kill is the point. Fall back to a direct write only if the
@@ -389,6 +501,15 @@ internal class DebugFileSink internal constructor(
     fun hasPinnedCrash(onResult: (pinned: Boolean, checkSucceeded: Boolean) -> Unit) {
         runCatching {
             worker.execute {
+                // A pin that outlived a refused purge is a pre-migration file:
+                // offering its banner leads the user straight to sharing the
+                // full rendering the purge exists to remove. Reported as a
+                // successful "no pin" rather than a failed check, because it
+                // is a real answer — there is nothing this process may show.
+                if (legacyPurgePending) {
+                    onResult(false, true)
+                    return@execute
+                }
                 val exists = runCatching { crash.exists() }
                     .onFailure { runCatching { Log.w(TAG, "Checking for a pinned crash failed.", it) } }
                     .getOrNull()
@@ -428,6 +549,16 @@ internal class DebugFileSink internal constructor(
     fun readPreviousOrCrash(onResult: (text: String?, wasCrash: Boolean, readSucceeded: Boolean) -> Unit) {
         runCatching {
             worker.execute {
+                // Same gate as [hasPinnedCrash], and the one that actually
+                // matters: this is the call that puts a prior run's text into
+                // a share. While a purge is unproven, whatever is in those
+                // slots may be the old full rendering, so there is nothing to
+                // give. A successful empty read, not a failed one — the share
+                // still goes out carrying this run's own reduced log.
+                if (legacyPurgePending) {
+                    onResult(null, false, true)
+                    return@execute
+                }
                 val pinned = runCatching { crash.exists() }
                     .onFailure { runCatching { Log.w(TAG, "Checking for a pinned crash failed.", it) } }
                     .getOrNull()
@@ -579,9 +710,41 @@ internal class DebugLogStore(context: Context) {
         return persisted
     }
 
+    /**
+     * Whether the one-time purge of pre-migration log files has been proven
+     * done (see [DebugFileSink.start]'s `purgeLegacy`).
+     *
+     * Defaults to `false`, so an install that has never recorded the flag —
+     * including every upgrade from a build before this one — purges. The cost
+     * of a redundant purge is one run of history; the cost of skipping a
+     * needed one is a full-rendered run in a shared report, so the default
+     * resolves to the safe side.
+     */
+    fun hasPurgedLegacyLogs(): Boolean = prefs.getBoolean(KEY_LEGACY_PURGED, false)
+
+    /**
+     * Records the purge as done, returning whether the write reached disk.
+     *
+     * Called only once the sink has confirmed the files are actually gone: a
+     * refused delete leaves the flag clear, and the next start tries again.
+     *
+     * `commit()` rather than `apply()`, and for a sharper reason than the
+     * symmetry with [setEnabled]. `apply()` reports nothing and lands later, so
+     * an unwritable store — or a process death before it lands — leaves the
+     * flag clear with the files already gone, and the next start purges a
+     * directory holding **this** version's own correctly-reduced logs, taking a
+     * current run, a previous one and a pinned crash with it (Codex, PR #151).
+     * That is a worse loss than the one the purge exists to prevent, so the
+     * write is synchronous and its failure is reported rather than assumed away.
+     * Safe to block here: every caller is already on the debug log's worker.
+     */
+    fun markLegacyLogsPurged(): Boolean =
+        prefs.edit().putBoolean(KEY_LEGACY_PURGED, true).commit()
+
     private companion object {
         const val FILE_NAME = "debug_log"
         const val KEY_ENABLED = "enabled"
+        const val KEY_LEGACY_PURGED = "legacy_logs_purged"
     }
 }
 
@@ -807,7 +970,8 @@ internal object DebugLogging {
     private fun installNow(app: Context) {
         if (sink != null) return
         runCatching {
-            val enabled = DebugLogStore(app).isEnabled()
+            val store = DebugLogStore(app)
+            val enabled = store.isEnabled()
             // The recording gate first, so a disabled install stops
             // collecting — and drops whatever was buffered before this
             // read — rather than only not persisting (Codex, PR #62).
@@ -824,7 +988,48 @@ internal object DebugLogging {
             // dispatch does: a manual toggle racing this startup
             // retry must be able to supersede it too.
             val generation = disableGeneration
-            fileSink.start(enabled = enabled) { allDeleted ->
+            fileSink.start(
+                enabled = enabled,
+                // One start after the move to the shared logger, and every
+                // start after that until it is proven done. Reading the flag
+                // here rather than inside the sink keeps the sink free of
+                // SharedPreferences, which is what lets its tests build one
+                // from a bare directory.
+                purgeLegacy = !store.hasPurgedLegacyLogs(),
+                onLegacyPurged = { purged ->
+                    // Only a proven purge is recorded, and only a recorded one
+                    // is trusted. A refused write leaves the flag clear, so the
+                    // next start purges again over this version's own logs —
+                    // said out loud here rather than discovered as a missing
+                    // run, since nothing downstream can tell that loss from an
+                    // ordinary empty history.
+                    //
+                    // Every fallible step in this migration maps a throw onto
+                    // the same outcome as a negative return — not proven — and
+                    // reports it. `commit()` can throw as well as return false,
+                    // and an escaping exception here would be swallowed by the
+                    // `runCatching` around this very callback, losing both
+                    // warnings on the one path that most needs them (Codex,
+                    // PR #151).
+                    val recorded = purged && runCatching { store.markLegacyLogsPurged() }
+                        .onFailure {
+                            runCatching {
+                                Log.w(TAG, "Recording the debug-log migration threw.", it)
+                            }
+                        }
+                        .getOrDefault(false)
+                    if (purged && !recorded) {
+                        runCatching {
+                            Log.w(TAG, "Could not record the debug-log migration; the next start may re-purge.")
+                        }
+                        runCatching {
+                            SnoozeDebugLog.warning(
+                                "could not record that old logs were cleared, so this run's log may be cleared again",
+                            )
+                        }
+                    }
+                },
+            ) { allDeleted ->
                 // Same assign-then-notify ordering as the toggle path
                 // below, and the same reason: a reader woken by the
                 // watch must see this attempt's own outcome. Nothing

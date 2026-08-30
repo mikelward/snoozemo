@@ -64,7 +64,7 @@ class SnoozeServiceArmCaptureTest {
         // ran the two together — `state → ARMINGsnooze(...)` (Codex, PR #129).
         // It is the first line anyone reads in a debug report, so an ambiguous
         // one costs exactly the diagnostic the log exists for.
-        SnoozeDebugLog.clearForTest()
+        SnoozeDebugLog.resetForTest()
 
         startService(SnoozeService.ACTION_ARM)
 

@@ -10,7 +10,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
-import app.snoozemo.core.safe
+import com.mikelward.androidlog.safe
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.Anchor
 import app.snoozemo.core.Attempt
