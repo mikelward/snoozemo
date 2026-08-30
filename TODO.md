@@ -1549,6 +1549,22 @@ the point is that every other line of the app is worthless if it isn't true.
       Closing it needs a live grant check on the Wi-Fi-only path — a new detection site rather
       than a reclassification, since there is no platform refusal to classify there — plus test
       coverage for that anchor shape.
+      **Re-raised on PR #150 and deliberately not half-built there** (Codex again). Two things
+      make the obvious narrow version worse than the bug:
+      - **The ambiguous case is the common one.** Only an outright *revoked* fine grant makes a
+        Wi-Fi loss provably not-evidence. Under a while-in-use grant the read is redacted in the
+        background and fine in the foreground, so a loss is indistinguishable from a real
+        departure — and suppressing grace for every while-in-use user, including those who
+        actually left, is principle 1's failure, not a defense against it.
+      - **There is no restoration proof on that path.** `LocationAccessRestored` is delivered
+        from a successful `addGeofences`, which a Wi-Fi-only anchor never reaches. So a latch set
+        there could never be lifted: the snooze would run to its cap even after the user
+        re-granted and genuinely left. Whatever closes this has to bring its own refutation,
+        not just its own detection.
+      So the shape is: teach the Wi-Fi tracker to report *unreadable* distinctly from *lost*
+      (today `AnchorWifiTracker` folds the redaction placeholder into not-associated by design,
+      D7), and pair it with a proof the read works again. That is a change to the tracker's
+      contract, not a check bolted onto the monitor.
 - [ ] **The end-condition sheet never opens from the main screen's Snooze button** (maintainer,
       2026-08-30; **follow-up PR, not #150**). Arming from the Quick Settings tile goes through
       the trampoline and shows the sheet; arming from the button on `MainScreen` does not, so the
