@@ -9,6 +9,7 @@ import android.util.Log
 import app.snoozemo.R
 import app.snoozemo.tile.R as TileR
 import app.snoozemo.core.ActiveSnooze
+import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenFailure
@@ -220,6 +221,35 @@ class SnoozeNotifications(private val context: Context) {
         }
     }
 
+    /**
+     * The user-facing reason behind a degraded mode, or null where there is
+     * nothing worth saying (TODO.md; Codex, PR #31). Copy approved by the
+     * maintainer, 2026-08-30.
+     *
+     * Only three causes earn a line, and the omissions are deliberate rather
+     * than unfinished:
+     * - `NO_LOCATION_IN_BACKGROUND` recovers by an action the user has to
+     *   take, and no UI offers it yet — naming the state without the way out
+     *   would be worse than the mode alone. It gets its line with that
+     *   affordance, not before.
+     * - `NOTHING_WATCHING` is the app's own wiring, not anything the user did
+     *   or can act on; `Timer only` already says everything true about it.
+     */
+    private fun reasonFor(cause: DegradationCause?): String? = when (cause) {
+        DegradationCause.LOCATION_SERVICES_OFF ->
+            context.getString(R.string.ongoing_cause_services_off)
+        // The distinction this whole line exists for: location is broken,
+        // versus location works but cannot place you where you are standing.
+        DegradationCause.NO_LOCATION_FIX ->
+            context.getString(R.string.ongoing_cause_no_fix)
+        DegradationCause.FIXES_TOO_VAGUE ->
+            context.getString(R.string.ongoing_cause_weak_signal)
+        DegradationCause.NO_LOCATION_IN_BACKGROUND,
+        DegradationCause.NOTHING_WATCHING,
+        null,
+        -> null
+    }
+
     fun showOngoing(snooze: ActiveSnooze) {
         reapplyDndBypassOnce()
         val body = when (snooze.mode) {
@@ -232,10 +262,24 @@ class SnoozeNotifications(private val context: Context) {
             TrackingMode.WIFI_GRACE -> context.getString(R.string.ongoing_wifi_grace)
             TrackingMode.DURATION_ONLY -> context.getString(R.string.ongoing_timer_only)
         }
+        // Appended only where a reason adds something. FULL carries no cause
+        // by construction (`SnoozeController.modeFor` maps a null degradation
+        // straight to the anchor's own capability), and WIFI_GRACE is excluded
+        // deliberately: `Wi-Fi lost — ending soon` already names the thing
+        // that matters, and stacking a second em-dashed clause onto a state
+        // that resolves in minutes buys nothing for the length it costs
+        // (AGENTS.md, *Concise copy*).
+        val withReason = when (snooze.mode) {
+            TrackingMode.WIFI_ONLY, TrackingMode.DURATION_ONLY ->
+                reasonFor(snooze.degradation)?.let {
+                    context.getString(R.string.ongoing_degraded_reason, body, it)
+                } ?: body
+            TrackingMode.FULL, TrackingMode.WIFI_GRACE -> body
+        }
         val notification = android.app.Notification.Builder(context, CHANNEL_ACTIVE)
             .setSmallIcon(TileR.drawable.ic_tile_snooze)
             .setContentTitle(context.getString(R.string.ongoing_title))
-            .setContentText(body)
+            .setContentText(withReason)
             .setOngoing(true)
             // This card is reposted on every ARMED/CHECKING transition, which
             // includes presence evidence flip-flopping (ProbablyLeft then

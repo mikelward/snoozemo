@@ -862,15 +862,75 @@ the point is that every other line of the app is worthless if it isn't true.
         frame to convert, which is the one piece `GraceDeadlineStoreTest` pins. Adding Robolectric to
         `:presence` to close this would be a real infrastructure decision, not a same-PR fix, so it
         stays a call for the maintainer rather than something to invent unilaterally here.
-      - [ ] **The degradation *cause* stops at the controller** (Codex, PR #31). `Presence` now
+      - [x] **The degradation *cause* stops at the controller** (Codex, PR #31). `Presence` now
         tells `FIXES_TOO_VAGUE` from `NO_LOCATION_FIX`, and `SnoozeController` maps both to the
         same `TrackingMode`, which is all `SnoozeService.onTrackingChanged` renders from — so the
         notification says the same thing either way and the distinction never reaches the user.
         Fixing it means new user-facing copy, which needs the propose-in-chat-and-approve step
         (`AGENTS.md`, *Translations*), so it is a follow-up rather than part of the engine PR.
-        Despite this item's own earlier note, **the two halves did not land together**: only the
-        mode half below is fixed; this cause-distinction half is still open and its own copy has
-        not been proposed.
+        Despite this item's own earlier note, **the two halves did not land together**: the mode
+        half below landed first, and this cause-distinction half followed on 2026-08-30.
+        **Landed**: the copy was proposed in chat and approved by the maintainer — `location is
+        off` / `no location` / `weak location signal`, the third reworded from two rejected
+        drafts (`no signal here` reads as cellular bars; `poor location here` reads as a
+        judgement about where the user is standing). `ActiveSnooze` carries the cause beside the
+        mode, so a restore reposts the reason rather than coming back half-told;
+        `ActiveSnoozeStore` persists it, reading an unrecognized or absent value as "no reason"
+        rather than refusing the record; `SnoozeController.onPresenceUpdate` now treats a *cause*
+        change as news even when the mode holds — without that the card would assert the wrong
+        reason until the mode happened to move; and `SnoozeNotifications` appends it.
+        **Two causes deliberately get no line**: `NO_LOCATION_IN_BACKGROUND` needs the `Resume
+        tracking` affordance that no UI offers yet, and naming a state without its way out is
+        worse than the mode alone; `NOTHING_WATCHING` is the app's own wiring, which `Timer only`
+        already describes. `WIFI_GRACE` is excluded as a mode, since its own string already names
+        what matters. `SPEC.md` §4.3 records all of it.
+        **One trade-off taken knowingly**: an existing test asserted that a cause change under one
+        mode reported nothing, to stop the record and card being rewritten on every update. That
+        assertion bundled two cases — restating the *same* level, which still reposts nothing, and
+        a genuinely different cause, which now does. In marginal conditions the cause can
+        alternate between `NO_LOCATION_FIX` and `FIXES_TOO_VAGUE`, so the card can update on that
+        cadence; the repost is silent (`setOnlyAlertOnce`) and costs a preferences write and a
+        tile refresh, which is the price of the line not lying.
+        **And the engine had to change with it** (Codex, PR #141): `Presence.useless` froze the
+        cause at whichever flavor first crossed the threshold, so the controller's new comparison
+        was unreachable through the engine path and the card could say `no location` indefinitely
+        while vague fixes were in fact arriving. That freeze was PR #31's deliberate anti-flapping
+        call, made on the reasoning that both causes "say the same thing to the user" — which this
+        change is precisely what falsifies. The cause now follows the failures; `nowDegraded` keeps
+        its old meaning so the §6.6 grace deadline still arms once. `SPEC.md` §6.1 records the
+        reversal, and `failures that alternate do not flap the level` was rewritten to assert the
+        new value sequence while keeping the half that did not change — a level, never an event.
+        **Still open here**: `MainScreen` renders the mode from `TrackingMode` alone and does not
+        show the reason, so the app screen and the notification can disagree in wording. Left out
+        to keep this change to the surface §8.1 actually names; it needs a `SnoozeStatus`
+        signature change and a screenshot pass.
+        - [ ] **A restart promotes a degraded snooze back to full before it re-derives the
+          problem** (Codex, PR #141; deferred to its own PR by the same review). After process
+          death — the common case on `play`, which runs no foreground service — the monitor
+          builds a fresh `PresenceFeed`, whose `PresenceState.degradation` starts null, and
+          `registrationDegradation`/`servicesDegradation` start null with it. The first update
+          out of the restarted monitor therefore carries `degradation = null`, which
+          `modeFor` reads as full tracking and `onPresenceUpdate` now reads as a cause
+          recovery — so the restored `Timer only — no location` becomes a plain `Snoozing`
+          moments after the card is reposted, on no evidence that anything recovered.
+          **The mode half predates this PR** (`moved` compared modes alone and the promotion
+          already happened); what this PR adds is the reason following the mode it already
+          followed, which is consistent but inherits the same wrong answer.
+          **Why it is worse than a moment's optimism**: the engine infers `NO_LOCATION_FIX`
+          by *counting* misses (`DEGRADED_AFTER_USELESS_OBSERVATIONS`), and a fresh feed's
+          count starts at zero — so re-deriving the truth takes a fresh run of failures, not
+          one probe. A phone somewhere with no fixes can oscillate across restarts and read
+          as healthy for most of the snooze.
+          **Why it is not a one-liner**, and so not folded in here: the fix is to seed the
+          restart, and each cause belongs in a different slot under the two-slot refutation
+          rule (Codex, PR #75) — `LOCATION_SERVICES_OFF` into `servicesDegradation`, where a
+          delivered fix refutes it; `NO_LOCATION_FIX`/`FIXES_TOO_VAGUE` into the feed, where a
+          usable fix does. That needs a `PresenceMonitor.start` parameter (the restored cause
+          is in hand at `SnoozeService.kt`'s call site, and a default keeps the `direct` stub
+          and the fakes compiling), and a seed for `lastUnusableAtMs` alongside it, or
+          `staleFix` will let a cached reading from *before* the restart clear a degradation
+          it says nothing about — precisely the PR #33 case, reopened by the restart boundary.
+          Tests in `PresenceFeedTest`, the monitor's suite, and `SnoozeControllerTest`.
         - [x] **The *mode* was wrong too, during the grace period** (Codex, PR #31; landed
           2026-08-23). `modeFor` picked `WIFI_ONLY` whenever the anchor *had* an SSID, so while
           the grace period ran — Wi-Fi gone, location vague — the notification claimed Wi-Fi was
@@ -4005,6 +4065,33 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
       default branch requiring `ci.yml`'s always-reporting `gate`
       job and the `codex` status, plus conversation resolution and
       up-to-date branches, with the auto-merge setting enabled.
+
+- [ ] **Following the push rules correctly red-lines `gate`/`lanes` every time**
+      (observed twice on PR #141, 2026-08-30). `ci.yml` triggers on
+      `pull_request: [opened, synchronize, reopened, edited]`, and `edited` is there
+      deliberately — a retarget changes what the diff is measured against while the head,
+      and any `gate`/`lanes` run already minted on it, stays put. `AGENTS.md` separately
+      requires the PR title and body to be refreshed *with* the push rather than after it.
+      Together those make a second run inevitable seconds after the first: push starts run
+      A, the body refresh starts run B, the concurrency group cancels A's heavy jobs, and
+      A's `gate`/`lanes` — `if: always()` over `needs: [classify, build, screenshot-tests,
+      sync-screenshots]` — read `build=cancelled` and report **failure** on the same head.
+      Self-clearing (branch protection reads the most recent run per check name, and B
+      mints its own), so it costs noise and a wasted CI cycle rather than a merge — but it
+      fires on every correctly-followed push, which is exactly the shape that trains a
+      reader to ignore a red required check.
+      **The obvious one-liner is a fail-open trap, so this is not a quick fix.** Swapping
+      `if: always()` for `if: ${{ !cancelled() }}` makes the superseded run's gate *skip*
+      instead of fail — and `ci.yml`'s own trigger comment already records that **GitHub
+      counts a SKIPPED required check as satisfied**. A head whose runs were all cancelled
+      would then show a satisfied gate having verified nothing, which is the one direction
+      the whole gate design refuses. A correct fix has to let `gate` tell "my run was
+      superseded" from "the heavy jobs genuinely failed" — report neutral or leave it
+      pending rather than skipped, or look up whether a newer run exists for the same head
+      — and since that changes the required check's own semantics it is the maintainer's
+      call, and it may belong in `mikelward/lanes` rather than here.
+      **Cheap partial mitigation meanwhile**: when a push needs no body change, don't make
+      one; a lone `synchronize` runs uncancelled and goes green.
 
 - [ ] **`deploy`'s display name is load-bearing and now inaccurate.** The job
       is still called `Build and release` after the release build moved to

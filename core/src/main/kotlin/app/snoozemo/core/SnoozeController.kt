@@ -247,6 +247,17 @@ class SnoozeController(
         // records it, and a reason that misstates which is which is exactly
         // what it exists to rule out (SPEC.md §4.6; flagged by Codex on
         // PR #71 when this said NO_LOCATION_FIX over a fix just captured).
+        //
+        // **Deliberately not onto the record** (Codex, PR #141, which asked for
+        // exactly that). These two causes are structural facts the mode already
+        // expresses — the anchor never had a fix, or nothing is watching — not
+        // runtime failures the notification needs to explain. Recording them
+        // would also flap: the engine's first update carries its own
+        // degradation, `null` on a healthy watch, which does not refute an
+        // anchor that still has no coordinates but *would* clear the stored
+        // cause and drop the reason off a card seconds after arming. The
+        // notification's reason is for the engine's runtime causes; here the
+        // mode is the whole story, and the log is what wants the distinction.
         if (armed.mode != TrackingMode.FULL) {
             val cause = if (armed.mode != fieldsAllow) {
                 DegradationCause.NOTHING_WATCHING
@@ -438,8 +449,14 @@ class SnoozeController(
         val snooze = active ?: return
 
         val mode = modeFor(update.degradation, update.graceActive, snooze.anchor)
-        val moved = mode != snooze.mode
-        if (moved) active = snooze.copy(mode = mode)
+        // The *cause* moving counts as news too, not only the mode (TODO.md;
+        // Codex, PR #31). `NO_LOCATION_FIX` and `FIXES_TOO_VAGUE` map to one
+        // mode, so a mode-only test would let the reason change underneath a
+        // notification that never reposts — which is the whole failure this
+        // plumbing exists to end, just moved one layer down from where it
+        // started.
+        val moved = mode != snooze.mode || update.degradation != snooze.degradation
+        if (moved) active = snooze.copy(mode = mode, degradation = update.degradation)
 
         val before = state
         update.event?.let { report(it) }

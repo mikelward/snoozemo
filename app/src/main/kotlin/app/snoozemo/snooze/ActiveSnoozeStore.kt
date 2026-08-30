@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import app.snoozemo.core.ActiveSnooze
+import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.Anchor
 import app.snoozemo.core.RecordOrigin
@@ -114,6 +115,7 @@ class ActiveSnoozeStore(context: Context) {
             startedAt = Instant.ofEpochMilli(startedAt),
             capExpiresAt = Instant.ofEpochMilli(capExpiresAt),
             mode = loadMode(),
+            degradation = loadDegradation(),
             armed = prefs.getBoolean(KEY_ARMED, false),
             placeName = prefs.getString(KEY_PLACE, ActiveSnooze.DEFAULT_PLACE_NAME)
                 ?: ActiveSnooze.DEFAULT_PLACE_NAME,
@@ -159,6 +161,31 @@ class ActiveSnoozeStore(context: Context) {
      * type, a value written by a build that knew a mode this one doesn't, or a
      * record that reached disk without its mode.
      */
+    /**
+     * The recorded reason behind [ActiveSnooze.mode], or null.
+     *
+     * Every failure here answers null rather than escalating, and that is the
+     * right direction for this field alone: unlike the mode, a missing reason
+     * costs the notification some detail and nothing else — the snooze is
+     * still reported as degraded, and still ends on its cap. An unrecognized
+     * name (a record written by a build that knew a cause this one does not)
+     * is the same case, not a crash.
+     */
+    private fun loadDegradation(): DegradationCause? {
+        val stored = try {
+            prefs.getString(KEY_DEGRADATION, null)
+        } catch (e: ClassCastException) {
+            Log.w(TAG, "The stored degradation cause is not a string; reporting no reason.", e)
+            null
+        } ?: return null
+        return try {
+            DegradationCause.valueOf(stored)
+        } catch (e: IllegalArgumentException) {
+            Log.w(TAG, "The stored degradation cause is unrecognized; reporting no reason.", e)
+            null
+        }
+    }
+
     private fun loadMode(): TrackingMode {
         val stored = try {
             prefs.getString(KEY_MODE, null)
@@ -291,6 +318,10 @@ class ActiveSnoozeStore(context: Context) {
         }
         .putLong(KEY_CAPTURED_AT, snooze.anchor.capturedAt.toEpochMilli())
         .putString(KEY_MODE, snooze.mode.name)
+        // Null clears the key rather than leaving the previous reason behind:
+        // a snooze that recovered must not keep explaining a degradation it no
+        // longer has.
+        .putString(KEY_DEGRADATION, snooze.degradation?.name)
         .putString(KEY_PLACE, snooze.placeName)
         .putString(KEY_SSID, snooze.anchor.ssid)
         // Recorded alongside the SSID and acted on by nothing (SPEC.md §6.2);
@@ -422,6 +453,7 @@ class ActiveSnoozeStore(context: Context) {
         const val KEY_DEVICE_STAMP = "device_stamp"
         const val KEY_CAPTURED_AT = "captured_at"
         const val KEY_MODE = "mode"
+        const val KEY_DEGRADATION = "degradation"
         const val KEY_PLACE = "place"
         const val KEY_SSID = "ssid"
         const val KEY_BSSID = "bssid"

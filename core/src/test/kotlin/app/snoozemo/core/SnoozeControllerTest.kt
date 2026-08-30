@@ -194,6 +194,43 @@ class SnoozeControllerTest {
     }
 
     @Test
+    fun `a cause change is news even when the mode stays put`() {
+        // The whole reason the record carries a cause: NO_LOCATION_FIX and
+        // FIXES_TOO_VAGUE map to one mode and mean completely different things
+        // to a user. A mode-only test for "did anything change" would leave
+        // the notification saying the first reason while the second is true.
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.onAnchorCaptured(anchor, setOf(TrackingMode.FULL, TrackingMode.DURATION_ONLY))
+        controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX))
+        val afterFirst = listener.tracking.size
+        assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
+        assertEquals(DegradationCause.NO_LOCATION_FIX, controller.active?.degradation)
+
+        controller.onPresenceUpdate(update(degradation = DegradationCause.FIXES_TOO_VAGUE))
+
+        assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
+        assertEquals(DegradationCause.FIXES_TOO_VAGUE, controller.active?.degradation)
+        assertEquals(afterFirst + 1, listener.tracking.size)
+        assertEquals(DegradationCause.FIXES_TOO_VAGUE, listener.tracking.last().second)
+    }
+
+    @Test
+    fun `recovering clears the recorded cause`() {
+        // A snooze that recovered must not keep explaining a degradation it no
+        // longer has — the record is what a restore reposts the notification
+        // from.
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.onAnchorCaptured(anchor, setOf(TrackingMode.FULL, TrackingMode.DURATION_ONLY))
+        controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX))
+        assertEquals(DegradationCause.NO_LOCATION_FIX, controller.active?.degradation)
+
+        controller.onPresenceUpdate(update(degradation = null))
+
+        assertEquals(TrackingMode.FULL, controller.active?.mode)
+        assertNull(controller.active?.degradation)
+    }
+
+    @Test
     fun `an update cannot promote the mode past what the machinery supports`() {
         // The first harmless-looking report would otherwise undo the arm's
         // honesty: a null degradation reads as "the anchor's full capability",
@@ -507,15 +544,24 @@ class SnoozeControllerTest {
         // this the record and the notification would be rewritten every 90
         // seconds — the flapping the engine avoids, reintroduced at the
         // controller.
+        //
+        // This used to assert the same of a *different* cause under one mode
+        // (`NO_LOCATION_FIX` then `FIXES_TOO_VAGUE`), on the reasoning that
+        // the mode had not moved so nothing had. That reasoning was the bug:
+        // the two mean opposite things to a user — location is broken, versus
+        // location works but cannot place you here — and the notification now
+        // says which. The case moved to its own test below; what stays true,
+        // and is what this test was really protecting, is that restating one
+        // unchanged level reposts nothing.
         armFully()
         controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX))
         listener.tracking.clear()
 
         controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX))
-        controller.onPresenceUpdate(update(degradation = DegradationCause.FIXES_TOO_VAGUE))
+        controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX))
 
         assertEquals(
-            "same mode either way, so neither update moved anything",
+            "the same level restated moved nothing",
             emptyList<Pair<TrackingMode, DegradationCause?>>(),
             listener.tracking,
         )
