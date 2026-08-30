@@ -3513,6 +3513,17 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   half is one argument: seed from `loaded.capExpiresAt`. Doing it properly means the
   controller taking the record rather than a `ceilingAt` lambda, which is a signature change
   across both hosts and is why it is not a one-liner.
+  **And once more on the delayed-offer path** (Codex's ninth round, same PR, third in a row
+  against a documentation-only commit). `offerSheetForThisArm` reads the record off the main
+  thread and seeds on the callback, and its only staleness check is for a *newer arm*. If the
+  snooze ends in between — the End button, the tile, a departure, its cap — `reconcileSheet`
+  may run while no sheet exists yet, do nothing, and then the callback opens a sheet over a
+  snooze that is already gone, with no later record change guaranteed to take it down.
+  Same shape again: state read at one moment, acted on at another, with nothing tying the two
+  together. Which is the argument for fixing this family **as one change** rather than
+  case by case — the sheet needs an identity for the snooze it belongs to (`startedAt` is
+  the obvious one) checked wherever it is seeded, restored or reconciled, instead of four
+  separate guards each covering the path its own round happened to name.
 
 - **Rounding drops a wall clock that only exists on the other side of a spring-forward gap**
   (2026-08-25, Codex on PR #118, declined — the fifth consecutive finding on this surface).
