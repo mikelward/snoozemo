@@ -1548,11 +1548,32 @@ This is where the battery budget is won:
 - **Not associated** → register `Sensor.TYPE_SIGNIFICANT_MOTION` via
   `SensorManager.requestTriggerSensor`. It is a hardware-backed one-shot trigger, requires **no
   permission**, and costs approximately nothing. While it has not fired, the phone has not moved, so
-  poll location at a very slow 10-minute rate purely as a sanity check.
+  poll location slowly, purely as a sanity check — at the resting cadence below.
 - **Significant motion fired** → switch to the 90 s request above until the state resolves, then
   re-arm the trigger.
 
 A phone sitting on a desk for four hours therefore does essentially no location work.
+
+**The resting cadence is per flavor, and on `play` it is the §6.10 backstop's** (maintainer,
+2026-08-30). This section was written for the foreground-service design, where the process stays
+alive and an in-process 10-minute timer is exactly right — which is `direct`'s shape from Phase 7,
+and there the 10 minutes stands. `play` runs no foreground service (§3.4): the process is reclaimed
+within about a minute of each wake, so an in-process timer would almost never fire, and the only
+mechanism that would actually deliver a 10-minute cadence is a repeating alarm — roughly **6 wakes
+an hour against the backstop's 2**, each one a service start and a location request, for a snooze
+that can run eight hours. That is a real charge against §9's budget, and the resting state is
+precisely where §9 is meant to be won.
+
+So `play` schedules no resting poll of its own: the backstop's own wake carries the resting probe,
+and the resting cadence is therefore ~30 minutes. **This holds whether or not the device has a
+significant-motion sensor** — the maintainer's call, and the point worth stating, because the
+tempting middle option is to schedule the alarm only where the sensor is missing. That was
+declined: the sensor is nearly universal, so the alarm would exist for a rare device while
+complicating the duty cycle for every device, and a resting snooze on such a device is still
+bounded — the geofence and the Wi-Fi watch are both unaffected, since the poll is a *sanity check*
+behind them, not the mechanism. What such a device loses is escalation latency while resting away
+from the anchor's Wi-Fi: it waits for the backstop rather than for motion. The duration cap is
+unchanged and remains the only hard bound (D7).
 
 ### 6.8 Foreground service
 
