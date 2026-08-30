@@ -3318,6 +3318,28 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   success it has not verified. Not resolved here in either direction — the
   threads stay open and #153 stays unmerged until it is answered.
 
+  **A third P1 joined them, and it widens the same gap.** When retention holds
+  an unreadable crash file beside a readable ordinary run, `readPreviousRun()`
+  answers with a handle covering only the ordinary run. `wasCrash` is the
+  global pinned flag so it reads true, `text` is non-blank, and `omitted` is
+  therefore false — so a landed copy consumes the pin and lowers the banner
+  over a report that never contained the crash. The evidence survives on disk;
+  the prompt to send it does not. This branch introduced it: narrowing
+  `readSucceeded` to "the read ran" was argued safe because the library never
+  puts an unreadable file into the handle, which is true of clearing the
+  **files** and false of acknowledging the **banner**.
+
+  It cannot be fixed app-side: `PreviousRun` exposes `text` and nothing else,
+  so this app cannot tell "the handle includes the unacknowledged crash" from
+  "the handle is the ordinary run beside it". So the library owes the caller
+  **read completeness** as well as the purge outcome, which makes three of the
+  four P1s on #153 one gap rather than three findings — and makes option (1)
+  the stronger of the two.
+
+  A fourth P1 on the same review — the legacy `cacheDir/debuglog` migration
+  never retried on the Off toggle — needed no library change and is **fixed**
+  in `cc48be9`, with a test.
+
   - **An empty crash log now raises no banner.** A crash marker can land without
     the run's content ever reaching disk — process death between the two writes
     — and the library declines to raise a banner over a report with nothing in
