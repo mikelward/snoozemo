@@ -3568,13 +3568,18 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   was filtered out of both `aboutlibraries.json` files even though it is
   compiled into every APK. **Answered by the move to a published coordinate**:
   a resolved module is a `ModuleComponentIdentifier`, so both entries now
-  appear on their own, with no filter to extend. What is still open is the
-  POM metadata behind them: androidlog's `maven-publish` block declares
-  neither a name nor a license, so both rows carry `"licenses": []` and fall
-  back to group-and-artifact for their title — the screen reads `androidlog
-  logging-core` where every neighbor reads a real name. The fix belongs in that
-  repository's publication block, and it will read the same way in every app
-  that migrates.
+  appear on their own, with no filter to extend. The rows shipped with
+  `"licenses": []`, because androidlog's POM declared no license —
+  **fixed upstream in androidlog 1.0.43** (Apache-2.0, declared into both
+  POMs), so this app picks it up on its next version bump and the rows render
+  a real license.
+
+  An earlier version of this entry also claimed the POM declared no *name*.
+  That was wrong: it declares `<name>androidlog logging-core</name>` and the
+  screen honors it, which is why the rows read as group-and-artifact beside
+  neighbors like `AboutLibraries Core Library`. Nothing here is broken — it is
+  a naming style question, and a one-line POM change upstream whenever it is
+  wanted.
 
   - **An empty crash log now raises no banner.** A crash marker can land without
     the run's content ever reaching disk — process death between the two writes
