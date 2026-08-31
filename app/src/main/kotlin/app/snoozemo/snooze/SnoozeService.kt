@@ -1616,7 +1616,10 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // exit clears it, including the one that applies by doing nothing and
         // any written later.
         if (result == EndChoiceResult.APPLIED) notifications.cancelFailure()
-        EndChoiceOutcome.report(result)
+        // Addressed to the commit that asked, never broadcast: the other host
+        // may have a commit outstanding too, and an answer delivered to it
+        // would dismiss the wrong sheet and strand this one.
+        EndChoiceOutcome.report(intent?.getLongExtra(EXTRA_CHOICE_REQUEST_ID, 0L) ?: 0L, result)
     }
 
     /**
@@ -2480,6 +2483,14 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         const val EXTRA_CAP_EXPIRES_AT = "app.snoozemo.extra.CAP_EXPIRES_AT"
 
         /**
+         * Which commit asked for this cap, echoed back with the outcome so it
+         * can only settle the sheet that made the request — two sheets can be
+         * outstanding at once now that both the tile and the app screen have
+         * one (Codex, PR #152).
+         */
+        const val EXTRA_CHOICE_REQUEST_ID = "app.snoozemo.extra.CHOICE_REQUEST_ID"
+
+        /**
          * Why an [ACTION_RELEASE_STUCK] start is ending a snooze, as an
          * [EndReason] name.
          *
@@ -2536,9 +2547,10 @@ open class SnoozeService : Service(), SnoozeController.Listener {
          * cap, so nothing is stranded, but a tap that silently kept the old
          * deadline is the app quietly doing the wrong thing.
          */
-        fun chooseEnd(context: Context, endsAt: Instant): Boolean =
+        fun chooseEnd(context: Context, endsAt: Instant, requestId: Long): Boolean =
             start(context, ACTION_SET_CAP) {
                 it.putExtra(EXTRA_CAP_EXPIRES_AT, endsAt.toEpochMilli())
+                it.putExtra(EXTRA_CHOICE_REQUEST_ID, requestId)
             }
 
         /**

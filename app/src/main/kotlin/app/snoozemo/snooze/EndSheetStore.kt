@@ -1,5 +1,6 @@
 package app.snoozemo.snooze
 
+import androidx.annotation.VisibleForTesting
 import android.content.Context
 import java.util.concurrent.Executors
 
@@ -190,41 +191,97 @@ internal enum class EndChoiceResult {
 
 internal object EndChoiceOutcome {
 
-    private var listener: ((EndChoiceResult) -> Unit)? = null
+    /**
+     * Watches, one per outstanding request rather than one in total.
+     *
+     * A single slot was right while the tile trampoline was the only surface
+     * with a sheet. The app screen has one too now, in the main task, while the
+     * trampoline's sheet stays alive in its own `singleInstance` task behind
+     * it — so two commits can be outstanding at once. With one slot the second
+     * watch replaced the first, the first answer dismissed whichever host
+     * registered last, and the other answer arrived with nobody left to take
+     * it, leaving that sheet committing forever and — since the swipe veto
+     * keys off the same flag — impossible to dismiss (Codex, PR #152).
+     */
+    private val listeners = mutableMapOf<Long, (EndChoiceResult) -> Unit>()
 
     /**
-     * An outcome that arrived with nobody listening, kept for whoever asks next.
+     * Outcomes that arrived with nobody listening, kept for whoever asks next.
      *
      * A configuration change destroys the sheet and builds another one, and the
      * service may answer in between — an outcome dropped there would leave the
      * replacement sheet waiting on a commit that has already finished (Codex,
      * PR #118). Held rather than delivered, because only a sheet that knows it
      * was mid-commit should act on it; see [takePending].
+     *
+     * Bounded, because an entry nobody comes back for — a host that died
+     * between the request and the answer — would otherwise sit here for the
+     * life of the process. The oldest is evicted past [MAX_HELD]; anything
+     * that far back belongs to a sheet long gone.
      */
-    private var pending: EndChoiceResult? = null
+    private val pending = linkedMapOf<Long, EndChoiceResult>()
 
-    /** Watches for the next outcome. Closing the handle stops it. */
-    fun watch(onOutcome: (EndChoiceResult) -> Unit): AutoCloseable {
-        listener = onOutcome
-        // Identity, so a handle closed after a later watch replaced it doesn't
-        // silently unhook the newer one.
-        return AutoCloseable { if (listener === onOutcome) listener = null }
+    /** Enough for both hosts and a little slack; see [pending]. */
+    private const val MAX_HELD = 4
+
+    private var lastRequestId = 0L
+
+    /**
+     * A fresh identity for one commit, so its answer cannot settle another.
+     *
+     * Process-scoped and monotonic rather than random: the only thing it has to
+     * do is tell two live requests apart, and the requests it is compared
+     * against died with the process if there was one.
+     */
+    @Synchronized
+    fun nextRequestId(): Long = ++lastRequestId
+
+    /**
+     * Watches for the outcome of [requestId] alone. Closing the handle stops it.
+     */
+    @Synchronized
+    fun watch(requestId: Long, onOutcome: (EndChoiceResult) -> Unit): AutoCloseable {
+        listeners[requestId] = onOutcome
+        // Identity, so a handle closed after a later watch replaced this one
+        // doesn't silently unhook the newer one.
+        return AutoCloseable {
+            synchronized(this) { if (listeners[requestId] === onOutcome) listeners.remove(requestId) }
+        }
     }
 
     /**
-     * The outcome that landed while nothing was watching, cleared as it is read.
+     * The outcome of [requestId] that landed while nothing was watching,
+     * cleared as it is read.
      *
      * Deliberately *not* delivered by [watch]: a sheet starting a fresh commit
      * registers a watch too, and handing it an answer to somebody else's tap is
      * how a new choice gets reported as already applied. So the restore path
-     * asks for it and the commit path discards it, and each says which it is
-     * doing.
+     * asks for it — naming the request it is resuming — and the commit path
+     * never has to, since its own id is new.
      */
-    fun takePending(): EndChoiceResult? = pending.also { pending = null }
+    @Synchronized
+    fun takePending(requestId: Long): EndChoiceResult? = pending.remove(requestId)
 
-    /** Reports what became of a chosen end time. */
-    fun report(result: EndChoiceResult) {
-        val waiting = listener
-        if (waiting != null) waiting(result) else pending = result
+    /** Reports what became of the end time chosen by [requestId]. */
+    @Synchronized
+    fun report(requestId: Long, result: EndChoiceResult) {
+        val waiting = listeners[requestId]
+        if (waiting != null) {
+            waiting(result)
+            return
+        }
+        pending[requestId] = result
+        while (pending.size > MAX_HELD) {
+            pending.remove(pending.keys.first())
+        }
+    }
+
+    /** Drops everything held, for a test that must not inherit another's state. */
+    @VisibleForTesting
+    @Synchronized
+    internal fun reset() {
+        listeners.clear()
+        pending.clear()
+        lastRequestId = 0L
     }
 }

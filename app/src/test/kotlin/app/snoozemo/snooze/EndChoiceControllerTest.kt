@@ -21,6 +21,9 @@ import java.time.ZoneId
  */
 class EndChoiceControllerTest {
 
+    /** The request a restored sheet says it was waiting on. */
+    private val RESUMED_REQUEST = 7L
+
     private val now: Instant = Instant.parse("2026-01-01T13:12:00Z")
     private val zone: ZoneId = ZoneId.of("UTC")
 
@@ -31,13 +34,23 @@ class EndChoiceControllerTest {
         var closes = 0
         var dismissals = 0
         var onOutcome: ((EndChoiceResult) -> Unit)? = null
+        var watchedRequestId: Long = 0L
+        var sentRequestId: Long = 0L
     }
+
+    @org.junit.Before
+    fun clearChannel() = EndChoiceOutcome.reset()
 
     private fun controller(seams: Seams) = EndChoiceController(
         ceilingAt = { at -> at.plus(ActiveSnooze.DEFAULT_CAP) },
-        chooseEnd = { at -> seams.sent = at; seams.accepted },
-        watchOutcome = { handler ->
+        chooseEnd = { at, requestId ->
+            seams.sent = at
+            seams.sentRequestId = requestId
+            seams.accepted
+        },
+        watchOutcome = { requestId, handler ->
             seams.watches++
+            seams.watchedRequestId = requestId
             seams.onOutcome = handler
             AutoCloseable { seams.closes++ }
         },
@@ -168,13 +181,14 @@ class EndChoiceControllerTest {
         // existed, so the replacement takes the held result and acts on it.
         val seams = Seams(now)
         val controller = controller(seams)
-        EndChoiceOutcome.report(EndChoiceResult.APPLIED)
+        EndChoiceOutcome.report(RESUMED_REQUEST, EndChoiceResult.APPLIED)
 
         controller.restore(
             EndCondition.seededAt(now, now.plus(ActiveSnooze.DEFAULT_CAP), zone),
             wasCommitting = true,
             failed = false,
             configurationChange = true,
+            requestId = RESUMED_REQUEST,
         )
 
         assertEquals("an applied change dismisses, whenever it arrived", 1, seams.dismissals)
@@ -191,13 +205,14 @@ class EndChoiceControllerTest {
         // (Codex, PR #152).
         val seams = Seams(now)
         val controller = controller(seams)
-        assertNull("nothing held over from another test", EndChoiceOutcome.takePending())
+        assertNull("nothing held over from another test", EndChoiceOutcome.takePending(RESUMED_REQUEST))
 
         controller.restore(
             EndCondition.seededAt(now, now.plus(ActiveSnooze.DEFAULT_CAP), zone),
             wasCommitting = true,
             failed = false,
             configurationChange = true,
+            requestId = RESUMED_REQUEST,
         )
 
         assertTrue("still committing, so the rows stay inert", controller.committing)
@@ -219,6 +234,7 @@ class EndChoiceControllerTest {
             wasCommitting = true,
             failed = false,
             configurationChange = true,
+            requestId = RESUMED_REQUEST,
         )
         requireNotNull(seams.onOutcome)(EndChoiceResult.APPLIED)
 
@@ -233,18 +249,81 @@ class EndChoiceControllerTest {
         // keys off the same flag — the sheet undismissable too.
         val seams = Seams(now)
         val controller = controller(seams)
-        assertNull("nothing held over from another test", EndChoiceOutcome.takePending())
+        assertNull("nothing held over from another test", EndChoiceOutcome.takePending(RESUMED_REQUEST))
 
         controller.restore(
             EndCondition.seededAt(now, now.plus(ActiveSnooze.DEFAULT_CAP), zone),
             wasCommitting = true,
             failed = false,
             configurationChange = false,
+            requestId = RESUMED_REQUEST,
         )
 
         assertFalse("usable again, not stuck waiting on an answer that cannot come", controller.committing)
         assertNotNull("and still offering what it was", controller.endCondition)
         assertEquals("and watching nothing, since nothing can answer", 0, seams.watches)
+    }
+
+    @Test
+    fun `an answer to somebody else's commit is not taken`() {
+        // Both hosts can have a commit outstanding: the app screen's sheet in
+        // the main task, the tile's alive in its own `singleInstance` task
+        // behind it. A restore that took whatever the channel held would settle
+        // on the other sheet's answer (Codex, PR #152).
+        val seams = Seams(now)
+        val controller = controller(seams)
+        EndChoiceOutcome.report(RESUMED_REQUEST + 1, EndChoiceResult.APPLIED)
+
+        controller.restore(
+            EndCondition.seededAt(now, now.plus(ActiveSnooze.DEFAULT_CAP), zone),
+            wasCommitting = true,
+            failed = false,
+            configurationChange = true,
+            requestId = RESUMED_REQUEST,
+        )
+
+        assertEquals("not settled by an answer addressed elsewhere", 0, seams.dismissals)
+        assertTrue("still waiting on its own request", controller.committing)
+        assertEquals("and watching for that one", RESUMED_REQUEST, seams.watchedRequestId)
+        assertEquals(
+            "the other host's answer is left for it",
+            EndChoiceResult.APPLIED,
+            EndChoiceOutcome.takePending(RESUMED_REQUEST + 1),
+        )
+    }
+
+    @Test
+    fun `each commit sends and watches its own request`() {
+        // The identity is what the service echoes back, so it has to be the
+        // one this commit is listening for.
+        val seams = Seams(now)
+        val controller = seeded(seams)
+
+        controller.commit(controller.endCondition!!.endsAt)
+
+        assertTrue("a real identity, not the absent-request sentinel", seams.sentRequestId != 0L)
+        assertEquals(seams.sentRequestId, seams.watchedRequestId)
+        assertEquals(seams.sentRequestId, controller.committingRequestId)
+    }
+
+    @Test
+    fun `a saved commit naming no request comes back retryable`() {
+        // A bundle written before this identity existed, or one where the
+        // commit never got as far as minting one. Nothing can be addressed to
+        // it, so waiting would be waiting on an answer that cannot arrive.
+        val seams = Seams(now)
+        val controller = controller(seams)
+
+        controller.restore(
+            EndCondition.seededAt(now, now.plus(ActiveSnooze.DEFAULT_CAP), zone),
+            wasCommitting = true,
+            failed = false,
+            configurationChange = true,
+            requestId = 0L,
+        )
+
+        assertFalse(controller.committing)
+        assertEquals("and watching nothing", 0, seams.watches)
     }
 
     @Test

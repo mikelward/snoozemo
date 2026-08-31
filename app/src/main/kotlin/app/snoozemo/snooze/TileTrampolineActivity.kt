@@ -93,7 +93,7 @@ class TileTrampolineActivity : ComponentActivity() {
         // and reads it only after the service start, so a load is the honest
         // shape — and the sheet is off by default, so most taps never reach it.
         ceilingAt = { now -> EndCondition.ceilingFor(ActiveSnoozeStore(this).load(), now) },
-        chooseEnd = { endsAt -> SnoozeService.chooseEnd(this, endsAt) },
+        chooseEnd = { endsAt, requestId -> SnoozeService.chooseEnd(this, endsAt, requestId) },
         watchOutcome = EndChoiceOutcome::watch,
         onDismiss = ::finish,
     )
@@ -233,6 +233,7 @@ class TileTrampolineActivity : ComponentActivity() {
         outState.putBoolean(STATE_AWAITING_PERMISSION, awaitingPermission)
         outState.putBoolean(STATE_SHEET_SHOWN, sheetRendered)
         outState.putBoolean(STATE_COMMITTING, sheet.committing)
+        outState.putLong(STATE_REQUEST_ID, sheet.committingRequestId)
         outState.putBoolean(STATE_COMMIT_FAILED, sheet.commitFailed)
         sheet.endCondition?.let {
             outState.putLong(STATE_ENDS_AT, it.endsAt.toEpochMilli())
@@ -341,6 +342,7 @@ class TileTrampolineActivity : ComponentActivity() {
                 // `onCreate`. A process restore re-dispatches the tap instead
                 // of restoring, so a commit reached here is always live.
                 configurationChange = true,
+                requestId = 0L,
             )
             return
         }
@@ -350,6 +352,7 @@ class TileTrampolineActivity : ComponentActivity() {
             wasCommitting = state.getBoolean(STATE_COMMITTING),
             failed = state.getBoolean(STATE_COMMIT_FAILED),
             configurationChange = true,
+            requestId = state.getLong(STATE_REQUEST_ID),
         )
     }
 
@@ -613,6 +616,7 @@ class TileTrampolineActivity : ComponentActivity() {
         const val STATE_AWAITING_PERMISSION = "awaiting_permission"
         const val STATE_SHEET_SHOWN = "sheet_shown"
         const val STATE_COMMITTING = "committing"
+        const val STATE_REQUEST_ID = "requestId"
         const val STATE_COMMIT_FAILED = "commit_failed"
 
         // The sheet's own three instants. On-device only and never logged: when
