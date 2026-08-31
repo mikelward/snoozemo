@@ -50,6 +50,9 @@ class TileTrampolineSheetTest {
      * for the wrong reason. Taking `now` from the same source keeps the two
      * agreeing; every assertion here is relative to it.
      */
+    /** The request the rotation test's in-flight commit is waiting on. */
+    private val GAP_REQUEST = 9L
+
     private val now: Instant = Instant.ofEpochMilli(System.currentTimeMillis())
 
     private var controller: ActivityController<TileTrampolineActivity>? = null
@@ -71,7 +74,7 @@ class TileTrampolineSheetTest {
 
     @After
     fun tearDown() {
-        EndChoiceOutcome.takePending()
+        EndChoiceOutcome.reset()
         controller?.destroy()
         controller = null
         EndSheetStore(appContext).setEnabled(false)
@@ -255,6 +258,9 @@ class TileTrampolineSheetTest {
         ActiveSnoozeStore(appContext).save(snoozeFixture(now))
         val controller = tapTileController()
         controller.get().sheet.committing = true
+        // The answer is addressed to a request, so the sheet has to be waiting
+        // on one for the replacement to resume it.
+        controller.get().sheet.committingRequestId = GAP_REQUEST
 
         // Reported from the gap itself rather than staged beforehand: this
         // fires after the old activity is destroyed — taking its watch with it
@@ -262,7 +268,7 @@ class TileTrampolineSheetTest {
         val application = appContext
         val reportInTheGap = object : Application.ActivityLifecycleCallbacks {
             override fun onActivityPreCreated(activity: Activity, savedInstanceState: Bundle?) {
-                EndChoiceOutcome.report(EndChoiceResult.APPLIED)
+                EndChoiceOutcome.report(GAP_REQUEST, EndChoiceResult.APPLIED)
             }
 
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
@@ -285,7 +291,10 @@ class TileTrampolineSheetTest {
             "an applied change dismisses the sheet, whenever the answer arrived",
             controller.get().isFinishing,
         )
-        assertNull("and it is consumed, not left for the next tap", EndChoiceOutcome.takePending())
+        assertNull(
+            "and it is consumed, not left for the next tap",
+            EndChoiceOutcome.takePending(GAP_REQUEST),
+        )
     }
 
     @Test

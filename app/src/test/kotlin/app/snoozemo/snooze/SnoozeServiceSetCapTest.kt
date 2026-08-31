@@ -32,6 +32,9 @@ class SnoozeServiceSetCapTest {
 
     private val now: Instant = Instant.parse("2026-01-01T12:00:00Z")
 
+    /** The commit these intents claim to come from; see [setUp]. */
+    private val REQUEST = 42L
+
     @Before
     fun setUp() {
         TestSnoozeService.reset(now)
@@ -44,7 +47,10 @@ class SnoozeServiceSetCapTest {
         // through it, or an opted-in user is left looking at a sheet that never
         // answers (Codex, PR #118).
         reported = null
-        watch = EndChoiceOutcome.watch { reported = it }
+        EndChoiceOutcome.reset()
+        // Addressed: the service echoes back the request that asked, so a
+        // watch names the one this test's intents carry.
+        watch = EndChoiceOutcome.watch(REQUEST) { reported = it }
     }
 
     @After
@@ -76,6 +82,7 @@ class SnoozeServiceSetCapTest {
     private fun chooseEnd(endsAt: Instant, record: ActiveSnooze?) =
         startService(SnoozeService.ACTION_SET_CAP, record) {
             putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, endsAt.toEpochMilli())
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
         }
 
     @Test
@@ -104,6 +111,7 @@ class SnoozeServiceSetCapTest {
         TogglableAlarmManager.refuse = true
         service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
             putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, chosen.toEpochMilli())
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
         }
         assertTrue("the refused attempt should have posted its card", shadeShows(failureCard))
 
@@ -112,6 +120,7 @@ class SnoozeServiceSetCapTest {
         TogglableAlarmManager.refuse = false
         service.send(SnoozeService.ACTION_SET_CAP, startId = 3) {
             putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, chosen.toEpochMilli())
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
         }
 
         assertEquals(chosen, ActiveSnoozeStore(appContext).load()?.capExpiresAt)
@@ -219,6 +228,7 @@ class SnoozeServiceSetCapTest {
                 SnoozeService.EXTRA_CAP_EXPIRES_AT,
                 now.plus(Duration.ofHours(1)).toEpochMilli(),
             )
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
         }
 
         assertEquals(record.capExpiresAt, ActiveSnoozeStore(appContext).load()?.capExpiresAt)
@@ -275,7 +285,12 @@ class SnoozeServiceSetCapTest {
     fun `a start carrying no time leaves the cap alone`() {
         val record = snoozeFixture(now)
 
-        startService(SnoozeService.ACTION_SET_CAP, record)
+        startService(SnoozeService.ACTION_SET_CAP, record) {
+            // The time is what is missing here, not the sender: a real commit
+            // always names itself, and the refusal has to reach the sheet that
+            // asked.
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
 
         assertEquals(record.capExpiresAt, ActiveSnoozeStore(appContext).load()?.capExpiresAt)
         assertEquals(EndChoiceResult.REFUSED, reported)

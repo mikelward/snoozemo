@@ -85,6 +85,7 @@ private const val KEY_SCREEN = "screen"
 private const val KEY_PERMISSIONS_ORIGIN = "permissionsOrigin"
 private const val KEY_ROUTED_TO_PERMISSIONS_ONCE = "routedToPermissionsOnce"
 private const val KEY_SHEET_COMMITTING = "sheetCommitting"
+private const val KEY_SHEET_REQUEST_ID = "sheetRequestId"
 private const val KEY_SHEET_FAILED = "sheetFailed"
 private const val KEY_SHEET_ENDS_AT = "sheetEndsAt"
 private const val KEY_SHEET_FLOOR = "sheetFloor"
@@ -182,7 +183,7 @@ class MainActivity : ComponentActivity() {
     @androidx.annotation.VisibleForTesting
     internal val sheet = EndChoiceController(
         ceilingAt = { at -> EndCondition.ceilingFor(activeSnooze, at) },
-        chooseEnd = { endsAt -> SnoozeService.chooseEnd(this, endsAt) },
+        chooseEnd = { endsAt, requestId -> SnoozeService.chooseEnd(this, endsAt, requestId) },
         watchOutcome = EndChoiceOutcome::watch,
         // Nothing to finish: clearing the offer is what closes this sheet,
         // unlike the trampoline where the activity *is* the sheet.
@@ -978,6 +979,7 @@ class MainActivity : ComponentActivity() {
         // time is the only work the user has done there, and dropping it would
         // leave them on the default cap having answered.
         outState.putBoolean(KEY_SHEET_COMMITTING, sheet.committing)
+        outState.putLong(KEY_SHEET_REQUEST_ID, sheet.committingRequestId)
         outState.putBoolean(KEY_SHEET_FAILED, sheet.commitFailed)
         sheet.endCondition?.let {
             outState.putLong(KEY_SHEET_ENDS_AT, it.endsAt.toEpochMilli())
@@ -1003,6 +1005,7 @@ class MainActivity : ComponentActivity() {
             wasCommitting = state.getBoolean(KEY_SHEET_COMMITTING),
             failed = state.getBoolean(KEY_SHEET_FAILED),
             configurationChange = configurationChange,
+            requestId = state.getLong(KEY_SHEET_REQUEST_ID),
         )
     }
 

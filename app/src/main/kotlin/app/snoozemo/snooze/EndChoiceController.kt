@@ -48,9 +48,9 @@ internal class EndChoiceController(
      * Hands the chosen time to the service. False means it never dispatched,
      * so no outcome is coming and this settles the commit itself.
      */
-    private val chooseEnd: (Instant) -> Boolean,
+    private val chooseEnd: (endsAt: Instant, requestId: Long) -> Boolean,
     /** Subscribes to what the service said; closed on every settled commit. */
-    private val watchOutcome: (onOutcome: (EndChoiceResult) -> Unit) -> AutoCloseable,
+    private val watchOutcome: (requestId: Long, onOutcome: (EndChoiceResult) -> Unit) -> AutoCloseable,
     /** Called when the sheet has nothing left to ask and should go away. */
     private val onDismiss: () -> Unit,
     /** Now, injectable so the refusal re-seed is reachable from a JVM test. */
@@ -89,6 +89,18 @@ internal class EndChoiceController(
      */
     var commitFailed by mutableStateOf(false)
         private set
+
+    /**
+     * The request the outstanding commit is waiting on, or 0 when none is.
+     *
+     * Saved and restored with the sheet, because the answer belongs to the
+     * *request* rather than to the activity that made it: a rotation replaces
+     * the host while the service is still working, and the replacement has to
+     * resume listening for that same request rather than for whatever the
+     * channel reports next.
+     */
+    var committingRequestId: Long = 0L
+        @VisibleForTesting internal set
 
     private var outcomeWatch: AutoCloseable? = null
 
@@ -136,13 +148,14 @@ internal class EndChoiceController(
         if (committing) return
         committing = true
         commitFailed = false
-        // Discarded, not delivered: anything held here answers an *earlier*
-        // commit, and handing it to this one would report a fresh choice as
-        // already applied.
-        EndChoiceOutcome.takePending()
+        // A fresh identity, which is what keeps an *earlier* answer from
+        // settling this one — whether the earlier request was this sheet's
+        // previous tap or the other host's, since both surfaces share the
+        // channel now (Codex, PR #152).
+        committingRequestId = EndChoiceOutcome.nextRequestId()
         outcomeWatch?.close()
-        outcomeWatch = watchOutcome(::onOutcome)
-        if (!chooseEnd(endsAt)) {
+        outcomeWatch = watchOutcome(committingRequestId, ::onOutcome)
+        if (!chooseEnd(endsAt, committingRequestId)) {
             SnoozeDebugLog.warning("the service refused to start for a chosen end time")
             onOutcome(EndChoiceResult.REFUSED)
         }
@@ -154,6 +167,7 @@ internal class EndChoiceController(
         outcomeWatch?.close()
         outcomeWatch = null
         committing = false
+        committingRequestId = 0L
         // `GONE` dismisses like `APPLIED`, and deliberately: the snooze ended
         // under the sheet — a departure, the cap, a capability loss — so there
         // is nothing left to refine and every later tap would fail the same
@@ -218,21 +232,31 @@ internal class EndChoiceController(
         wasCommitting: Boolean,
         failed: Boolean,
         configurationChange: Boolean,
+        requestId: Long,
     ) {
         endCondition = condition
         commitFailed = failed
         if (!wasCommitting) return
-        val alreadyAnswered = EndChoiceOutcome.takePending()
+        // Named, so the answer this resumes is the one this sheet asked for.
+        // Unnamed it would take whatever the channel happened to be holding,
+        // which after the second host arrived can be the other sheet's.
+        val alreadyAnswered = if (requestId != 0L) EndChoiceOutcome.takePending(requestId) else null
         if (alreadyAnswered != null) {
             committing = true
+            committingRequestId = requestId
             onOutcome(alreadyAnswered)
             return
         }
         // Process death: nothing is coming, so leave it retryable and unwatched.
         if (!configurationChange) return
+        // A saved commit with no request to resume cannot be waited on — there
+        // is nothing to address an answer to — so it comes back retryable for
+        // the same reason a process death does.
+        if (requestId == 0L) return
         committing = true
+        committingRequestId = requestId
         outcomeWatch?.close()
-        outcomeWatch = watchOutcome(::onOutcome)
+        outcomeWatch = watchOutcome(requestId, ::onOutcome)
     }
 
     /** Drops the outcome watch. Idempotent. */
