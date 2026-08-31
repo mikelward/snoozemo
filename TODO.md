@@ -1160,8 +1160,10 @@ the point is that every other line of the app is worthless if it isn't true.
       departure test's distance and accuracy arithmetic, tracking-mode changes, cap arming and
       firing, and permission state. On by default with a setting to turn it off (maintainer,
       2026-08-11), on-device, the current run plus a few recent ones, rotated at start, in
-      `cacheDir`. The floor is absolute and needs a test of its own: **no raw coordinates,
-      no full SSID/BSSID, no user-typed place name** ever reach it.
+      `cacheDir`. The floor is what the app writes and needs a test of its own: **no raw
+      coordinates, no full SSID/BSSID, no user-typed place name** ever reach it — with the one
+      exception §4.6 names, a thrown error's own message, which Snoozemo does not compose
+      (2026-08-31).
       **Landed as the recording half**: `SnoozeDebugLog` in `:core` (bounded buffer, sinks, real
       timestamps with zone offset, the floor test) and, since the retirement, the shared
       `DebugFileSink` from `mikelward/androidlog` (§4.6 rotation, a crashed run set aside under
@@ -3086,6 +3088,57 @@ question.
 
 ## Deferred
 
+- [ ] **The debug report has no preview, so the user cannot read it before choosing a
+  share target.** `DebugReport.share()` copies the payload to the clipboard and launches
+  `ACTION_SEND` in one step (`DebugReport.kt`), so the only way to read the exact text is
+  to paste it somewhere afterwards. That was tolerable while the log carried nothing but
+  values Snoozemo wrote; it matters more now that §4.6 accepts a thrown error's own
+  message, which can in principle quote a coordinate, an SSID or a place name. Codex
+  raised it on PR #164 against `docs/PRIVACY.md`, which had promised "you can read the
+  whole report before you send it" — a promise the code does not keep.
+  **Taken there: correct the copy, not the code.** The policy now says what is actually
+  true — nothing is sent until you pick where it goes, the report is on your clipboard so
+  you can paste it and read all of it, and there is no preview screen today. Adding one is
+  a real UI change (a scrollable report screen, its string, its screenshot test, and the
+  maintainer's copy approval before translation), which does not belong in a
+  dependency-bump PR.
+  **What a preview would buy**, if it lands: the assurance back in its stronger form, and
+  a place to show the user the one thing they cannot otherwise see — that an error message
+  is in there and what it says. Cheapest shape is probably the existing share row opening
+  a read-only screen with a Share button on it, rather than a new entry point.
+
+- [ ] **`drainDebugLogWorker`'s ten-second ceiling is load-sensitive, and that
+  is the flake.** `ProcessExitReasonsTest` (all six cases) and
+  `MainActivityLifecycleTest`'s *a restart picks up a dismiss outcome missed
+  while stopped* fail together on the `direct` flavor, always at
+  `ProcessExitReasonsTest.kt:59` with *"the debug-log worker did not drain;
+  startup collection may still be in flight"*. Seen in CI on `df97a6a`, locally
+  on 2026-08-31 at ~14:50, and again on 2026-08-31 during the androidlog 1.0.44
+  bump — where the same two classes then **passed on their own in 10 s**, which
+  is the tell.
+
+  **Not a race, and that is why it resists the usual fix.** The ordering is
+  already explicit: a latch on a single-threaded FIFO worker, which is the
+  right shape. What is not deterministic is the *wall clock* — `drained.await(10,
+  SECONDS)` is a real-time deadline in a Robolectric JVM that competes with
+  every other Gradle daemon on the machine, so it fails under load rather than
+  under any particular interleaving. **Do not bump the timeout**; that is
+  papering over it by the letter as well as the spirit.
+
+  The bound is not gratuitous either — its comment says it *"fails loudly
+  rather than timing out silently"*, so a gate that was never applied is caught
+  here rather than by every later assertion racing invisible work. Removing the
+  bound trades a flake for a hang. So the fix is to remove the *waiting*: let a
+  test install a direct (inline) executor on `DebugLogging`, so the startup
+  collection has already run by the time `startRecording` returns and there is
+  nothing to drain. That is a change to `DebugLogging`'s construction, not to
+  the test.
+
+  Deliberately not folded into the androidlog 1.0.44 bump (2026-08-31): that
+  branch is a test reversal and a `docs/PRIVACY.md` update, and this is
+  snoozemo's own test scaffolding in code the branch does not touch. It failed
+  on a green base before that work existed.
+
 - [x] **The shared logger's opt-out now does what `SPEC.md` §4.6 promises**
   (raised by Codex, PR #153; **answered by the maintainer 2026-08-31**, and
   fixed in `mikelward/androidlog`). §4.6 says *"Turning the setting off deletes
@@ -4239,14 +4292,31 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 Judgment calls made without an explicit answer from the maintainer. Each is reversible;
 none is load-bearing yet.
 
-- **The debug log renders a throwable as exception types and stack frames, never `getMessage()`**
-  (autopilot, 2026-08-21). A platform exception quotes what it was given, and on the Wi-Fi and
-  location stacks that is exactly what the §4.6 floor bans — and unlike Simmo, whose log scrubs
-  phone numbers out of messages, Snoozemo has no sanctioned scrubber (coordinates in free text are
-  plain decimals; a reliable redactor for them does not exist). The cost is real: "permission
-  denied" texts and file paths are lost, and only the type and frames locate a failure. Reversible
-  by adding a message line with an allowlist of exception types known to carry no user data, if
-  the field shows types-and-frames alone leaves failures undiagnosable.
+- **RESOLVED — REVERSED by the maintainer, 2026-08-31: the debug log records a throwable's
+  message.** The guess below was *"types and stack frames, never `getMessage()`"* (autopilot,
+  2026-08-21), and it named its own reversal condition — *"reversible ... if the field shows
+  types-and-frames alone leaves failures undiagnosable"*. That is what happened, from the other
+  end: surveying the fleet for the shared logger showed the type and frames answer nothing on the
+  paths this log exists for, and the message is routinely the whole diagnostic.
+
+  The reversal is narrower than the guess anticipated, and does **not** take the allowlist route
+  it proposed. `SPEC.md` §4.6 now holds the floor as *what Snoozemo writes* — the app still never
+  puts a coordinate, a full SSID/BSSID or a place name into the log — with a thrown error's own
+  message and the exit-reason description named as its single exception, on the grounds that
+  Snoozemo composes neither and the log stays on the device. Codex (PR #164) was right that
+  "Android composes it" understated the sources: the message belongs to whoever raised the error,
+  and a refused worker submission or a failed Crashlytics call reaches the same path. **No allowlist and no scrubber**: an
+  allowlist of "types known to carry no user data" is the same fails-open filter as a scrubber,
+  correct only for the types it has been taught, which is the design `mikelward/androidlog` was
+  extracted to replace. The original reasoning below stands as the argument that was overturned,
+  and it was right about the risk — it was wrong that the risk outweighed the loss.
+
+  The rest of the guess is unchanged and still true: Snoozemo has no sanctioned scrubber, and a
+  reliable redactor for coordinates in free text does not exist. That is why the exception is
+  stated plainly in `docs/PRIVACY.md` rather than papered over.
+
+  Applies identically to all four apps on the shared logger — a per-app opt-out was considered and
+  rejected as the divergence the library was extracted to end.
 - **The debug-log settings row landed** (2026-08-22), resolving the 2026-08-21 entry that held it
   for copy. The description is the maintainer's own wording — **`Save snooze details to help fix
   issues`** — and the title stayed the proposed **`Debug log`**; the maintainer's message quoted

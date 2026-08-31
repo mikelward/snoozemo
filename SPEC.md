@@ -964,6 +964,16 @@ happened:
   and nothing restored the watch is principle 1's failure, and it is indistinguishable from a bug in
   the state machine without this. The description is system-composed and can name the component that
   stopped us; it stays on the device like the rest of the log.
+- **The error, when something fails**: the exception's type, its stack frames, and the sentence
+  describing it, for each link of the cause chain. The type says what broke and the frames say
+  where, but on the paths this log exists for the message is routinely the whole answer — which
+  precondition failed, which setting was refused — and the two either side of it are useless
+  without it. The message is composed by whoever raised the error, not always the framework: a
+  refused worker submission comes from the Java runtime, a failed opt-out write from the crash
+  reporter. It carries the same consequence as the exit-reason description above: **Snoozemo does
+  not write that text, so it can quote what the app handed the API it came from.** See the floor below, which this narrows. It is bounded
+  and flattened — a few hundred characters, newlines collapsed — so one throw cannot push out the
+  frames or forge a line that reads like the log's own.
 - Build, device, and Android version.
 
 **Entries carry real timestamps, in local time** (maintainer, 2026-08-11). Times are diagnostic, not decorative:
@@ -994,9 +1004,31 @@ into a bug report — no longer carries its own offset. That is the deliberate t
 is read as a run far more often than a line is lifted out of one, and the
 per-line offset was being paid on every entry to serve the rarer case.
 
-**The floor is absolute and is not a matter of judgment**: never raw coordinates, never a full
-SSID or BSSID, never a user-typed place name. Distance and accuracy answer "did the test fire
-correctly"; the position answers "where do you live", which no bug report needs. Anything above the floor is added only with a specific failure it makes diagnosable, and
+**The floor governs what Snoozemo writes, and it is not a matter of judgment**: the app never puts
+a raw coordinate, a full SSID or BSSID, or a user-typed place name into the log. Distance and
+accuracy answer "did the test fire correctly"; the position answers "where do you live", which no
+bug report needs. `ActiveSnooze.logSummary()` is the one sanctioned way to render a snooze and its
+own test pins this; every other value reaches the log as an enum, a boolean, a number or a time.
+
+**One text is not Snoozemo's to write, and that is the floor's single exception** (maintainer,
+2026-08-31): a thrown error's own message, and the exit-reason description beside it. Neither is
+composed by Snoozemo — the exit reason is Android's, and a message belongs to whoever raised the
+error, which is not always the framework: a refused worker submission comes from the Java runtime
+and a failed opt-out write from the crash reporter, and both are logged this way. An error can
+quote what it was given — the Wi-Fi and location stacks are
+handed exactly what the floor above keeps out — so it is possible in principle for one to surface
+in the log. It is accepted for the reason the rest of the log is: the message is frequently the
+only thing that explains a failure, dropping it leaves a type and frames that answer nothing, and
+this log stays on the device and reaches nobody without an explicit share. **Snoozemo does not
+scrub it**, because scrubbing rendered text is a net that is only ever correct for the categories
+it has been taught — the design the shared logger (`mikelward/androidlog`) exists to replace.
+
+This is the same rule in all four apps using that logger, deliberately: the device's own copy is
+whole, and the reduction applies to anything leaving without the user in the loop. Snoozemo has no
+such channel today. A per-app opt-out was considered and rejected — four loggers that behave
+differently is the divergence the shared library was extracted to end.
+
+Anything above the floor is added only with a specific failure it makes diagnosable, and
 `docs/PRIVACY.md` describes what the log carries before it ships (AGENTS.md, *Privacy*).
 
 **A crashed run says so, and survives rotation.** When a previous run ended in an uncaught
@@ -2827,9 +2859,12 @@ doesn't mention shows up as a row with no rationale behind it.
 - **The debug log (§4.6) is the one sanctioned exception, and a narrow one.** It is on by default
   (maintainer, 2026-08-11) with a setting to switch it off, on-device, holding only recent runs, and
   leaves the device only when the user shares it through the system share sheet — the default is
-  about what is recorded *on the user's own phone*, not about anything leaving it. Its floor is absolute: coarse state, reasons, distance from the anchor in
-  meters, and fix accuracy — never raw coordinates, never a full SSID or BSSID, never a place name
-  the user typed. It exists because the alternative is worse for the user, not better: a snooze that
+  about what is recorded *on the user's own phone*, not about anything leaving it. Its floor is
+  what Snoozemo writes: coarse state, reasons, distance from the anchor in meters, and fix
+  accuracy — never raw coordinates, never a full SSID or BSSID, never a place name the user typed.
+  The one exception is text Snoozemo does not author, a thrown error's own message — whoever
+  raised it, framework, runtime or bundled library — and Android's exit-reason description, which
+  §4.6 states in full. It exists because the alternative is worse for the user, not better: a snooze that
   misfires while the phone is in a pocket is otherwise undiagnosable, and "it sometimes ends early"
   is a bug that never gets fixed.
 - In-app prominent disclosure before the location permission prompt, explaining the *place* use and
