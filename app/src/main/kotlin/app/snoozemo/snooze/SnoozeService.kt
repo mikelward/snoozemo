@@ -1649,6 +1649,22 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             return EndChoiceResult.GONE
         }
 
+        // **The identity check that actually binds**, because it happens here,
+        // against the record being changed, in the same pass that changes it.
+        // The sheet checks the same thing, but only when something prompts it
+        // to redraw — and the tile's sheet is never prompted, so a snooze that
+        // ended and was replaced between the offer and the tap would otherwise
+        // have the old choice applied to it (Codex, PR #155).
+        //
+        // Absent means no claim, which is how anything queued before this
+        // existed still works; a claim that does not match is `GONE`, since the
+        // snooze this choice was for really is over.
+        val claimedMillis = intent?.getLongExtra(EXTRA_CHOICE_FOR_SNOOZE, 0L) ?: 0L
+        if (claimedMillis > 0L && Instant.ofEpochMilli(claimedMillis) != snooze.startedAt) {
+            SnoozeDebugLog.event("end-condition: the chosen end was for a snooze that is no longer running")
+            return EndChoiceResult.GONE
+        }
+
         val reading = readClock()
         val floor = Instant.ofEpochMilli(reading.wallMillis).plus(ActiveSnooze.MIN_CAP)
         // A time that has fallen inside the floor is **declined, not moved**.
@@ -2491,6 +2507,15 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         const val EXTRA_CHOICE_REQUEST_ID = "app.snoozemo.extra.CHOICE_REQUEST_ID"
 
         /**
+         * Which snooze the choice was made for — its `startedAt`, the record's
+         * own identity — so this side can refuse to apply it to a different
+         * one. The sheet checks the same thing, but only as it redraws: it can
+         * be answered while its snooze is being replaced, and the tile's sheet
+         * never redraws at all (Codex, PR #155).
+         */
+        const val EXTRA_CHOICE_FOR_SNOOZE = "app.snoozemo.extra.CHOICE_FOR_SNOOZE"
+
+        /**
          * Why an [ACTION_RELEASE_STUCK] start is ending a snooze, as an
          * [EndReason] name.
          *
@@ -2547,10 +2572,18 @@ open class SnoozeService : Service(), SnoozeController.Listener {
          * cap, so nothing is stranded, but a tap that silently kept the old
          * deadline is the app quietly doing the wrong thing.
          */
-        fun chooseEnd(context: Context, endsAt: Instant, requestId: Long): Boolean =
+        fun chooseEnd(
+            context: Context,
+            endsAt: Instant,
+            requestId: Long,
+            forSnooze: Instant?,
+        ): Boolean =
             start(context, ACTION_SET_CAP) {
                 it.putExtra(EXTRA_CAP_EXPIRES_AT, endsAt.toEpochMilli())
                 it.putExtra(EXTRA_CHOICE_REQUEST_ID, requestId)
+                forSnooze?.let { startedAt ->
+                    it.putExtra(EXTRA_CHOICE_FOR_SNOOZE, startedAt.toEpochMilli())
+                }
             }
 
         /**

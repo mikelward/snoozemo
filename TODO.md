@@ -3461,7 +3461,7 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   lost refinement in a rotation measured against tens of milliseconds). Option 1 above answers
   both cleanly and neither is worth paying for on its own, so they settle together.
 
-- **A restored sheet is not bound to the snooze it was offering times for**
+- [x] **A restored sheet was not bound to the snooze it was offering times for**
   (2026-08-30, Codex on PR #152, deferred there — the sixth round on this seam, and
   the point at which it stopped converging). `MainActivity.reconcileSheet` asks only
   whether *some* record still offers a choice, so a sheet left open while the activity
@@ -3482,7 +3482,7 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   written, so this is the maintainer's call: take it as a follow-up PR, or fold it in and
   accept another round.
 
-- **A refusal settled during restore reseeds against the wrong cap**
+- [x] **A refusal settled during restore reseeded against the wrong cap**
   (2026-08-30, Codex on PR #152, deferred there — the seventh round, filed against a
   documentation-only commit, which is the clearest evidence yet that this seam is not
   converging). `MainActivity`'s `ceilingAt` reads the in-memory `activeSnooze`, and that
@@ -3502,6 +3502,11 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   `ceiling` — already in the bundle — into the reseed instead of asking `ceilingAt`.
   Settle it together with the `startedAt` binding above; both are about a restored sheet
   trusting state the screen has not read back yet.
+  **Fixed** by giving the offer an identity: the controller records the `startedAt` of the
+  snooze it was seeded against, takes its ceiling from that same record, and `reconcile`
+  compares the two — dropping an offer whose snooze is gone or replaced, and reseeding one
+  whose time has fallen inside the floor. The refusal path reseeds against the offer's own
+  ceiling rather than asking the host for one it may not have.
   **And the same seam bites the fresh-arm path, not just restore** (Codex's eighth round,
   same PR, also filed against a documentation-only commit). `offerSheetForThisArm` gates on
   the record it just loaded and then seeds from `activeSnooze` — so an arm made while the

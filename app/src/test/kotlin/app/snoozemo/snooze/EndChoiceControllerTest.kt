@@ -1,6 +1,8 @@
 package app.snoozemo.snooze
 
 import app.snoozemo.core.ActiveSnooze
+import app.snoozemo.core.Anchor
+import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.EndCondition
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -8,6 +10,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
 
@@ -36,16 +39,20 @@ class EndChoiceControllerTest {
         var onOutcome: ((EndChoiceResult) -> Unit)? = null
         var watchedRequestId: Long = 0L
         var sentRequestId: Long = 0L
+        var sentForSnooze: Instant? = null
+        /** What the host would answer if asked what is running right now. */
+        var live: ActiveSnooze? = null
     }
 
     @org.junit.Before
     fun clearChannel() = EndChoiceOutcome.reset()
 
     private fun controller(seams: Seams) = EndChoiceController(
-        ceilingAt = { at -> at.plus(ActiveSnooze.DEFAULT_CAP) },
-        chooseEnd = { at, requestId ->
+        currentRecord = { seams.live },
+        chooseEnd = { at, requestId, forSnooze ->
             seams.sent = at
             seams.sentRequestId = requestId
+            seams.sentForSnooze = forSnooze
             seams.accepted
         },
         watchOutcome = { requestId, handler ->
@@ -59,8 +66,17 @@ class EndChoiceControllerTest {
         zone = { zone },
     )
 
+    /** A snooze to offer times against; its `startedAt` is the offer's identity. */
+    private fun snoozeAt(startedAt: Instant, capIn: Duration = ActiveSnooze.DEFAULT_CAP) =
+        ActiveSnooze(
+            anchor = Anchor(capturedAt = startedAt, ssid = "ExampleWifi"),
+            startedAt = startedAt,
+            capExpiresAt = startedAt.plus(capIn),
+            mode = TrackingMode.DURATION_ONLY,
+        )
+
     private fun seeded(seams: Seams): EndChoiceController =
-        controller(seams).also { it.seed() }
+        controller(seams).also { it.seed(snoozeAt(seams.now)) }
 
     @Test
     fun `an accepted choice dismisses the sheet`() {
@@ -141,8 +157,8 @@ class EndChoiceControllerTest {
         val controller = seeded(seams)
         val first = controller.endCondition!!.endsAt
 
-        val later = now.plus(java.time.Duration.ofMinutes(40))
-        controller.seed(later)
+        val later = now.plus(Duration.ofMinutes(40))
+        controller.seed(snoozeAt(later), later)
 
         assertTrue("the offer moved with the arm", controller.endCondition!!.endsAt.isAfter(first))
     }
@@ -155,7 +171,7 @@ class EndChoiceControllerTest {
         controller.commit(controller.endCondition!!.endsAt)
         assertTrue(controller.commitFailed)
 
-        controller.seed()
+        controller.seed(snoozeAt(now))
 
         assertFalse("a fresh offer is not a failed one", controller.commitFailed)
     }
@@ -187,6 +203,7 @@ class EndChoiceControllerTest {
             EndCondition.seededAt(now, now.plus(ActiveSnooze.DEFAULT_CAP), zone),
             wasCommitting = true,
             failed = false,
+            offeredFor = now,
             configurationChange = true,
             requestId = RESUMED_REQUEST,
         )
@@ -211,6 +228,7 @@ class EndChoiceControllerTest {
             EndCondition.seededAt(now, now.plus(ActiveSnooze.DEFAULT_CAP), zone),
             wasCommitting = true,
             failed = false,
+            offeredFor = now,
             configurationChange = true,
             requestId = RESUMED_REQUEST,
         )
@@ -233,6 +251,7 @@ class EndChoiceControllerTest {
             EndCondition.seededAt(now, now.plus(ActiveSnooze.DEFAULT_CAP), zone),
             wasCommitting = true,
             failed = false,
+            offeredFor = now,
             configurationChange = true,
             requestId = RESUMED_REQUEST,
         )
@@ -255,6 +274,7 @@ class EndChoiceControllerTest {
             EndCondition.seededAt(now, now.plus(ActiveSnooze.DEFAULT_CAP), zone),
             wasCommitting = true,
             failed = false,
+            offeredFor = now,
             configurationChange = false,
             requestId = RESUMED_REQUEST,
         )
@@ -278,6 +298,7 @@ class EndChoiceControllerTest {
             EndCondition.seededAt(now, now.plus(ActiveSnooze.DEFAULT_CAP), zone),
             wasCommitting = true,
             failed = false,
+            offeredFor = now,
             configurationChange = true,
             requestId = RESUMED_REQUEST,
         )
@@ -304,6 +325,11 @@ class EndChoiceControllerTest {
         assertTrue("a real identity, not the absent-request sentinel", seams.sentRequestId != 0L)
         assertEquals(seams.sentRequestId, seams.watchedRequestId)
         assertEquals(seams.sentRequestId, controller.committingRequestId)
+        assertEquals(
+            "and names the snooze it was made for, so the service can refuse a mismatch",
+            controller.offerFor,
+            seams.sentForSnooze,
+        )
     }
 
     @Test
@@ -318,12 +344,150 @@ class EndChoiceControllerTest {
             EndCondition.seededAt(now, now.plus(ActiveSnooze.DEFAULT_CAP), zone),
             wasCommitting = true,
             failed = false,
+            offeredFor = now,
             configurationChange = true,
             requestId = 0L,
         )
 
         assertFalse(controller.committing)
         assertEquals("and watching nothing", 0, seams.watches)
+    }
+
+    @Test
+    fun `a refusal rebuilds the offer from the cap as it is now`() {
+        // A wall-clock change reconciles `capExpiresAt` onto the new frame
+        // while `startedAt` stays put, so the ceiling this offer was built with
+        // can name an earlier instant than the snooze actually allows.
+        // Reseeding against that cached value could put the replacement below
+        // the floor as well, refusing every retry (Codex, PR #155).
+        val seams = Seams(now)
+        val controller = controller(seams)
+        val tight = snoozeAt(now, capIn = ActiveSnooze.MIN_CAP.plusMinutes(20))
+        controller.seed(tight, now)
+        // The clock moves on past the offer, and the cap moves with it.
+        val later = controller.endCondition!!.endsAt.plus(Duration.ofMinutes(1))
+        val reconciled = tight.copy(capExpiresAt = later.plus(Duration.ofHours(4)))
+        seams.live = reconciled
+        seams.now = later
+        seams.accepted = true
+        controller.commit(controller.endCondition!!.endsAt)
+
+        requireNotNull(seams.onOutcome)(EndChoiceResult.REFUSED)
+
+        assertTrue("the refusal is still shown", controller.commitFailed)
+        assertEquals(
+            "and the rebuilt offer uses the reconciled cap",
+            reconciled.capExpiresAt,
+            controller.endCondition!!.ceiling,
+        )
+        assertTrue(
+            "so the retry is one the service would accept",
+            controller.endCondition!!.endsAt.isAfter(later.plus(ActiveSnooze.MIN_CAP)),
+        )
+    }
+
+    @Test
+    fun `a refusal with no live record leaves the offer standing`() {
+        // The host has not read a record back yet. Rebuilding from something
+        // that is not this snooze would be worse than showing the failure and
+        // letting `reconcile` settle it on the next record read.
+        val seams = Seams(now)
+        val controller = controller(seams)
+        controller.seed(snoozeAt(now, capIn = ActiveSnooze.MIN_CAP.plusMinutes(20)), now)
+        val offered = controller.endCondition!!.endsAt
+        seams.now = offered.plus(Duration.ofMinutes(1))
+        seams.live = null
+        controller.commit(offered)
+
+        requireNotNull(seams.onOutcome)(EndChoiceResult.REFUSED)
+
+        assertTrue(controller.commitFailed)
+        assertEquals("unchanged, not rebuilt from a guess", offered, controller.endCondition!!.endsAt)
+    }
+
+    @Test
+    fun `a different snooze running is not the one the offer was made for`() {
+        // The screen can be stopped across one snooze ending and another
+        // arming. Asking only whether *some* snooze offers a choice lets the
+        // replacement pass for the original, and the time chosen for the first
+        // is then applied to the second (Codex, PR #152).
+        val seams = Seams(now)
+        val controller = seeded(seams)
+
+        controller.reconcile(snoozeAt(now.plus(Duration.ofMinutes(20))), now)
+
+        assertNull(controller.endCondition)
+        assertEquals(1, seams.dismissals)
+    }
+
+    @Test
+    fun `the snooze ending takes its offer with it`() {
+        val seams = Seams(now)
+        val controller = seeded(seams)
+
+        controller.reconcile(null, now)
+
+        assertNull(controller.endCondition)
+    }
+
+    @Test
+    fun `the same snooze still running keeps its offer untouched`() {
+        val seams = Seams(now)
+        val controller = seeded(seams)
+        val offered = controller.endCondition!!.endsAt
+
+        controller.reconcile(snoozeAt(now), now.plus(Duration.ofMinutes(5)))
+
+        assertEquals("nothing to correct", offered, controller.endCondition!!.endsAt)
+        assertEquals(0, seams.dismissals)
+    }
+
+    @Test
+    fun `an offer that went stale while away is reseeded, not dropped`() {
+        // The worker finished while the screen was stopped, or it simply sat
+        // there: the time on it has fallen inside the floor. The snooze is
+        // still running and still refinable, so the question is worth asking —
+        // just not that one (Codex, PR #152).
+        val seams = Seams(now)
+        val controller = seeded(seams)
+        val stale = controller.endCondition!!.endsAt
+
+        val muchLater = stale.plus(Duration.ofMinutes(1))
+        controller.reconcile(snoozeAt(now, capIn = Duration.ofHours(8)), muchLater)
+
+        assertEquals("still asking", 0, seams.dismissals)
+        assertTrue(
+            "against a time the service would accept",
+            controller.endCondition!!.endsAt.isAfter(muchLater.plus(ActiveSnooze.MIN_CAP)),
+        )
+    }
+
+    @Test
+    fun `a commit in flight is never reconciled away`() {
+        val seams = Seams(now)
+        val controller = seeded(seams)
+        controller.commit(controller.endCondition!!.endsAt)
+
+        controller.reconcile(null, now)
+
+        assertNotNull("its answer is coming and settles it", controller.endCondition)
+        assertEquals(0, seams.dismissals)
+    }
+
+    @Test
+    fun `the offer takes its ceiling from the record it was seeded against`() {
+        // Not from whatever the host had to hand: a stale or absent warm copy
+        // gives `now + DEFAULT_CAP`, and the offer can then walk past the
+        // running snooze's real cap — which the service honors by doing
+        // nothing while reporting it applied (Codex, PR #152).
+        val seams = Seams(now)
+        val controller = controller(seams)
+        val nearCap = snoozeAt(now, capIn = Duration.ofHours(2))
+
+        controller.seed(nearCap, now)
+
+        assertEquals(nearCap.capExpiresAt, controller.endCondition!!.ceiling)
+        assertEquals(nearCap.startedAt, controller.offerFor)
     }
 
     @Test

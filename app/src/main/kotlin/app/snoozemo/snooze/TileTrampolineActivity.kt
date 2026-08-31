@@ -92,8 +92,13 @@ class TileTrampolineActivity : ComponentActivity() {
         // Loaded here rather than kept warm: this activity exists for one tap
         // and reads it only after the service start, so a load is the honest
         // shape — and the sheet is off by default, so most taps never reach it.
-        ceilingAt = { now -> EndCondition.ceilingFor(ActiveSnoozeStore(this).load(), now) },
-        chooseEnd = { endsAt, requestId -> SnoozeService.chooseEnd(this, endsAt, requestId) },
+        // Read from disk, which this activity keeps no copy of. Only ever
+        // called from a refusal, long after the service start, so it is not on
+        // the arm path (SPEC.md §6.9).
+        currentRecord = { ActiveSnoozeStore(this).load() },
+        chooseEnd = { endsAt, requestId, forSnooze ->
+            SnoozeService.chooseEnd(this, endsAt, requestId, forSnooze)
+        },
         watchOutcome = EndChoiceOutcome::watch,
         onDismiss = ::finish,
     )
@@ -164,7 +169,8 @@ class TileTrampolineActivity : ComponentActivity() {
             // not [decide] itself: the permission has just been answered, so
             // re-running its ask branch would put the dialog straight back up.
             val now = Instant.ofEpochMilli(System.currentTimeMillis())
-            if (shouldOfferSheet(stillArming, now)) showEndConditionSheet(now) else finish()
+            val offering = offerableRecord(stillArming, now)
+            if (offering != null) showEndConditionSheet(offering, now) else finish()
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -222,6 +228,14 @@ class TileTrampolineActivity : ComponentActivity() {
         }
     }
 
+    /** The snooze a saved offer was made against, if it named one. */
+    private fun savedOfferedFor(state: Bundle): Instant? =
+        if (state.containsKey(STATE_OFFERED_FOR)) {
+            Instant.ofEpochMilli(state.getLong(STATE_OFFERED_FOR))
+        } else {
+            null
+        }
+
     /** The recreation marker for this activity; see [RecreationMarker]. */
     private fun marker(): RecreationMarker =
         ViewModelProvider(this)[RecreationMarker::class.java]
@@ -234,6 +248,7 @@ class TileTrampolineActivity : ComponentActivity() {
         outState.putBoolean(STATE_SHEET_SHOWN, sheetRendered)
         outState.putBoolean(STATE_COMMITTING, sheet.committing)
         outState.putLong(STATE_REQUEST_ID, sheet.committingRequestId)
+        sheet.offerFor?.let { outState.putLong(STATE_OFFERED_FOR, it.toEpochMilli()) }
         outState.putBoolean(STATE_COMMIT_FAILED, sheet.commitFailed)
         sheet.endCondition?.let {
             outState.putLong(STATE_ENDS_AT, it.endsAt.toEpochMilli())
@@ -290,11 +305,15 @@ class TileTrampolineActivity : ComponentActivity() {
         // Only on the way in. A user ending a snooze is on their way out of
         // the app's way, and a permission dialog in front of that is the
         // opposite of "always available, always instant" (SPEC.md §7).
-        if (arming && shouldAskForNotifications()) {
+        val askFirst = arming && shouldAskForNotifications()
+        // Read once, and only where it can be used: both this and the record
+        // load below are IPC or disk, and this path runs on the main thread.
+        val offering = if (askFirst) null else offerableRecord(arming, now)
+        if (askFirst) {
             awaitingPermission = true
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else if (shouldOfferSheet(arming, now)) {
-            showEndConditionSheet(now)
+        } else if (offering != null) {
+            showEndConditionSheet(offering, now)
         } else {
             // Nothing to render, so don't linger: an empty transparent
             // window on screen is the "flash of blank" §6.9 warns about.
@@ -343,6 +362,7 @@ class TileTrampolineActivity : ComponentActivity() {
                 // of restoring, so a commit reached here is always live.
                 configurationChange = true,
                 requestId = 0L,
+                offeredFor = savedOfferedFor(state),
             )
             return
         }
@@ -353,6 +373,7 @@ class TileTrampolineActivity : ComponentActivity() {
             failed = state.getBoolean(STATE_COMMIT_FAILED),
             configurationChange = true,
             requestId = state.getLong(STATE_REQUEST_ID),
+            offeredFor = savedOfferedFor(state),
         )
     }
 
@@ -456,8 +477,10 @@ class TileTrampolineActivity : ComponentActivity() {
      * is exactly what the setting being off would have given them. The opposite
      * failure is a sheet whose taps go nowhere.
      */
-    private fun shouldOfferSheet(arming: Boolean, now: Instant): Boolean =
-        arming && startAccepted && !isLocked() && endSheetStore.isEnabled() && thereIsAChoice(now)
+    private fun offerableRecord(arming: Boolean, now: Instant): ActiveSnooze? {
+        if (!arming || !startAccepted || isLocked() || !endSheetStore.isEnabled()) return null
+        return recordOffering(now)
+    }
 
     /**
      * Whether the phone is locked, in which case there is no sheet.
@@ -491,9 +514,13 @@ class TileTrampolineActivity : ComponentActivity() {
      * sheet and a correctly armed snooze is exactly what the setting being off
      * would have given them.
      */
-    private fun thereIsAChoice(now: Instant): Boolean {
-        val cap = ActiveSnoozeStore(this).load()?.capExpiresAt ?: return false
-        return cap.isAfter(now.plus(ActiveSnooze.MIN_CAP))
+    private fun recordOffering(now: Instant): ActiveSnooze? {
+        // Returned rather than reduced to a yes: the sheet is seeded from this
+        // very record, so its ceiling and the gate that admitted it cannot
+        // disagree, and the disk is read once rather than twice (Codex,
+        // PR #152).
+        val record = ActiveSnoozeStore(this).load() ?: return null
+        return record.takeIf { EndCondition.offersAChoice(it, now) }
     }
 
     /**
@@ -518,7 +545,7 @@ class TileTrampolineActivity : ComponentActivity() {
      * theme leaves it off so nothing runs before the service start, and the
      * sheet is the first thing this activity has ever drawn.
      */
-    private fun showEndConditionSheet(now: Instant) {
+    private fun showEndConditionSheet(record: ActiveSnooze, now: Instant) {
         // Re-seeded on every arm, including a second tile tap arriving at
         // `onNewIntent` while the sheet is up: that tap armed a *new* snooze, so
         // an hour from the first tap is no longer the offer being made.
@@ -527,7 +554,7 @@ class TileTrampolineActivity : ComponentActivity() {
         // renders in: rounding against any other would put the seed on a half
         // hour the user is not being shown (Codex, PR #118). Reading it here is
         // an in-memory lookup, and this runs after the service is already away.
-        sheet.seed(now)
+        sheet.seed(record, now)
         renderSheet()
     }
 
@@ -617,6 +644,7 @@ class TileTrampolineActivity : ComponentActivity() {
         const val STATE_SHEET_SHOWN = "sheet_shown"
         const val STATE_COMMITTING = "committing"
         const val STATE_REQUEST_ID = "requestId"
+        const val STATE_OFFERED_FOR = "offeredFor"
         const val STATE_COMMIT_FAILED = "commit_failed"
 
         // The sheet's own three instants. On-device only and never logged: when

@@ -36,19 +36,26 @@ import java.time.ZoneId
  */
 internal class EndChoiceController(
     /**
-     * The latest time the sheet may offer, over the record as it stands now.
+     * The snooze running right now, as the host best knows it.
      *
-     * A seam because each host holds the record somewhere different — the tile
-     * path loads it, the app screen keeps a warm copy — and neither should put
-     * a disk wait where this is read. Both pass it through
-     * [EndCondition.ceilingFor].
+     * Typed as the record rather than as a bare ceiling, which is what makes it
+     * safe where its predecessor was not: the controller compares
+     * [ActiveSnooze.startedAt] against the offer's own before using it, so a
+     * host that answers with a stale or absent copy is *detected* instead of
+     * silently supplying `now + DEFAULT_CAP`.
+     *
+     * Needed because a cached ceiling can go stale under a fixed identity: a
+     * wall-clock change reconciles `capExpiresAt` onto the new frame while
+     * `startedAt` deliberately stays put (see `ActiveSnooze.capCeilingAt`), so
+     * the same snooze can outlive the ceiling the offer was built with (Codex,
+     * PR #155).
      */
-    private val ceilingAt: (Instant) -> Instant,
+    private val currentRecord: () -> ActiveSnooze?,
     /**
      * Hands the chosen time to the service. False means it never dispatched,
      * so no outcome is coming and this settles the commit itself.
      */
-    private val chooseEnd: (endsAt: Instant, requestId: Long) -> Boolean,
+    private val chooseEnd: (endsAt: Instant, requestId: Long, forSnooze: Instant?) -> Boolean,
     /** Subscribes to what the service said; closed on every settled commit. */
     private val watchOutcome: (requestId: Long, onOutcome: (EndChoiceResult) -> Unit) -> AutoCloseable,
     /** Called when the sheet has nothing left to ask and should go away. */
@@ -68,6 +75,22 @@ internal class EndChoiceController(
      * naming an hour from the first tap.
      */
     var endCondition by mutableStateOf<EndCondition?>(null)
+        @VisibleForTesting internal set
+
+    /**
+     * Which snooze the current offer was made against — its `startedAt`, which
+     * never moves for a given snooze — or null while no sheet is up.
+     *
+     * **The sheet needs an identity for its snooze, and this is it.** Without
+     * one, every check here asks a proxy question: is *some* snooze running,
+     * does *some* record still offer a choice. Each proxy is right until a path
+     * turns up where it isn't — a sheet outliving its snooze while the screen
+     * is stopped, another snooze armed before the user comes back, an offer
+     * seeded from a record the screen had not caught up with. Five review
+     * rounds on PR #152 each found one of those and each would have taken its
+     * own guard; comparing identities answers all of them at once.
+     */
+    var offerFor by mutableStateOf<Instant?>(null)
         @VisibleForTesting internal set
 
     /**
@@ -111,8 +134,15 @@ internal class EndChoiceController(
      * the sheet is up armed a *new* snooze, so an hour from the first is no
      * longer the offer being made.
      */
-    fun seed(now: Instant = clock()) {
-        endCondition = EndCondition.seededAt(now, ceilingAt(now), zone())
+    fun seed(record: ActiveSnooze?, now: Instant = clock()) {
+        // The ceiling comes from the record the caller checked, never from a
+        // copy it keeps elsewhere: the app screen's warm `activeSnooze` can be
+        // null or stale exactly when a sheet is being seeded, and a ceiling of
+        // `now + DEFAULT_CAP` then lets the offer walk past the running
+        // snooze's real cap — which the service honors by doing nothing while
+        // reporting it applied (Codex, PR #152).
+        offerFor = record?.startedAt
+        endCondition = EndCondition.seededAt(now, EndCondition.ceilingFor(record, now), zone())
         commitFailed = false
     }
 
@@ -155,7 +185,10 @@ internal class EndChoiceController(
         committingRequestId = EndChoiceOutcome.nextRequestId()
         outcomeWatch?.close()
         outcomeWatch = watchOutcome(committingRequestId, ::onOutcome)
-        if (!chooseEnd(endsAt, committingRequestId)) {
+        // The identity travels with the choice. The check here is redraw-time
+        // hygiene; this is what makes it binding, since the service applies the
+        // cap and validates the claim in the same pass (Codex, PR #155).
+        if (!chooseEnd(endsAt, committingRequestId, offerFor)) {
             SnoozeDebugLog.warning("the service refused to start for a chosen end time")
             onOutcome(EndChoiceResult.REFUSED)
         }
@@ -183,16 +216,67 @@ internal class EndChoiceController(
         // sheet a dead end — the same tap failing forever — so the offer is
         // reseeded against the clock as it is now.
         val now = clock()
-        if (endCondition?.endsAt?.isBefore(now.plus(ActiveSnooze.MIN_CAP)) == true) {
-            endCondition = EndCondition.seededAt(now, ceilingAt(now), zone())
+        val standing = endCondition
+        if (standing == null || !standing.endsAt.isBefore(now.plus(ActiveSnooze.MIN_CAP))) return
+        // Rebuilt from the record as it is now, not from the ceiling this offer
+        // was built with: a clock change moves `capExpiresAt` under a fixed
+        // `startedAt`, so the cached ceiling can name an earlier instant than
+        // the snooze actually allows — and reseeding against that could put the
+        // new offer below the floor too, refusing every retry (Codex, PR #155).
+        val live = currentRecord()
+        if (live?.startedAt == offerFor && EndCondition.offersAChoice(live, now)) {
+            seed(live, now)
+            commitFailed = true
+            return
         }
+        // The host cannot see a live record for this offer — it may not have
+        // read one back yet. Left standing with the failure showing rather than
+        // rebuilt from something that isn't this snooze; [reconcile] runs on
+        // every record read and always has one, so it settles this.
+        SnoozeDebugLog.event("end-condition offer left stale: no live record to rebuild it from")
     }
 
     /** Takes the sheet down without committing; the snooze stands as armed. */
     fun dismiss() {
         endCondition = null
+        offerFor = null
         commitFailed = false
         onDismiss()
+    }
+
+    /**
+     * Drops or refreshes an offer the running record can no longer honor.
+     *
+     * Three ways an offer stops belonging to what is actually running, all of
+     * which this answers by comparing [offerFor] against the record rather than
+     * asking whether *some* snooze is up (Codex, PR #152):
+     *
+     * - **Its snooze is over** — a departure, the cap, a capability loss. The
+     *   sheet goes, rather than waiting for a tap to come back `GONE`.
+     * - **A different snooze is running.** The screen can be stopped across a
+     *   snooze ending and another arming; without the identity the replacement
+     *   passes for the original and the old chosen time is applied to it.
+     * - **The offer has gone stale** — the worker finished while the screen was
+     *   away, or it simply sat there, and the time on it has fallen inside the
+     *   floor. Reseeded rather than dropped: the snooze is still running and
+     *   still refinable, so there is a question worth asking, just not that one.
+     *
+     * Never touches a commit in flight: its answer is coming and settles the
+     * sheet itself, and dismissing underneath would lose the refusal message
+     * SPEC.md §4.2 requires reach a user who denied notifications.
+     */
+    fun reconcile(record: ActiveSnooze?, now: Instant = clock()) {
+        val standing = endCondition ?: return
+        if (committing) return
+        if (record?.startedAt != offerFor || !EndCondition.offersAChoice(record, now)) {
+            SnoozeDebugLog.event("end-condition sheet dropped: it was offering times for another snooze")
+            dismiss()
+            return
+        }
+        if (standing.endsAt.isBefore(now.plus(ActiveSnooze.MIN_CAP))) {
+            SnoozeDebugLog.event("end-condition sheet reseeded: its offer had gone stale")
+            seed(record, now)
+        }
     }
 
     /**
@@ -233,8 +317,10 @@ internal class EndChoiceController(
         failed: Boolean,
         configurationChange: Boolean,
         requestId: Long,
+        offeredFor: Instant?,
     ) {
         endCondition = condition
+        offerFor = offeredFor
         commitFailed = failed
         if (!wasCommitting) return
         // Named, so the answer this resumes is the one this sheet asked for.
