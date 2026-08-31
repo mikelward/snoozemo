@@ -261,6 +261,26 @@ internal object DebugLogging {
     }
 
     /**
+     * Reports a failure from a call into the shared sink, or from the enqueue
+     * that would have made one.
+     *
+     * None of those calls throws today — each is contained whole on the
+     * library's side, and the ones with an outcome the screen needs publish it
+     * rather than propagating. So every catch these guard is for a contract
+     * that changes under us: the library is tracked at `@main` with nothing
+     * pinned, and a silent catch is exactly what would hide that (Codex,
+     * PR #153).
+     *
+     * Contained itself, because it runs inside catches whose whole job is to
+     * stop a failure escaping — and it goes through the log rather than a bare
+     * `Log.e` so the *Privacy* rule's floor applies to it too. The messages
+     * name the operation and nothing else.
+     */
+    private fun logSinkFailure(cause: Throwable, what: String) {
+        runCatching { SnoozeDebugLog.failure(cause, what) }
+    }
+
+    /**
      * [install]'s body, on the worker thread. Separate so the crash reads below
      * can retry it inline when they find [sink] null — they already run on this
      * same single-threaded worker.
@@ -306,7 +326,7 @@ internal object DebugLogging {
             // before this screen existed still reaches it.
             fileSink.addStorageListener { outcomes ->
                 sinkPurgeFailed = outcomes.optOutPurgeFailed
-                lastDismissFailed = outcomes.crashDismissalFailed
+                sinkDismissFailed = outcomes.crashDismissalFailed
                 // Both ears, unconditionally. The sink's purge and rename run
                 // on *its* worker, so either outcome can settle long after the
                 // tap that started it has already told the screen it was done
@@ -462,11 +482,17 @@ internal object DebugLogging {
                 if (installed == null) {
                     onResult(false, false)
                 } else {
+                    // A recompute that never ran leaves the screen deriving
+                    // from a stale value with nothing to say so.
                     runCatching { installed.requestCrashRecompute() }
+                        .onFailure { logSinkFailure(it, "a crash recompute could not be requested") }
                     onResult(pinnedCrash, true)
                 }
             }
-        }.onFailure { onResult(false, false) }
+        }.onFailure {
+            logSinkFailure(it, "debug-log worker refused a crash check")
+            onResult(false, false)
+        }
     }
 
     /**
@@ -508,10 +534,16 @@ internal object DebugLogging {
                     // "timed out" instead of the real failure (Codex, PR #89).
                     runCatching { installed.readPreviousRun() }
                         .onSuccess { onResult(it, pinnedCrash, true) }
-                        .onFailure { onResult(null, pinnedCrash, false) }
+                        .onFailure {
+                            logSinkFailure(it, "the previous runs could not be read")
+                            onResult(null, pinnedCrash, false)
+                        }
                 }
             }
-        }.onFailure { onResult(null, false, false) }
+        }.onFailure {
+            logSinkFailure(it, "debug-log worker refused a previous-run read")
+            onResult(null, false, false)
+        }
     }
 
     /** Mirrors [watchSaveOutcome]; fed by the sink's own crash listener. */
@@ -533,8 +565,17 @@ internal object DebugLogging {
             worker.execute {
                 val installed = sink
                 if (installed != null) {
-                    if (run != null) runCatching { installed.clearPreviousRun(run) }
+                    // The banner is acknowledged whether or not the clear
+                    // succeeded, deliberately: the report landed, so the user
+                    // has the crash, and the library holds any file it could
+                    // not discard for the next share to retry. What a failure
+                    // here loses is the diagnostic, not the evidence.
+                    if (run != null) {
+                        runCatching { installed.clearPreviousRun(run) }
+                            .onFailure { logSinkFailure(it, "a shared run could not be cleared") }
+                    }
                     runCatching { installed.acknowledgeCrashBanner() }
+                        .onFailure { logSinkFailure(it, "a crash banner could not be acknowledged after a share") }
                 }
                 // Unconditional, because "a consume completed" is its own event
                 // and not the same fact as "the pin state changed". The sink's
@@ -555,24 +596,40 @@ internal object DebugLogging {
                 runCatching { onCrashPinOutcome?.invoke() }
                 onResult(true)
             }
-        }.onFailure { onResult(false) }
+        }.onFailure {
+            logSinkFailure(it, "debug-log worker refused a crash-pin consume")
+            onResult(false)
+        }
     }
 
     /**
      * Whether the most recently completed [dismissCrashPin] was refused.
      *
-     * Mirrored from the sink's storage listener rather than cleared on each
-     * tap and set on completion: the sink already clears it when a dismissal
-     * succeeds, and a local eager reset would race that publication for the
-     * screen's next read.
+     * A union, for the same reason [lastDisableCleanupFailed] is one: the sink
+     * can only answer for the attempts that reached it. [sinkDismissFailed] is
+     * mirrored from its storage listener rather than cleared on each tap and
+     * set on completion — the sink already clears it when a dismissal succeeds,
+     * and a local eager reset would race that publication for the screen's next
+     * read. [localDismissFailed] covers the attempts that never got that far.
      *
      * A refused dismissal leaves the banner up by construction — the sink
      * lowers nothing eagerly — so the user is never told it worked. What this
      * carries is the *why*, which the banner alone cannot say (Codex, PR #153).
      */
+    val lastDismissFailed: Boolean get() = sinkDismissFailed || localDismissFailed
+
+    /** The half the sink publishes; see [lastDismissFailed]. */
     @Volatile
-    var lastDismissFailed: Boolean = false
-        private set
+    private var sinkDismissFailed: Boolean = false
+
+    /**
+     * The half the sink cannot publish: a dismissal *this* worker refused, so
+     * `acknowledgeCrashBanner()` was never called and nothing over there has an
+     * outcome to report. Cleared at the start of each attempt, so a retry that
+     * gets through retires it (Codex, PR #153).
+     */
+    @Volatile
+    private var localDismissFailed: Boolean = false
 
     @Volatile
     private var onDismissOutcome: (() -> Unit)? = null
@@ -589,12 +646,34 @@ internal object DebugLogging {
      * dismissal is "I don't want to look at this", not "delete the evidence".
      */
     fun dismissCrashPin() {
-        runCatching {
+        try {
             worker.execute {
-                reinstallIfNeeded()
-                runCatching { sink?.acknowledgeCrashBanner() }
+                localDismissFailed = false
+                try {
+                    reinstallIfNeeded()
+                    sink?.acknowledgeCrashBanner()
+                } catch (e: RuntimeException) {
+                    // The sink does not throw here today — its body is
+                    // contained whole, and the one synchronous failure it has,
+                    // a refused enqueue, publishes `crashDismissalFailed`
+                    // rather than propagating. So this is for a contract that
+                    // changes under us: the library is tracked at `@main` with
+                    // nothing pinned. It logs and records rather than
+                    // swallowing, because a silent catch here would leave the
+                    // banner up with nothing anywhere saying why (Codex,
+                    // PR #153).
+                    localDismissFailed = true
+                    logSinkFailure(e, "a crash-banner dismissal failed before it was queued")
+                }
                 runCatching { onDismissOutcome?.invoke() }
             }
+        } catch (e: RuntimeException) {
+            // This one the sink genuinely cannot cover: the task never reached
+            // it, so nothing over there has an outcome to publish and the
+            // screen would keep reading the previous answer.
+            localDismissFailed = true
+            logSinkFailure(e, "debug-log worker refused a crash-banner dismissal")
+            runCatching { onDismissOutcome?.invoke() }
         }
     }
 
@@ -616,7 +695,8 @@ internal object DebugLogging {
         lastSaveRefused = false
         sinkPurgeFailed = false
         legacyPurgeFailed = false
-        lastDismissFailed = false
+        sinkDismissFailed = false
+        localDismissFailed = false
         onSaveOutcome = null
         onCrashPinOutcome = null
         onDismissOutcome = null
