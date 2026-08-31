@@ -79,6 +79,49 @@ class SnoozeServiceSetCapTest {
 
     private var watch: AutoCloseable? = null
 
+    /** A choice that claims to be for a snooze that is no longer the one running. */
+    @Test
+    fun `a chosen end for a snooze that is no longer running changes nothing`() {
+        // The sheet checks this too, but only as it redraws — and the tile's
+        // sheet never redraws. This is where it binds: the claim is validated
+        // against the record in the same pass that would change it (Codex,
+        // PR #155).
+        val record = snoozeFixture(now)
+        val chosen = now.plus(Duration.ofHours(1))
+
+        startService(SnoozeService.ACTION_SET_CAP, record) {
+            putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, chosen.toEpochMilli())
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+            // An earlier snooze: this record replaced it while the sheet was up.
+            putExtra(
+                SnoozeService.EXTRA_CHOICE_FOR_SNOOZE,
+                record.startedAt.minus(Duration.ofHours(2)).toEpochMilli(),
+            )
+        }
+
+        assertEquals(
+            "the running snooze keeps its own cap",
+            record.capExpiresAt,
+            ActiveSnoozeStore(appContext).load()?.capExpiresAt,
+        )
+        assertEquals("and the sheet is told its snooze is gone", EndChoiceResult.GONE, reported)
+    }
+
+    @Test
+    fun `a chosen end naming the running snooze is applied`() {
+        val record = snoozeFixture(now)
+        val chosen = now.plus(Duration.ofHours(1))
+
+        startService(SnoozeService.ACTION_SET_CAP, record) {
+            putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, chosen.toEpochMilli())
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+            putExtra(SnoozeService.EXTRA_CHOICE_FOR_SNOOZE, record.startedAt.toEpochMilli())
+        }
+
+        assertEquals(chosen, ActiveSnoozeStore(appContext).load()?.capExpiresAt)
+        assertEquals(EndChoiceResult.APPLIED, reported)
+    }
+
     private fun chooseEnd(endsAt: Instant, record: ActiveSnooze?) =
         startService(SnoozeService.ACTION_SET_CAP, record) {
             putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, endsAt.toEpochMilli())

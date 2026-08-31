@@ -86,6 +86,7 @@ private const val KEY_PERMISSIONS_ORIGIN = "permissionsOrigin"
 private const val KEY_ROUTED_TO_PERMISSIONS_ONCE = "routedToPermissionsOnce"
 private const val KEY_SHEET_COMMITTING = "sheetCommitting"
 private const val KEY_SHEET_REQUEST_ID = "sheetRequestId"
+private const val KEY_SHEET_OFFERED_FOR = "sheetOfferedFor"
 private const val KEY_SHEET_FAILED = "sheetFailed"
 private const val KEY_SHEET_ENDS_AT = "sheetEndsAt"
 private const val KEY_SHEET_FLOOR = "sheetFloor"
@@ -182,8 +183,12 @@ class MainActivity : ComponentActivity() {
      */
     @androidx.annotation.VisibleForTesting
     internal val sheet = EndChoiceController(
-        ceilingAt = { at -> EndCondition.ceilingFor(activeSnooze, at) },
-        chooseEnd = { endsAt, requestId -> SnoozeService.chooseEnd(this, endsAt, requestId) },
+        // The warm copy, which may be stale or null — the controller checks
+        // its identity against the offer's before trusting it.
+        currentRecord = { activeSnooze },
+        chooseEnd = { endsAt, requestId, forSnooze ->
+            SnoozeService.chooseEnd(this, endsAt, requestId, forSnooze)
+        },
         watchOutcome = EndChoiceOutcome::watch,
         // Nothing to finish: clearing the offer is what closes this sheet,
         // unlike the trampoline where the activity *is* the sheet.
@@ -980,6 +985,7 @@ class MainActivity : ComponentActivity() {
         // leave them on the default cap having answered.
         outState.putBoolean(KEY_SHEET_COMMITTING, sheet.committing)
         outState.putLong(KEY_SHEET_REQUEST_ID, sheet.committingRequestId)
+        sheet.offerFor?.let { outState.putLong(KEY_SHEET_OFFERED_FOR, it.toEpochMilli()) }
         outState.putBoolean(KEY_SHEET_FAILED, sheet.commitFailed)
         sheet.endCondition?.let {
             outState.putLong(KEY_SHEET_ENDS_AT, it.endsAt.toEpochMilli())
@@ -1006,6 +1012,11 @@ class MainActivity : ComponentActivity() {
             failed = state.getBoolean(KEY_SHEET_FAILED),
             configurationChange = configurationChange,
             requestId = state.getLong(KEY_SHEET_REQUEST_ID),
+            offeredFor = if (state.containsKey(KEY_SHEET_OFFERED_FOR)) {
+                Instant.ofEpochMilli(state.getLong(KEY_SHEET_OFFERED_FOR))
+            } else {
+                null
+            },
         )
     }
 
@@ -1034,12 +1045,11 @@ class MainActivity : ComponentActivity() {
      */
     @androidx.annotation.VisibleForTesting
     internal fun reconcileSheet(record: ActiveSnooze?, seenAtGeneration: Int) {
-        if (sheet.endCondition == null || sheet.committing) return
+        // A record read that began before the sheet went up predates the arm
+        // the sheet belongs to, so its answer says nothing about this offer.
+        // The rest of the question is the controller's, and both hosts get it.
         if (seenAtGeneration != sheetGeneration) return
-        val wallNow = Instant.ofEpochMilli(SnoozeClock.read().wallMillis)
-        if (EndCondition.offersAChoice(record, wallNow)) return
-        SnoozeDebugLog.event("end-condition sheet dropped: the snooze it offered times for is over")
-        sheet.dismiss()
+        sheet.reconcile(record, Instant.ofEpochMilli(SnoozeClock.read().wallMillis))
     }
 
     override fun onStart() {
@@ -1889,7 +1899,7 @@ class MainActivity : ComponentActivity() {
                     val wallNow = Instant.ofEpochMilli(SnoozeClock.read().wallMillis)
                     if (!EndCondition.offersAChoice(loaded, wallNow)) return@runOnUiThread
                     sheetGeneration++
-                    sheet.seed(wallNow)
+                    sheet.seed(loaded, wallNow)
                 }
             }
         }
