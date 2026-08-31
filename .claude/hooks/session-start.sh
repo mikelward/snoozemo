@@ -15,27 +15,6 @@ if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
   exit 0
 fi
 
-# mikelward/androidlog — the shared debug log, included as a composite build by
-# settings.gradle.kts, which fails evaluation without it. So this runs ahead of
-# the SDK work below: whatever the SDK's state, a session without this checkout
-# cannot run a single Gradle command.
-#
-# Refreshed every session rather than cloned once, because container state
-# survives between sessions and there is no version here — "what @main says now"
-# is the only correct answer.
-#
-# Best-effort: an unreachable GitHub keeps whatever checkout is already there and
-# says so, rather than failing session startup over it.
-ANDROIDLOG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/.androidlog"
-if [ -d "$ANDROIDLOG_DIR/.git" ]; then
-  git -C "$ANDROIDLOG_DIR" fetch --depth 1 origin HEAD \
-    && git -C "$ANDROIDLOG_DIR" reset --hard FETCH_HEAD \
-    || echo "androidlog: could not refresh $ANDROIDLOG_DIR — keeping the existing checkout." >&2
-elif [ ! -d "$ANDROIDLOG_DIR" ]; then
-  git clone --depth 1 https://github.com/mikelward/androidlog "$ANDROIDLOG_DIR" \
-    || echo "androidlog: clone failed — Gradle cannot configure until $ANDROIDLOG_DIR exists." >&2
-fi
-
 ANDROID_SDK_ROOT="${ANDROID_HOME:-/opt/android-sdk}"
 CMDLINE_TOOLS_BUILD="${CMDLINE_TOOLS_BUILD:-13114758}"
 PLATFORM="platforms;android-37.0"

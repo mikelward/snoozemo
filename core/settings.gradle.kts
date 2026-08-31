@@ -34,6 +34,14 @@ dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         mavenCentral()
+        // Same repository the outer build declares, for the same coordinate.
+        // Deliberately fine for this offramp: what it exists to avoid is
+        // `google()` and AGP, not the network — see below.
+        maven {
+            name = "androidlog"
+            url = uri("https://raw.githubusercontent.com/mikelward/androidlog/maven")
+            content { includeGroup("com.mikelward.androidlog") }
+        }
     }
     versionCatalogs {
         create("libs") {
@@ -42,30 +50,44 @@ dependencyResolutionManagement {
     }
 }
 
-// mikelward/androidlog, the same composite build the outer settings includes.
+// mikelward/androidlog. `logging-core` is now published, so the ordinary path
+// here resolves it from the repository declared above like any other
+// dependency — the coordinate being unpublished is what used to force a
+// composite build into this offramp at all (Codex, PR #148).
 //
-// It has to be here too, or this offramp stops being one: `:core` depends on
-// `logging-core`, the coordinate is deliberately unpublished, and without the
-// substitution `cd core && ../gradlew test` fails at `:compileKotlin` trying to
-// resolve `0.0` from Maven Central (Codex, PR #148).
+// The opt-in mirrors the outer build's, and keeps its one hard-won detail:
+// it includes the library's `logging-core/` directory, NOT the repository root.
+// `includeBuild` configures every project in the included build rather than
+// only the one substitution selects, so including the root here would evaluate
+// `:logging-android` -- which applies AGP -- and the root build script, which
+// resolves the AGP plugin marker even under `apply false`. Both come from
+// `google()`, so this offramp would fail on exactly the dependency it exists to
+// avoid (Codex, PR #148; confirmed with an `error(...)` probe in that module,
+// which fired from this build). `logging-core/` carries its own settings file
+// for this, and is Android-free by construction -- `:logging-core:verifyNoAndroid`
+// is what enforces that.
 //
 // Paths are relative to THIS file's directory (`core/`), so they are one level
-// deeper than the outer build's: `../.androidlog` is the CI checkout at the
-// repo root, `../../androidlog` the sibling clone.
-//
-// It includes the library's `logging-core/` directory, NOT the repository root
-// the outer build includes. `includeBuild` configures every project in the
-// included build rather than only the one substitution selects, so including
-// the root here would evaluate `:logging-android` -- which applies AGP -- and
-// the root build script, which resolves the AGP plugin marker even under
-// `apply false`. Both come from `google()`, so this offramp would fail on
-// exactly the dependency it exists to avoid (Codex, PR #148; confirmed with an
-// `error(...)` probe in that module, which fired from this build). `logging-core/`
-// carries its own settings file for this, and is Android-free by construction --
-// `:logging-core:verifyNoAndroid` is what enforces that.
-val androidlog = listOf(file("../.androidlog"), file("../../androidlog"))
-    .firstOrNull { it.isDirectory }
-    ?: error("androidlog not found — git clone https://github.com/mikelward/androidlog ../../androidlog")
-includeBuild(androidlog.resolve("logging-core"))
+// deeper than the outer build's: `../.androidlog` is a checkout at the repo
+// root, `../../androidlog` the sibling clone.
+val androidlogLocal = providers.gradleProperty("androidlogLocal").orNull?.let { raw ->
+    when (raw.trim().lowercase()) {
+        "", "true" -> true
+        "false" -> false
+        else -> error("androidlogLocal must be true or false (or bare), not \"$raw\"")
+    }
+} ?: false
+
+if (androidlogLocal) {
+    val androidlog = listOf(file("../.androidlog"), file("../../androidlog"))
+        .firstOrNull { it.isDirectory }
+        ?: error(
+            "androidlogLocal is set but no checkout was found: " +
+                "git clone https://github.com/mikelward/androidlog ../../androidlog, " +
+                "or drop the property to resolve the published version"
+        )
+    includeBuild(androidlog.resolve("logging-core"))
+    logger.lifecycle("androidlog: using the local checkout at $androidlog")
+}
 
 rootProject.name = "core"
