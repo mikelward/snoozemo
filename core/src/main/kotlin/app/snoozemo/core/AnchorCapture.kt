@@ -147,6 +147,27 @@ class AnchorCapture(private val capturedAt: Instant) {
             return unquoted.takeUnless { it.isBlank() || it == REDACTED_SSID }
         }
 
+        /**
+         * Whether [raw] is the platform withholding the SSID, rather than
+         * reporting one.
+         *
+         * The distinction [sanitizeSsid] cannot express, because it answers
+         * *"is this a usable anchor value?"* and both a redacted read and no
+         * network at all answer no. For a **capture** that is the right
+         * collapse — neither can be stored. For a **watch** it is not: a read
+         * that came back redacted says the platform refused to look, not that
+         * the anchor's network is absent, and treating the two alike is how a
+         * snooze ended for a departure with the phone on its own network.
+         *
+         * Cause-agnostic on purpose. A while-in-use grant read from the
+         * background, a revoked grant, and location services switched off
+         * system-wide all produce this same string, and so will whatever
+         * Android adds next; asking *why* means a list to maintain, while
+         * asking *whether the platform answered* does not.
+         */
+        fun isRedactedSsid(raw: String?): Boolean =
+            raw?.removeSurrounding("\"") == REDACTED_SSID
+
         fun sanitizeBssid(raw: String?): String? =
             raw?.takeUnless { it.isBlank() || it == REDACTED_BSSID }
     }

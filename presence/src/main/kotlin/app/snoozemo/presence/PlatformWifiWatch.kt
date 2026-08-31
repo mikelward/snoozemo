@@ -160,13 +160,27 @@ internal class PlatformWifiWatch(
     }
 
     /**
-     * The raw SSID of whichever known network currently matches the anchor,
-     * or null if none does — association is a property of the *set* of
-     * known networks, not of any single one, so this is read fresh on every
-     * report rather than cached on one network's identity.
+     * The raw SSID that decides the anchor's association, or null when the
+     * known networks establish it is absent — association is a property of
+     * the *set* of known networks, not of any single one, so this is read
+     * fresh on every report rather than cached on one network's identity.
+     *
+     * Three answers in a deliberate order, because they are not equally
+     * definitive:
+     *
+     * 1. A network whose SSID **is** the anchor's settles it, whatever else
+     *    is connected beside it.
+     * 2. Failing that, a **redacted** read settles nothing. The platform
+     *    withheld the SSID rather than reporting a different one, so the
+     *    network behind it may be the anchor's. Handed through rather than
+     *    nulled, so [AnchorWifiTracker] can tell *not here* from *not
+     *    allowed to look*; collapsing the two into null is what let a
+     *    departure be reported with the phone on its own network.
+     * 3. Only with neither of those is the anchor genuinely absent.
      */
     private fun currentAssociationSsid(): String? =
         ssidByNetwork.values.firstOrNull { AnchorCapture.sanitizeSsid(it) == anchorSsid }
+            ?: ssidByNetwork.values.firstOrNull { AnchorCapture.isRedactedSsid(it) }
 
     override fun close() {
         if (!registered) return
