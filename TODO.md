@@ -2981,6 +2981,35 @@ that can only be settled on a real device, ordered by risk.
 
 ## Deferred
 
+- **An oversized crash log can never be consumed by sharing** (Codex, PR #153;
+  needs a maintainer decision). `DebugReport.omitted` refuses to consume the
+  crash pin whenever the report's own 25,000-character bound dropped any of
+  what was read — a guard added earlier on that same PR, because a pinned
+  crash can be an older run that newer ordinary ones push out of the tail, and
+  consuming it there would lower the banner over a report that never carried
+  the crash. For a crash whose runs exceed that bound, the same input truncates
+  the same way every time, so the refusal is **permanent**: sharing can never
+  lower the banner, and the user has to dismiss it by hand. Not a strand — the
+  report still lands, the evidence still exists, and Dismiss still works — but
+  it is a control that visibly never does what it says.
+  **No fix is available to this app alone.** The question the guard would need
+  to ask is "did the *crash's* portion survive", and the concatenated text
+  carries no marker saying where each run begins; `PreviousRun` exposes `text`
+  and `complete`, with `files` internal and no way to request the crashed run
+  on its own. So all three options change `mikelward/androidlog`, which four
+  apps compile:
+  1. **Per-run boundaries in the handle** — the report could then ask about the
+     crash specifically. Biggest, and every consumer re-renders.
+  2. **A read for the crashed run alone**, given its own section and its own
+     budget, so it is never the thing truncated away. Smaller, but adds a
+     second read and a second section to the report format.
+  3. **Leave it, and say so in the UI** — tell the user the report could not
+     carry the whole crash and that Dismiss is the way to clear it. Cheapest;
+     needs approved English copy, so it is not autopilot's to write.
+  Deliberately not guessed: this is a shared-library change or new user-facing
+  copy, and it sits on a seam that has already taken several review rounds.
+
+
 - **A seven-failure unit-test run seen once, never reproduced** (2026-08-31).
   One `:app:testDirectDebugUnitTest` run went red with seven failures whose
   shape pointed at recording being *off* when a test expected it on — a
