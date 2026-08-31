@@ -3233,63 +3233,43 @@ Nothing here is scheduled; each is a sequel that follows from something already 
       Still owed on a handset: that a real calendar provider answers the `Instances` query
       the way the emulator-free unit tests assume, and that the third action reads
       acceptably on a Quick Settings-width card.
-- [ ] **Calendar action: the last freshness windows — the maintainer has now called it**
-      (PR #156, Codex rounds 10-11; decided 2026-08-31). Two windows, both in the gap between
-      a card being built and being posted:
-      - A **timezone change** in that gap leaves `Until 17:00` reading in the old zone. The
-        receiver's repost queues a worker, that worker finds the cache populated and returns
-        without rebuilding, and the in-flight card wins.
-      - A **second record change** in that gap — another degradation, a cap move, a
-        replacement — is not caught by the rebuild's generation guard, which the takedown
-        bumps and nothing else does. The rebuild can overwrite the newer card with the
-        record it loaded a moment earlier.
-      **Both are narrower than this entry first implied, and one is worse.** Tracing them
-      showed each is the *millisecond* span between the card being built and posted, not the
-      calendar query: the label is formatted at build time from an absolute `endsAt`, so a
-      timezone change before the build is rendered correctly and one after the post is
-      corrected by the receiver's own repost. The first window is cosmetic — the action
-      carries `endsAt` as epoch millis, so the button sets the right cap under a wrong
-      label — and is bounded to about once per snooze by the offer cache's
-      `(startedAt, capExpiresAt, readable)` key. The second needs *two* changes in the same
-      gap, so it is rarer, but it costs a stale mode line: `Ends when you leave` over a
-      snooze that is now timer-only, which is principle 2's failure.
-      **Duration is the axis that does not shrink.** None of the eight repost sites is
-      periodic — arm, tile tap, tracking-mode change, record update, clock change, service
-      restart, the no-service cap fallback, and the worker's own rebuild are all events — so
-      on the eventless happy path a stale card stands for the rest of the snooze rather than
-      briefly.
-      **A third path reaches the same stale label by a different mechanism, and it is not one
-      of these two** (Codex, PR #160). `TimeChangedReceiver` corrects the timezone case by
-      asking `SnoozeService.refresh` for a repost — and it ignores that call's Boolean, so a
-      **refused service start** means no repost happens at all. `CapAlarm.kt` says so in as
-      many words: *"Nothing to do when the start is refused — the label is cosmetic, and the
-      next state change rebuilds it anyway."* That reasoning is the same one this entry has
-      just corrected: on an eventless snooze there may be no next state change for hours. It
-      is a separate fix from the two windows below — nothing about how the card is built
-      changes it, because the repost never runs — so the restructure does not close it and
-      it stays open here.
-      **The decision: document now, restructure next** (maintainer, 2026-08-31).
-      - **Done here:** the limits are named where a reader meets them — on
-        `ongoingGeneration` itself, on `postOngoing`'s guard, and beside the worker's
-        field-by-field comparison. No behavior change.
-      - **Next, as its own PR:** stop carrying a built card across the gap. The codebase
-        already contains this path — it is the rebuild the worker takes when the record
-        moved — so the change is to *delete the other branch* and always rebuild. That
-        removes the worker's `buildOngoing` call, the hand-maintained three-field
-        comparison, and the rebuild/post fork, and it needs the generation counter widened
-        from "taken down" to "replaced" (bumped in `postOngoing`, not only `dropOngoing`),
-        since the rebuild still carries the loaded record across the gap even without a
-        card. Building inside the lock is not the alternative: three `PendingIntent` binder
-        calls under it would put the service's main thread behind the worker.
-      - **Why the restructure rather than the counter alone.** The field list is an
-        invariant nothing enforces — it must grow whenever the card grows an input, and
-        forgetting fails silently, which is exactly how `mode` and `degradation` came to be
-        added a round late. Widening the counter closes both windows but leaves that list;
-        deleting the carried-card branch removes it, and is a net deletion. The cost is a
-        rebuild on paths that would previously have posted the card they built: about four
-        binder calls off the main thread, invisible to the user (the card is `setOngoing` +
-        `setOnlyAlertOnce` with a stable `setWhen`, so a repost neither alerts nor
-        re-sorts).
+- [x] **Calendar action: the last freshness windows — closed by rebuilding at post time**
+      (PR #156, Codex rounds 10-11; decided and done 2026-08-31). Two windows sat in the gap
+      between the ongoing card being built and being posted: a **timezone change** left
+      `Until 17:00` reading in the old zone, and a **second record change** could be
+      overwritten by the rebuild, whose generation guard the takedown bumped and nothing
+      else did.
+      **Both were narrower than this entry first implied, and one was worse.** Each was the
+      *millisecond* span between the card being built and posted, not the calendar query —
+      the label is formatted at build time from an absolute `endsAt`, so a timezone change
+      before the build rendered correctly and one after the post was corrected by the
+      receiver's own repost. The first was cosmetic (the action carries `endsAt` as epoch
+      millis, so the button set the right cap under a wrong label). The second cost a stale
+      mode line — `Ends when you leave` over a snooze that was by then timer-only, principle
+      2's failure. Duration was the axis that did not shrink: none of the repost sites is
+      periodic, so a stale card stood until the next real state change rather than briefly.
+      **Fixed by removing the class rather than the instances.** The worker no longer builds
+      a card at all — it answers the calendar question, caches it, and reposts from the
+      record it loaded, so nothing built earlier is posted later and there is no list of
+      fields to keep in step with what the card reads. That deleted the worker's
+      `buildOngoing` call, the hand-maintained mode/degradation/bootReference comparison, and
+      the rebuild-or-post fork.
+      **The counter was split into the two questions it was answering at once**:
+      `ongoingGeneration` now moves on every change to the displayed card, posted or taken
+      down, and answers "is what I validated against still up?"; `ongoingUp` answers "is a
+      card up at all?", which is the separate fact a teardown needs, since it cancels the
+      card before erasing the record. Each name matches its job.
+      **A third path to the same stale label is NOT closed by this** (Codex, PR #160):
+      `TimeChangedReceiver` asks `SnoozeService.refresh` for the timezone repost and ignores
+      that call's Boolean, so a **refused service start** means no repost runs at all.
+      `CapAlarm.kt` reasons that "the next state change rebuilds it anyway", which is the
+      assumption this pair of entries has just corrected — on an eventless snooze there may
+      be no next state change for hours. Nothing about how the card is built reaches it,
+      since the rebuild never happens, so it is a separate fix and stays open.
+      **Cost, stated because it is the trade:** a repost on paths that would previously have
+      posted the card they had already built — about four binder calls off the main thread,
+      invisible, since the card is `setOngoing` + `setOnlyAlertOnce` with a stable `setWhen`
+      and so neither alerts nor re-sorts.
 - [ ] **Saved places** — name an anchor, give it its own policy and duration cap; the tile
       long-press becomes a picker. The `Anchor` type is already shaped for it.
 - [ ] **Settle the backup story** (maintainer, 2026-08-11) — before the first release with

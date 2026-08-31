@@ -88,6 +88,9 @@ class SnoozeNotificationsCalendarTest {
          */
         var onQuery: () -> Unit = {}
 
+        /** Cleared for the case where the calendar answers with nothing. */
+        var hasMeeting: Boolean = true
+
         /** The selection the last query carried, for asserting what it excludes. */
         var lastSelection: String? = null
             private set
@@ -105,7 +108,7 @@ class SnoozeNotificationsCalendarTest {
             lastSelection = selection
             onQuery()
             return MatrixCursor(arrayOf(CalendarContract.Instances.END)).apply {
-                addRow(arrayOf(end.toEpochMilli()))
+                if (hasMeeting) addRow(arrayOf(end.toEpochMilli()))
             }
         }
 
@@ -131,6 +134,15 @@ class SnoozeNotificationsCalendarTest {
             shadowOf(appContext.getSystemService(NotificationManager::class.java))
                 .getNotification(SnoozeNotifications.ID_ONGOING),
         )
+
+    /**
+     * Runs [steps] one per `showOngoing` post, in order, and nothing once they
+     * run out — so a test names only the firings it cares about.
+     */
+    private fun atEachPost(steps: List<() -> Unit>) {
+        val remaining = ArrayDeque(steps)
+        SnoozeNotifications.betweenReadAndPost = { remaining.removeFirstOrNull()?.invoke() }
+    }
 
     private fun ongoingIsUp(): Boolean =
         shadowOf(appContext.getSystemService(NotificationManager::class.java))
@@ -319,6 +331,164 @@ class SnoozeNotificationsCalendarTest {
             2,
             currentOngoing().actions.size,
         )
+    }
+
+    @Test
+    fun `a card posted after the answer was cached is not overwritten by it`() {
+        // The window the generation counter was widened for. The record is
+        // loaded, the answer cached, and *then* something posts a newer card —
+        // a degradation, here. The repost that follows was decided against the
+        // older state, so it has to lose.
+        //
+        // Driven from the seam rather than by timing, because both halves live
+        // in one runnable and nothing else can get between them.
+        val store = ActiveSnoozeStore(appContext)
+        val record = snoozeFixture(now)
+        store.save(record)
+        val notifications = SnoozeNotifications(appContext)
+        val degraded = record.copy(
+            mode = TrackingMode.DURATION_ONLY,
+            degradation = DegradationCause.LOCATION_SERVICES_OFF,
+        )
+        var degradedText: String? = null
+        SnoozeNotifications.betweenAnswerAndRepost = {
+            store.save(degraded)
+            notifications.showOngoing(degraded)
+            degradedText = shadowOf(currentOngoing()).contentText.toString()
+        }
+
+        notifications.showOngoing(record)
+        held.single().run()
+
+        assertEquals(
+            "the repost overwrote a card posted after the answer was cached",
+            degradedText,
+            shadowOf(currentOngoing()).contentText.toString(),
+        )
+    }
+
+    @Test
+    fun `an answer with no meeting does not repost over a newer card`() {
+        // The repost builds from the *persisted* record, and
+        // `onTrackingChanged` posts the correct in-memory card even when its
+        // `store.save` is refused — so in that window the store is behind the
+        // display. When the answer adds nothing, reposting can only put the
+        // pre-degradation mode line back, and there is no third action to be
+        // gained in exchange.
+        //
+        // The failed save is modeled by leaving the store holding the old
+        // record while the degraded card is posted, which is exactly the state
+        // a refused write produces.
+        val store = ActiveSnoozeStore(appContext)
+        val record = snoozeFixture(now)
+        store.save(record)
+        provider.hasMeeting = false
+        val notifications = SnoozeNotifications(appContext)
+        notifications.showOngoing(record)
+
+        val degraded = record.copy(
+            mode = TrackingMode.DURATION_ONLY,
+            degradation = DegradationCause.LOCATION_SERVICES_OFF,
+        )
+        notifications.showOngoing(degraded)
+        val degradedText = shadowOf(currentOngoing()).contentText.toString()
+
+        // Both posts queued a read before either answer landed; the second
+        // finds the cache the first wrote and returns.
+        held.toList().forEach { it.run() }
+
+        assertEquals(
+            "an answer that adds nothing reposted the stale persisted mode",
+            degradedText,
+            shadowOf(currentOngoing()).contentText.toString(),
+        )
+    }
+
+    @Test
+    fun `a card built before the answer landed picks it up after posting`() {
+        // The other side of the same race, and the one the generation guard
+        // alone cannot fix. A card is built from a cache that is empty, the
+        // worker commits its answer and reposts, and *then* the older card
+        // reaches the lock — it takes the generation, so the worker's repost is
+        // abandoned, and what stands is the two-action card. Nothing reposts
+        // the ongoing card on a timer, so it would stand until the next state
+        // change.
+        //
+        // Driven from the seam because the read and the post are one method,
+        // and the gap between them is not otherwise reachable. Queued rather
+        // than a single lambda: the worker's own repost runs through the same
+        // method and fires the seam again, so each firing takes the next entry
+        // and an empty queue is a no-op.
+        val store = ActiveSnoozeStore(appContext)
+        val record = snoozeFixture(now)
+        store.save(record)
+        val notifications = SnoozeNotifications(appContext)
+        notifications.showOngoing(record)
+
+        val degraded = record.copy(
+            mode = TrackingMode.DURATION_ONLY,
+            degradation = DegradationCause.LOCATION_SERVICES_OFF,
+        )
+        store.save(degraded)
+        atEachPost(listOf({ held.single().run() }))
+
+        notifications.showOngoing(degraded)
+
+        assertEquals(
+            "the card built before the answer landed kept the stale offer",
+            3,
+            currentOngoing().actions.size,
+        )
+    }
+
+    @Test
+    fun `the follow-up post loses to a takedown that beat it`() {
+        // The follow-up carries a guard of its own — the generation its own
+        // first post wrote — and this is what that guard is for: the phone has
+        // been let ring between the two, so correcting the offer would put
+        // `Snoozing` back over it. The record is left in place, since a
+        // teardown cancels the card before erasing it.
+        //
+        // Third entry, because the seam fires on the outer post, on the
+        // worker's repost, and again before the follow-up.
+        val store = ActiveSnoozeStore(appContext)
+        val record = snoozeFixture(now)
+        store.save(record)
+        val notifications = SnoozeNotifications(appContext)
+        notifications.showOngoing(record)
+
+        atEachPost(
+            listOf(
+                { held.single().run() },
+                {},
+                { notifications.cancelOngoing() },
+            ),
+        )
+
+        notifications.showOngoing(record)
+
+        assertFalse(
+            "the follow-up put the card back over a phone that had been let ring",
+            ongoingIsUp(),
+        )
+    }
+
+    @Test
+    fun `a takedown after the answer was cached is not undone by the repost`() {
+        // The other thing landing in that gap, and the reason the guard cannot
+        // simply be "post whatever is freshest": a takedown means the phone has
+        // been let ring, and reposting would put `Snoozing` back over it. The
+        // record is deliberately left in place, since a teardown cancels the
+        // card before erasing it.
+        val record = snoozeFixture(now)
+        ActiveSnoozeStore(appContext).save(record)
+        val notifications = SnoozeNotifications(appContext)
+        SnoozeNotifications.betweenAnswerAndRepost = { notifications.cancelOngoing() }
+
+        notifications.showOngoing(record)
+        held.single().run()
+
+        assertFalse("the repost put a canceled card back up", ongoingIsUp())
     }
 
     @Test

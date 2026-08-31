@@ -241,11 +241,16 @@ class SnoozeNotifications(private val context: Context) {
     fun showOngoing(snooze: ActiveSnooze) = showOngoing(snooze, onlyIfGeneration = null)
 
     /**
-     * @param onlyIfGeneration when set, the post is abandoned if the ongoing
-     *   card has been taken down since that generation was observed. Only the
-     *   calendar worker passes it, and it is the one caller that needs it:
-     *   every other `showOngoing` runs on the service's own thread, which is
-     *   where teardown runs too, so those are already serialized against it.
+     * @param onlyIfGeneration when set, the post is abandoned if the displayed
+     *   card has *changed at all* since that generation was observed — taken
+     *   down, or replaced by a newer post. Only the calendar worker passes it,
+     *   and it is the one caller that needs it: every other `showOngoing` runs
+     *   on the service's own thread, which is where teardown runs too, so
+     *   those are already serialized against it.
+     *
+     *   It guards the *first* post only. The follow-up below, if the offer
+     *   moved, guards against the generation that first post wrote — which is
+     *   the state it is actually correcting.
      */
     private fun showOngoing(snooze: ActiveSnooze, onlyIfGeneration: Long?) {
         reapplyDndBypassOnce()
@@ -255,7 +260,28 @@ class SnoozeNotifications(private val context: Context) {
         // than a binder round trip, which is why it is affordable here at all —
         // the same reading the settings rows already rely on.
         val calendarReadable = NextMeetings.isReadable(context)
-        postOngoing(buildOngoing(snooze, cachedOfferFor(snooze, calendarReadable)), onlyIfGeneration)
+        val builtWith = cachedOfferFor(snooze, calendarReadable)
+        betweenReadAndPost()
+        val posted = postOngoing(buildOngoing(snooze, builtWith), onlyIfGeneration)
+        // The cache is read above but written under the lock this post takes,
+        // so the worker can commit an answer in between and lose its own
+        // repost to this one — the newer post wins the generation, and the
+        // card standing is the one built from the older answer. Asking again
+        // afterwards is what closes that: the read now cannot be earlier than
+        // the post, so an answer that beat us here is visible, and one that
+        // arrives later still has its own repost to make.
+        //
+        // Bounded at one extra post, and only when the answer actually moved.
+        // It reposts rather than recursing, so nothing re-reads the calendar
+        // and nothing can chain: a card built from what the cache says after
+        // the post is the freshest card there is to build.
+        if (posted != null) {
+            val settled = cachedOfferFor(snooze, calendarReadable)
+            if (settled != builtWith) {
+                betweenReadAndPost()
+                postOngoing(buildOngoing(snooze, settled), onlyIfGeneration = posted)
+            }
+        }
         // After the card is up, never before it: this is a binder query into
         // another app's provider and the notification is on the arm path
         // (SPEC.md §4.1, §6.9). A first arm therefore shows two actions and
@@ -267,11 +293,11 @@ class SnoozeNotifications(private val context: Context) {
     /**
      * The ongoing card as it would look for [snooze], offering [until].
      *
-     * Split from posting it so the calendar worker can do this part — string
-     * lookups and three `PendingIntent` binder calls — *outside* the lock that
-     * serializes its post against teardown. The offer is passed rather than
-     * read from the cache, so the worker can build a card for an answer it has
-     * not committed to the cache yet.
+     * Split from posting it so this part — string lookups and three
+     * `PendingIntent` binder calls — happens *outside* the lock that serializes
+     * the post against teardown. The offer is a parameter rather than a cache
+     * read so that the caller decides which answer the card is built against,
+     * and so this stays a pure function of its arguments.
      */
     private fun buildOngoing(snooze: ActiveSnooze, until: Instant?): android.app.Notification {
         val body = when (snooze.mode) {
@@ -383,26 +409,37 @@ class SnoozeNotifications(private val context: Context) {
      * `NotificationManager` call and a preferences read — no binder round trip
      * to another app, and no work that can block for long.
      *
-     * [onlyIfGeneration] carries that check the rest of the way. The worker's
-     * rebuild path builds outside the lock and posts here, so without it a
-     * takedown in that gap would be overwritten by the card it validated a
-     * moment earlier — the same failure one step further along the path
-     * (Codex, PR #156).
+     * [onlyIfGeneration] carries that check the rest of the way. The worker
+     * builds outside the lock and posts here, so without it a takedown in that
+     * gap would be overwritten by the card it validated a moment earlier — the
+     * same failure one step further along the path (Codex, PR #156).
      *
-     * **It catches a takedown and not a replacement**, because that is all
-     * [ongoingGeneration] counts. A *newer post* landing in the same gap moves
-     * nothing, so the rebuild wins over a card built after it and a stale mode
-     * line can stand — nothing reposts on a timer, so it stands until the next
-     * real state change. Named rather than fixed: `TODO.md`, *Calendar action:
-     * the last freshness windows*.
+     * **It catches a replacement as well as a takedown**, since
+     * [ongoingGeneration] moves on both — which is what stops a repost decided
+     * against an older state from overwriting a card posted after it.
+     *
+     * Every post goes through here, so this is the single place the counter
+     * moves in the posting direction; [dropOngoing] is the other.
+     *
+     * @return the generation this post wrote, or null if it was abandoned. A
+     *   caller that needs to follow its own post — [showOngoing], when the
+     *   offer moved underneath it — names that value in the follow-up, so the
+     *   second post loses to anything that landed between the two rather than
+     *   overwriting it.
      */
-    private fun postOngoing(notification: android.app.Notification, onlyIfGeneration: Long? = null) {
+    private fun postOngoing(
+        notification: android.app.Notification,
+        onlyIfGeneration: Long? = null,
+    ): Long? {
         synchronized(ongoingLock) {
             if (onlyIfGeneration != null && onlyIfGeneration != ongoingGeneration) {
-                SnoozeDebugLog.event("calendar: the card came down while its rebuild was being built; dropping it")
-                return
+                SnoozeDebugLog.event("calendar: the card changed while its rebuild was being built; dropping it")
+                return null
             }
+            ongoingGeneration++
+            ongoingUp = true
             post(ID_ONGOING, notification)
+            return ongoingGeneration
         }
     }
 
@@ -436,11 +473,6 @@ class SnoozeNotifications(private val context: Context) {
      */
     private fun refreshOfferIfUnknown(snooze: ActiveSnooze, readable: Boolean) {
         if (offer?.matches(snooze, readable) == true) return
-        // Captured before the query, so any teardown from here on is visible as
-        // a mismatch when the answer lands — including one that cancels the
-        // card *before* erasing the record, which a record check alone would
-        // read as a snooze still running.
-        val generation = ongoingGeneration
         if (!readable) {
             // Cached as "nothing", so a card reposted every state change does
             // not re-ask a question whose answer is a permission check — and
@@ -467,10 +499,6 @@ class SnoozeNotifications(private val context: Context) {
                 NextMeetings.endsBefore(context, snooze, now),
                 now,
             )
-            // Built here, outside the lock: this is where the binder calls are
-            // (three `PendingIntent`s), and holding a lock across them would
-            // put the service's main thread behind this worker.
-            val card = found?.let { buildOngoing(snooze, it) }
             // **Atomic with teardown**, which is the whole point of the lock:
             // the check that this answer still belongs to the running snooze
             // and the post that acts on it cannot be separated by a
@@ -498,7 +526,7 @@ class SnoozeNotifications(private val context: Context) {
             // the one that replaced it.
             // The record to rebuild from when this answer's own card is stale,
             // handled after the lock is released — see below.
-            val rebuildFor = synchronized(ongoingLock) {
+            val postFor = synchronized(ongoingLock) {
                 val live = ActiveSnoozeStore(context).load()
                 // Re-read rather than trusted from the top of `showOngoing`: a
                 // revocation during the query would otherwise let this commit
@@ -506,7 +534,6 @@ class SnoozeNotifications(private val context: Context) {
                 // cached, and post a three-action card built under a permission
                 // the user has taken back (Codex, PR #156).
                 if (!NextMeetings.isReadable(context) ||
-                    ongoingGeneration != generation ||
                     live == null ||
                     live.startedAt.toEpochMilli() != snooze.startedAt.toEpochMilli() ||
                     live.capExpiresAt.toEpochMilli() != snooze.capExpiresAt.toEpochMilli()
@@ -526,73 +553,69 @@ class SnoozeNotifications(private val context: Context) {
                     readable = true,
                     endsAt = found,
                 )
-                // Only when there is something to add. Reposting to show the
-                // same two actions would be a wasted rebuild of a card nobody's
-                // view of has changed.
+                // Nothing is carried across the gap but the *answer*. The
+                // record to build from is the one loaded here, and the card
+                // itself is built by the repost below, from that record — so
+                // there is no captured card that can be stale by the time it
+                // is posted, and no list of fields to keep in step with what
+                // the card reads. That list, and the two windows it could not
+                // close, are what this replaced (`TODO.md`, *Calendar action:
+                // the last freshness windows*).
                 //
-                // And only when the record has not changed *at all*, not merely
-                // kept its identity and cap. The card built above carries the
-                // captured record's tracking mode and degradation, so posting
-                // it after presence dropped a snooze from `FULL` to
-                // `DURATION_ONLY` would restore `Ends when you leave` over a
-                // snooze that is now only a timer — the one thing §4.3 exists
-                // to prevent, and principle 2's failure exactly (Codex,
-                // PR #156).
+                // Two facts decide whether to repost at all, and they are
+                // separate questions rather than one counter answering both:
                 //
-                // Skipping costs nothing: whatever changed the record posted
-                // its own card, and the offer is in the cache by the line
-                // above, so that card's own rebuild — or the next one — carries
-                // the action without another calendar read.
+                // **Is a card up?** A teardown cancels the card before erasing
+                // the record, so the record alone reads as a snooze still
+                // running; reposting into that window would put `Snoozing`
+                // back over a phone that has just been let ring. `ongoingUp`
+                // is the direct answer, maintained under this same lock.
                 //
-                // Named fields rather than `live != snooze`, and these three
-                // because they are what the card reads beyond the identity and
-                // cap already checked: the mode and its reason are the body,
-                // and the boot reference is what `remaining` counts the
-                // chronometer from. Whole-record equality would compare an
-                // in-memory `Instant` against one reloaded at millisecond
-                // precision and never match.
+                // **Has the card changed since?** [ongoingGeneration], read
+                // here and named in the repost, so anything landing in the gap
+                // — a newer post or a takedown — abandons this one instead of
+                // overwriting it.
                 //
-                // **This list is a hand-maintained invariant, and nothing
-                // enforces it.** It has to grow whenever the card grows a new
-                // input, and forgetting fails silently — which is how `mode`
-                // and `degradation` came to be added here in the first place,
-                // one review round after the identity and cap. Adding a field
-                // to the card means adding it here.
+                // **Does the answer change the card?** No meeting means the
+                // rebuilt card carries exactly what is already displayed, so
+                // the repost can only do harm: the record it builds from is
+                // the *persisted* one, and `onTrackingChanged` posts the
+                // correct in-memory card even when its `store.save` is refused
+                // — so in that window a repost that adds nothing puts the
+                // pre-degradation mode line back (Codex, PR #161). The
+                // condition is about this worker's own answer, not about what
+                // the card reads, so it is not the field list this change
+                // removed: nothing has to be added here when the card learns
+                // to show something new.
                 //
-                // The generation check above it does not cover the gap either:
-                // [ongoingGeneration] counts takedowns, not replacements, so a
-                // newer *post* landing during the query moves nothing and the
-                // card built here can still win over it. Both limits, and the
-                // restructure that removes them rather than documenting them,
-                // are `TODO.md`, *Calendar action: the last freshness windows*.
-                if (live.mode != snooze.mode ||
-                    live.degradation != snooze.degradation ||
-                    live.bootReference != snooze.bootReference
-                ) {
-                    SnoozeDebugLog.event(
-                        "calendar: the snooze changed while its meeting end was read; rebuilding for the newer one",
-                    )
-                    live
-                } else {
-                    card?.let { post(ID_ONGOING, it) }
-                    null
-                }
+                // Reposting when there *is* an answer stays unconditional, and
+                // that is the cost this shape trades for: about four binder
+                // calls off the main thread, invisible to the user, since the
+                // card is `setOngoing` + `setOnlyAlertOnce` with a stable
+                // `setWhen` and so neither alerts nor re-sorts.
+                if (ongoingUp && found != null) live to ongoingGeneration else null
             }
 
-            // Rebuilt rather than dropped. Skipping the stale card is right,
-            // but the card that *is* up was posted before this answer existed —
-            // and the read it queued alongside itself now finds the cache
-            // populated and does nothing, so without this a snooze that
-            // degraded during the query would sit on two actions until some
-            // unrelated transition rebuilt it (Codex, PR #156).
+            // Outside the lock — this is where the three `PendingIntent`
+            // binder calls happen, and holding the lock across them would put
+            // the service's main thread behind this worker.
             //
-            // Outside the lock, and safe from looping: the offer is cached by
-            // the line above, so this pass finds it, posts, and its own
-            // `refreshOfferIfUnknown` returns on the cache hit.
-            // Carrying the generation it validated under, so a takedown
-            // between here and the post inside `postOngoing` abandons it rather
-            // than overwriting the takedown.
-            rebuildFor?.let { showOngoing(it, onlyIfGeneration = generation) }
+            // Safe from looping: the offer is cached above, so this pass finds
+            // it, posts, and its own `refreshOfferIfUnknown` returns on the
+            // cache hit.
+            //
+            // A card that wins the race against this one is never the poorer
+            // for it — but only because [showOngoing] asks again after its own
+            // post. The cache write above is under the lock; the *read* that
+            // built the winning card was not, so a card built before this
+            // section can still post after it, take the generation, and leave
+            // this repost abandoned. Its own re-read is what recovers the
+            // action, since a read that follows its post cannot miss a write
+            // that preceded it.
+            postFor?.let { (live, generation) ->
+                betweenAnswerAndRepost()
+                showOngoing(live, onlyIfGeneration = generation)
+            }
         }
     }
 
@@ -623,6 +646,7 @@ class SnoozeNotifications(private val context: Context) {
     private fun dropOngoing() {
         synchronized(ongoingLock) {
             ongoingGeneration++
+            ongoingUp = false
             drop(ID_ONGOING)
         }
     }
@@ -1038,12 +1062,43 @@ class SnoozeNotifications(private val context: Context) {
          * code never sees a second process to leak across, so nothing else
          * resets these.
          */
+        /**
+         * Test seam: runs after the answer is cached and before the repost.
+         *
+         * A no-op in production. The gap it opens is the one the generation
+         * guard exists for — a post or a takedown landing between the record
+         * being loaded and the card being posted — and it is not reachable any
+         * other way, since both halves are inside one runnable. The same
+         * reasoning as [readCalendar]: the test *is* the race, so it drives the
+         * ordering rather than hoping for it.
+         */
+        @Volatile
+        internal var betweenAnswerAndRepost: () -> Unit = {}
+
+        /**
+         * Test seam: runs before each of [showOngoing]'s posts, after the
+         * offer that post was built against was read.
+         *
+         * A no-op in production. The window it opens is the other half of the
+         * same race [betweenAnswerAndRepost] drives — a worker committing its
+         * answer while a card built from the older one is still on its way to
+         * the lock — and, like that one, it is not reachable from outside
+         * because both halves live in one method. It fires before the
+         * follow-up post as well, because that post has a guard of its own and
+         * the takedown it has to lose to lands in exactly that gap.
+         */
+        @Volatile
+        internal var betweenReadAndPost: () -> Unit = {}
+
         internal fun resetForTest() {
             channelsCreated = false
             bypassReapplyAttempted = false
             offer = null
             ongoingGeneration = 0L
+            ongoingUp = false
             readCalendar = Executor { it.run() }
+            betweenAnswerAndRepost = {}
+            betweenReadAndPost = {}
         }
 
         /** Test-only: whether [reapplyDndBypassOnce] has marked itself done. */
@@ -1066,21 +1121,34 @@ class SnoozeNotifications(private val context: Context) {
         private val ongoingLock = Any()
 
         /**
-         * Bumped every time the ongoing card is taken **down**.
+         * Bumped every time the displayed ongoing card **changes** — posted or
+         * taken down.
          *
-         * Process-scoped like [offer], and read by the calendar worker as the
-         * one signal a record check cannot supply — see [cancelOngoing].
+         * Process-scoped like [offer]. Read under [ongoingLock] and named in
+         * the repost that follows, so a value captured there answers exactly
+         * one question: *is the card I validated against still the card that
+         * is up?* Anything landing in between — a newer post or a takedown —
+         * moves it, and the repost is abandoned rather than overwriting them.
          *
-         * **A takedown, not a replacement — and both readers want the broader
-         * question.** Nothing bumps this when the card is merely re-posted, so
-         * a comparison against a captured value answers "was it taken down?"
-         * and not "did anything replace it?". Both guard sites want the
-         * second, and get the first: see the note in [postOngoing] and the one
-         * beside the worker's own check. Widening it is `TODO.md`, *Calendar
-         * action: the last freshness windows*.
+         * It counted only takedowns until the freshness rework, which is why
+         * a post that should have lost to a newer post won instead.
          */
         @Volatile
         private var ongoingGeneration: Long = 0L
+
+        /**
+         * Whether an ongoing card is currently displayed.
+         *
+         * The separate question [ongoingGeneration] cannot answer, since a
+         * takedown and a repost both move it. A teardown cancels the card
+         * *before* erasing the record, so in that window the record still
+         * reads as a snooze running — and reposting there would put `Snoozing`
+         * back over a phone that has just been let ring (Codex, PR #156). The
+         * calendar worker asks this before reposting; every other caller runs
+         * on the service's own thread, where teardown runs too.
+         */
+        @Volatile
+        private var ongoingUp: Boolean = false
 
         /**
          * The one thread the calendar is read on.
