@@ -2320,6 +2320,33 @@ attempt to resume presence monitoring. If location comes back denied — a while
 no background grant behind it — degrade to duration-only and say which grant is missing:
 `Timer only — background location off`.
 
+**Both anchor shapes get that, and reaching the Wi-Fi-only one takes a different instrument**
+(2026-08-31). An anchor with a fix registers a geofence, so a revoked grant announces itself when
+`addGeofences` is refused and a restored one when a registration succeeds. A Wi-Fi-only anchor
+never calls either, so nothing told it — and the consequence was worse than silence, because D7
+has a redacted SSID read as *not associated*: the same revoked grant that merely degraded a
+fix-having snooze made a Wi-Fi-only one report a departure the user never made and end on the
+five-minute grace. The monitor therefore asks the permission directly for that shape: when Wi-Fi reports a loss,
+before that loss is spent; at restore; and again on each 15-minute Wi-Fi recheck, which is also
+what refutes it — a latch nothing could
+lift would silence a user who really did leave, the one direction principle 1 refuses. A live
+permission read proves only that the two grants are held, so it clears a grant cause and never a
+location-services outage; that stays for the fix that refutes it.
+
+**Asking when the loss is reported is what covers a live snooze.** The recheck owns the periodic
+case and the restore the cold one, but a user who revokes location while a snooze is running is
+served by neither: the callback arrives redacted within moments, and a grace deadline armed on it
+ends the snooze about ten minutes before the next recheck. The question is therefore asked on the
+transition itself, and only in the latch direction — a loss is not the moment to declare a
+restoration.
+
+Restoring the grant **rebuilds the Wi-Fi watch**, because the grant returning does not repair what
+its absence wrote: every redacted callback left the watch holding a placeholder for the network and
+its tracker holding *not associated*, and no callback is dispatched merely because a permission was
+granted. A real departure would then read as a repeat of the loss already reported and say nothing.
+Re-registering is what fixes it — a fresh registration dispatches the current networks, unredacted,
+into a tracker whose first report is a transition by definition (D7).
+
 **There is no `Resume tracking` action, and the earlier design for one was wrong** (2026-08-30).
 It reasoned that a notification-action tap is a documented while-in-use exemption and so "fully
 restores tracking". The exemption is real but buys *location fixes* for its window, not a
