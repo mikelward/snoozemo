@@ -579,7 +579,37 @@ class SettingsScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("Off, but some saved files couldn't be deleted").assertExists()
+        composeRule.onNodeWithText("Some saved files couldn't be deleted").assertExists()
+    }
+
+    @Test
+    fun `the cleanup warning stays true after the log is turned back on`() {
+        // The flag deliberately outlives the Off toggle that set it -- turning
+        // the log back on removes no files -- and it is set at startup too,
+        // where the switch may be either. So the line must not assert a state
+        // the switch contradicts: it read "Off, but some saved files couldn't
+        // be deleted" beside a switch the user could see was On (Codex,
+        // PR #153).
+        capture("settings-screen-cleanup-failed-enabled.png") {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                debugLogCleanupFailed = true,
+                shareFailed = false,
+                versionName = SAMPLE_VERSION_NAME,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onShareDebugLog = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Some saved files couldn't be deleted").assertExists()
+        composeRule.onNodeWithText("Off, but some saved files couldn't be deleted").assertDoesNotExist()
     }
 
     @Test
