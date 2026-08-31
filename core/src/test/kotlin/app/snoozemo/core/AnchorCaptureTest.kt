@@ -2,8 +2,10 @@ package app.snoozemo.core
 
 import java.time.Instant
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AnchorCaptureTest {
@@ -187,4 +189,26 @@ class AnchorCaptureTest {
 
         assertEquals("ExampleWifi", anchor?.ssid)
     }
+
+    @Test
+    fun `a redacted read is told apart from no network at all`() {
+        // The distinction `sanitizeSsid` cannot express, because both answer
+        // "not a usable anchor value". A watch needs the other question —
+        // *did the platform answer?* — since a withheld SSID says nothing
+        // about whether the anchor's network is there, and reading it as an
+        // absence is what ended a snooze on a phone sitting on its own
+        // network.
+        assertTrue(AnchorCapture.isRedactedSsid("<unknown ssid>"))
+        assertTrue(
+            "the platform quotes what it reports; the placeholder is seen both ways",
+            AnchorCapture.isRedactedSsid("\"<unknown ssid>\""),
+        )
+
+        // Every one of these sanitizes to null, and none of them is a
+        // redaction: no network, an empty name, a real one.
+        assertFalse(AnchorCapture.isRedactedSsid(null))
+        assertFalse(AnchorCapture.isRedactedSsid(""))
+        assertFalse(AnchorCapture.isRedactedSsid("\"ExampleWifi\""))
+    }
+
 }
