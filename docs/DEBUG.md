@@ -99,8 +99,12 @@ Sections, in order:
    whether the tile has been added. Every one of these is a fact already in `SPEC.md`'s
    correctness checklist ("no Wi-Fi, no location fix, permission revoked mid-snooze, ...")
    and each is a plausible whole answer to "why didn't it end" (SPEC.md §4.6).
-5. **Previous run** — present only when `readPreviousOrCrash` found one; labeled `(ended in
-   an uncaught exception)` when `wasCrash` is true, otherwise unlabeled.
+5. **Earlier runs** — present only when `readPreviousOrCrash` found something. Plural
+   because the handle covers every unshared prior run as one text with no marker saying
+   where each begins, and `wasCrash` is the global banner state rather than a fact about
+   one of them: `(one ended in an uncaught exception)` when it is true, otherwise
+   unlabeled. Naming *which* run crashed would need per-run metadata the handle does not
+   carry.
 6. **Recent log** — `SnoozeDebugLog.snapshot()`, newest-last, the same shape Simmo's
    "Recent log" section uses.
 

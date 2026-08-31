@@ -647,17 +647,25 @@ internal fun buildDebugReportPayload(
         // cause, since a timeout and a genuinely blank pinned crash file
         // land here the same way).
         if (previousRunOmitted) {
-            "\n--- Previous run ---\n(could not be included in this report — try Share again)\n"
+            "\n--- Earlier runs ---\n(could not be included in this report — try Share again)\n"
         } else {
             ""
         }
     } else {
         buildString {
             appendLine()
+            // Plural, and the crash named as *one of* them rather than as what
+            // the whole section is. The library hands over one text covering
+            // every unshared prior run with no marker saying where each begins,
+            // and the crash flag is the global banner state -- so labeling the
+            // aggregate "Previous run (ended in an uncaught exception)" told a
+            // reader that ordinary restarts were the crash (Codex, PR #153).
+            // Naming which one crashed needs per-run metadata the handle does
+            // not carry; saying it truthfully does not.
             val label = if (previousRunCrashed) {
-                "--- Previous run (ended in an uncaught exception) ---"
+                "--- Earlier runs (one ended in an uncaught exception) ---"
             } else {
-                "--- Previous run ---"
+                "--- Earlier runs ---"
             }
             appendLine(label)
             // Keep the newest lines: the file is oldest-first, so a crash
