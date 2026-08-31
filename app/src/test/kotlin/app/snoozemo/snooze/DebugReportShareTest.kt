@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import app.snoozemo.core.SnoozeDebugLog
 import java.io.File
+import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -759,5 +760,72 @@ class DebugReportShareTest {
             true,
             pinnedAfter,
         )
+    }
+
+    /**
+     * A crash the read could not open is skipped and left on disk, so the
+     * handle can cover only the ordinary run beside it: text non-blank,
+     * nothing truncated, and the global pin still true. Consuming on that
+     * share lowers the banner over a report that never carried the crash, and
+     * the crash file then sits there with nothing left to offer it (Codex,
+     * PR #153). `PreviousRun.complete` is the library saying its handle does
+     * not cover everything still there.
+     */
+    @Test
+    fun `a crash the read could not open is not consumed`() {
+        val dir = context.cacheDir
+        File(dir, "androidlog.log").writeText("the run that crashed\n")
+        File(dir, "androidlog.log.crash").writeText("1")
+        DebugLogging.install(context)
+        DebugLogging.awaitIdleForTest()
+
+        // An ordinary earlier run beside it, which is what makes the handle
+        // non-blank once the crash has been skipped.
+        File(dir, "androidlog-prev-ordinary.log").writeText("an ordinary earlier run\n")
+        // The rotated crash log becomes unreadable: a self-referencing symlink
+        // fails with a real filesystem error rather than "not found", so the
+        // library skips it and leaves it in place. The banner stays up, since
+        // an entry that will not say never lowers it.
+        val rotated = dir.listFiles()?.single { it.name.endsWith(".crash.log") }
+            ?: error("install left ${dir.list()?.sorted()} with no rotated crash log")
+        assertTrue(rotated.delete())
+        Files.createSymbolicLink(rotated.toPath(), rotated.toPath())
+
+        var pinnedBefore: Boolean? = null
+        DebugLogging.hasPinnedCrash { pinned, _ -> pinnedBefore = pinned }
+        DebugLogging.awaitIdleForTest()
+        assertEquals("precondition: the crash is still pinned", true, pinnedBefore)
+
+        var sharedText: String? = null
+        val result = DebugReport.share(
+            context,
+            clipboardWrite = { _, text -> sharedText = text; true },
+            chooserLaunch = { _, _ -> true },
+        )
+        DebugLogging.awaitIdleForTest()
+
+        assertTrue(result.clipboardCopied)
+        // The report carries what it could read, and the library's own notice
+        // says a run is missing from it -- so the reader is told.
+        assertTrue(sharedText ?: "", sharedText!!.contains("an ordinary earlier run"))
+        assertTrue(sharedText!!, sharedText!!.contains("could not be read"))
+        // What the guard changes is whether the share *consumes*. The banner
+        // alone is not evidence here: the dismissal cannot rename a file it
+        // cannot classify either, so it stays up either way. The runs the
+        // report was built from surviving is the observable difference --
+        // without the guard they are deleted, and the crash is left behind
+        // with the ordinary run that would have carried it gone.
+        assertTrue(
+            "the run the report carried is not consumed by an incomplete share",
+            File(dir, "androidlog-prev-ordinary.log").exists(),
+        )
+        assertTrue(
+            "and the crash it could not read is still there to send",
+            dir.listFiles()?.any { it.name.endsWith(".crash.log") } == true,
+        )
+        var pinnedAfter: Boolean? = null
+        DebugLogging.hasPinnedCrash { pinned, _ -> pinnedAfter = pinned }
+        DebugLogging.awaitIdleForTest()
+        assertEquals("and the banner stays up for a later share", true, pinnedAfter)
     }
 }
