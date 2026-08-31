@@ -87,5 +87,39 @@ class MainActivityLifecycleTest {
      * while stopped, so `dismissFailed` must be synced from
      * `DebugLogging.lastDismissFailed` again at the next `onStart` (Codex,
      * PR #89).
+     *
+     * Restored with the shared logger's storage listener, which is what gives
+     * `lastDismissFailed` a source again (androidlog#20).
      */
+    @Test
+    fun `a restart picks up a dismiss outcome missed while stopped`() {
+        DebugLogging.resetForTest()
+        val app: Application = ApplicationProvider.getApplicationContext()
+        DebugLogStore(app).setEnabled(true)
+        // The crashed run's plain name is already taken, so the rename off the
+        // crash suffix is refused -- the failure this outcome carries.
+        File(app.cacheDir, "androidlog-prev-1.crash.log").writeText("the run that crashed\n")
+        File(app.cacheDir, "androidlog-prev-1.log").writeText("an earlier run, never shared\n")
+
+        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        val activity = controller.get()
+        controller.pause().stop()
+        assertFalse("precondition: nothing has failed yet", activity.dismissFailed)
+
+        // The dismissal runs to completion and updates the process-level
+        // outcome regardless of whether anything is watching -- what a worker
+        // thread's completion looks like landing after onStop.
+        DebugLogging.install(app)
+        DebugLogging.dismissCrashPin()
+        DebugLogging.awaitIdleForTest()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        controller.start()
+
+        assertTrue(
+            "onStart must sync dismissFailed from the outcome missed while stopped",
+            activity.dismissFailed,
+        )
+        DebugLogging.resetForTest()
+    }
 }

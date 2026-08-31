@@ -143,17 +143,26 @@ internal object DebugLogging {
     /**
      * Whether the most recent Off toggle left one or more files undeleted.
      *
-     * **Nothing sets this any more, and that is a known gap.** The library
-     * reports a failed opt-out purge *into the log* and holds the line until
-     * one can land, rather than answering the caller — so the outcome this
-     * field carried has no source. It is kept rather than deleted because the
-     * screen that reads it should light up again once the library grows a
-     * caller-visible signal, which is a rewire rather than a rebuild.
-     * Recorded under *Decisions needing review* in `TODO.md`.
+     * Two independent directories can fail, and either one leaves files the
+     * user was told were gone: the shared sink's own (this run's saved log,
+     * reported by its storage listener) and `cacheDir/debuglog`, where the old
+     * logger's full-rendered files sit until the migration finally removes
+     * them. The sink cannot answer for the second — it has never read those
+     * files — so the union is assembled here.
+     *
+     * Each half is cleared by its own next success, so a retry that works
+     * retires the warning; neither is cleared by turning the log back on,
+     * which removes no files.
      */
+    val lastDisableCleanupFailed: Boolean get() = sinkPurgeFailed || legacyPurgeFailed
+
+    /** See [lastDisableCleanupFailed]; mirrored from the sink's storage listener. */
     @Volatile
-    var lastDisableCleanupFailed: Boolean = false
-        private set
+    private var sinkPurgeFailed = false
+
+    /** See [lastDisableCleanupFailed]; set by the Off toggle's own retry. */
+    @Volatile
+    private var legacyPurgeFailed = false
 
     /**
      * Whether a crashed run is currently unshared and undismissed.
@@ -279,6 +288,22 @@ internal object DebugLogging {
                 pinnedCrash = unacknowledged
                 runCatching { onCrashPinOutcome?.invoke() }
             }
+            // Registered here for the same reason as the crash listener: the
+            // first value is delivered on registration, so a failure recorded
+            // before this screen existed still reaches it.
+            fileSink.addStorageListener { outcomes ->
+                sinkPurgeFailed = outcomes.optOutPurgeFailed
+                lastDismissFailed = outcomes.crashDismissalFailed
+                // Both ears, unconditionally. The sink's purge and rename run
+                // on *its* worker, so either outcome can settle long after the
+                // tap that started it has already told the screen it was done
+                // — and a configuration change in between hands the screen to
+                // an instance that captured neither. Each observer re-reads
+                // rather than trusting a delivered value, so notifying the ear
+                // whose field did not move costs a duplicate read.
+                runCatching { onSaveOutcome?.invoke() }
+                runCatching { onDismissOutcome?.invoke() }
+            }
             // start() before addSink, so the rotation is queued ahead of this
             // run's first write and can never clobber the prior run.
             fileSink.start()
@@ -297,8 +322,15 @@ internal object DebugLogging {
      * Every fallible step maps a throw onto the same outcome as a negative
      * return — not proven — and reports it, so a refusal cannot be mistaken for
      * a completed migration (Codex, PR #151, three rounds on this shape).
+     *
+     * Answers whether the directory is **gone**, so an Off toggle can say on
+     * screen that its cleanup did not finish. The warning below reaches the
+     * debug log, which is not where a user who has just used a privacy control
+     * is looking — and the shared sink's own outcome cannot cover this, since
+     * it owns a different directory and has never read these files (Codex,
+     * PR #153).
      */
-    private fun purgeLegacyDirectory(app: Context, store: DebugLogStore) {
+    private fun purgeLegacyDirectory(app: Context, store: DebugLogStore): Boolean {
         val gone = runCatching {
             val dir = File(app.cacheDir, LEGACY_DIR_NAME)
             !dir.exists() || (dir.deleteRecursively() && !dir.exists())
@@ -317,6 +349,7 @@ internal object DebugLogging {
                 SnoozeDebugLog.warning("could not record that old logs were removed, so this will run again")
             }
         }
+        return gone
     }
 
     /**
@@ -356,7 +389,12 @@ internal object DebugLogging {
                     // shared sink's own purge does not reach them: it owns a
                     // different directory and has never read these files.
                     val store = DebugLogStore(app)
-                    if (!store.hasPurgedLegacyLogs()) purgeLegacyDirectory(app, store)
+                    // Nothing left to purge is a success, not a silence: it is
+                    // what clears a warning an earlier refused toggle left up.
+                    val purged = runCatching { store.hasPurgedLegacyLogs() }
+                        .onFailure { runCatching { Log.w(TAG, "Reading the debug-log migration state threw.", it) } }
+                        .getOrDefault(false)
+                    legacyPurgeFailed = !(purged || purgeLegacyDirectory(app, store))
                 }
                 if (persisted) {
                     // Off gates recording itself, not just persistence: the
@@ -432,12 +470,14 @@ internal object DebugLogging {
      * the read ran at all, as against no sink installed or a worker that
      * refused the task.
      *
-     * That narrowing does not reopen what the wider answer protected against.
-     * `readSucceeded` was there to stop a report consuming a pin whose content
-     * it had failed to read, and two things still stop that: a crash that
-     * arrives with no text is caught by `DebugReport`'s own check, and the
-     * library never puts a file it could not read into the handle, so clearing
-     * this report leaves that file for the next one.
+     * That narrowing does not reopen what the wider answer protected against,
+     * but only because the handle now says so itself. A crash arriving with no
+     * text is caught by `DebugReport`'s own check; a crash *skipped* by a read
+     * that could not open it is caught by `PreviousRun.complete`, which is the
+     * library reporting that its handle does not cover every run still on
+     * disk. Leaving the file in place is not enough on its own — the file
+     * survives, but acknowledging the banner on a report that never carried it
+     * retires the only offer to send it (Codex, PR #153).
      */
     fun readPreviousOrCrash(
         onResult: (run: PreviousRun?, wasCrash: Boolean, readSucceeded: Boolean) -> Unit,
@@ -508,11 +548,14 @@ internal object DebugLogging {
     /**
      * Whether the most recently completed [dismissCrashPin] was refused.
      *
-     * **Nothing sets this any more**, for the same reason as
-     * [lastDisableCleanupFailed]: the library's acknowledge and clear report
-     * their trouble into the log rather than to the caller. Kept for the same
-     * reason too — the screen reading it should light up again once a
-     * caller-visible signal exists. See `TODO.md`.
+     * Mirrored from the sink's storage listener rather than cleared on each
+     * tap and set on completion: the sink already clears it when a dismissal
+     * succeeds, and a local eager reset would race that publication for the
+     * screen's next read.
+     *
+     * A refused dismissal leaves the banner up by construction — the sink
+     * lowers nothing eagerly — so the user is never told it worked. What this
+     * carries is the *why*, which the banner alone cannot say (Codex, PR #153).
      */
     @Volatile
     var lastDismissFailed: Boolean = false
@@ -533,7 +576,6 @@ internal object DebugLogging {
      * dismissal is "I don't want to look at this", not "delete the evidence".
      */
     fun dismissCrashPin() {
-        lastDismissFailed = false
         runCatching {
             worker.execute {
                 reinstallIfNeeded()
@@ -559,7 +601,8 @@ internal object DebugLogging {
         gateApplied = false
         pinnedCrash = false
         lastSaveRefused = false
-        lastDisableCleanupFailed = false
+        sinkPurgeFailed = false
+        legacyPurgeFailed = false
         lastDismissFailed = false
         onSaveOutcome = null
         onCrashPinOutcome = null

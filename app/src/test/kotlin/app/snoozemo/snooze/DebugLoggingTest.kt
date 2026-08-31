@@ -403,4 +403,64 @@ class DebugLoggingTest {
         )
     }
 
+    @Test
+    fun `an Off toggle that could not delete this run's log says so on screen`() {
+        // The shared sink reports a failed opt-out purge *into the log* and
+        // holds the line until recording comes back -- which the user has just
+        // turned off, so it may never land at all. Without a caller-visible
+        // outcome the switch clears its warning and tells a user who has just
+        // used a privacy control that it worked (Codex, PR #153).
+        DebugLogging.install(context)
+        DebugLogging.awaitIdleForTest()
+
+        // Wedged after the rotation has settled, so this is the purge failing
+        // rather than a prior run the purge keeps on purpose: neither
+        // deletable (not empty) nor truncatable.
+        val current = File(context.cacheDir, "androidlog.log")
+        current.delete()
+        File(current, "wedged").mkdirs()
+        assertTrue("precondition: the file the purge must remove is wedged", current.isDirectory)
+
+        DebugLogging.setEnabled(context, false) {}
+        DebugLogging.awaitIdleForTest()
+
+        assertTrue(DebugLogging.lastDisableCleanupFailed)
+
+        // Cleared by the same operation next succeeding, so a retry that works
+        // retires the warning rather than leaving it up for the process.
+        current.deleteRecursively()
+        DebugLogging.setEnabled(context, true) {}
+        DebugLogging.awaitIdleForTest()
+        DebugLogging.setEnabled(context, false) {}
+        DebugLogging.awaitIdleForTest()
+        assertFalse(DebugLogging.lastDisableCleanupFailed)
+    }
+
+    @Test
+    fun `a dismissal the storage refused says why the banner is still up`() {
+        // A refused dismissal leaves the banner up by construction, so the user
+        // is never told it worked -- but without this they are left tapping a
+        // control with no visible effect and no reason, and the one line that
+        // explains it is in a log they would have to go and read (Codex,
+        // PR #153).
+        val dir = context.cacheDir
+        // The crashed run's plain name is already taken, so the rename off the
+        // crash suffix is refused rather than replacing the run that is there.
+        File(dir, "androidlog-prev-1.crash.log").writeText("the run that crashed\n")
+        File(dir, "androidlog-prev-1.log").writeText("an earlier run, never shared\n")
+        DebugLogging.install(context)
+        DebugLogging.awaitIdleForTest()
+
+        DebugLogging.dismissCrashPin()
+        DebugLogging.awaitIdleForTest()
+        assertTrue("precondition: it really was refused", File(dir, "androidlog-prev-1.crash.log").exists())
+        assertTrue(DebugLogging.lastDismissFailed)
+
+        // And a retry that works clears it.
+        File(dir, "androidlog-prev-1.log").delete()
+        DebugLogging.dismissCrashPin()
+        DebugLogging.awaitIdleForTest()
+        assertFalse(DebugLogging.lastDismissFailed)
+    }
+
 }
