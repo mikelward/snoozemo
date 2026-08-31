@@ -4,12 +4,20 @@
 
 ## The short version
 
-**Snoozemo sends one thing, and only if you ask it to: a crash report.** There is no
-account to create, no analytics, and no advertising. The Google Play version can send a
-crash — what the code was doing when it fell over, your device model, and your Android and
-app version — so the bug can be fixed, but **it is off until you turn it on** in Settings.
-The version distributed outside Google Play cannot send it at all. Details under **Crash
-reports**.
+**Snoozemo sends two things, and only if you ask it to: a crash report and anonymous usage
+statistics.** There is no account to create and no advertising. The Google Play version can
+send a crash — what the code was doing when it fell over, your device model, your
+Android and app version, and a short trail of those same automatic events from just before
+it — so the bug can be fixed, along with a small set of events that
+say the app was opened and how long you were in it, not what you did in it. **Both are off
+until you turn them on** in Settings, behind a single question — there is one answer, not
+two, so you are never asked to allow one and not the other. If saying **no** does not fully
+take — if either one fails to stop — Snoozemo says so rather than leaving you to guess, and
+tries again the next time the app opens. Saying **yes** is not treated the same way on
+purpose: if one of the two then fails to start, Snoozemo does not interrupt you about it,
+because the result is that *less* is collected than you allowed, never more. That is noted
+in the debug log and retried at the next launch. The version distributed outside Google Play
+cannot send either at all. Details under **Crash reports**.
 
 **Where you are is never part of that, and never leaves your phone.** Snoozemo does need to
 know where you are — that is the whole point of "stay quiet until I leave here" — but that
@@ -21,15 +29,27 @@ it goes, covered under **The debug log**.
 
 ## What leaves your phone
 
-**One thing, and only once you switch it on: a crash report, and only from the Google Play
-version.** It is described under **Crash reports** below, it contains nothing about where
-you are, and it is off until you turn it on.
+**Two things, and only once you switch them on: a crash report and anonymous usage
+statistics, and only from the Google Play version.** They are described under **Crash
+reports** and **Usage statistics** below, neither contains anything about where you are,
+and both are off until you say yes. Snoozemo asks once, on its main screen; until you
+answer, nothing is collected, and if you answer no, nothing ever is.
 
 Our Google Play Data Safety declaration says so: Snoozemo declares **crash logs**,
-**diagnostics**, and the **installation identifier** described below — collected for app
-functionality and analytics, not shared with anyone else, and optional, which is Play's
-word for a switch you can turn off. It declares no location data, because none is sent,
-and it does not use an advertising ID at all.
+**diagnostics**, **app interactions**, and the **installation identifier** described
+below — collected for app functionality and analytics, not shared with anyone else, and
+optional, which is Play's word for a switch you can turn off. It does not use an
+advertising ID at all.
+
+**It also declares "approximate location", and that one needs explaining**, because on the
+face of it it contradicts everything above. Snoozemo sends no location — not a coordinate,
+not a Wi-Fi network, not a place you named, not the place you snoozed at. What it refers to
+is that every request any app makes over the internet arrives carrying a network address,
+and Google works out a rough country from that. Google's rules count that as location whether
+or not the app went looking for it, so declaring it is the honest answer even though the
+alternative would read better on the store page. It is nothing your phone measured and
+nothing this app looked up: turn the switch off, or never answer the question, and no request
+is made for a country to be worked out from.
 
 **The version distributed outside Google Play sends nothing at all.** Snoozemo ships in two
 builds. The sideloaded / F-Droid one does not ask Android for the `INTERNET` permission, so
@@ -46,23 +66,60 @@ builds a plain-text report and hands it to the clipboard and Android's share she
 destination is something you pick, not something Snoozemo decides — covered under **The
 debug log** below.
 
+## Usage statistics
+
+When you say yes, the Google Play version sends anonymous usage statistics to **Firebase
+Analytics**, a Google service, so we can see how much Snoozemo is actually used and on
+what kinds of device — which is what says whether a fix reached anyone.
+
+**What is in it**: the events Firebase Analytics collects on its own — installing,
+opening, closing and updating the app, an Android upgrade, and your clearing its data or
+uninstalling it — plus how long a session lasted and how much of it you were actively in
+the app (Analytics reports that as engagement time, with every event), your device model,
+your Android version, your Snoozemo version, and a randomly-generated app-instance
+identifier. That is a *different* identifier from the one the crash reports carry — each
+service generates its own — and like that one it is specific to Snoozemo, cannot be
+matched to you anywhere else, and is replaced if you clear the app's data or reinstall. Google decides that list and can add to it, so read it
+as examples rather than as a closed set; the part that is Snoozemo's to promise is the
+paragraph below. Not *which* screen you were on: Snoozemo is one Android screen with
+everything drawn inside it, so the only screen name Analytics ever sees is that one, the
+same for every install. Google's own service also derives a coarse country from the
+network address the report arrives on.
+
+**What is not in it, ever**: your location or any coordinate, the name or identifier of
+any Wi-Fi network, any place name you typed, when or how long you snoozed for, and the
+contents of the debug log described below. Snoozemo sends no events of its own and sets
+no properties of its own — only what Analytics collects automatically — so there is no
+place in the app where any of that could be attached.
+
+**Turning it off**: it is off until you say yes. Settings → *Help make Snoozemo better* switches both
+this and the crash reports below back off, and nothing further is collected from that
+point.
+
 ## Crash reports
 
-When the Google Play version of Snoozemo crashes, it sends a crash report to **Firebase
-Crashlytics**, a Google service, so the bug can be found and fixed.
+When you say yes and the Google Play version of Snoozemo crashes, it sends a crash report
+to **Firebase Crashlytics**, a Google service, so the bug can be found and fixed.
 
 **What is in it**: the technical trace of what the code was doing when it crashed, your
 device model, your Android version, and your Snoozemo version. Google's own service also
 records a randomly-generated installation identifier so repeat crashes on one phone can be
 told apart, and the approximate time.
 
+**And a short trail of what happened just before the crash.** Because crash reporting and
+usage statistics come from two parts of the same Google toolkit, the crash report carries the
+last few of the automatic events described above — the ones the toolkit records by itself.
+That is Google's behavior, not a choice Snoozemo makes, and it is why the two really are one
+switch: turning them on turns this on too. Snoozemo records no events of its own, so the trail
+is the automatic ones and nothing you did in particular.
+
 **What is not in it, ever**: your location or any coordinate, the name or identifier of any
 Wi-Fi network, any place name you typed, when or how long you snoozed for, and the contents
-of the debug log described below. None of that is attached, and the app has no code that
-could attach it. A crash report answers *did Snoozemo break, and where in the code* — not
-*where is this person*.
+of the debug log described below. That is true of the trail as well as of the report — none of
+it is attached, and the app has no code that could attach it. A crash report answers *did
+Snoozemo break, and where in the code* — not *where is this person*.
 
-**It is off until you turn it on**: Settings → *Crash reports*. Nothing is sent before you
+**It is off until you turn it on**: Settings → *Help make Snoozemo better*. Nothing is sent before you
 do. If the app crashes while it is off, the reporting library still writes the report to
 your phone — it is never sent, and it is discarded when you turn the switch on, rather
 than being released. Turning the switch back off likewise stops anything further being
@@ -102,7 +159,7 @@ All of this lives in Snoozemo's private app storage, which other apps cannot rea
 | Whether you have turned down the notification permission | So the app asks once and then stops asking | Erased as soon as you allow notifications, or when you uninstall |
 | Why a snooze failed to start, when it failed while you were not looking | So a tap that quietly did nothing tells you what went wrong, rather than leaving you to guess | Erased when your next snooze starts and makes it moot. It is kept even after the message is shown, in case the message never arrived — if it was waiting on notification permission, showing it is what clears it |
 | A note that Do Not Disturb may still be on after Snoozemo lost track of it | So Snoozemo keeps trying to turn its own rule back off, instead of leaving your phone quiet with nothing watching | Erased when the rule is confirmed off, or when a new snooze takes the rule over — seeing the warning is not enough |
-| Whether you have turned crash reports off | So the choice sticks, and nothing is sent while it is off. It is a single yes/no, stored on the phone, and never sent anywhere itself | Until you uninstall |
+| Your answer to *Help make Snoozemo better*, and separately whether you have answered it at all | So the choice sticks and covers both crash reports and usage statistics, and so nothing is sent before you answer. Two facts rather than one, because "off" and "not asked yet" are different: the second is what stops the question coming back after you say no, and what keeps an upgrade from an older version — where the old *Crash reports* switch was on — from being read as a yes to a question nobody asked. Both are yes/no, stored on the phone, and never sent anywhere themselves | Until you uninstall |
 | A short technical log of what the snooze machinery did, and when — see **The debug log** below | So a snooze that ended early, or never ended, can be explained after the fact | The current run of the app and a few recent ones; deleted immediately if you turn the log off |
 
 There is no history: Snoozemo does not keep a record of past snoozes, past places, or past
@@ -244,8 +301,10 @@ crash reporter — not by Snoozemo, and it is usually the only thing that explai
 kept because a snooze that would not arm, and no reason why, is a bug report nobody can
 act on. It stays on your phone with the rest of the log, and if the log is ever sent
 anywhere automatically the error's description is dropped and only its type and location
-go — but Snoozemo sends nothing automatically today, so this is a rule about the code, not
-something happening to you now.
+go — but nothing sends the log anywhere automatically today, so this is a rule about the
+code rather than something happening to you now. The crash reports and usage statistics
+described above are the only things that leave on their own, and the log is not part of
+either.
 
 **What Snoozemo never writes into it**, as a hard rule with its own automated test: your
 coordinates, the name or identifier of any Wi-Fi network, and any place name you typed. The
@@ -275,8 +334,9 @@ warning — a log that starts off guarantees the first one is the one nobody cap
 **Turning it off deletes everything the log kept, immediately**, including an unshared
 crash record: off means off, not "stop writing but keep the old files".
 
-**None of it leaves your phone unless you share it.** It is not part of a crash report and
-there is no automatic upload of it of any kind — the only way this log reaches anyone else
+**None of it leaves your phone unless you share it.** It is in neither of the things that
+leave on their own — a crash report or a usage-statistics event — and there is no automatic
+upload of it of any kind — the only way this log reaches anyone else
 is the *Share debug logs* button in Settings, and the banner offering to share after a
 crash. Both are always an explicit act: tapping either builds a plain-text report and
 puts it on your clipboard, then opens Android's own share sheet so you choose the
@@ -328,8 +388,8 @@ you started on an old one.
 That record is a scrambled value, not a device identity: it is derived from an Android
 identifier through a one-way hash, and the only question ever asked of it is whether it
 matches the one on this phone. It is stored with the snooze and erased with it, and
-Snoozemo never sends it anywhere — it is not in a crash report and there is nothing else
-that transmits. The one
+Snoozemo never sends it anywhere — it is in neither of the two things that leave the phone,
+a crash report or a usage-statistics event. The one
 way it can move is the same device-to-device transfer described above, and that is not an
 exception so much as the point: if the transfer copies the snooze, the marker has to travel
 with it, because comparing it is how the new phone knows to refuse. If
@@ -354,17 +414,25 @@ No server holds a copy of anything in the list above — with one exception wort
 Snoozemo's data came across to a new phone during setup, the old phone still has its own
 copy, and it is deleted the same way.
 
-Crash reports are the one thing that is not on your phone to delete. Turning *Crash
-reports* off in Settings stops any more being sent and drops any that were still waiting;
-reports already received are held by Firebase Crashlytics for 90 days and then deleted
-automatically. To have earlier ones removed sooner, email the address at the foot of this
-page.
+**Crash reports and usage statistics are the things that are not on your phone to delete.**
+Turning *Help make Snoozemo better* off in Settings stops any more of either being sent, and
+drops any crash reports that were still waiting — but it cannot reach back for what has already
+arrived.
+
+- **Crash reports** already received are held by Firebase Crashlytics for 90 days and then
+  deleted automatically.
+- **Usage statistics** already received are held by Firebase Analytics for as long as this
+  app's Firebase project is set to keep them — Google's default is two months, and the
+  longest it can be set to is fourteen.
+
+To have earlier ones of either removed sooner, email the address at the foot of this page.
 
 ## Children
 
 Snoozemo is not directed at children. It works the same way for a user of any age: what it
-keeps is the short list in the table above, it stays on that phone, and the only thing sent
-anywhere is a crash report you can turn off.
+keeps is the short list in the table above, it stays on that phone, and the only things sent
+anywhere are the crash reports and usage statistics you can turn off — with one switch, and
+only after you have said yes.
 
 ## Changes to this policy
 

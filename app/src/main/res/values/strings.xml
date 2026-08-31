@@ -126,8 +126,15 @@
       nothing of the sort because nothing there leaves the phone by itself.
       TODO: translate
     -->
-    <string name="setup_crash_reporting_title" tools:ignore="MissingTranslation">Crash reports</string>
-    <string name="setup_crash_reporting_description" tools:ignore="MissingTranslation">Send crash details so bugs get fixed. No location is included.</string>
+    <!-- TODO: translate — reworded because this row now governs analytics as
+         well as crash reports (maintainer, 2026-08-31). It matches the consent
+         card's title, minus the question mark: the card asks and the row
+         labels, and one thing the user agreed to once should not carry two
+         names. Named for what the user gets rather than for the two SDKs
+         behind it, which made the row longer without telling anyone why they
+         would want it on. -->
+    <string name="setup_crash_reporting_title" tools:ignore="MissingTranslation">Help make Snoozemo better</string>
+    <string name="setup_crash_reporting_description" tools:ignore="MissingTranslation">Send crash details and anonymous usage stats so bugs get fixed.</string>
     <string name="setup_crash_reporting_save_failed" tools:ignore="MissingTranslation">Couldn\'t save this setting</string>
     <!--
       The Play update banner (MainScreen and SettingsScreen, `play` flavor only — SPEC.md
@@ -215,6 +222,21 @@
     <string name="background_location_banner_allow" tools:ignore="MissingTranslation">Yes please</string>
     <!-- TODO: translate -->
     <string name="background_location_banner_dismiss" tools:ignore="MissingTranslation">No thanks</string>
+
+    <!--
+      The telemetry consent card (SPEC.md §12), following simmo's and
+      ClothesCast's prior art: nothing is collected until the user says yes,
+      and both buttons record an answer so a recorded "no" is never re-asked.
+      Same question, same two answers, so the three apps read alike.
+    -->
+    <!-- TODO: translate -->
+    <string name="telemetry_invite_title" tools:ignore="MissingTranslation">Help make Snoozemo better?</string>
+    <!-- TODO: translate -->
+    <string name="telemetry_invite_body" tools:ignore="MissingTranslation">Send crash reports and anonymous usage stats so bugs get found and fixed?</string>
+    <!-- TODO: translate -->
+    <string name="telemetry_invite_accept" tools:ignore="MissingTranslation">Yes please</string>
+    <!-- TODO: translate -->
+    <string name="telemetry_invite_decline" tools:ignore="MissingTranslation">No thanks</string>
     <string name="setup_action_add">Add</string>
     <string name="failure_could_not_add_tile">Couldn\'t add the tile</string>
     <string name="failure_could_not_open_settings">Couldn\'t open Settings</string>

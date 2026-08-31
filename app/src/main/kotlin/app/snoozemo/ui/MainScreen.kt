@@ -83,6 +83,13 @@ internal fun MainScreen(
     backgroundLocationMissing: Boolean = false,
     /** Whether the user has dismissed the background-location banner for good. */
     backgroundLocationBannerDismissed: Boolean = true,
+    /**
+     * Whether the telemetry question is still unanswered *and* this build has
+     * something to turn on. False on `direct`, which has no reporter, and
+     * false until the store has been read — unasked is not "unanswered" as
+     * far as this screen is concerned.
+     */
+    telemetryUnanswered: Boolean = false,
     // Only SetupRowId.TILE is ever relevant here — this banner has no other
     // capability to fail — but the type is shared with the other screens'
     // failure-routing rather than narrowed to a Boolean, so a caller reading
@@ -102,6 +109,7 @@ internal fun MainScreen(
     onDismissPlayUpdate: () -> Unit = {},
     onAllowBackgroundLocation: () -> Unit = {},
     onDismissBackgroundLocationBanner: () -> Unit = {},
+    onAnswerTelemetry: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -181,6 +189,12 @@ internal fun MainScreen(
                 onRestart = onCompletePlayUpdate,
                 onDismiss = onDismissPlayUpdate,
             )
+        }
+        // Last of the banners. Everything above either blocks the product
+        // (Do Not Disturb access, the tile) or offers to repair something the
+        // user is missing; this asks for a favor, so it yields to all of them.
+        if (telemetryUnanswered) {
+            TelemetryInviteCard(onAnswer = onAnswerTelemetry)
         }
         // One slot, always saying which of the two states the screen is in
         // once the record has been read — a running snooze reports what would
@@ -336,6 +350,60 @@ private fun remainingText(remaining: Duration): String {
         stringResource(TileR.string.tile_remaining_hours, hours, minutes % 60)
     } else {
         stringResource(TileR.string.tile_remaining_minutes, minutes)
+    }
+}
+
+/**
+ * The telemetry question, put to an install that has never answered it
+ * (`SPEC.md` §12).
+ *
+ * Nothing is collected until the answer is yes, so an install that is never
+ * asked never reports — which is why the question needs a home outside
+ * Settings: a user who never opens Settings would otherwise have decided by
+ * default, and the default is the one that loses every crash.
+ *
+ * **Both buttons record an answer**, because a question you can only walk
+ * away from is not one that was asked. Declining is a recorded "no", not an
+ * absence, so the card does not come back. simmo's `AnalyticsInviteCard` is
+ * the prior art and this follows it — same question, same two answers, so
+ * the apps read alike.
+ *
+ * Last of the banners, below even the update prompt: nothing is broken, and
+ * everything above it is either blocking the product or offering to fix
+ * something the user is missing.
+ */
+@Composable
+private fun TelemetryInviteCard(onAnswer: (Boolean) -> Unit) {
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.telemetry_invite_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = stringResource(R.string.telemetry_invite_body),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            ) {
+                TextButton(onClick = { onAnswer(false) }) {
+                    Text(stringResource(R.string.telemetry_invite_decline))
+                }
+                Button(onClick = { onAnswer(true) }) {
+                    Text(stringResource(R.string.telemetry_invite_accept))
+                }
+            }
+        }
     }
 }
 

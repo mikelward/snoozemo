@@ -5,7 +5,26 @@
   network access at all, which is that flavor's reason to exist;
   DeclaredPermissionsTest pins the split in both directions.
 -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      Firebase Analytics merges `AD_ID` into whatever includes it, and Play's
+      Advertising ID declaration is answered "not used"
+      (docs/play-store-declarations.md). Removing it keeps that answer true:
+      Analytics then reports against the per-install app-instance ID, which is
+      specific to this app, cannot be joined to activity elsewhere, and resets
+      on a clear-data or reinstall.
+
+      What this costs is the ads-adjacent surface — audience export to Google
+      Ads, and the demographics that are inferred from the advertising ID —
+      none of which Snoozemo has any use for. `DeclaredPermissionsTest` was
+      written to fail the moment Analytics arrived, precisely so this was
+      decided rather than inherited; this is that decision.
+    -->
+    <uses-permission
+        android:name="com.google.android.gms.permission.AD_ID"
+        tools:node="remove" />
 
     <!--
       The Geofencing API needs the background grant to deliver an exit while
@@ -16,12 +35,16 @@
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
     <!--
-      Crash reporting, and nothing else, uses this (SPEC.md §12). It was
-      absent from both flavors until Crashlytics landed, and the day it landed
-      the Play Data Safety answer moved off "no data collected, no data
+      Crash reporting and Firebase Analytics use this, and nothing else
+      (SPEC.md §12). Both sit behind one consent the user has to give first,
+      so the permission is held by a build that sends nothing until asked.
+
+      It was absent from both flavors until Crashlytics landed, and the day it
+      landed the Play Data Safety answer moved off "no data collected, no data
       shared" onto crash logs, diagnostics and the installation identifier
-      Crashlytics records — docs/play-store-declarations.md
-      carries the new answer and docs/PRIVACY.md the user-facing statement.
+      Crashlytics records; Analytics later added app interactions and its own
+      app-instance identifier — docs/play-store-declarations.md carries the
+      answers and docs/PRIVACY.md the user-facing statement.
 
       Still absent from `direct`: that flavor holds no Play Services
       dependency, so it has no reporter to feed, and "this build cannot open a
@@ -30,8 +53,9 @@
       The floor of SPEC.md §12 is unchanged by this permission — no
       coordinates, no SSID or BSSID, no user-typed place name goes anywhere,
       and the on-device debug log still leaves the phone only when the user
-      shares it. What Crashlytics sends is a stack trace, and the user can
-      turn even that off in Settings.
+      shares it. What Crashlytics sends is a stack trace; what Analytics sends
+      is the events the SDK collects on its own. The user can turn both off in
+      Settings, with one switch, and neither sends anything until they say yes.
     -->
     <uses-permission android:name="android.permission.INTERNET" />
 
@@ -53,6 +77,27 @@
         -->
         <meta-data
             android:name="firebase_crashlytics_collection_enabled"
+            android:value="false" />
+        <!--
+            Analytics needs its own switch, and the reasoning above is why
+            rather than a second copy of it: Firebase initializes every SDK
+            from the same ContentProvider, so an SDK without a default here
+            decides for itself before any of Snoozemo's code has run. Analytics
+            is the one where that bites hardest — it records its own automatic
+            events with no call site of ours to gate, so an install that has
+            not answered the question yet would already have sent `first_open`
+            and `session_start` by the time it is asked.
+
+            The advertising ID is switched off separately below; the permission
+            itself is removed in the main manifest, so the identifier that
+            remains is per-install and cannot be joined to activity in other
+            apps.
+        -->
+        <meta-data
+            android:name="firebase_analytics_collection_enabled"
+            android:value="false" />
+        <meta-data
+            android:name="google_analytics_adid_collection_enabled"
             android:value="false" />
     </application>
 
