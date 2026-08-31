@@ -29,8 +29,7 @@ class ProcessExitReasonsTest {
     fun startRecording() {
         // The log is on by default (SPEC.md §4.6), but a sibling test turns
         // recording off, and the object is a process-wide singleton — so set it
-        // explicitly rather than depending on test order. It also has to come
-        // before the drain below, which is skipped while recording is off.
+        // explicitly rather than depending on test order.
         SnoozeDebugLog.setRecording(true)
         // Robolectric constructs SnoozemoApplication before this runs, and its
         // onCreate queues the exit collector on DebugLogging's worker. Left
@@ -48,17 +47,22 @@ class ProcessExitReasonsTest {
      * so far, including the startup collection.
      *
      * The worker is single-threaded and FIFO, so a task queued now has run only
-     * once every earlier one has. Fails loudly rather than timing out silently:
-     * if the gate was never applied the task is skipped and this is the honest
-     * place to notice, since every assertion below would otherwise be racing
-     * work it cannot see.
+     * once every earlier one has. It goes through the test seam rather than
+     * `afterRecordingGateApplied`, which is production API entitled to *skip*
+     * its task when the recording gate is off or was never applied: latching on
+     * it makes the wait conditional on state this test does not own, and a skip
+     * is indistinguishable from a worker that never got there. The seam's task
+     * runs unconditionally, so the wait either completes or is a real failure.
+     *
+     * Keeps the ten seconds the old wait had rather than the seam's default
+     * five: the bound is real time in a JVM competing with every other Gradle
+     * worker, and the point of this change is to remove a wait that could
+     * never finish, not to leave less room for one that is merely slow.
      */
     private fun drainDebugLogWorker() {
-        val drained = java.util.concurrent.CountDownLatch(1)
-        DebugLogging.afterRecordingGateApplied { drained.countDown() }
         assertTrue(
             "the debug-log worker did not drain; startup collection may still be in flight",
-            drained.await(10, java.util.concurrent.TimeUnit.SECONDS),
+            DebugLogging.awaitIdleForTest(timeoutSeconds = 10),
         )
     }
 
@@ -162,16 +166,14 @@ class ProcessExitReasonsTest {
     fun recordsNothingWhileTheDebugLogIsOff() {
         // The log is on by default, but turning it off means off — it stops
         // recording and deletes what it kept (SPEC.md §4.6, docs/PRIVACY.md).
-        // These records must honour that switch like every other entry rather
+        // These records must honor that switch like every other entry rather
         // than becoming collection the user cannot stop.
         //
         // DebugLogging.afterRecordingGateApplied goes further and skips the
         // collection entirely when the gate says Off, so the queries are never
-        // even issued. That stronger property is not asserted here: observing
-        // "the task did not run" needs a second task to prove the worker
-        // drained, and with recording off that one is skipped too — so the
-        // check could only ever be a timeout, which is the flaky shape this
-        // repo rejects. The guard is small and commented at the decision.
+        // even issued. That stronger property is about the production queueing
+        // path, not this direct call, so it is not what this test covers; the
+        // guard is small and commented at the decision.
         SnoozeDebugLog.setRecording(false)
         seedExit(ApplicationExitInfo.REASON_LOW_MEMORY)
 
