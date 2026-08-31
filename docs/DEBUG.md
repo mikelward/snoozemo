@@ -7,12 +7,17 @@ implementations (Simmo's `DebugReport.kt`, ClothesCast's `diag/BugReport.kt` +
 
 ## What already exists (Phase 3)
 
-The recording and persistence half is fully built and unchanged by this work:
+The recording and persistence half is fully built and unchanged by this work. Both
+halves have since moved to [mikelward/androidlog](https://github.com/mikelward/androidlog),
+the shared debug log this app's own logger was one of four sources for; the names below
+stay put, so nothing in this plan moved with them:
 
 - `core/SnoozeDebugLog` — the in-memory ring buffer (`snapshot()`), the privacy floor
-  (types-and-frames only, no raw coordinates/SSID/place names).
-- `app/snooze/DebugLogFiles.kt` — `DebugFileSink` (rotation, the crash pin, delete-on-off),
-  `DebugLogStore` (the on/off setting), `DebugLogging` (install + the settings-screen glue).
+  (types-and-frames only, no raw coordinates/SSID/place names). Now a thin delegate to
+  the library's `DebugLog`.
+- `app/snooze/DebugLogFiles.kt` — `DebugLogStore` (the on/off setting) and `DebugLogging`
+  (install + the settings-screen glue). Rotation, the crash pin and delete-on-off are the
+  library's `DebugFileSink` now, not this app's.
 - `SettingsScreen` already carries the on/off switch (`DebugLogRow`).
 
 None of that reads its own files back out. This plan is entirely about the *reading* and
