@@ -1,7 +1,9 @@
 package app.snoozemo.core
 
 import com.mikelward.androidlog.REDACTED_PLACEHOLDER
+import com.mikelward.androidlog.formatLogMessage
 import java.time.Instant
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -76,17 +78,79 @@ class SnoozeDebugLogTest {
     // --- conformance: the floor is in force in this app, not just upstream ---
 
     @Test
-    fun `an untagged String is withheld, because that is what an SSID arrives as`() {
+    fun `an untagged String is kept on this device and withheld from anything leaving`() {
         // The library owns the type rule and tests it exhaustively. What this
         // asserts is narrower and is the part the library cannot: that the
         // instance this app actually logs through is subject to it. A base
         // class swapped, or a constructor argument added in the wrong place,
         // fails here and nowhere else.
-        SnoozeDebugLog.event("candidate=%s", "ExampleWifi")
+        //
+        // Reversed with the library's floor (androidlog, 2026-08-31): the
+        // device's own log keeps the value, and the placeholder appears in the
+        // rendering that leaves. This app has nowhere that leaves — every sink
+        // is on-device and a report goes only where the user sends it — so the
+        // second half is asserted through the boundary directly.
+        SnoozeDebugLog.event("candidate=%s", "candidate-1")
 
         val line = SnoozeDebugLog.snapshot().last { !it.contains("timezone offset") }
-        assertFalse("the SSID must not reach the log", line.contains("ExampleWifi"))
-        assertTrue("and its absence must be visible", line.contains(REDACTED_PLACEHOLDER))
+        assertTrue("this device's own log keeps it", line.contains("candidate-1"))
+        assertFalse("and does not hide it", line.contains(REDACTED_PLACEHOLDER))
+
+        assertEquals(
+            "candidate=$REDACTED_PLACEHOLDER",
+            formatLogMessage("candidate=%s", arrayOf<Any?>("candidate-1"), leavingDevice = true),
+        )
+    }
+
+    @Test
+    fun `what the floor bans never reaches the log in the first place`() {
+        // The one that matters now that the device's own copy is whole, and it
+        // asserts the *structural* protection rather than a call this test
+        // makes safe itself (Codex, PR #164).
+        //
+        // `ActiveSnooze` is a data class, so its generated `toString()` would
+        // print the SSID, the coordinates and the place name in full. What
+        // stops a call site that passes the record directly is that the shared
+        // logger renders an unknown type as its class name and never calls a
+        // `toString()` it did not write. So this logs the record *itself*,
+        // unwrapped and untagged — the shape a future call site would reach for
+        // by mistake — and pins that the floor holds anyway.
+        val snooze = ActiveSnooze(
+            anchor = Anchor(
+                lat = 12.345678,
+                lon = -87.654321,
+                fixAccuracyM = 12.5f,
+                capturedAt = Instant.parse("2026-01-01T12:00:00Z"),
+                ssid = "ExampleWifi",
+                bssid = "02:00:00:00:00:01",
+            ),
+            startedAt = Instant.parse("2026-01-01T12:00:00Z"),
+            capExpiresAt = Instant.parse("2026-01-01T20:00:00Z"),
+            mode = TrackingMode.FULL,
+            placeName = "Cinema",
+        )
+
+        // The mistake case: the record itself, with nothing to make it safe.
+        SnoozeDebugLog.event("state → %s", snooze)
+
+        val direct = SnoozeDebugLog.snapshot().last { !it.contains("timezone offset") }
+        assertFalse("the SSID is banned", direct.contains("ExampleWifi"))
+        assertFalse("the BSSID is banned", direct.contains("02:00"))
+        assertFalse("the place name is banned", direct.contains("Cinema"))
+        assertFalse("latitude is banned", direct.contains("12.345678"))
+        assertFalse("longitude is banned", direct.contains("87.654321"))
+        // Asserted positively too, so this cannot pass because the line was
+        // empty or the record never reached the log at all.
+        assertTrue(direct, direct.contains("app.snoozemo.core.ActiveSnooze"))
+
+        // And the sanctioned route still yields the diagnostic it exists for.
+        SnoozeDebugLog.event("state → %s", snooze.logSummary())
+
+        val summarized = SnoozeDebugLog.snapshot().last { !it.contains("timezone offset") }
+        assertFalse("the SSID is banned", summarized.contains("ExampleWifi"))
+        assertFalse("the place name is banned", summarized.contains("Cinema"))
+        assertFalse("latitude is banned", summarized.contains("12.345678"))
+        assertTrue("and the summary is what survives", summarized.contains("ssid captured"))
     }
 
     @Test

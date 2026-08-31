@@ -28,15 +28,29 @@ import com.mikelward.androidlog.safe
  * because they were taken from here. So this declares none of them.
  *
  * **The privacy floor is enforced by what this API accepts, not by scrubbing**
- * (AGENTS.md, *Privacy*; SPEC.md §4.6): never raw coordinates, never a full
- * SSID or BSSID, never a user-typed place name. There is no redactor because
- * nothing sanctions those values arriving at all — callers pass enum names,
- * booleans, distances and accuracies in meters, and times. The two places
- * data-shaped values could slip through are closed structurally: a throwable
- * renders as **types and stack frames only, never messages** (a platform
- * exception can quote what it was given, and the Wi-Fi and location stacks are
- * given exactly what the floor bans), and the one sanctioned way to render a
- * snooze is [logSummary], whose own test pins the floor.
+ * (AGENTS.md, *Privacy*; SPEC.md §4.6): this app never puts a raw coordinate, a
+ * full SSID or BSSID, or a user-typed place name into the log. There is no
+ * redactor because nothing sanctions those values arriving at all — callers pass
+ * enum names, booleans, distances and accuracies in meters, and times, and the
+ * one sanctioned way to render a snooze is [logSummary], whose own test pins it.
+ *
+ * **Two things that used to be true here are not, and both changed with the
+ * shared logger's boundary rule** (androidlog 1.0.44; maintainer, 2026-08-31).
+ * The floor moved from ingestion to the boundary: what this device keeps is
+ * whole, and the reduction applies to a rendering that is *leaving*.
+ *
+ * - An untagged `String` is **no longer withheld** from the device's own copy.
+ *   It renders in full here and as the placeholder only in
+ *   `formatLogMessage(..., leavingDevice = true)`. [safe] therefore does not
+ *   mean "keep this"; it means "carry this off the device too".
+ * - A throwable renders **its message as well as its type and frames**. That
+ *   was the second structural closure for the floor above, and losing it is
+ *   deliberate: an exception can quote what it was given, and the Wi-Fi and
+ *   location stacks are handed exactly what the floor keeps out, so it is
+ *   possible in principle for one of those values to reach the log inside a
+ *   message Snoozemo did not write — the framework's, the runtime's, or a
+ *   bundled library's. Accepted rather than scrubbed — see SPEC.md §4.6,
+ *   which records the trade and the reason a per-app opt-out was rejected.
  */
 object SnoozeDebugLog : DebugLog()
 
@@ -58,9 +72,11 @@ object SnoozeDebugLog : DebugLog()
  * off-device mirror at all, so the only way they leave is inside a report the
  * user chose to share.
  *
- * [safe] rather than a bare string because the floor withholds every untagged
- * `String` by default; this one is a summary the call site has already decided
- * the contents of, which is exactly what the tag is for.
+ * [safe] rather than a bare string because this summary is one the call site has
+ * already decided the contents of, so it is fit to leave the device as well as
+ * to sit in the log — which is what the tag means since the boundary rule
+ * (androidlog 1.0.44). An untagged `String` reaches this device's own log in
+ * full either way; the tag governs the rendering that leaves.
  */
 fun ActiveSnooze.logSummary(): SafeLogValue {
     val anchor = anchor

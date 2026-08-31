@@ -392,8 +392,9 @@ internal object DebugLogging {
                 // runs on an install that starts disabled -- but logcat is not
                 // in the report the user shares, so the type and frames would
                 // never reach whoever has to explain the failure (Codex,
-                // PR #153). `failure` records the throwable's type and stack
-                // and never its message, so the floor holds.
+                // PR #153). `failure` records the throwable's type, stack and
+                // message; the message is Android's own text and SPEC.md §4.6
+                // accepts it as the floor's single exception.
                 runCatching { Log.w(TAG, "Removing the old debug-log directory threw.", it) }
                 logFailure(it, "removing the pre-migration log directory threw")
             }

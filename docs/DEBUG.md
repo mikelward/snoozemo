@@ -12,9 +12,15 @@ halves have since moved to [mikelward/androidlog](https://github.com/mikelward/a
 the shared debug log this app's own logger was one of four sources for; the names below
 stay put, so nothing in this plan moved with them:
 
-- `core/SnoozeDebugLog` — the in-memory ring buffer (`snapshot()`), the privacy floor
-  (types-and-frames only, no raw coordinates/SSID/place names). Now a thin delegate to
-  the library's `DebugLog`.
+- `core/SnoozeDebugLog` — the in-memory ring buffer (`snapshot()`) and the privacy floor:
+  this app never writes a raw coordinate, SSID/BSSID or typed place name into the log. Now a
+  thin delegate to the library's `DebugLog`. **Since androidlog 1.0.44 the floor is a
+  boundary, not an ingestion filter**, so what this device keeps is whole — an untagged
+  `String` renders in full, and a throwable carries its message as well as its type and
+  frames. Whoever raised the error composes that message — framework, runtime or bundled
+  library — so it is the one text the app does not author;
+  SPEC.md §4.6 records it as the floor's single exception and why it is accepted rather
+  than scrubbed.
 - `app/snooze/DebugLogFiles.kt` — `DebugLogStore` (the on/off setting) and `DebugLogging`
   (install + the settings-screen glue). Rotation, the crash pin and delete-on-off are the
   library's `DebugFileSink` now, not this app's.
@@ -195,8 +201,10 @@ the one piece of crash evidence that explains a stuck or early-ended snooze).
   landed clipboard copy.
 - A **floor test**, called out explicitly because `docs/PRIVACY.md` already promises one
   ("as a hard rule with its own automated test"): the built payload never contains a raw
-  coordinate, a full SSID/BSSID, or a user-typed place name, exercised against a log/state
-  containing genuinely realistic-looking fixture values for all three.
+  coordinate, a full SSID/BSSID, or a user-typed place name **that this app wrote**,
+  exercised against a log/state containing genuinely realistic-looking fixture values for
+  all three. It does not cover a thrown error's own message, which the app does not
+  author — SPEC.md §4.6's single exception.
 - Coverage for the two outcome watches themselves: fires after completion, closing stops it
   from hearing later completions, and a later registration doesn't get evicted by an earlier
   instance's deferred close — the same three properties `DebugLoggingTest` already pins for

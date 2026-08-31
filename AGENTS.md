@@ -524,15 +524,23 @@ it in the same commit.
   ends up unable to explain its own failures — see *Working with PRs* for what to do when a
   reviewer argues for a stricter reading (short version: quote the rule, decline, and bring
   a genuine conflict to the maintainer instead of resolving it by removing the capability).
-- **An on-device debug log, if one is added, is the one sanctioned exception, and a narrow
-  one.** Diagnosing a snooze that ended early — or never ended — needs a record of what the
-  presence engine saw. Such a log may carry **coarse state and reasons**: which state the
-  controller was in, which of the three wake-up sources fired, whether the anchor SSID was
-  associated, and the *result* of the departure test. The floor is absolute: never raw
-  coordinates, never a full SSID/BSSID, never a user-typed place name. Distance from the
-  anchor in meters and fix accuracy are the diagnostic value; the position is not. Anything
-  above the floor gets added only with a specific failure it makes diagnosable, and
-  `docs/PRIVACY.md` must describe what the log carries before it ships.
+- **The on-device debug log is the one sanctioned exception, and a narrow one.** Diagnosing
+  a snooze that ended early — or never ended — needs a record of what the presence engine
+  saw. It carries **coarse state and reasons**: which state the controller was in, which of
+  the three wake-up sources fired, whether the anchor SSID was associated, and the *result*
+  of the departure test. Distance from the anchor in meters and fix accuracy are the
+  diagnostic value; the position is not. Anything above that gets added only with a specific
+  failure it makes diagnosable, and `docs/PRIVACY.md` must describe what the log carries
+  before it ships.
+  **The floor is what this app writes**: never a raw coordinate, a full SSID/BSSID or a
+  user-typed place name — `logSummary()` is the only sanctioned way to render a snooze, and
+  its test pins that. **The one exception is text Snoozemo does not author**: a thrown
+  error's own message — whoever raised it, framework, runtime or bundled library — and
+  Android's exit-reason description, either of which can quote what it was given.
+  Accepted, not scrubbed; reasoning and rejected alternatives in `SPEC.md` §4.6.
+  This does not touch the bullet above, which stays absolute: an *automatic* off-device
+  channel carries none of those values, ever. That one is about channels the user is not in
+  the loop for; this is about a log they read and hand over themselves.
 
 ## Language and spelling
 

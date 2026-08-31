@@ -237,9 +237,28 @@ that never ended because of a bug, and without this there is nothing afterwards 
 those apart. Android's reason text is written by the system and can name the component
 that stopped Snoozemo — for an app update, the installer.
 
-**What it never records**, as a hard rule with its own automated test: your coordinates,
-the name or identifier of any Wi-Fi network, and any place name you typed. The distance
-number says whether the departure test worked; where you were is not in the log at all.
+When something fails, the log records **the error itself** — its type, where in Snoozemo's
+code it happened, and the sentence describing it. That sentence is written by whatever
+raised the error — Android, the Java runtime, or a library Snoozemo bundles such as its
+crash reporter — not by Snoozemo, and it is usually the only thing that explains a failure; it can name a system component or a setting that was refused. It is
+kept because a snooze that would not arm, and no reason why, is a bug report nobody can
+act on. It stays on your phone with the rest of the log, and if the log is ever sent
+anywhere automatically the error's description is dropped and only its type and location
+go — but Snoozemo sends nothing automatically today, so this is a rule about the code, not
+something happening to you now.
+
+**What Snoozemo never writes into it**, as a hard rule with its own automated test: your
+coordinates, the name or identifier of any Wi-Fi network, and any place name you typed. The
+distance number says whether the departure test worked; where you were is not in the log at
+all. Those are kept out *before* they reach the log rather than hidden once inside it.
+
+The honest limit on that: **the error text above is not written by Snoozemo** — it comes
+from whatever raised the error — and an error can quote what it was given. So it is
+possible in principle for one of those values to appear inside an error message, even
+though Snoozemo never puts one there itself. Snoozemo does not try to scrub it — searching
+text for things that look sensitive only ever catches the kinds it was taught, and the
+alternative would be dropping the sentence that usually explains the failure. It stays on
+your phone with the rest of the log, and nothing is sent until you pick where it goes.
 **Nothing from your calendar is in it either** — no event, no time, no title — not even
 the end time the notification offers you.
 
@@ -275,9 +294,13 @@ sharing it deletes exactly the runs that report carried. Dismissing the banner i
 deletes nothing: it stops the crash being announced, and the log ages out like any other.
 
 **The crash banner appears only after a crash** — an ordinary close, a force-stop, or an app
-update never raises it — and only until you share the report or dismiss the banner. The floor above is unchanged
-for a shared report: never a raw coordinate, a full Wi-Fi network name or identifier, or a
-place name you typed, whatever the report contains otherwise.
+update never raises it — and only until you share the report or dismiss the banner. The floor
+above holds for a shared report exactly as it does for the log: Snoozemo never writes a raw
+coordinate, a full Wi-Fi network name or identifier, or a place name you typed into it — with
+the same single exception, the message on an error Snoozemo did not compose, which can quote
+what it was given. Nothing is sent until you pick where it goes, and Snoozemo puts the
+report on your clipboard at the same time, so you can paste it somewhere and read all of
+it. There is no preview screen inside Snoozemo today.
 
 ## Backup
 
