@@ -388,6 +388,13 @@ class SnoozeNotifications(private val context: Context) {
      * takedown in that gap would be overwritten by the card it validated a
      * moment earlier — the same failure one step further along the path
      * (Codex, PR #156).
+     *
+     * **It catches a takedown and not a replacement**, because that is all
+     * [ongoingGeneration] counts. A *newer post* landing in the same gap moves
+     * nothing, so the rebuild wins over a card built after it and a stale mode
+     * line can stand — nothing reposts on a timer, so it stands until the next
+     * real state change. Named rather than fixed: `TODO.md`, *Calendar action:
+     * the last freshness windows*.
      */
     private fun postOngoing(notification: android.app.Notification, onlyIfGeneration: Long? = null) {
         synchronized(ongoingLock) {
@@ -544,6 +551,20 @@ class SnoozeNotifications(private val context: Context) {
                 // chronometer from. Whole-record equality would compare an
                 // in-memory `Instant` against one reloaded at millisecond
                 // precision and never match.
+                //
+                // **This list is a hand-maintained invariant, and nothing
+                // enforces it.** It has to grow whenever the card grows a new
+                // input, and forgetting fails silently — which is how `mode`
+                // and `degradation` came to be added here in the first place,
+                // one review round after the identity and cap. Adding a field
+                // to the card means adding it here.
+                //
+                // The generation check above it does not cover the gap either:
+                // [ongoingGeneration] counts takedowns, not replacements, so a
+                // newer *post* landing during the query moves nothing and the
+                // card built here can still win over it. Both limits, and the
+                // restructure that removes them rather than documenting them,
+                // are `TODO.md`, *Calendar action: the last freshness windows*.
                 if (live.mode != snooze.mode ||
                     live.degradation != snooze.degradation ||
                     live.bootReference != snooze.bootReference
@@ -1045,10 +1066,18 @@ class SnoozeNotifications(private val context: Context) {
         private val ongoingLock = Any()
 
         /**
-         * Bumped every time the ongoing card is taken down.
+         * Bumped every time the ongoing card is taken **down**.
          *
          * Process-scoped like [offer], and read by the calendar worker as the
          * one signal a record check cannot supply — see [cancelOngoing].
+         *
+         * **A takedown, not a replacement — and both readers want the broader
+         * question.** Nothing bumps this when the card is merely re-posted, so
+         * a comparison against a captured value answers "was it taken down?"
+         * and not "did anything replace it?". Both guard sites want the
+         * second, and get the first: see the note in [postOngoing] and the one
+         * beside the worker's own check. Widening it is `TODO.md`, *Calendar
+         * action: the last freshness windows*.
          */
         @Volatile
         private var ongoingGeneration: Long = 0L
