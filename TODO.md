@@ -3000,7 +3000,7 @@ question.
 ## Deferred
 
 - **An oversized crash log can never be consumed by sharing** (Codex, PR #153;
-  needs a maintainer decision). `DebugReport.omitted` refuses to consume the
+  route 3 landed, the real fix still open). `DebugReport.omitted` refuses to consume the
   crash pin whenever the report's own 25,000-character bound dropped any of
   what was read — a guard added earlier on that same PR, because a pinned
   crash can be an older run that newer ordinary ones push out of the tail, and
@@ -3024,8 +3024,23 @@ question.
   3. **Leave it, and say so in the UI** — tell the user the report could not
      carry the whole crash and that Dismiss is the way to clear it. Cheapest;
      needs approved English copy, so it is not autopilot's to write.
-  Deliberately not guessed: this is a shared-library change or new user-facing
-  copy, and it sits on a seam that has already taken several review rounds.
+  **Decided (maintainer, 2026-08-31): route 3 for now, with 1 or 2 still to
+  do.** The report says `(crash details too large to include - dismiss the
+  banner to clear)` when a pinned crash was among what the bound cut off, so
+  the user is told rather than left tapping Share. The deadlock itself
+  remains — this explains it, it does not fix it.
+  **Constraint for whoever takes 1 or 2 (maintainer, 2026-08-31): if there
+  are multiple sections they all need limits.** That is already how the report
+  works — `MAX_STRUCTURED_CHARS` 4,000 + `MAX_PREVIOUS_RUN_CHARS` 25,000 +
+  `MAX_LOG_PAYLOAD_CHARS` 30,000 = 59,000, under `MAX_SHARE_PAYLOAD_CHARS`
+  60,000 — so a separate crash section cannot be *added*: its budget has to be
+  carved out of the existing 25,000, or the total raised, and 60,000 is there
+  because share targets choke past it. That makes route 2 dearer than it first
+  looks.
+  Note also that no budget scheme removes the deadlock on its own: a single
+  crash run larger than its own section still cannot be carried whole. Route 2
+  only closes it if a *truncated but present* crash is then treated as
+  consumable — which looks right, since the user did send the crash's tail.
 
 - **A skipped ordinary run is never announced in the report** (Codex, PR #153;
   same family as the entry above). When the library cannot read one retained

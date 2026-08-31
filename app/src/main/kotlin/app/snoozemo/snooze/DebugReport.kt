@@ -375,6 +375,8 @@ internal object DebugReport {
             previousRun = previousRunRead.text,
             previousRunCrashed = previousRunRead.wasCrash,
             previousRunOmitted = previousRunOmitted,
+            previousRunCrashTooLarge =
+                previousRunRead.wasCrash && previousRunRead.renderDroppedPartOfPreviousRun,
             recentLog = SnoozeDebugLog.snapshot(),
         )
         // Only safe when the read actually completed, actually succeeded,
@@ -598,6 +600,15 @@ internal fun buildDebugReportPayload(
     previousRun: String?,
     previousRunCrashed: Boolean,
     previousRunOmitted: Boolean = false,
+    /**
+     * Whether a pinned crash was among what this report's own bound cut off.
+     *
+     * Says so in the section rather than leaving the reader to wonder, and
+     * points at the way out: sharing cannot clear the banner in this state —
+     * the same runs truncate the same way every retry — so Dismiss is the only
+     * route (maintainer, 2026-08-31; `TODO.md` carries the proper fix).
+     */
+    previousRunCrashTooLarge: Boolean = false,
     recentLog: List<String>,
 ): String {
     val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(Date(nowMillis))
@@ -668,6 +679,12 @@ internal fun buildDebugReportPayload(
                 "--- Earlier runs ---"
             }
             appendLine(label)
+            // Before the text, not after: the reader needs to know what is
+            // missing before they read what is there, and a line at the end of
+            // 25,000 characters is a line nobody reaches.
+            if (previousRunCrashTooLarge) {
+                appendLine("(crash details too large to include - dismiss the banner to clear)")
+            }
             // Keep the newest lines: the file is oldest-first, so a crash
             // entry or the last decisions are at the end.
             appendLine(
