@@ -57,7 +57,7 @@ internal class DebugLogStore(context: Context) {
      * needed one is a full-rendered run in a shared report, so the default
      * resolves to the safe side.
      */
-    fun hasPurgedLegacyLogs(): Boolean = prefs.getBoolean(KEY_LEGACY_PURGED, false)
+    fun hasPurgedLegacyLogs(): Boolean = prefs.getBoolean(KEY_DIRECTORY_PURGED, false)
 
     /**
      * Records the purge as done, returning whether the write reached disk.
@@ -76,12 +76,28 @@ internal class DebugLogStore(context: Context) {
      * Safe to block here: every caller is already on the debug log's worker.
      */
     fun markLegacyLogsPurged(): Boolean =
-        prefs.edit().putBoolean(KEY_LEGACY_PURGED, true).commit()
+        prefs.edit().putBoolean(KEY_DIRECTORY_PURGED, true).commit()
 
     private companion object {
         const val FILE_NAME = "debug_log"
         const val KEY_ENABLED = "enabled"
-        const val KEY_LEGACY_PURGED = "legacy_logs_purged"
+
+        /**
+         * This migration's own marker, deliberately **not** the older
+         * `legacy_logs_purged`.
+         *
+         * That key belongs to a different migration: the local sink's
+         * full-to-reduced purge (PR #151), which emptied `cacheDir/debuglog`
+         * and then went on writing to it. So on every upgrade from that
+         * release the old key is already `true` while the directory holds
+         * that release's logs — reusing it would skip this purge, orphan
+         * those files, and have the Off toggle trust the same stale answer
+         * and report a privacy control that succeeded (Codex, PR #153).
+         *
+         * The old key is left where it is. Nothing reads it now, and clearing
+         * it would be a write with no reader.
+         */
+        const val KEY_DIRECTORY_PURGED = "shared_logger_directory_purged"
     }
 }
 

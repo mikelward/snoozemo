@@ -367,6 +367,38 @@ class DebugLoggingTest {
     }
 
     @Test
+    fun `an upgrade purges the old directory even though the older marker is set`() {
+        // The previous release's own sink lived in `cacheDir/debuglog`, purged
+        // that same directory for the full-to-reduced migration, recorded
+        // `legacy_logs_purged`, and then went on writing there. So every
+        // upgrade from it arrives with that key already true and the directory
+        // full of that release's logs. Reusing the key would skip this purge
+        // and leave them for good, with the Off toggle trusting the same stale
+        // answer and reporting a privacy control that succeeded (Codex,
+        // PR #153).
+        val dir = File(context.cacheDir, "debuglog")
+        dir.mkdirs()
+        File(dir, "current.log").writeText("a line from the previous release")
+        val prefs = context.getSharedPreferences("debug_log", Context.MODE_PRIVATE)
+        prefs.edit()
+            // Exactly the state an upgrade lands in: the older migration's
+            // marker set, this one's absent.
+            .putBoolean("legacy_logs_purged", true)
+            .remove("shared_logger_directory_purged")
+            .commit()
+        assertFalse(
+            "precondition: this migration reads as not yet done",
+            DebugLogStore(context).hasPurgedLegacyLogs(),
+        )
+
+        DebugLogging.install(context)
+        DebugLogging.awaitIdleForTest()
+
+        assertFalse("the previous release's logs are gone", dir.exists())
+        assertFalse("and nothing is left to warn about", DebugLogging.lastDisableCleanupFailed)
+    }
+
+    @Test
     fun `turning the log off retries a legacy purge that startup could not finish`() {
         // The migration runs once per process and records itself done only
         // when the directory is actually gone, so a refusal at startup used to
@@ -387,7 +419,7 @@ class DebugLoggingTest {
         // in this class may already have recorded the migration against the
         // shared app context.
         context.getSharedPreferences("debug_log", Context.MODE_PRIVATE)
-            .edit().putBoolean("legacy_logs_purged", false).commit()
+            .edit().putBoolean("shared_logger_directory_purged", false).commit()
         assertFalse(
             "precondition: the migration reads as not yet done",
             DebugLogStore(context).hasPurgedLegacyLogs(),
