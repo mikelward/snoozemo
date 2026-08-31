@@ -152,7 +152,13 @@ internal object DebugLogging {
      *
      * Each half is cleared by its own next success, so a retry that works
      * retires the warning; neither is cleared by turning the log back on,
-     * which removes no files.
+     * which removes no files. The legacy half is set at startup as well as on
+     * the Off toggle, since the files outlive the process that failed to
+     * remove them and the flag would otherwise read false at every launch.
+     *
+     * That outliving is why the row's copy is state-neutral rather than
+     * naming Off: the switch can be back On, or never have been touched this
+     * launch, while the warning is still true (Codex, PR #153).
      */
     val lastDisableCleanupFailed: Boolean get() = sinkPurgeFailed || legacyPurgeFailed
 
@@ -279,7 +285,14 @@ internal object DebugLogging {
             // *full* rendering, and leaving them on disk keeps that content
             // around for nothing. Deleted once, and only recorded as done when
             // they are actually gone, so a refusal retries at the next start.
-            if (!store.hasPurgedLegacyLogs()) purgeLegacyDirectory(app, store)
+            // The answer is recorded, not just acted on. A refusal here reaches
+            // the log only when recording is on -- and an install that starts
+            // *disabled* is exactly when it is not, which is also exactly when
+            // the user last asked for those files to go. Without this the flag
+            // resets to false at every launch while the files the Off toggle
+            // promised to delete are still on disk, and Settings reports a
+            // privacy control that succeeded (Codex, PR #153).
+            if (!store.hasPurgedLegacyLogs()) legacyPurgeFailed = !purgeLegacyDirectory(app, store)
 
             val fileSink = DebugFileSink(SnoozeDebugLog, app)
             // Registered before start() so the first derivation — which start()
