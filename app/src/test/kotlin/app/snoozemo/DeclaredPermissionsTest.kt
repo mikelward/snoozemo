@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import androidx.test.core.app.ApplicationProvider
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -18,7 +19,8 @@ import org.robolectric.RobolectricTestRunner
  * permission, because shipping without one is that flavor's reason to exist.
  *
  * INTERNET is now part of that split rather than absent everywhere: `play`
- * declares it for crash reporting (SPEC.md §12), and `direct` must not, so
+ * declares it for crash reporting and Firebase Analytics, both behind one
+ * consent (SPEC.md §12), and `direct` must not, so
  * "this build cannot open a network connection" stays literally true of the
  * sideload flavor. Asserting both directions is what stops a dependency
  * quietly merging the permission into `direct` — the way that guarantee would
@@ -47,6 +49,54 @@ class DeclaredPermissionsTest {
             .requestedPermissions
             .orEmpty()
             .toList()
+    }
+
+    /** The merged manifest's application-level metadata, per flavor. */
+    private val metaData: Map<String, String> by lazy {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val bundle = context.packageManager
+            .getApplicationInfo(context.packageName, PackageManager.GET_META_DATA)
+            .metaData
+        bundle?.keySet().orEmpty().associateWith { bundle?.get(it).toString() }
+    }
+
+    @Test
+    fun `every Firebase SDK is switched off in the manifest`() {
+        // Firebase initializes every SDK from one `ContentProvider`, before
+        // `Application.onCreate`, so an SDK with no default here decides for
+        // itself whether to collect — and can record and upload before the
+        // stored answer has even been read. The runtime setters are what turn
+        // collection on; these are what stop it starting.
+        //
+        // Asserted as a *set* rather than one assertion per SDK: Analytics was
+        // added to the sibling launcher without its default and no per-SDK
+        // test noticed, so a fourth SDK added later must not be able to ship
+        // the same way.
+        val switches = setOf(
+            "firebase_crashlytics_collection_enabled",
+            "firebase_analytics_collection_enabled",
+        )
+
+        if (isDirectFlavor) {
+            // `direct` has no Firebase at all, so it must not carry the
+            // switches either — their presence would mean an SDK had been
+            // merged into the flavor whose reason to exist is not having one.
+            assertTrue(
+                "direct ships no Firebase, so it declares none of its switches",
+                metaData.keys.none { it in switches },
+            )
+            return
+        }
+
+        assertEquals(
+            "every Firebase collection switch must be declared and default off",
+            switches.associateWith { "false" },
+            metaData.filterKeys { it in switches },
+        )
+        // A separate switch from collection, so its absence would not show up
+        // above. The AD_ID permission is removed outright in the main
+        // manifest; this is the SDK-side half of the same decision.
+        assertEquals("false", metaData["google_analytics_adid_collection_enabled"])
     }
 
     @Test
@@ -97,7 +147,7 @@ class DeclaredPermissionsTest {
             )
         } else {
             assertTrue(
-                "play declares INTERNET for crash reporting (SPEC.md §12)",
+                "play declares INTERNET for crash reporting and analytics (SPEC.md §12)",
                 network,
             )
         }
@@ -110,13 +160,18 @@ class DeclaredPermissionsTest {
         // that answer false without anyone deciding it — the same failure shape
         // INTERNET has above, and the same reason to assert it here.
         //
-        // Unconditional, INTERNET's split notwithstanding: Crashlytics is
-        // added without Firebase Analytics, on the understanding that
-        // Analytics is what brings AD_ID in (not verified against Google's
-        // docs from this repo — the assertion is the check, not the belief).
-        // Analytics may be added later; this failing then is the intended
-        // prompt to decide the Advertising ID and Data Safety answers
-        // deliberately, rather than an obstacle to route around.
+        // Unconditional, INTERNET's split notwithstanding. This was written
+        // while Crashlytics shipped without Firebase Analytics, saying that if
+        // Analytics ever arrived this assertion failing would be the prompt to
+        // decide the Advertising ID and Data Safety answers deliberately rather
+        // than an obstacle to route around.
+        //
+        // That is exactly what happened (PR #166): Analytics does merge AD_ID —
+        // confirmed by this test failing the moment the dependency landed, not
+        // by reading Google's docs — and the decision was to keep the answer at
+        // "not used", so `play`'s manifest removes the permission with
+        // `tools:node="remove"` and switches `google_analytics_adid_collection_enabled`
+        // off. The assertion stays for the next SDK that would merge it back in.
         assertFalse(
             "AD_ID would falsify the Advertising ID declaration",
             "com.google.android.gms.permission.AD_ID" in declared,

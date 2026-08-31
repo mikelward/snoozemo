@@ -45,10 +45,17 @@ failure when it is down.
 ## What is sent, and what is not
 
 **What Snoozemo puts in a report**: a stack trace, the device model, the OS version, and
-the app version — and nothing else, because it attaches **no custom keys and no
-breadcrumbs**. That is the property that matters: there is no mechanism here that could
-carry the things `SPEC.md` §12's floor forbids — no coordinates, no SSID or BSSID, no
-user-typed place name.
+the app version. It attaches **no custom keys** and logs **no custom events**.
+
+**What the Analytics SDK adds to a report on its own**: a **breadcrumb trail**. Crashlytics
+picks up Analytics' events automatically once that SDK is in the build — Firebase's
+behavior, not something this app calls — so a report carries the automatic events leading up
+to the crash. Since Snoozemo logs no custom events, that trail is the SDK's own:
+`screen_view`, which names the single activity every install has, and its siblings. None of
+them carries the things `SPEC.md` §12's floor forbids — no coordinates, no SSID or BSSID, no
+user-typed place name — so the floor holds, but it now holds because *nothing that goes down
+the channel is forbidden*, not because there is no channel. Adding a custom Analytics event
+later would put its parameters here too, and needs checking against the floor at that point.
 
 **What Crashlytics adds on its own**: a randomly-generated installation identifier, so
 repeat crashes on one phone can be told apart, and the approximate time. The identifier is
@@ -63,18 +70,21 @@ policy and the compliance guidance it is supposed to agree with (Codex, PR #113)
 The on-device debug log (`SPEC.md` §4.6) is a separate thing and is not part of a report:
 it still leaves the phone only when the user shares it by hand.
 
-**Firebase Analytics is not added yet.** Crashlytics works without it — the cost is the
-"crash-free users" percentage in the console, not the reports themselves — and leaving it
-out keeps the Play "Advertising ID" answer at "not used", since the understanding is that
-Analytics is what pulls `AD_ID` in. (That link is the working reason rather than a verified
-one; what is actually checked is the outcome, `DeclaredPermissionsTest` asserting `AD_ID`
-absent on both flavors.)
+**Firebase Analytics is here now** (maintainer, 2026-08-31), on `play` beside Crashlytics
+and behind the same single consent. It collects only what the SDK collects automatically:
+Snoozemo logs no events of its own and sets no custom user properties, so there is no call
+site that could attach a coordinate, an SSID or a place name.
 
-Analytics may well be added later (maintainer, 2026-08-25), and that is fine — it is a
-declaration to update, not a line to defend. What has to stay true either way is the thing
-that matters: **no user data leaves the device**, and whatever does is under the user's
-control. The assertion above going red is the prompt to update the Advertising ID and Data
-Safety answers, not a reason to avoid the feature.
+Adding it did pull `AD_ID` in, exactly as the earlier note here guessed — and
+`DeclaredPermissionsTest` failed the moment the dependency landed, which is what that
+assertion was written to do. The Play **Advertising ID** answer stays "not used": `play`'s
+manifest removes the permission with `tools:node="remove"` and switches
+`google_analytics_adid_collection_enabled` off, so Analytics reports against the
+per-install app-instance ID instead. What the Data Safety form did gain is **app
+interactions**, alongside the crash logs, diagnostics and device IDs it already declared.
+
+What stays true either way is the thing that matters: **no user data leaves the device**,
+and whatever does is under the user's control.
 
 ## Setting it up
 
@@ -108,11 +118,20 @@ There is no way to check this from the sandbox — no emulator, and an emulator 
 answer the question anyway. On a device, with a build made from a checkout that has the
 config:
 
-1. Launch the app, confirm **Settings → Crash reports** shows the switch (its absence
-   means the build had no config).
-2. Force a crash, relaunch, and look for the report in the console. Crashlytics uploads
-   on the launch *after* the crash, so the relaunch is required.
-3. Turn the switch off, force another crash, relaunch twice. Nothing should arrive.
+1. On a **fresh install**, confirm the consent card appears on the home screen and that
+   **nothing has been sent** — no session in the Analytics console, no crash uploaded from
+   a crash forced before answering. That is the whole guarantee, and it is the one thing
+   only a device can check.
+2. Confirm **Settings → Help make Snoozemo better** shows the switch (its absence means the build had
+   no config), and that it reads **off** until the card is answered — including on a build
+   upgraded from one where the old *Crash reports* switch was left on, which is the case
+   the stored answer exists to keep separate from the stored preference.
+3. Answer **Yes please**. Force a crash, relaunch, and look for the report in the console.
+   Crashlytics uploads on the launch *after* the crash, so the relaunch is required.
+   Analytics sessions should start appearing too.
+4. Turn the switch off, force another crash, relaunch twice. Nothing should arrive from
+   either service — and no new Analytics session on the launches after the opt-out, which
+   is the half the crash check alone would not catch.
 
 ## How the opt-out actually works
 

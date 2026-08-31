@@ -407,6 +407,16 @@ class MainActivity : ComponentActivity() {
 
     /** Dismissed until read, for the reason [tileBannerDismissed] is. */
     private var backgroundLocationBannerDismissed by mutableStateOf(true)
+
+    /**
+     * Whether the telemetry question is still outstanding — what raises the
+     * consent card (`SPEC.md` §12).
+     *
+     * Starts **answered**, the same direction [tileBannerDismissed] starts
+     * dismissed: a card asking for data must never flash before the store has
+     * been read, and a frame late is the harmless direction here.
+     */
+    private var telemetryUnanswered by mutableStateOf(false)
     private var lastOutcome by mutableStateOf<String?>(null)
 
     /**
@@ -885,6 +895,7 @@ class MainActivity : ComponentActivity() {
                             playUpdateRestartFailed = playUpdateRestartFailed,
                             backgroundLocationMissing = backgroundLocationMissing,
                             backgroundLocationBannerDismissed = backgroundLocationBannerDismissed,
+                            telemetryUnanswered = telemetryUnanswered,
                             lastOutcome = lastOutcome,
                             crashPending = crashPending,
                             shareFailed = shareFailed,
@@ -905,6 +916,7 @@ class MainActivity : ComponentActivity() {
                             // be the one that forgets the disclosure Play
                             // requires before the background prompt.
                             onAllowBackgroundLocation = ::fixLocation,
+                            onAnswerTelemetry = ::answerTelemetry,
                             onDismissBackgroundLocationBanner = {
                                 // Written and reflected in the same breath:
                                 // unlike the tile store there is no listener
@@ -1188,8 +1200,17 @@ class MainActivity : ComponentActivity() {
         crashReportingWatch = CrashReporting.watchSaveOutcome {
             runOnUiThread {
                 if (crashReportingWrites == 0 && CrashReporting.isAvailable(this)) {
-                    crashReportingEnabled = CrashReporting.isEnabled(this)
+                    crashReportingEnabled = CrashReporting.collectionPermitted(this)
                     crashReportingSaveFailed = CrashReporting.lastSaveRefused
+                    // The card, too, and for the same reason as the switch
+                    // (Codex, PR #166). A recreation between a consent tap
+                    // and the worker's commit gives the replacement
+                    // `answered = false`, so it draws the card; the tap's own
+                    // completion then lands on the destroyed instance and
+                    // cannot correct it. Refreshing only the switch here left
+                    // that stale card up until the next start, asking a
+                    // question the user had already answered.
+                    telemetryUnanswered = !CrashReporting.hasAnswered(this)
                 }
             }
         }
@@ -1340,6 +1361,24 @@ class MainActivity : ComponentActivity() {
                 // listener the way the tile store needs one.
                 backgroundLocationBannerDismissed =
                     locationPromptStore.isBackgroundBannerDismissed()
+                // Gated on the reporter existing as well as the question
+                // being open: `direct` has neither, and a build with no
+                // `google-services.json` has nothing to switch on either, so
+                // asking would be a question with no effect behind it.
+                //
+                // Held off while a tap's write is still on the worker, exactly
+                // as the two reads below are: `answerTelemetry` retires the
+                // card optimistically and only then queues the write, so a
+                // stop/start of *this same instance* before it completes would
+                // otherwise read the store's pre-tap `false` and put the card
+                // back — able to take a second answer to a question already
+                // answered. A recreated instance is the case this read exists
+                // for and still gets it, since its own counter starts at zero
+                // (Codex, PR #166).
+                if (crashReportingWrites == 0) {
+                    telemetryUnanswered =
+                        CrashReporting.isAvailable(this) && !CrashReporting.hasAnswered(this)
+                }
                 // `zenRuleId` is deliberately not read here. Unlike the two
                 // stores above, `zen.ruleId()` is the *unverified* persisted
                 // value — see `zenRuleId`'s own comment — so it is left for
@@ -1361,7 +1400,7 @@ class MainActivity : ComponentActivity() {
                 // the worker. Left null — and so unrendered — where the build
                 // carries no reporter at all (SPEC.md §3.4).
                 if (crashReportingWrites == 0 && CrashReporting.isAvailable(this)) {
-                    crashReportingEnabled = CrashReporting.isEnabled(this)
+                    crashReportingEnabled = CrashReporting.collectionPermitted(this)
                     crashReportingSaveFailed = CrashReporting.lastSaveRefused
                 }
                 // Its own one-key file, and read here rather than in `onCreate`
@@ -1568,6 +1607,56 @@ class MainActivity : ComponentActivity() {
      * request directly, the same as every other row's runtime prompt — no
      * disclosure precedes it (see [foregroundLocationPermission]).
      */
+    /**
+     * The consent card's answer, either way (`SPEC.md` §12).
+     *
+     * The card is retired **immediately**, before the write lands: it asked a
+     * question and got one, so leaving it up while a worker writes would read
+     * as the tap having done nothing, and a second tap would ask the same
+     * question again. The write's own outcome reaches the Settings switch,
+     * which is where a refused save is already explained.
+     *
+     * **Nothing separates this from the Settings switch any more**, and that
+     * is the fix rather than a simplification: both are the user deciding, so
+     * both record an answer. Treating only the card as an answer left a fresh
+     * install able to turn collection on from a Settings row that said
+     * nothing about analytics, with the card still standing unanswered
+     * (Codex, PR #166).
+     */
+    private fun answerTelemetry(enabled: Boolean) {
+        telemetryUnanswered = false
+        crashReportingEnabled = enabled
+        crashReportingWrites++
+        CrashReporting.setEnabled(this, enabled) { _ ->
+            runOnUiThread {
+                // Counted like the Settings switch's writes, and for the same
+                // reason: a rotation between the tap and the commit hands the
+                // screen off, and the replacement's own `onStart` read can run
+                // while `answered` is still false — which put the card back up
+                // and left it there, since the completion callback belonged to
+                // the destroyed instance (Codex, PR #166). Reconciling from
+                // the store on the surviving instance is what closes that; the
+                // counter is what stops an earlier write repainting over a
+                // later tap.
+                crashReportingWrites--
+                if (crashReportingWrites == 0) {
+                    crashReportingEnabled = CrashReporting.collectionPermitted(this)
+                    telemetryUnanswered = !CrashReporting.hasAnswered(this)
+                    // The failure line too (Codex, PR #166). The process-level
+                    // watcher copies this, but it runs while this write is
+                    // still outstanding and skips for that reason — so on the
+                    // card's own path nothing else was going to. Without it a
+                    // refused answer put the card back with no explanation,
+                    // and Settings showed a clean switch in the same session:
+                    // the user taps Yes please, the question returns, and
+                    // nothing anywhere says a write failed. Principle 2's
+                    // failure exactly.
+                    crashReportingSaveFailed = CrashReporting.lastSaveRefused
+                }
+            }
+        }
+    }
+
     private fun fixLocation() {
         when (refreshLocation()) {
             LocationPermission.ASKABLE -> beginLocationRequest()
@@ -2242,8 +2331,13 @@ class MainActivity : ComponentActivity() {
                 // it is the latest write's.
                 crashReportingWrites--
                 if (crashReportingWrites == 0) {
-                    crashReportingEnabled = CrashReporting.isEnabled(this)
+                    crashReportingEnabled = CrashReporting.collectionPermitted(this)
                     crashReportingSaveFailed = CrashReporting.lastSaveRefused
+                    // Moving the switch answers the question, so the card must
+                    // go with it — read back rather than assumed, so a refused
+                    // write leaves the card standing and the user is asked
+                    // rather than silently recorded as having answered.
+                    telemetryUnanswered = !CrashReporting.hasAnswered(this)
                 }
             }
         }

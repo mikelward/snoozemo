@@ -305,10 +305,12 @@ class SettingsScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("Crash reports").assertExists()
-        composeRule.onNodeWithText("Send crash details so bugs get fixed. No location is included.")
+        composeRule.onNodeWithText("Help make Snoozemo better").assertExists()
+        composeRule.onNodeWithText(
+            "Send crash details and anonymous usage stats so bugs get fixed.",
+        )
             .assertExists()
-        composeRule.onNodeWithText("Crash reports").performClick()
+        composeRule.onNodeWithText("Help make Snoozemo better").performClick()
         assertEquals(false, changed)
     }
 
@@ -337,7 +339,7 @@ class SettingsScreenScreenshotTest {
         }
 
         composeRule.onNodeWithText("Debug log").assertExists()
-        composeRule.onNodeWithText("Crash reports").assertDoesNotExist()
+        composeRule.onNodeWithText("Help make Snoozemo better").assertDoesNotExist()
     }
 
     @Test
@@ -390,7 +392,7 @@ class SettingsScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("Crash reports").assertExists()
+        composeRule.onNodeWithText("Help make Snoozemo better").assertExists()
     }
 
     @Test

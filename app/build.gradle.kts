@@ -493,6 +493,7 @@ dependencies {
     // had a google-services.json: with no FirebaseApp initialized the gate
     // reports unavailable and nothing is ever collected.
     "playImplementation"(platform(libs.firebase.bom))
+    "playImplementation"(libs.firebase.analytics)
     "playImplementation"(libs.firebase.crashlytics)
     // Reads the committed res/raw/aboutlibraries.json for the Licenses page.
     // Only `rememberLibraries` and the `Libs`/`Library` model are used -- the

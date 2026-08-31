@@ -516,8 +516,11 @@ it in the same commit.
   through it too, and it still owes the same floor as everything else on this list:
   location data and the user's own configuration stay off any channel that leaves the
   device unless the user has been told plainly and agreed. Nothing sent off the device may
-  carry a coordinate, an SSID/BSSID, or a user-typed place name — which is why the crash
-  reporter attaches no custom keys and no breadcrumbs at all.
+  carry a coordinate, an SSID/BSSID, or a user-typed place name. What keeps that true is **no
+  custom keys and no custom Analytics events** — a crash report carries a breadcrumb trail of
+  the SDK's automatic events, so **a custom Analytics event is a decision, not a detail**: its
+  parameters reach crash reports too, and it is checked against this floor where it is written
+  (`SPEC.md` §12).
 - **The floor below is a list, and the list is exhaustive.** What it names is forbidden
   absolutely; what it does not name is a judgment call, and the answer to a judgment call
   is not "add it to the floor to be safe". Widening the floor by inference is how the app

@@ -2414,11 +2414,15 @@ the point is that every other line of the app is worthless if it isn't true.
 - [x] **Crash reporting (Firebase Crashlytics), `play` flavor only.** (`SPEC.md` §12,
       `docs/crashlytics.md`) **Landed**: `play` declares `INTERNET` and reports crashes;
       `direct` gains neither the reporter nor the permission, so that flavor still cannot
-      open a network connection at all. On by default with an opt-out at Settings → *Crash
-      reports*; the `play` manifest starts Crashlytics with collection off and the app
-      applies the stored choice at startup, so an opt-out install never begins collecting.
-      Crashlytics **without** Firebase Analytics, so the Play "Advertising ID: not used"
-      answer stays true (`DeclaredPermissionsTest` fails if `AD_ID` ever appears). The
+      open a network connection at all. **Superseded in part by PR #166**, which put both
+      this and Firebase Analytics behind one consent card and renamed the Settings row to
+      *Help make Snoozemo better*: reporting is no longer on by default, nothing is sent
+      until the card is answered, and Analytics is now in the build. The `play` manifest
+      starts every Firebase SDK with collection off and the app applies the stored answer at
+      startup, so an install that has not consented never begins collecting. The Play
+      "Advertising ID: not used" answer still holds — `play` removes `AD_ID` and switches the
+      SDK's advertising-ID collection off (`DeclaredPermissionsTest` fails if it reappears).
+      The
       build activates it only when `app/google-services.json` exists, so fresh clones,
       forks and every CI job but `deploy` build with it dormant.
 
@@ -2447,29 +2451,39 @@ the point is that every other line of the app is worthless if it isn't true.
             task and record the failure in the debug log only, so it is at least
             reconstructible, without adding a fourth thing the Settings row can say.
 
-      - [ ] **Decide whether a Settings switch is enough, or Snoozemo needs a consent
-            surface** (2026-08-28). Crash reporting now defaults off (`SPEC.md` §12), so the
-            *absence* of collection is correct. But a switch the user has to go looking for
-            is not the same as having been asked, which is what explicit consent means.
-            Type Launcher has a consent card for this; Snoozemo has only the Settings row.
-            Cost of adding one: a surface in front of a user who opened the app to snooze.
-            Cost of not: reporting stays off for almost everyone, so crash visibility is
-            near zero in practice.
+      - [x] **Decide whether a Settings switch is enough, or Snoozemo needs a consent
+            surface** (2026-08-28). **Answered by building it, PR #166**: a switch the user
+            has to go looking for is not the same as having been asked, so Snoozemo now has
+            the consent card the sibling apps share — *Help make Snoozemo better?*, one
+            answer covering crash reports and analytics together, and nothing sent until it
+            is answered. The cost that was weighed against it (a surface in front of a user
+            who opened the app to snooze) is paid once: ignoring the card is itself a
+            complete answer, since nothing collects while it stands.
 
-      - [ ] **Decide what the off switch means — maintainer's impression recorded, not yet
-            confirmed** (2026-08-25). The leaning: off means **no crash reports** — the
-            feature, not the network — with defaults staying on for Play
-            in-app updates, and `INTERNET` not treated as a problem in itself, since most
+      - [ ] **Decide whether the off switch must also stop every Firebase network
+            connection** (2026-08-25, narrowed 2026-09-01). **The feature-level half is
+            settled and shipped** (PR #166): off means **no crash reports and no usage
+            statistics**, one answer governing both, and `docs/PRIVACY.md` says so as a
+            promise the code keeps — the two `setCollectionEnabled` calls are what make it
+            true, and nothing is sent before the card is answered. Defaults stay on for Play
+            in-app updates, and `INTERNET` is not treated as a problem in itself, since most
             Play apps hold it and defending its absence costs the product without buying the
-            user anything. Written down as the working direction; **confirm before any of it
-            is worded as a promise in `docs/PRIVACY.md`.**
+            user anything.
+
+            **What is still open is only the network half**: whether "off" should also mean
+            the Firebase stack opens no connection at all. Nothing in `docs/PRIVACY.md`
+            promises that today — it is careful to describe the feature, not the socket —
+            so this is a decision about going *further* than what shipped, not a gap between
+            the docs and the code.
 
             **The invariant that does matter: no user data leaves the device, and anything
             that does is under the user's configuration.** That is what users and the EU
             care about, and it is the line to hold and to keep testing. Crash reports carry
             a stack trace, device model and app version — no coordinate, no SSID/BSSID, no
             place name, no snooze timing, and no debug log — because nothing attaches custom
-            keys or breadcrumbs. The user can switch even that off. `SPEC.md` §12's floor is
+            keys and logs no custom Analytics events — the breadcrumb trail a report carries
+            is built from the SDK's automatic events, which name none of those things. The
+            user can switch even that off. `SPEC.md` §12's floor is
             unchanged, and `DeclaredPermissionsTest` plus the absence of any key-attaching
             code are what keep it honest.
 
@@ -2487,20 +2501,41 @@ the point is that every other line of the app is worthless if it isn't true.
             this sandbox cannot observe it. The claim is only worth making in
             `docs/PRIVACY.md` if that check is actually done.
 
+      - [ ] **Cover `MainActivity`'s three `onStart` store reads with a test.** The
+            consent card's read is gated on `crashReportingWrites == 0` like its two
+            siblings, so a stop/start while a tap's write is still queued cannot put an
+            answered card back up (Codex, PR #166). All three gates are currently held by
+            **inspection and symmetry, not by a test**: the class such a test belongs in is
+            `MainActivityLifecycleTest`, which is one of the two known-flaky suites below,
+            and there is no seam to hold a consent write in flight the way the debug log's
+            `awaitIdleForTest` holds its worker. So this waits on the flake and on a seam,
+            and is recorded rather than quietly counted as covered.
+
+      - [ ] **Confirm the Firebase project's Analytics data-retention setting before the next
+            `play` upload.** `docs/PRIVACY.md` now tells users how long usage statistics are
+            kept, and names Google's default of two months and the fourteen-month maximum
+            rather than a value for this project — because the value is a project setting
+            nothing in this repo can read. Check what it is actually set to, and if it is not
+            the default, say so in the policy rather than leaving the reader to assume.
+
       - [ ] **Update the Play Console Data Safety form before the next `play` upload.**
             It moved from "no data collected, no data shared" to *crash logs,
-            diagnostics, and device or other IDs — collected, not shared, optional*
-            (`docs/play-store-declarations.md`). Shipping crash reporting under the old
-            answer is a policy violation, not a stale doc, so this one is blocking rather
-            than tidy-up.
+            diagnostics, device or other IDs, app interactions, and approximate location
+            — collected, not shared, optional* (`docs/play-store-declarations.md`). Shipping crash
+            reporting under the old answer is a policy violation, not a stale doc, so this
+            one is blocking rather than tidy-up.
 
             The third type was the maintainer's call (2026-08-25) after Codex pointed out
             that `docs/PRIVACY.md` already says Crashlytics records an installation
-            identifier, so omitting it would under-declare. The separate **Advertising
-            ID** question stays *no*: that one is about `AD_ID`, which Firebase Analytics
-            carries and Snoozemo deliberately does not — `docs/play-store-declarations.md`
-            spells the distinction out, since answering it yes off the back of the Data
-            Safety row would be wrong.
+            identifier, so omitting it would under-declare. **App interactions is the
+            fourth**, added when Firebase Analytics landed: its automatic events are what
+            Play means by app interactions, so the three-type answer became an
+            under-declaration the moment the SDK was in the build. The separate
+            **Advertising ID** question stays *no*: Analytics merges `AD_ID`, and `play`'s
+            manifest removes it with `tools:node="remove"` and switches
+            `google_analytics_adid_collection_enabled` off, which is what keeps that answer
+            true — `docs/play-store-declarations.md` spells the distinction out, since
+            answering it yes off the back of the Data Safety row would be wrong.
 
 - [x] Release signing and a `deploy` job that builds a downloadable AAB. **Landed**:
       `signingConfigs["release"]` (`app/build.gradle.kts`) reads the upload keystore from
@@ -2626,12 +2661,17 @@ the point is that every other line of the app is worthless if it isn't true.
       appear, it needs a decision before upload rather than a form filled in on the spot, since
       `SPEC.md` §3.3's whole argument is that Snoozemo must not enter a foreground-service review.
       Reasoning and the options are in `docs/play-store-declarations.md`.
-- [ ] Data Safety declaration: **crash logs, diagnostics, and device or other IDs — collected,
-      not shared, optional** (`SPEC.md` §12). This item used to read "no data collected, no data
-      shared"; that answer was correct until crash reporting landed and is now false of a
-      reporting-enabled `play` build, so filing it would be a policy violation rather than a
-      stale note (Codex, PR #113 — it was still standing here after the rest of the sweep). The
-      separate **Advertising ID** question stays *not used*. The field-by-field answers and their
+- [ ] Data Safety declaration: **crash logs, diagnostics, device or other IDs, app
+      interactions, and approximate location — collected, not shared, optional**
+      (`SPEC.md` §12). This item used to read
+      "no data collected, no data shared"; that answer was correct until crash reporting landed
+      and is now false of a reporting-enabled `play` build, so filing it would be a policy
+      violation rather than a stale note (Codex, PR #113 — it was still standing here after the
+      rest of the sweep). **App interactions joined it when Firebase Analytics landed** (Codex,
+      PR #166): the SDK's automatic events are what Play means by app interactions, so the
+      three-type answer became an under-declaration the moment the dependency was in the build.
+      The separate **Advertising ID** question stays *not used*, which `play`'s manifest is what
+      keeps true — it removes `AD_ID` and switches the SDK's advertising-ID collection off. The field-by-field answers and their
       reasoning are in `docs/play-store-declarations.md`, together with every other App content
       questionnaire and the drafted text for the background-location permissions declaration;
       filing them in the Play Console is the maintainer's own step, and publishing a
@@ -3145,37 +3185,40 @@ question.
   is in there and what it says. Cheapest shape is probably the existing share row opening
   a read-only screen with a Share button on it, rather than a new entry point.
 
-- [ ] **`drainDebugLogWorker`'s ten-second ceiling is load-sensitive, and that
-  is the flake.** `ProcessExitReasonsTest` (all six cases) and
+- [ ] **`ProcessExitReasonsTest`'s drain times out under full-suite load — still
+  unfixed, and two diagnoses have now been wrong.** All six cases, plus
   `MainActivityLifecycleTest`'s *a restart picks up a dismiss outcome missed
-  while stopped* fail together on the `direct` flavor, always at
-  `ProcessExitReasonsTest.kt:59` with *"the debug-log worker did not drain;
-  startup collection may still be in flight"*. Seen in CI on `df97a6a`, locally
-  on 2026-08-31 at ~14:50, and again on 2026-08-31 during the androidlog 1.0.44
-  bump — where the same two classes then **passed on their own in 10 s**, which
-  is the tell.
+  while stopped*, fail together on the `direct` flavor at
+  `ProcessExitReasonsTest.kt` with *"the debug-log worker did not drain; startup
+  collection may still be in flight"*, always at a flat ~10.03 s. Seen in CI on
+  `df97a6a`, locally several times, and in CI on PR #166.
 
-  **Not a race, and that is why it resists the usual fix.** The ordering is
-  already explicit: a latch on a single-threaded FIFO worker, which is the
-  right shape. What is not deterministic is the *wall clock* — `drained.await(10,
-  SECONDS)` is a real-time deadline in a Robolectric JVM that competes with
-  every other Gradle daemon on the machine, so it fails under load rather than
-  under any particular interleaving. **Do not bump the timeout**; that is
-  papering over it by the letter as well as the spirit.
+  **Wrong diagnosis 1** (earlier entry here): "not a race — the ten-second
+  ceiling is load-sensitive wall clock". **Wrong diagnosis 2** (PR #166): the
+  drain latched on `DebugLogging.afterRecordingGateApplied`, which is entitled
+  to *skip* its task, so the latch could wait on something that would never
+  fire. That was true and worth fixing — the wait is now on
+  `awaitIdleForTest`, whose task runs unconditionally — **but it did not fix
+  the flake**: the same six cases still time out at the same flat ~10.03 s.
 
-  The bound is not gratuitous either — its comment says it *"fails loudly
-  rather than timing out silently"*, so a gate that was never applied is caught
-  here rather than by every later assertion racing invisible work. Removing the
-  bound trades a flake for a hang. So the fix is to remove the *waiting*: let a
-  test install a direct (inline) executor on `DebugLogging`, so the startup
-  collection has already run by the time `startRecording` returns and there is
-  nothing to drain. That is a change to `DebugLogging`'s construction, not to
-  the test.
+  **What that rules out, which is the useful part.** The task is now *queued
+  and simply not executed within ten seconds*. `awaitIdleForTest` counts its
+  latch down even when `worker.execute` throws, so a rejected execution would
+  return early rather than time out — this is a live queue that does not reach
+  the task. On a single-threaded FIFO worker that means **something earlier in
+  the queue is long-running or blocked**.
 
-  Deliberately not folded into the androidlog 1.0.44 bump (2026-08-31): that
-  branch is a test reversal and a `docs/PRIVACY.md` update, and this is
-  snoozemo's own test scaffolding in code the branch does not touch. It failed
-  on a green base before that work existed.
+  **The remaining hypothesis, untested**: it passes in isolation (9 s for the
+  whole class) and fails only in the full suite, so the blocking work is
+  probably left by a sibling class in the same JVM fork. `DebugLogging`'s
+  worker is never shut down between classes, `resetForTest()` clears `sink`
+  without draining what the old sink queued, and `DebugLogFiles` has at least
+  one deliberately blocking call on that thread ("Safe to block here: every
+  caller is already on the debug log's worker"). Look there before theorizing
+  again.
+
+  **Do not** bump the timeout, and do not assume the next diagnosis is right
+  because the previous two sounded right — both did.
 
 - [x] **The shared logger's opt-out now does what `SPEC.md` §4.6 promises**
   (raised by Codex, PR #153; **answered by the maintainer 2026-08-31**, and
@@ -3287,10 +3330,10 @@ question.
     user's, with `safe(...)` / `sensitive(...)` overriding per value.
     `SnoozeDebugLog` takes a pre-built `String`, so redaction here is whatever
     the call site remembered to do.
-  - **`SnoozeDebugLog` has no off-device mirror at all.** Crash reporting
-    deliberately attaches no breadcrumbs and no custom keys (`SPEC.md` §12), so
-    there is nothing to withhold from and the port invents no redaction
-    wrapper. That is why the exit `description` and the timestamps are logged
+  - **`SnoozeDebugLog` has no off-device mirror at all.** Crash reporting attaches
+    no custom keys, and nothing routes the debug log into the breadcrumb trail
+    Analytics feeds (`SPEC.md` §12), so there is nothing to withhold from and the
+    port invents no redaction wrapper. That is why the exit `description` and the timestamps are logged
     in full here but marked `sensitive(...)` in Type Launcher: same values,
     different channel.
   - **All three log by default; only the off-switch differs.** `SnoozeDebugLog`
@@ -3913,11 +3956,13 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   re-exports them — buys nothing and adds a layer.
 
 - **Wiring a Crashlytics sink is NOT part of this and still needs a real
-  answer.** It contradicts two published statements: `AGENTS.md` says the crash
-  reporter "attaches no custom keys and no breadcrumbs at all", and
-  `docs/PRIVACY.md` says the debug log reaches nobody without an explicit
-  share. Turning breadcrumbs on changes what the Data Safety declaration must
-  say, which `AGENTS.md` puts with the maintainer whatever mode is in effect.
+  answer**, and PR #166 did not settle it. Analytics now feeds Crashlytics a
+  breadcrumb trail of its *automatic* events; routing `SnoozeDebugLog` into that
+  channel is a different thing entirely, and it still contradicts
+  `docs/PRIVACY.md`'s promise that the debug log reaches nobody without an
+  explicit share. What changes what the Data Safety declaration must say is
+  putting *our own* content down that channel, which `AGENTS.md` puts with the
+  maintainer whatever mode is in effect.
   Autopilot did not guess this one.
 
 - **The sheet gate reads the snooze record without any guarantee the arm has landed**
@@ -4552,6 +4597,147 @@ Phase 3's wake-up sources give the rest for free.
 Two structural rules fall out of the above and constrain future work: the **cap never depends on a
 process staying alive**, and the **release obligation never lives only in memory** — alarm first,
 in-process second (`SPEC.md` §8.1).
+
+## Crashlytics' legacy persisted override on the first upgraded launch (PR #166)
+
+**For the maintainer.** A real window, narrower than it first looks, and closing
+it fully costs more than this PR should spend.
+
+**The mechanism** (Codex, PR #166, P1): Crashlytics persists its own collection
+override, and that override outranks the manifest's `false` — this file's own KDoc
+says so, from PR #113. An install upgrading from the switch-only build with *Crash
+reports* on therefore carries a persisted `true`, and Firebase's `ContentProvider`
+initializes before `install()`'s worker re-applies `collectionPermitted()`. So on the
+first upgraded launch there is a window in which Crashlytics may upload a queued
+report before the new gate takes effect.
+
+**What is NOT exposed, and it is the part that matters**: Analytics. `origin/main`'s
+reporter contains no Analytics call at all, so no install has a persisted Analytics
+override, and the manifest default governs it absolutely. The new data category this
+PR introduces cannot leak through this window.
+
+**What IS exposed**: a crash report, from a user who had explicitly switched *Crash
+reports* on. That is the data they had already agreed to send, continuing to send for
+one startup window until this build re-reads consent and stops it. It is a consent
+model changing under them, not a category they never agreed to.
+
+**Closing it fully would take one of:**
+
+- **Clear Crashlytics' persisted override before Firebase initializes** — only
+  `Application.attachBaseContext` runs earlier than the provider, and it would mean
+  writing to another SDK's private `SharedPreferences` by undocumented file and key
+  name. Fragile against any Crashlytics update, and a silent failure if the names
+  change.
+- **Stage the migration in an earlier release** — ship a build that clears the
+  override, then ship the consent card. Correct, and it costs a release cycle.
+- **Accept it**, on the reasoning above, and say so.
+
+Not blocking the PR on its own reading: the window predates this change for crash
+reports and cannot reach Analytics. Worth deciding before a wide rollout rather than
+before merge.
+
+## Flaky: `ProcessExitReasonsTest` and `MainActivityLifecycleTest` — still unfixed (PR #166)
+
+**Not fixed by PR #166, despite an earlier claim here that half of it was.** The full
+diagnosis, both wrong theories, and what the latest evidence rules out are in the Phase 6
+checklist item *`ProcessExitReasonsTest`'s drain times out under full-suite load*. Kept as
+one account there rather than two here.
+
+The short version: six `ProcessExitReasonsTest` cases and one `MainActivityLifecycleTest`
+case fail together at a flat ~10.03 s under full-suite load and pass in isolation. PR #166
+changed the drain from a skippable production API to the unconditional test seam — a real
+fix to a real defect, and **not** a fix to this. The task is queued and not executed, so the
+worker is occupied by something earlier in the queue.
+
+## Analytics turns on a Crashlytics breadcrumb channel — accepted (PR #166)
+
+**Decided by the maintainer, 2026-08-31: accept it, and correct every statement that said
+otherwise.** Recorded here because the reason the §12 floor holds changed, and a later reader
+needs the argument rather than only its conclusion.
+
+**What is true**, confirmed against Firebase's own docs rather than taken from the review:
+*"Crashlytics automatically gets breadcrumb logs if your app uses the Firebase SDK for Google
+Analytics."* The trail is populated by the SDK's automatic `screen_view` event, plus any custom
+events and their parameters. It needs Analytics in the app, Analytics enabled in the Firebase
+project, and Data sharing for Analytics enabled in the console.
+
+**What it broke.** The claim was repeated all over the repo, and one instance was a rule rather
+than a document: `AGENTS.md`'s *Privacy* section, where the no-breadcrumb property was given as
+the *reason* the floor holds; `SPEC.md` §12; `docs/crashlytics.md`; `CrashReporter.kt`'s KDoc;
+`docs/play-store-declarations.md`'s *no Location* argument; and two entries here. Codex found
+them in rounds rather than at once, because the phrase wraps across lines and a line-based
+`grep` misses it — sweep the whitespace-normalized text, not the lines. The last two were literally true as worded — *Snoozemo* attaches none, the SDK integration
+does — which is what made them misleading rather than harmlessly imprecise. All four are
+corrected, and `docs/PRIVACY.md` now tells the user the crash report carries a short trail of the
+automatic events from just before the crash, and that this is Google's behavior rather than
+Snoozemo's choice.
+
+**The floor still holds, on a weaker footing.** Snoozemo logs no custom events, so what rides
+the trail is the SDK's automatic events — none carrying a coordinate, an SSID/BSSID, or a
+user-typed place name — and `screen_view` names the single activity every install has. The
+guarantee is now *nothing that goes down the channel is forbidden* rather than *there is no
+channel*.
+
+**The standing constraint that falls out of it**, and the reason this entry stays after the
+decision: **a custom Analytics event is a decision, not a detail.** Its parameters would reach
+crash reports as well as Analytics, so one has to be checked against §12's floor where it is
+written — never assumed safe because the reporter attaches nothing itself. `AGENTS.md` says so
+now too.
+
+**Rejected alternatives**, with what each would have cost: suppressing the trail by leaving Data
+sharing for Analytics off in the Firebase console — keeps every original statement true with no
+code change, but it is an operator setting nothing in this repo enforces or can test, so it
+could be flipped later with nothing going red; and dropping Analytics from Snoozemo, which keeps
+the strong form of the guarantee at the cost of the feature.
+
+## Approximate location IS declared — decided (PR #166)
+
+**Decided by the maintainer, 2026-09-01: declare it.** Recorded with the argument, because the
+leaning an hour earlier was the opposite and a later reader needs to know what moved it.
+
+**The finding** (Codex, PR #166, P1): `docs/PRIVACY.md` says plainly that Google derives a
+coarse country from the network address an Analytics request arrives on, while
+`docs/play-store-declarations.md` instructed "Declare **no** Location" and the Settings row
+said "No location is included." (both since changed — see below).
+
+**What is true about the app, and did not change:** Snoozemo transmits no location. No
+coordinate, no SSID, no place name reaches any off-device channel; §12's floor is intact and
+enforced by there being no call site. Nothing the geofence, the SSID read or a location fix
+produces is sent anywhere.
+
+**What decided it was Google's own documentation**, which this entry originally did not cite.
+Android's *Declare your app's data use* lists, under **Location**, an app that "derives location
+information from an IP address or access point name" — the exact mechanism — and states that if
+a third-party SDK in the app collects user data, that must be reflected in the form. It draws
+**no distinction between data the app collects and data a processor derives**, which is the
+distinction the "no" answer rested on. The maintainer's first leaning was no; shown that text,
+the answer became yes.
+
+**What it costs, taken deliberately:** the store listing gains a Location row on an app whose
+pitch is that location never leaves the phone — the most likely thing a privacy-minded
+installer reads, and the least accurate impression they could take from it.
+`docs/PRIVACY.md` is where that difference is explained rather than left for them to
+reconcile. Declared **optional**, which is accurate: it follows the consent card, so a user who
+never answers produces no request for a country to be derived from.
+
+**Rejected:** leaving it undeclared and relying on the app collecting no location — it matched
+what the app does and what the listing says, and it ran against Google's stated guidance, which
+is a Data Safety rejection risk on a submission rather than an argument won.
+
+**Not established, and worth ten minutes before the next submission:** GA4's per-region
+*granular location and device data collection* controls (Admin → Data collection). Turning them
+off everywhere would make "no location" true rather than argued — but they appear to govern
+*granular* location (city, region, device detail) with country-level derivation surviving them,
+so they probably do not reach this. If they do, the declaration could go back to no.
+
+**The Settings copy: dropped** (maintainer, 2026-09-01). The row's description said "No
+location is included." — true of what Snoozemo sends, but about to sit next to a listing
+declaring Approximate location, so it invited exactly the reconciliation the paragraph above
+describes, in the one place with no room to explain it. The row now reads "Send crash details
+and anonymous usage stats so bugs get fixed." and stops there; `docs/PRIVACY.md` is where the
+difference between what the app sends and what the store row says is worked through. Simpler
+copy was the maintainer's reason, and it happens to remove the claim that would have needed a
+footnote.
 
 ## Deferred review findings (Codex, PR #165)
 

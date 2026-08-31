@@ -37,8 +37,9 @@ DND back off.
   never triggers itself from your calendar. Nothing watches it: no observer, no sync adapter, no
   background job, and a time already chosen does not move when the meeting does.
 - Cross-device sync or accounts. Nothing about a snooze, a place, or the user's settings leaves
-  the phone. The `play` flavor does declare `INTERNET`, for crash reporting alone (§12); `direct`
-  declares none at all.
+  the phone. The `play` flavor does declare `INTERNET`, for crash reporting and Firebase
+  Analytics, both behind one consent the user has to give first (§12); `direct` declares none
+  at all.
 - Wear OS, tablets, foldable-specific UI.
 - Automatic *arming* on arrival at a place (geofence enter). Deliberately deferred — see §14.
 
@@ -194,11 +195,21 @@ Arguing for approval:
   the user puts the phone in their pocket and stops interacting with it.
 - Google's own policy now routes this exact use case to the Geofence API, which requires the
   permission. The declaration can say so directly, and that is a strong argument to make in the form.
-- **No location data is collected, transmitted, or monetized, and the Data Safety form says so**
-  (§12). The `play` build does declare `INTERNET`, but the only thing using it is crash reporting,
-  which carries no coordinate, no SSID/BSSID and no place name — the declaration covers crash logs,
-  diagnostics and an installation identifier, and nothing else. Most background-location rejections
-  are about undisclosed collection and sharing of *location*; there is none of that here.
+- **No location the background grant produces is collected, transmitted, or monetized** (§12).
+  The `play` build does declare `INTERNET`, and two things use it — crash reporting and
+  Firebase Analytics, behind one consent the user has to give first. Neither carries a
+  coordinate, an SSID/BSSID or a place name.
+
+  The Data Safety form **does** declare **Approximate location** (maintainer, 2026-09-01), and
+  that is not a weakening of this argument as long as it is stated precisely: what is declared
+  is the coarse country Google derives from the network address an Analytics request arrives
+  on, which every network request carries and which owes nothing to the location permissions.
+  Nothing the geofence, the SSID read or a location fix produces reaches any off-device
+  channel. So the argument does not rest on the app sending only one thing, nor now on it
+  declaring no location at all; it rests on **none of the declared data being derived from the
+  grant this declaration is asking for**. Most background-location rejections are about
+  undisclosed collection and sharing of the location a *permission* obtained; there is none of
+  that here, and the form says what there is instead of understating it.
 - The in-app prominent disclosure and the permission flow are straightforward to demonstrate on
   video, and the feature is visibly the app's headline function.
 
@@ -887,7 +898,8 @@ Snoozemo neither notices nor cares. A snooze that silently re-times itself under
 one that is occasionally stale, and `+30 min` (§4.3) covers the overrun.
 
 Remaining constraints: read-only, never written, never leaves the device (nothing transmits it —
-crash reporting is the only thing on the network and it carries no calendar data, §12); nothing
+crash reporting and Firebase Analytics are what use the network, and neither carries calendar
+data, §12); nothing
 calendar-derived reaches the debug log either (§12's floor); and the offer ends at one event and
 does **not** chain into the next one — chaining is how you end up silenced all afternoon by a
 calendar you forgot about.
@@ -908,8 +920,9 @@ the two failures that matter most — an early release and a stuck snooze — ar
 cannot be diagnosed.
 
 **An on-device log, on by default** (maintainer, 2026-08-11), with a setting to turn it off.
-Nothing in it leaves the device unless the user hands it over: it is not attached to a crash report
-— the only thing that transmits (§12) — so sharing goes through the system share sheet (and a
+Nothing in it leaves the device unless the user hands it over: it is attached to neither of the
+things that transmit — a crash report or an Analytics event (§12) — so sharing goes through the
+system share sheet (and a
 copy-to-clipboard fallback), which makes every send an explicit act with a visible destination. Retention is bounded — the current
 run plus a few recent ones, rotated at start, in `cacheDir`, which is excluded from backup.
 
@@ -2854,6 +2867,49 @@ doesn't mention shows up as a row with no rationale behind it.
     reporter nor `INTERNET` — "this build cannot open a network connection" stays literally
     true of one of the two flavors, auditable from its manifest, and an F-Droid build could
     not carry a proprietary reporter anyway. `DeclaredPermissionsTest` pins both directions.
+  - **Analytics joins it, and the two share one consent** (maintainer, 2026-08-31; all four
+    sibling apps are going the same way). Firebase Analytics ships on `play` alongside
+    Crashlytics, collecting only what the SDK collects automatically — app opens, session
+    length, screen views, app and OS updates, clear-data and uninstall, and the engagement
+    time attached to each — with **no custom events and no custom user properties**, which is
+    what keeps §12's floor intact: there is no call site that could
+    attach a coordinate, an SSID or a place name. The qualifier is load-bearing (Codex,
+    PR #166): the SDK derives user properties of its own — device model, coarse country —
+    so an unqualified "no user properties" would claim more than is true and contradict the
+    automatic collection described in the same breath. **State that invariant, not the SDK's
+    event list**: Google decides what Analytics collects automatically and can add to it,
+    so a spec or policy written as a closed enumeration goes stale without anyone touching
+    this repo, while "no custom events, no custom user properties" is a fact about Snoozemo
+    that a reader can check against the code. The automatic screen view is worth naming
+    for what it is *not* (Codex, PR #166): Snoozemo is a single activity with every screen
+    a composable inside it, so that event names the activity on every install and reports
+    nothing about which part of the app was used. Making it mean something would take
+    logging screen events deliberately, which is adding collection — a decision to take on
+    its merits, not a gap to close so a sentence comes true. `direct` gains neither, for the reason the next bullet gives.
+    One switch governs both, because the user is asked one question: no build offers them
+    separately, and no answer turns on only one of them. **That is not a promise that the
+    two are always live together** (Codex, PR #166). A failed opt-*in* deliberately leaves
+    Crashlytics on with Analytics off until the next launch — reverting would discard an
+    answer the user gave, and holding crash reporting off would punish their yes for an
+    unrelated SDK failure — so the gap is named in the debug log and closed by the startup
+    gate re-applying the stored preference. The opt-*out* direction has no such gap: **a
+    "no" is not finished until it is durable in both** (Codex, PR #166): each SDK persists
+    its own override with `apply()`, so the app waits for that override to reach disk
+    before recording the answer, and says the opt-out is incomplete rather than silently
+    showing a switch off over an SDK still allowed to collect. Analytics is the sharper
+    case of the two — it collects on its own, so a stale "on" surviving a process death has
+    no gate of ours left to shut, and its setter returns before the SDK has even queued the
+    write.
+    `docs/PRIVACY.md` and `docs/play-store-declarations.md` moved with it — the declaration
+    gains **App interactions**, since declaring only crash logs once Analytics is in the
+    build would be an under-declaration.
+  - **Asked once, on the main screen, and nothing is collected until the answer is yes.**
+    Off-by-default is only half a decision: an install that never opens Settings has
+    decided by default, and the default loses every crash. So the question is put where the
+    user already is, both answers are recorded — a decline is a recorded "no", not an
+    absence, so it is never re-asked — and the card is retired the moment it is answered.
+    simmo's `AnalyticsInviteCard` is the prior art and Snoozemo follows it, so the apps
+    read alike.
   - **Off until the user turns it on** (maintainer, 2026-08-28, across all four sibling
     apps; reverses the on-by-default decision in the bullet above). Crash reporting sends
     data off the device, and that needs the user's explicit agreement first — an install
@@ -2866,22 +2922,47 @@ doesn't mention shows up as a row with no rationale behind it.
     **off** and the app applies the stored choice at startup. Only the stored default
     changed — absent now reads as "not agreed".
 
-    Open, in `TODO.md`: whether a switch in Settings is enough, or Snoozemo needs a consent
-    surface like Type Launcher's card.
+    **That question is now settled: a card, not just a switch.** It asks once, in the wording
+    the sibling apps share, and until it is answered nothing is collected. Both halves are
+    required — the stored preference *and* a recorded answer — because an install upgrading
+    from the switch-only build carries a yes about crash reports that was never a yes about
+    anything else. Moving the Settings switch counts as answering too: it is the same
+    decision reached from a different screen, and treating it otherwise let a fresh install
+    turn collection on with the card still standing.
 
-  - **Crashlytics without Firebase Analytics, for now.** The understanding this rests on
-    is that Analytics is what brings the `AD_ID` permission in, and Play's "Advertising ID:
-    not used" answer was judged worth more than the console's crash-free-users percentage.
-    That link has not been verified against Google's own documentation from this repo, so it
-    is the working reason rather than an established one. What *is* checked is the outcome:
-    `DeclaredPermissionsTest` asserts `AD_ID` absent on both flavors. Analytics may be added
-    later (maintainer, 2026-08-25); when it is, that assertion failing is the prompt to take
-    the Data Safety and Advertising ID answers as a decision rather than a dependency bump.
-  - **The floor is unchanged, and nothing was added to reach it.** A crash report is a stack
-    trace, a device model, and a version. Snoozemo attaches no custom keys and no breadcrumbs,
-    so there is no mechanism here that could carry a coordinate, an SSID or BSSID, or a
-    user-typed place name. The debug log stays on the phone and still leaves it only when the
-    user shares it by hand.
+  - **Analytics ships, and the `AD_ID` question was decided rather than avoided.** The
+    earlier position was Crashlytics *without* Firebase Analytics, on the understanding that
+    Analytics is what brings the `AD_ID` permission in and that Play's "Advertising ID: not
+    used" answer was worth more than the console's crash-free-users percentage. That
+    understanding held: adding Analytics failed `DeclaredPermissionsTest`'s `AD_ID`
+    assertion, exactly as that test was written to do.
+
+    What changed is the conclusion, not the reasoning. Rather than choose between Analytics
+    and the declaration, the `play` manifest removes the permission outright
+    (`tools:node="remove"`) and switches `google_analytics_adid_collection_enabled` off, so
+    the answer stays "not used" and Analytics reports against the per-install app-instance
+    ID — specific to this app, unjoinable with activity elsewhere, reset on clear-data. The
+    cost is the ads-adjacent surface (audience export, inferred demographics), which
+    Snoozemo has no use for. `DeclaredPermissionsTest` still asserts `AD_ID` absent on both
+    flavors, and now also asserts every Firebase collection switch is declared and off on
+    `play` and absent on `direct`.
+  - **The floor is unchanged, but the reason it holds has changed, and that is worth stating
+    plainly.** A crash report is a stack trace, a device model, a version — and, since
+    Analytics joined the build, a **breadcrumb trail**: Crashlytics picks up Analytics' events
+    automatically once the SDK is present, which is Firebase's behavior and not something this
+    app opts into (Codex, PR #166; maintainer accepted it, 2026-08-31).
+
+    Snoozemo attaches no custom keys and logs no custom events, so what rides that trail is the
+    SDK's automatic events — `screen_view` naming the single activity every install has, and
+    its siblings — and none of them carries a coordinate, an SSID or BSSID, or a user-typed
+    place name. So the floor holds; what it rests on is now *nothing that goes down the channel
+    is forbidden* rather than *there is no channel*.
+
+    **That is a weaker guarantee, and it makes one thing a decision rather than a detail:**
+    adding a custom Analytics event would put its parameters into crash reports as well as into
+    Analytics, so it needs checking against this floor at the point it is added — not assumed
+    safe because the reporter attaches nothing. The debug log stays on the phone and still
+    leaves it only when the user shares it by hand.
 
   **What the off switch means: the feature, not the network** (maintainer's reading, 2026-08-25 —
   `TODO.md` carries it as the working direction awaiting confirmation, not a closed decision).
@@ -2900,13 +2981,22 @@ doesn't mention shows up as a row with no rationale behind it.
   reporting is enabled in the build rather than inspecting the manifest.
 
   **Play Data Safety moved with it**, as the bullet above required: from "no data collected,
-  no data shared" to **crash logs, diagnostics, and device or other IDs — collected, not
-  shared, optional**. The third type is the Crashlytics installation identifier, which
+  no data shared" to **crash logs, diagnostics, device or other IDs, app interactions, and
+  approximate location — collected, not shared, optional**. The fifth is the coarse country
+  Google derives from the network address an Analytics request arrives on: the app transmits
+  no location, but Android's *Declare your app's data use* names deriving location from an IP
+  address under Location and draws no line between what the app collects and what a processor
+  derives, so declaring is what matches the guidance (maintainer, 2026-09-01, reversing an
+  earlier leaning not to). The third type is the Crashlytics installation
+  identifier, which
   `docs/PRIVACY.md` describes: it is what lets repeat crashes on one phone be told apart, and
   omitting it from the form would under-declare (maintainer, 2026-08-25, on Codex's reading in
   PR #113). It is app-scoped and is **not** an advertising identifier — the separate
   Advertising ID declaration stays "not used", and that answer is checked rather than asserted,
-  by `DeclaredPermissionsTest`. `docs/play-store-declarations.md` carries the field-by-field
+  by `DeclaredPermissionsTest`. The fourth type is Analytics' automatic events, which
+  Play's taxonomy files under **App interactions**; it arrived with the analytics bullet
+  above and by the same rule, since declaring only crash logs once Analytics is in the
+  build would under-declare exactly as omitting the installation identifier would. `docs/play-store-declarations.md` carries the field-by-field
   answers; updating the Play Console form is a maintainer action the code cannot do.
 - Coordinates never leave the device. The v1 anchor is discarded when the snooze ends.
 - Snooze history (if added) is local, off by default, and clearable.

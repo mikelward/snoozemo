@@ -107,6 +107,30 @@ internal object CrashReporting {
     fun isEnabled(context: Context): Boolean = CrashReportingStore(context).isEnabled()
 
     /**
+     * What the Settings switch renders, which is **whether anything is
+     * actually being collected** rather than what the preference happens to
+     * hold (Codex, PR #166).
+     *
+     * The two differ on exactly one install: an upgrade from the switch-only
+     * build carries `enabled = true` with no answer recorded, so both SDKs are
+     * off — [CrashReportingStore.collectionPermitted] sees to that — while
+     * [isEnabled] still reads true. A switch drawn from the preference there
+     * says "on" over nothing collecting, which is the quiet wrongness this
+     * app's second principle is about. Drawn from this it says off, matching
+     * the card still standing beside it and the SDKs' real state; answering
+     * the card, either way, makes the two agree again.
+     */
+    fun collectionPermitted(context: Context): Boolean =
+        CrashReportingStore(context).collectionPermitted()
+
+    /**
+     * Whether the user has answered the telemetry question at all — what the
+     * consent card reads to decide whether to appear. A memory hit once
+     * [install] has warmed the file, like [isEnabled].
+     */
+    fun hasAnswered(context: Context): Boolean = CrashReportingStore(context).hasAnswered()
+
+    /**
      * Call once from `Application.onCreate`. Applies the stored choice to the
      * SDK, which is what makes the opt-out real: the manifest starts
      * Crashlytics with collection **off**, so nothing is collected on a fresh
@@ -127,7 +151,12 @@ internal object CrashReporting {
         // direction.
         runCatching {
             worker.execute {
-                val enabled = CrashReportingStore(app).isEnabled()
+                // The *permitted* value, not the stored one: an upgrade
+                // carrying `enabled = true` from the old Crash reports switch
+                // has answered nothing, and applying its preference here
+                // would start Analytics collecting before the card is even
+                // drawn (Codex, PR #166).
+                val enabled = CrashReportingStore(app).collectionPermitted()
                 if (applyToReporter(app, enabled) == ReporterOutcome.NO_REPORTER) {
                     SnoozeDebugLog.warning("crash reporting unavailable; nothing applied")
                 }
@@ -173,7 +202,28 @@ internal object CrashReporting {
      * path — see `flushCollectionOverride` there for how, and for what is
      * left when the SDK's internals move under it.
      */
-    fun setEnabled(context: Context, enabled: Boolean, onApplied: (persisted: Boolean) -> Unit) {
+    fun setEnabled(
+        context: Context,
+        enabled: Boolean,
+        /**
+         * Whether this write records the user having answered the question.
+         *
+         * **True for both surfaces**, and the default, because both are the
+         * user deciding: the card asks, and moving the Settings switch is the
+         * same decision reached a different way. It used to be false for the
+         * switch, on the reasoning that arriving at a screen showing the
+         * current state is not being asked — true of *arriving*, and wrong
+         * about *toggling*, which left a fresh install able to turn
+         * collection on from Settings while the card still stood unanswered
+         * and while nothing on that screen mentioned analytics (Codex, PR
+         * #166).
+         *
+         * A caller that genuinely is not the user — a migration, a test
+         * fixture — passes false.
+         */
+        recordAnswer: Boolean = true,
+        onApplied: (persisted: Boolean) -> Unit,
+    ) {
         val app = context.applicationContext
         runCatching {
             worker.execute {
@@ -187,13 +237,23 @@ internal object CrashReporting {
                 // takes (Codex, ClothesCast PR #1161, against the same
                 // design).
                 //
-                // Every off→on crossing, not only the very first: a period
-                // spent switched off is a period the user did not agree to,
-                // whether they had never answered or had answered no.
-                // Re-applying an on that was already on discards nothing,
-                // which is what keeps this off the reports the feature exists
-                // to collect.
-                if (enabled && !store.isEnabled()) discardPendingReports(app)
+                // Every crossing into *permitted*, not merely into enabled —
+                // and the distinction is load-bearing (Codex, PR #166). The
+                // two writes below commit separately, so a process death
+                // between them leaves `enabled = true` with no answer
+                // recorded. Keyed on `isEnabled()` the retry then reads true,
+                // skips this discard, and releases reports captured while
+                // consent was still absent; keyed on the permission it reads
+                // false, because an unanswered install is not permitted
+                // whatever the preference says, and the discard happens.
+                //
+                // A period spent unpermitted is a period the user did not
+                // agree to, whether they had never answered, had answered no,
+                // or had a yes torn in half by a process death. Re-applying an
+                // on that was already permitted discards nothing, which is
+                // what keeps this off the reports the feature exists to
+                // collect.
+                if (enabled && !store.collectionPermitted()) discardPendingReports(app)
                 // The off half of the ordering above. Deliberately ahead of
                 // the store write, and deliberately not conditional on it:
                 // stopping collection is the part that must survive a process
@@ -218,11 +278,60 @@ internal object CrashReporting {
                     return@execute
                 }
                 val preApplied: Boolean? = if (!enabled) false else null
-                val persisted = runCatching { store.setEnabled(enabled) }
+                val enabledPersisted = runCatching { store.setEnabled(enabled) }
                     .onFailure { SnoozeDebugLog.failure(it, "crash reporting setting could not be saved") }
                     .getOrDefault(false)
+                // **Recorded only when the stored preference actually says
+                // what the user said.** Not "did the write succeed", and not
+                // "was it a no" — the reading is of the state that resulted,
+                // which is what governs collection from here on.
+                //
+                // The earlier version made a **no** unconditional, reasoning
+                // that off is already the default so a refused write changed
+                // nothing. True of a fresh install, and false on exactly the
+                // install this whole mechanism exists for (Codex, PR #166): an
+                // upgrade from the switch-only build carries `enabled = true`,
+                // so a refused decline rolls back to **on**, and recording the
+                // answer anyway makes `collectionPermitted()` true. That turns
+                // an explicit **No thanks** into collection, with the card
+                // gone — the worst outcome available here, and reached through
+                // the one case the answer flag was added to protect.
+                //
+                // Read as "the preference agrees with the user", both
+                // directions fall out. A refused *yes* leaves it off, so no
+                // answer is recorded and the card returns rather than the user
+                // being silently opted out for the life of the install. A
+                // refused *no* on a fresh install leaves it off, which is what
+                // they asked for, so the answer stands and they are not asked
+                // twice. A refused *no* on that upgrade leaves it on, which is
+                // not, so the answer is withheld — and because unanswered is
+                // never permitted, both SDKs go off anyway and the card stays
+                // up to be answered again.
+                //
+                // Its own result counts toward the save outcome, though (Codex,
+                // PR #166). A refused answer write is not a cosmetic
+                // bookkeeping miss: the store rolls the map back, so the card
+                // stays up and collection stays off for a user who just said
+                // yes, and saying nothing would leave them looking at a
+                // question they had already answered with no explanation.
+                val answerTookEffect = store.isEnabled() == enabled
+                val answerPersisted = if (recordAnswer && answerTookEffect) {
+                    runCatching { store.setAnswered() }
+                        .onFailure { SnoozeDebugLog.failure(it, "telemetry answer could not be saved") }
+                        .getOrDefault(false)
+                } else {
+                    // Not attempted is not the same as failed: a caller that
+                    // records no answer, and one whose preference does not
+                    // agree with what was asked, both leave the answer alone.
+                    // Only the first is a success — the second is already
+                    // reported by `enabledPersisted` being false.
+                    true
+                }
+                val persisted = enabledPersisted && answerPersisted
                 lastSaveRefused = !persisted
-                val effective = store.isEnabled()
+                // Permitted, not merely stored: a caller that did not record an
+                // answer must not turn collection on (Codex, PR #166).
+                val effective = store.collectionPermitted()
                 // Skipped only when the pre-apply above already put the SDK
                 // where the store ended up — which is the ordinary successful
                 // opt-out. A refused write restores `true`, and that has to

@@ -884,6 +884,109 @@ class MainScreenScreenshotTest {
     }
 
     @Test
+    fun `an unanswered telemetry question is asked`() {
+        capture("main-screen-telemetry-invite.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                telemetryUnanswered = true,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Help make Snoozemo better?").assertExists()
+    }
+
+    @Test
+    fun `an answered telemetry question is not asked again`() {
+        // Either answer retires the card, which is why the screen reads a
+        // single "unanswered" flag rather than the enabled setting: a
+        // recorded "no" and a never-asked install both leave reporting off,
+        // and only one of them should see this.
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                telemetryUnanswered = false,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Help make Snoozemo better?").assertDoesNotExist()
+    }
+
+    @Test
+    fun `both telemetry answers are reported, and they differ`() {
+        // The half a "did the button fire" test would miss: declining has to
+        // reach the same handler as accepting, carrying `false`. A decline
+        // wired to nothing would look identical on screen and would leave the
+        // question unanswered forever.
+        val answers = mutableListOf<Boolean>()
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                telemetryUnanswered = true,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+                onAnswerTelemetry = { answers += it },
+            )
+        }
+
+        composeRule.onNodeWithText("Yes please").performScrollTo().performClick()
+        composeRule.onNodeWithText("No thanks").performScrollTo().performClick()
+
+        assertEquals(listOf(true, false), answers)
+    }
+
+    @Test
     fun `a failure is said, not swallowed`() {
         capture("main-screen-outcome.png") {
             MainScreen(

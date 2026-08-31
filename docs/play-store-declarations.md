@@ -81,16 +81,16 @@ Answers, and why each one is what it is.
 |---|---|---|
 | **Privacy policy** | `https://mikelward.github.io/snoozemo/PRIVACY.html` | Required for any app requesting a sensitive permission. Must resolve before you submit. |
 | **App access** | All functionality available without special access | No account, no login, no gated area. Nothing for a reviewer to be given credentials for. |
-| **Ads** | No ads | No ad SDK. `INTERNET` is declared on `play`, but the only thing that uses it is crash reporting (`SPEC.md` §12). |
+| **Ads** | No ads | No ad SDK. `INTERNET` is declared on `play`, and what uses it is crash reporting and Firebase Analytics, both behind one user consent (`SPEC.md` §12). Analytics' advertising-ID collection is switched off and the `AD_ID` permission removed, so the **Advertising ID** answer below stays "not used". |
 | **Content rating** (IARC) | Utility; no user-generated content, violence, sexuality, gambling, or controlled substances | Expect Everyone. |
 | **Target audience and content** | **13 and over**; not directed at children | Maintainer's answer (2026-08-24), from what has cleared review on their other listings. A Do Not Disturb utility has no content or feature aimed at kids, and leaving the under-13 boxes clear is how Play expresses "not directed at children" — which keeps Snoozemo out of the Families program without declaring an adults-only audience it does not have. That matters because `docs/PRIVACY.md` says outright that the app works the same for a user of any age; 13+ agrees with that, where 18+ would not. Note the sibling Simmo repo records 18+ for its own listing, on a rationale specific to it (future travel-eSIM commerce links). |
 | **News app** | No | |
 | **COVID-19 contact tracing / status** | No | |
-| **Data safety** | Collects **crash logs**, **diagnostics**, and **device or other IDs**; shares nothing; all optional | See below — this is the one with substance, and it changed when Crashlytics landed. **`READ_CALENDAR` (landed 2026-08-31, `SPEC.md` §4.3) does not move it**: the read is on-device, one column of end times, and no part of it is transmitted, stored, or logged — so nothing is *collected* in the form's sense. It is not a restricted permission and files no declaration of its own; it does appear on the store listing's permission list. |
+| **Data safety** | Collects **crash logs**, **diagnostics**, **app interactions**, **device or other IDs**, and **approximate location**; shares nothing; all optional | See below — this is the one with substance, and it changed when Crashlytics landed. **`READ_CALENDAR` (landed 2026-08-31, `SPEC.md` §4.3) does not move it**: the read is on-device, one column of end times, and no part of it is transmitted, stored, or logged — so nothing is *collected* in the form's sense. It is not a restricted permission and files no declaration of its own; it does appear on the store listing's permission list. |
 | **Government apps** | No | |
 | **Financial features** | None | |
 | **Health apps** | No | Not a health app; DND is not a health feature. |
-| **Advertising ID** | Not used | No `AD_ID` permission and no analytics SDK. Crashlytics is added *without* Firebase Analytics precisely to keep this true (`SPEC.md` §12); `DeclaredPermissionsTest` fails if `AD_ID` ever appears. |
+| **Advertising ID** | Not used | Firebase Analytics merges `AD_ID`, so the `play` manifest removes it (`tools:node="remove"`) and switches `google_analytics_adid_collection_enabled` off. Analytics then reports against the per-install app-instance ID, which cannot be joined to activity in other apps. `DeclaredPermissionsTest` fails if `AD_ID` reappears. |
 | **Foreground service types** | *Expect no section* — but read the note below before assuming | No service in the `play` build declares a `foregroundServiceType`, and the type is what Play reviews (`SPEC.md` §3.3). The merged manifest does carry the bare `FOREGROUND_SERVICE` permission, from WorkManager. |
 
 ### Open: WorkManager puts `FOREGROUND_SERVICE` in the shipped manifest
@@ -136,18 +136,53 @@ Yes**, then, under **App activity / App info and performance**:
 
 | Field | Answer |
 |---|---|
-| Data type | **Crash logs**, and **Diagnostics** (plus **Device or other IDs** — see below) |
+| Data type | **Crash logs**, **Diagnostics**, and **App interactions** (plus **Device or other IDs** and, under **Location**, **Approximate location** — both below) |
 | Collected | Yes |
-| Shared | **No** — Firebase Crashlytics processes on Snoozemo's behalf, which Play does not count as sharing |
-| Processed ephemerally | No — Crashlytics retains reports (90 days) |
-| Required or optional | **Optional** — Settings → *Crash reports* turns it off, which is exactly what Play means by optional |
+| Shared | **No** — Firebase Crashlytics and Firebase Analytics process on Snoozemo's behalf, which Play does not count as sharing |
+| Processed ephemerally | No — Crashlytics retains reports (90 days); Analytics retains events on its own schedule |
+| Required or optional | **Optional** — nothing is collected until the user answers the consent card yes, and Settings → *Help make Snoozemo better* turns both back off |
 | Purpose | **App functionality** and **Analytics** |
 
-Declare **no Location**. That is the answer that matters most here and it is not a
-stretched reading: the anchor is compared on the phone, is erased when the snooze ends,
-and is not attached to a crash report — the app has no code that attaches custom keys or
-breadcrumbs at all (`SPEC.md` §12's floor, `docs/crashlytics.md`). Nothing about a place,
-a network, or a snooze's timing is transmitted.
+**App interactions** joins the row with Firebase Analytics (2026-08-31). Analytics'
+automatically-collected events — app opens, session length, app and OS updates,
+clear-data and uninstall, the engagement time it attaches to each of them, and a screen
+view that only ever names Snoozemo's single Android screen (everything is drawn inside
+it, so this distinguishes no install from another) — are what Play means by app
+interactions, so declaring only crash logs and diagnostics would be an under-declaration
+once Analytics is in the build. Google decides that list, so treat it as examples: the
+declaration covers the SDK's automatic collection, whatever is in it. Snoozemo logs **no custom events and
+sets no custom user properties**, so the declaration covers the SDK's automatic collection and
+nothing else; that is the claim `docs/PRIVACY.md` makes to users, and it is enforced by
+there being no call site in the app that could log one.
+
+Declare **Approximate location** — collected, not shared, optional (maintainer,
+2026-09-01). **This reverses the earlier "declare no Location" answer**, and the reasoning
+is kept rather than replaced, because the change is in Play's rules and not in what the app
+does.
+
+*What the app does is unchanged*: the anchor is compared on the phone, is erased when the
+snooze ends, and is not attached to a crash report — there is no code that attaches custom
+keys, and no custom Analytics events. A report does carry a breadcrumb trail, but
+Crashlytics builds that from the SDK's *automatic* events, none of which names a place or a
+network (`SPEC.md` §12's floor, `docs/crashlytics.md`). Nothing about a place, a network, or
+a snooze's timing is transmitted.
+
+*What changed is the reading of the form.* Android's *Declare your app's data use* lists,
+under Location, an app that "derives location information from an IP address or access point
+name", and says that if a third-party SDK in your app collects user data you must reflect
+that in the form. Google derives a coarse country from the network address an Analytics
+request arrives on. The guidance draws no line between data the app collects and data the
+processor derives — so the earlier answer rested on a distinction Play does not make, and
+declaring is the answer that matches the documentation rather than the one that reads best
+on the listing.
+
+**Optional, because it is**: it follows the consent card, and a user who never answers, or
+answers no, produces no requests for a country to be derived from.
+
+This is the one row where the listing will read worse than the app behaves, and that is the
+accepted cost. `docs/PRIVACY.md` is where the difference is explained to a user who notices
+it: Snoozemo sends no location, and the country is Google's inference from an address every
+network request carries.
 
 #### **Device or other IDs** is declared too (maintainer, 2026-08-25)
 
@@ -169,7 +204,7 @@ row as the intended answer, to be checked against the page named below.
 | Collected | Yes |
 | Shared | **No** |
 | Processed ephemerally | No |
-| Required or optional | **Optional** — the same *Crash reports* switch turns it off with everything else |
+| Required or optional | **Optional** — the same *Help make Snoozemo better* switch turns it off with everything else |
 | Purpose | **App functionality**, **Analytics** |
 
 One thing left to confirm, and it can only make the declaration *more* complete: Google's
@@ -189,20 +224,29 @@ different answers:
   is about the Google Advertising ID and the `AD_ID` permission, and no `AD_ID` appears
   in either flavor's merged manifest — which `DeclaredPermissionsTest` checks, so it is a
   fact about the build rather than a judgment.
-- **Device or other IDs** (Data safety) is **Yes**, per the row above, covering the
-  Crashlytics installation identifier.
+- **Device or other IDs** (Data safety) is **Yes**, per the row above, covering **two**
+  identifiers rather than one: the Crashlytics installation identifier and Analytics'
+  app-instance ID. Each service generates its own, so they are distinct values — both
+  app-scoped, both replaced on a clear-data or reinstall, neither joinable to activity in
+  another app.
 
-The common understanding is that Firebase **Analytics** is what brings `AD_ID` in, and
-that is the reason Snoozemo's Crashlytics dependency is added without it — but that has
-not been verified against Google's documentation from this repo, so confirm it rather
-than relying on it. The point to carry forward is narrower and safe either way: these are
-two different questions, and the answer to one does not settle the other.
+Firebase **Analytics** does bring `AD_ID` in — that was the common understanding, and it
+was confirmed the moment the dependency landed and `DeclaredPermissionsTest` went red
+(2026-08-31). Rather than choosing between Analytics and the answer, the permission is
+removed outright and the answer stays **No**. The point to carry forward is narrower and
+safe either way: these are two different questions, and the answer to one does not settle
+the other.
 
-**This changes if analytics is added later**, which the maintainer has flagged as
-possible. Adding Firebase Analytics (or another SDK carrying `AD_ID`) would likely move
-the Advertising ID answer to yes and add data types here, so it is a distribution
-decision to take deliberately — `DeclaredPermissionsTest`'s `AD_ID` assertion failing is
-the intended prompt for that conversation, not an obstacle to route around.
+**Analytics has since been added, and this is how that conversation went.**
+`DeclaredPermissionsTest`'s `AD_ID` assertion failed the moment Firebase Analytics
+arrived, which is exactly what it was written to do. The decision was to keep the
+Advertising ID answer at **no** and remove the permission rather than let the SDK merge it
+in — the `play` manifest carries `tools:node="remove"` for `AD_ID` and switches
+`google_analytics_adid_collection_enabled` off. What that costs is the ads-adjacent
+surface: audience export to Google Ads, and the demographics inferred from the advertising
+ID. Snoozemo has no use for either. What it keeps is a per-install identifier that cannot
+be joined to activity in other apps and resets on a clear-data or reinstall. The **App
+interactions** data type is declared as a result; see the table above.
 
 The form also asks:
 
@@ -221,8 +265,8 @@ Snoozemo's, and the runtime snooze record is excluded from it by
 `docs/PRIVACY.md`.
 
 **Updating the Console form is a maintainer action.** Nothing in the repo can do it,
-and a build that ships crash reporting under the old "no data collected" answer is a
-policy violation rather than a stale doc — so this is the one item here that has to
+and a build that ships crash reporting and analytics under the old "no data collected"
+answer is a policy violation rather than a stale doc — so this is the one item here that has to
 be done before the next `play` upload, not alongside it.
 
 ## The background location permissions declaration
@@ -254,9 +298,11 @@ keep them true of the build you are uploading.
 > The app registers one geofence around the point where the snooze was armed and
 > ends the snooze on the exit transition. It runs no other location work: nothing is
 > tracked when no snooze is running, no path or history is recorded, and the anchor
-> point is erased the moment the snooze ends. Location never leaves the device: the
-> app sends nothing but crash reports, which contain a stack trace, the device model
-> and the app version, and no location data of any kind.
+> point is erased the moment the snooze ends. Location never leaves the device. The
+> app sends two things, and only after the user agrees to them: crash reports, which
+> contain a stack trace, the device model and the app version; and anonymous usage
+> statistics recording that the app was opened and how long it was in use. Neither
+> contains location data of any kind.
 
 ### Why can a foreground (while-in-use) permission not achieve the same result?
 

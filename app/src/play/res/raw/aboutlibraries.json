@@ -1005,6 +1005,28 @@
             ]
         },
         {
+            "uniqueId": "androidx.documentfile:documentfile",
+            "artifactVersion": "1.0.0",
+            "name": "Support Document File",
+            "description": "The Support Library is a static library that you can add to your Android application in order to use APIs that are either not available for older platform versions or utility APIs that aren't a part of the framework APIs. Compatible on devices running API 14 or later.",
+            "website": "http://developer.android.com/tools/extras/support-library.html",
+            "developers": [
+                {
+                    "name": "The Android Open Source Project"
+                }
+            ],
+            "scm": {
+                "connection": "scm:git:https://android.googlesource.com/platform/frameworks/support",
+                "url": "http://source.android.com"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
             "uniqueId": "androidx.emoji2:emoji2",
             "artifactVersion": "1.4.0",
             "name": "Emoji2",
@@ -1105,6 +1127,28 @@
             "uniqueId": "androidx.interpolator:interpolator",
             "artifactVersion": "1.0.0",
             "name": "Support Interpolators",
+            "description": "The Support Library is a static library that you can add to your Android application in order to use APIs that are either not available for older platform versions or utility APIs that aren't a part of the framework APIs. Compatible on devices running API 14 or later.",
+            "website": "http://developer.android.com/tools/extras/support-library.html",
+            "developers": [
+                {
+                    "name": "The Android Open Source Project"
+                }
+            ],
+            "scm": {
+                "connection": "scm:git:https://android.googlesource.com/platform/frameworks/support",
+                "url": "http://source.android.com"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "androidx.legacy:legacy-support-core-utils",
+            "artifactVersion": "1.0.0",
+            "name": "Support core utils",
             "description": "The Support Library is a static library that you can add to your Android application in order to use APIs that are either not available for older platform versions or utility APIs that aren't a part of the framework APIs. Compatible on devices running API 14 or later.",
             "website": "http://developer.android.com/tools/extras/support-library.html",
             "developers": [
@@ -1496,6 +1540,28 @@
             ]
         },
         {
+            "uniqueId": "androidx.localbroadcastmanager:localbroadcastmanager",
+            "artifactVersion": "1.0.0",
+            "name": "Support Local Broadcast Manager",
+            "description": "The Support Library is a static library that you can add to your Android application in order to use APIs that are either not available for older platform versions or utility APIs that aren't a part of the framework APIs. Compatible on devices running API 14 or later.",
+            "website": "http://developer.android.com/tools/extras/support-library.html",
+            "developers": [
+                {
+                    "name": "The Android Open Source Project"
+                }
+            ],
+            "scm": {
+                "connection": "scm:git:https://android.googlesource.com/platform/frameworks/support",
+                "url": "http://source.android.com"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
             "uniqueId": "androidx.navigationevent:navigationevent-android",
             "artifactVersion": "1.0.0",
             "name": "Navigation Event",
@@ -1526,6 +1592,78 @@
             "name": "NavigationEvent Compose",
             "description": "Compose integration with NavigationEvent",
             "website": "https://developer.android.com/jetpack/androidx/releases/navigationevent#1.0.0",
+            "developers": [
+                {
+                    "name": "The Android Open Source Project"
+                }
+            ],
+            "organization": {
+                "name": "The Android Open Source Project"
+            },
+            "scm": {
+                "connection": "scm:git:https://android.googlesource.com/platform/frameworks/support",
+                "url": "https://cs.android.com/androidx/platform/frameworks/support"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "androidx.print:print",
+            "artifactVersion": "1.0.0",
+            "name": "Support Print",
+            "description": "The Support Library is a static library that you can add to your Android application in order to use APIs that are either not available for older platform versions or utility APIs that aren't a part of the framework APIs. Compatible on devices running API 14 or later.",
+            "website": "http://developer.android.com/tools/extras/support-library.html",
+            "developers": [
+                {
+                    "name": "The Android Open Source Project"
+                }
+            ],
+            "scm": {
+                "connection": "scm:git:https://android.googlesource.com/platform/frameworks/support",
+                "url": "http://source.android.com"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "androidx.privacysandbox.ads:ads-adservices",
+            "artifactVersion": "1.1.0-beta11",
+            "name": "Privacy Sandbox for Ad Services",
+            "description": "This library enables integration with Privacy Preserving APIs, which are part of Privacy Sandbox on Android.",
+            "website": "https://developer.android.com/jetpack/androidx/releases/privacysandbox-ads#1.1.0-beta11",
+            "developers": [
+                {
+                    "name": "The Android Open Source Project"
+                }
+            ],
+            "organization": {
+                "name": "The Android Open Source Project"
+            },
+            "scm": {
+                "connection": "scm:git:https://android.googlesource.com/platform/frameworks/support",
+                "url": "https://cs.android.com/androidx/platform/frameworks/support"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "androidx.privacysandbox.ads:ads-adservices-java",
+            "artifactVersion": "1.1.0-beta11",
+            "name": "androidx.privacysandbox.ads:ads-adservices-java",
+            "description": "write Java code to call PP APIs.",
+            "website": "https://developer.android.com/jetpack/androidx/releases/privacysandbox-ads#1.1.0-beta11",
             "developers": [
                 {
                     "name": "The Android Open Source Project"
@@ -2019,8 +2157,23 @@
             ]
         },
         {
+            "uniqueId": "com.google.android.gms:play-services-ads-identifier",
+            "artifactVersion": "18.0.0",
+            "name": "play-services-ads-identifier",
+            "description": "",
+            "developers": [
+                
+            ],
+            "licenses": [
+                "ASDKL"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
             "uniqueId": "com.google.android.gms:play-services-base",
-            "artifactVersion": "18.9.0",
+            "artifactVersion": "18.5.0",
             "name": "play-services-base",
             "description": "",
             "developers": [
@@ -2035,7 +2188,7 @@
         },
         {
             "uniqueId": "com.google.android.gms:play-services-basement",
-            "artifactVersion": "18.8.0",
+            "artifactVersion": "18.9.0",
             "name": "play-services-basement",
             "description": "",
             "developers": [
@@ -2052,6 +2205,111 @@
             "uniqueId": "com.google.android.gms:play-services-location",
             "artifactVersion": "21.4.0",
             "name": "play-services-location",
+            "description": "",
+            "developers": [
+                
+            ],
+            "licenses": [
+                "ASDKL"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.android.gms:play-services-measurement",
+            "artifactVersion": "23.2.0",
+            "name": "play-services-measurement",
+            "description": "",
+            "developers": [
+                
+            ],
+            "licenses": [
+                "ASDKL"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.android.gms:play-services-measurement-api",
+            "artifactVersion": "23.2.0",
+            "name": "play-services-measurement-api",
+            "description": "",
+            "developers": [
+                
+            ],
+            "licenses": [
+                "ASDKL"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.android.gms:play-services-measurement-base",
+            "artifactVersion": "23.2.0",
+            "name": "play-services-measurement-base",
+            "description": "",
+            "developers": [
+                
+            ],
+            "licenses": [
+                "ASDKL"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.android.gms:play-services-measurement-impl",
+            "artifactVersion": "23.2.0",
+            "name": "play-services-measurement-impl",
+            "description": "",
+            "developers": [
+                
+            ],
+            "licenses": [
+                "ASDKL"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.android.gms:play-services-measurement-sdk",
+            "artifactVersion": "23.2.0",
+            "name": "play-services-measurement-sdk",
+            "description": "",
+            "developers": [
+                
+            ],
+            "licenses": [
+                "ASDKL"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.android.gms:play-services-measurement-sdk-api",
+            "artifactVersion": "23.2.0",
+            "name": "play-services-measurement-sdk-api",
+            "description": "",
+            "developers": [
+                
+            ],
+            "licenses": [
+                "ASDKL"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.android.gms:play-services-stats",
+            "artifactVersion": "17.0.2",
+            "name": "play-services-stats",
             "description": "",
             "developers": [
                 
@@ -2109,8 +2367,29 @@
             ]
         },
         {
+            "uniqueId": "com.google.code.findbugs:jsr305",
+            "artifactVersion": "3.0.2",
+            "name": "FindBugs-jsr305",
+            "description": "JSR305 Annotations for Findbugs",
+            "website": "http://findbugs.sourceforge.net/",
+            "developers": [
+                
+            ],
+            "scm": {
+                "connection": "scm:git:https://code.google.com/p/jsr-305/",
+                "developerConnection": "scm:git:https://code.google.com/p/jsr-305/",
+                "url": "https://code.google.com/p/jsr-305/"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
             "uniqueId": "com.google.errorprone:error_prone_annotations",
-            "artifactVersion": "2.26.0",
+            "artifactVersion": "2.11.0",
             "name": "error-prone annotations",
             "description": "Error Prone is a static analysis tool for Java that catches common programming mistakes at compile-time.",
             "website": "https://errorprone.info/error_prone_annotations",
@@ -2130,6 +2409,21 @@
             },
             "licenses": [
                 "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.firebase:firebase-analytics",
+            "artifactVersion": "23.2.0",
+            "name": "firebase-analytics",
+            "description": "",
+            "developers": [
+                
+            ],
+            "licenses": [
+                "ASDKL"
             ],
             "funding": [
                 
@@ -2371,6 +2665,54 @@
             ]
         },
         {
+            "uniqueId": "com.google.guava:failureaccess",
+            "artifactVersion": "1.0.1",
+            "name": "Guava InternalFutureFailureAccess and InternalFutures",
+            "description": "Contains\n    com.google.common.util.concurrent.internal.InternalFutureFailureAccess and\n    InternalFutures. Most users will never need to use this artifact. Its\n    classes is conceptually a part of Guava, but they're in this separate\n    artifact so that Android libraries can use them without pulling in all of\n    Guava (just as they can use ListenableFuture by depending on the\n    listenablefuture artifact).",
+            "website": "https://github.com/google/guava/failureaccess",
+            "developers": [
+                {
+                    "name": "Kevin Bourrillion",
+                    "organisationUrl": "http://www.google.com"
+                }
+            ],
+            "scm": {
+                "connection": "scm:git:https://github.com/google/guava.git/failureaccess",
+                "developerConnection": "scm:git:git@github.com:google/guava.git/failureaccess",
+                "url": "https://github.com/google/guava/failureaccess"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.guava:guava",
+            "artifactVersion": "31.1-android",
+            "name": "Guava: Google Core Libraries for Java",
+            "description": "Guava is a suite of core and expanded libraries that include\n    utility classes, Google's collections, I/O classes, and\n    much more.",
+            "website": "https://github.com/google/guava",
+            "developers": [
+                {
+                    "name": "Kevin Bourrillion",
+                    "organisationUrl": "http://www.google.com"
+                }
+            ],
+            "scm": {
+                "connection": "scm:git:https://github.com/google/guava.git/guava",
+                "developerConnection": "scm:git:git@github.com:google/guava.git/guava",
+                "url": "https://github.com/google/guava/guava"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
             "uniqueId": "com.google.guava:listenablefuture",
             "artifactVersion": "1.0",
             "name": "Guava ListenableFuture only",
@@ -2386,6 +2728,27 @@
                 "connection": "scm:git:https://github.com/google/guava.git/listenablefuture",
                 "developerConnection": "scm:git:git@github.com:google/guava.git/listenablefuture",
                 "url": "https://github.com/google/guava/listenablefuture"
+            },
+            "licenses": [
+                "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "com.google.j2objc:j2objc-annotations",
+            "artifactVersion": "1.3",
+            "name": "J2ObjC Annotations",
+            "description": "A set of annotations that provide additional information to the J2ObjC\n    translator to modify the result of translation.",
+            "website": "https://github.com/google/j2objc/",
+            "developers": [
+                
+            ],
+            "scm": {
+                "connection": "scm:svn:http://svn.sonatype.org/spice/tags/oss-parent-7/j2objc-annotations",
+                "developerConnection": "scm:svn:https://svn.sonatype.org/spice/tags/oss-parent-7/j2objc-annotations",
+                "url": "http://svn.sonatype.org/spice/tags/oss-parent-7/j2objc-annotations"
             },
             "licenses": [
                 "Apache-2.0"
@@ -2532,6 +2895,34 @@
             },
             "licenses": [
                 "Apache-2.0"
+            ],
+            "funding": [
+                
+            ]
+        },
+        {
+            "uniqueId": "org.checkerframework:checker-qual",
+            "artifactVersion": "3.12.0",
+            "name": "Checker Qual",
+            "description": "checker-qual contains annotations (type qualifiers) that a programmer\nwrites to specify Java code for type-checking by the Checker Framework.",
+            "website": "https://checkerframework.org",
+            "developers": [
+                {
+                    "name": "Michael Ernst",
+                    "organisationUrl": "https://www.cs.washington.edu/"
+                },
+                {
+                    "name": "Suzanne Millstein",
+                    "organisationUrl": "https://www.cs.washington.edu/"
+                }
+            ],
+            "scm": {
+                "connection": "scm:git:git://github.com/typetools/checker-framework.git",
+                "developerConnection": "scm:git:ssh://git@github.com/typetools/checker-framework.git",
+                "url": "https://github.com/typetools/checker-framework.git"
+            },
+            "licenses": [
+                "MIT"
             ],
             "funding": [
                 
@@ -2882,6 +3273,13 @@
             "internalHash": "BSD-3-Clause",
             "spdxId": "BSD-3-Clause",
             "hash": "BSD-3-Clause"
+        },
+        "MIT": {
+            "name": "MIT License",
+            "url": "https://spdx.org/licenses/MIT.html",
+            "internalHash": "MIT",
+            "spdxId": "MIT",
+            "hash": "MIT"
         },
         "PCSDKToS": {
             "name": "Play Core Software Development Kit Terms of Service",

@@ -155,8 +155,9 @@ will accept uploads from the service account.
 Every Play Console questionnaire, the answer to give, and the reason behind
 it now live in **[`play-store-declarations.md`](play-store-declarations.md)**,
 alongside the drafted text for the background-location permissions
-declaration. Short version: no ads, no data collected, no data shared, not
-directed at children, and a separate permissions declaration form that gates
+declaration. Short version: no ads; crash logs, diagnostics, app interactions,
+per-install identifiers and approximate location collected — all optional,
+behind one consent the user gives first — nothing shared, not directed at children, and a separate permissions declaration form that gates
 publishing — on the internal track as much as production — and every
 automated upload through the Publishing API, until it is filed. It does not
 gate the manual seed upload in step 2 above, which a new listing needs
