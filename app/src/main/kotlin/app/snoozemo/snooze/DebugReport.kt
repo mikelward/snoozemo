@@ -410,7 +410,20 @@ internal object DebugReport {
      */
     private val PreviousRunRead.omitted: Boolean
         get() = timedOut || !readSucceeded || (wasCrash && text.isNullOrBlank()) ||
-            (wasCrash && renderDroppedPartOfPreviousRun)
+            (wasCrash && renderDroppedPartOfPreviousRun) ||
+            (wasCrash && run?.complete == false)
+
+    // The last clause is the library saying its handle does not cover every run
+    // still on disk -- one it could not read was skipped and left in place, or
+    // the directory would not list at all. The skipped run is in neither the
+    // handle's files nor its text, so a handle missing an unreadable crash
+    // reads exactly like the ordinary run beside it: text non-blank, nothing
+    // truncated, and every other clause here false. Consuming the pin on that
+    // report would lower the banner over a share that never carried the crash,
+    // while the crash file itself stays on disk with nothing left to offer it
+    // (Codex, PR #153). Conservative in the same direction as the truncation
+    // clause: a skipped *ordinary* run also refuses, which costs a banner
+    // staying up for a later share.
 
     /** Whether the report's own bound cut anything off what [text] carried. */
     private val PreviousRunRead.renderDroppedPartOfPreviousRun: Boolean
