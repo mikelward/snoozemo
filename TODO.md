@@ -1540,6 +1540,34 @@ the point is that every other line of the app is worthless if it isn't true.
       - Not persisted, deliberately: the monitor re-derives it on every restart when its
         registration is refused again, and a second durable copy behind a different refutation is
         the two-slot mistake of PR #75. `SPEC.md` §6.6 carries the reasoning.
+- [ ] **Location services off system-wide still ends a Wi-Fi-only snooze on grace**
+      (Codex, PR #157; deferred 2026-08-31 — needs a maintainer decision). Android gates
+      Wi-Fi identifiers on the location *switch*, not only on the grants, so with both
+      permissions held and system location off the SSID read is redacted, D7 reads that as
+      not associated, grace arms, and the snooze ends about five minutes later with the
+      phone sitting on its own network.
+      **The codebase already states the hazard and the predicate does not cover it.**
+      `SnoozeController.modeFor`'s comment says in as many words that reading an SSID needs
+      `ACCESS_FINE_LOCATION` *and location services on*, and that claiming `WIFI_ONLY`
+      there "would report a departure on every wake with the phone sitting on its own
+      network" — but `DegradationCause.isGrantLoss`, the predicate that acts on it, is
+      `NO_LOCATION_IN_BACKGROUND || LOCATION_PERMISSION_GONE` only. So a
+      `LOCATION_SERVICES_OFF` degradation with an SSID falls through to `WIFI_ONLY`, which
+      is the state that comment describes.
+      **Not introduced by PR #157, and its suggested fix does not work as stated.** Nothing
+      latched a services outage at *start* before that PR either: `servicesDegradation` is
+      set only from a geofencing-unavailable signal, which a Wi-Fi-only anchor never
+      receives because it registers no fence — so a cold start with location already off
+      has never had anything to suppress the loss. And latching `LOCATION_SERVICES_OFF`
+      suppresses nothing on its own, because grace is gated on `isGrantLoss`.
+      **The coherent fix is to widen `isGrantLoss` to include `LOCATION_SERVICES_OFF`**,
+      which is a real decision rather than a line: it changes `modeFor` (services-off would
+      become `DURATION_ONLY` rather than `WIFI_ONLY`), it changes grace suppression
+      everywhere that predicate is read, and it extends the scope of the 2026-08-30
+      decision recorded against that same branch. Codex's alternative — "an equivalent
+      engine suppressor" — is a new mechanism rather than a smaller one.
+      **Fails safe**, which is why it is deferrable: the snooze ends early rather than
+      leaving a phone silent, and the duration cap is untouched.
 - [ ] **The grant slot and the engine's latch are not updated atomically** (Codex, PR #157,
       sixth pass — deferred there, and this entry is the durable record of it). Both latch
       paths now compare-and-set the cause they decided against, which closes the wide window
