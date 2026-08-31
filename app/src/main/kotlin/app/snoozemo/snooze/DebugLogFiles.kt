@@ -709,12 +709,29 @@ internal object DebugLogging {
         }
     }
 
-    /** Test seam: drains the worker so assertions see settled state. */
-    internal fun awaitIdleForTest() {
+    /**
+     * Test seam: drains the worker so assertions see settled state, and
+     * reports whether it actually drained.
+     *
+     * Unlike [afterRecordingGateApplied], the task queued here runs whatever
+     * the recording gate says — that method is production API whose job is to
+     * *skip* when the setting is Off, so a test latching on it waits on
+     * something that is entitled never to happen. FIFO ordering still gives
+     * the guarantee a drain needs: a task queued now runs only once every
+     * earlier one has.
+     *
+     * Returns false when the worker did not reach the queued task in time, so
+     * a caller can fail on that rather than proceeding against state it never
+     * waited for. [timeoutSeconds] is a real-time bound in a JVM competing with
+     * every other Gradle worker on the machine, so a caller that needs more
+     * headroom than the default asks for it rather than being failed by load.
+     */
+    internal fun awaitIdleForTest(timeoutSeconds: Long = 5): Boolean {
         val done = java.util.concurrent.CountDownLatch(1)
         runCatching { worker.execute { done.countDown() } }.onFailure { done.countDown() }
-        done.await(5, TimeUnit.SECONDS)
+        val drained = done.await(timeoutSeconds, TimeUnit.SECONDS)
         sink?.let { runCatching { it.awaitIdle() } }
+        return drained
     }
 
     /** Test seam: forgets the installed sink so the next [install] rebuilds it. */
