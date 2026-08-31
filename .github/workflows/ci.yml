@@ -145,9 +145,14 @@ jobs:
         if: steps.lane.outputs.docs_only != 'true'
         run: |
           set -euo pipefail
-          sha="$(git ls-remote https://github.com/mikelward/androidlog.git refs/heads/main | cut -f1)"
+          # PILOT PIN -- REVERT TO refs/heads/main BEFORE MERGING.
+          # AGENTS.md asks a library change to be piloted through one consumer
+          # *before* it merges, and consumers otherwise track @main -- so this
+          # PR runs against androidlog#20's branch until that PR merges.
+          ref="refs/heads/claude/storage-outcome"
+          sha="$(git ls-remote https://github.com/mikelward/androidlog.git "$ref" | cut -f1)"
           if [ -z "$sha" ]; then
-            echo "::error::could not resolve mikelward/androidlog refs/heads/main" >&2
+            echo "::error::could not resolve mikelward/androidlog $ref" >&2
             exit 1
           fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
