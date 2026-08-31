@@ -3477,10 +3477,11 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   - **Legacy log files must be deleted on migration, not read** — done in
     PR #151. The reduced rendering is not retroactive, so removing them is the
     only thing that stops lines written under the old full rendering being
-    readable. `DebugFileSink.start(purgeLegacy = true)` wipes the directory
-    ahead of the rotation on the first start after the move, and the flag
-    recording it is set only once the sink confirms the files are gone, so a
-    refused delete retries at the next start instead of being marked off.
+    readable. The library grew no API for this in the end — the old directory
+    is this app's, not the sink's, so `purgeLegacyDirectory` removes it here
+    before the sink is constructed. The flag recording it is set only once the
+    directory is confirmed gone, so a refused delete retries at the next start,
+    and on an Off toggle, instead of being marked off.
 
 - **DECIDED: `logSummary()` keeps the times, as one `safe(...)` rendering**
   (maintainer, 2026-08-30; raised the same day). The question was what happens
