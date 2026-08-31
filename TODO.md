@@ -2989,6 +2989,13 @@ that can only be settled on a real device, ordered by risk.
   `temp`; prior runs deliberately survive an opt-out, a decision recorded in
   that repository (Codex, its PR #4). Moving this app onto the library is what
   put the two in conflict, so the conflict arrives with this PR.
+  **Every opt-out is affected, not just the interrupted one.** An ordinary
+  On→Off toggle, with the sink installed and the purge completing normally,
+  also leaves every `androidlog-prev-*.log` — pinned crashes included — while
+  the setting and `optOutPurgeFailed` both report success. So the common path
+  is the one that breaks the promise, and a later re-enable and share can carry
+  logs the user was told were deleted immediately. The startup case is a second
+  route to the same place, not the whole of it.
   **A second defect compounds it.** `DebugFileSink.start()` rotates
   unconditionally — it takes no notion that recording is off — so a start that
   finds the log already disabled moves `androidlog.log` to
