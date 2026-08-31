@@ -448,7 +448,12 @@ class SnoozeController(
     fun onPresenceUpdate(update: PresenceUpdate) {
         val snooze = active ?: return
 
-        val mode = modeFor(update.degradation, update.graceActive, snooze.anchor)
+        val mode = modeFor(
+            update.degradation,
+            update.graceActive,
+            update.locationAccessLost,
+            snooze.anchor,
+        )
         // The *cause* moving counts as news too, not only the mode (TODO.md;
         // Codex, PR #31). `NO_LOCATION_FIX` and `FIXES_TOO_VAGUE` map to one
         // mode, so a mode-only test would let the reason change underneath a
@@ -623,7 +628,12 @@ class SnoozeController(
      * one cause that invalidates the Wi-Fi signal itself rather than merely
      * failing alongside it — see the body.
      */
-    private fun modeFor(degradation: DegradationCause?, graceActive: Boolean, anchor: Anchor): TrackingMode {
+    private fun modeFor(
+        degradation: DegradationCause?,
+        graceActive: Boolean,
+        locationAccessLost: Boolean,
+        anchor: Anchor,
+    ): TrackingMode {
         val computed = when {
             // A missing *grant* outranks even a running grace period, and is
             // the one cause that does (Codex, PR #149, deferred there; fixed
@@ -648,7 +658,31 @@ class SnoozeController(
             // would not merely overstate the mode: it would report a
             // departure on every wake with the phone sitting on its own
             // network.
-            degradation?.isGrantLoss == true -> TrackingMode.DURATION_ONLY
+            // **Asked of the suppressor, not of the cause** (Codex, PR
+            // #165). This branch first read `isGrantLoss`, which missed the
+            // system location switch: it withholds the SSID exactly as a dead
+            // grant does, and the monitor now says so the moment a read comes
+            // back redacted, so the card claimed `Wi-Fi only` while the engine
+            // had already shut every grace path — a snooze running to the cap
+            // under a line saying something else was tracking it.
+            //
+            // Widening it to `blocksLocationReads` fixed that and bought the
+            // mirror-image error, because a cause can reach the level without
+            // the suppressor: a stale `GEOFENCE_NOT_AVAILABLE` observation
+            // delivered after the switch is back on records
+            // `LOCATION_SERVICES_OFF` while Wi-Fi is working and a grace
+            // period can still arm and end the snooze. Reading the cause
+            // promised the cap there instead.
+            //
+            // Both readings were proxies for one fact the engine already
+            // knows, so this asks for it directly. It stays above
+            // `graceActive` for the original reason: under a withheld SSID
+            // the absence that started a grace period may be the withholding
+            // itself, so `WIFI_GRACE` would say Wi-Fi is bounding a departure
+            // that may never have happened — and by the time this line is
+            // reached that deadline is cleared, persisted and its alarm
+            // canceled.
+            locationAccessLost -> TrackingMode.DURATION_ONLY
             graceActive && anchor.ssid != null -> TrackingMode.WIFI_GRACE
             degradation == null -> TrackingMode.from(anchor)
             // Every other degradation leaves Wi-Fi *only if there was an SSID*;

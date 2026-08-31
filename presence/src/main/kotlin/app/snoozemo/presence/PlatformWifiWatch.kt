@@ -20,9 +20,12 @@ import app.snoozemo.core.SnoozeDebugLog
  * why SPEC.md §6.10 calls Wi-Fi loss the highest-value wake-up source.
  *
  * `FLAG_INCLUDE_LOCATION_INFO` is what puts the SSID into the capabilities
- * callback; it requires the fine-location grant the snooze already holds,
- * and when the platform redacts anyway the tracker reads it as
- * *not associated* — the fail-open direction.
+ * callback; it requires the fine-location grant the snooze already holds.
+ * When the platform redacts anyway, that is reported through
+ * [onRedactedRead]: a withheld name is direct evidence that location access
+ * is gone, which is a different claim from the departure the tracker would
+ * otherwise read out of it. Reported *after* the tracker's own signal — see
+ * `deliverCurrent` for why the more obvious order is the unsafe one.
  *
  * Signals are marshaled onto the main thread, the same confinement every
  * other source of the monitor's `deliver` uses. Timestamps are delivery
@@ -33,6 +36,7 @@ internal class PlatformWifiWatch(
     context: Context,
     private val anchorSsid: String,
     private val readElapsedRealtimeMs: () -> Long = SystemClock::elapsedRealtime,
+    private val onRedactedRead: () -> Unit = {},
     private val onSignal: (PresenceSignal) -> Unit,
 ) : AutoCloseable {
 
@@ -69,7 +73,27 @@ internal class PlatformWifiWatch(
         }
 
         private fun deliverCurrent() {
-            tracker.onWifiSsid(currentAssociationSsid(), readElapsedRealtimeMs())?.let(onSignal)
+            val raw = currentAssociationSsid()
+            tracker.onWifiSsid(raw, readElapsedRealtimeMs())?.let(onSignal)
+            // **After the tracker, not before** (Codex, PR #165). Reporting
+            // first looks better — the grace deadline is never armed rather
+            // than armed and canceled — but it puts the caller's whole
+            // recovery machinery inside this call, ahead of the loss that
+            // motivated it. A redaction the caller's probes cannot explain
+            // latches a cause those same probes immediately refute, so the
+            // recovery ran to completion here, clearing the engine's latch
+            // and rebuilding this watch, and *then* the redacted read below
+            // reported its loss into an engine with nothing left suppressing
+            // grace: five minutes to the end of a snooze whose user had not
+            // moved.
+            //
+            // Ordering it after is safe because the engine withdraws a
+            // deadline rather than merely declining to arm one:
+            // `PresenceSignal.LocationAccessLost` clears `graceDeadlineMs`,
+            // which the monitor persists and `GraceAlarm.reconcile` cancels
+            // for real. So the loss arms and the report cancels, in that
+            // order, with no window where anything acts on the deadline.
+            if (AnchorCapture.isRedactedSsid(raw)) onRedactedRead()
         }
     }
 

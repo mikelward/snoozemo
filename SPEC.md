@@ -2424,6 +2424,59 @@ which the tracker reads as *not associated* by design. A `WIFI_ONLY` claim in ei
 report a departure on every wake with the phone sitting on its own network. Both grant-shaped
 degradations therefore go straight to duration-only, whatever the anchor holds.
 
+**A withheld network name is the detection, not a probe for why** (maintainer, 2026-08-31).
+Every route to an unreadable SSID — a revoked grant, a while-in-use grant read from the
+background, the system location switch off — hands back the same placeholder, and each one
+blocks location fixes too, so none of them leaves a signal to fall back to. Asking *which*
+means keeping a list of platform gates current, and the list was already incomplete: a
+services outage held both grants, so the permission probe found nothing wrong and let the
+loss through as a departure. So Snoozemo reads the refusal itself. A redacted read declares
+that location access is gone, which shuts the §6.6 grace period; naming the cause is a
+separate, best-effort step that only decides what the card says, and it always names
+something. The snooze then runs duration-only and says so, which is what it was already
+owed — the change is that nothing has to explain the outage before that can happen.
+
+**The declaration follows the loss it explains, and must.** The obvious order is the wrong
+one: reporting the refusal first runs the whole recovery path — including the checks that
+can immediately declare the outage over — ahead of the departure that motivated it, so the
+latch is raised and dropped and only then does the loss arrive, with nothing left
+suppressing grace. Declaring afterward is safe because the engine *withdraws* a deadline
+rather than declining to arm one, so the loss arms grace and the declaration cancels it,
+durably. Every path that records one of these causes must deliver that declaration —
+a path that merely records it leaves an armed deadline with nothing to cancel it, which
+is the same failure by a different route.
+
+**So the line that matters is "location data is withheld", not "a grant is missing".** Both
+questions that turn on it — what mode the card claims, and when an outage is over — ask
+about the reads, and the system location switch withholds an SSID exactly as a dead grant
+does. For the *mode* the line is drawn one step further in: the card follows the
+suppression the engine is actually applying, not the cause recorded beside it. The two
+come apart in both directions — a cause left on the grant side claimed `Wi-Fi only` with
+every grace path already shut, and a cause recorded without a suppressor (a stale
+unavailable-fence observation arriving after the switch is back on) claimed `Timer only`
+while a grace period could still end the snooze at the anchor. Only the suppressor answers
+what is running. Left on the grant side, a services outage claimed `Wi-Fi only` while every grace path
+was already shut, and on a Wi-Fi-only anchor it could never be declared over at all: there
+is no geofence registration to succeed and lift it, so a real departure afterward ran
+silently to the cap. A restoration still needs both grants *and* the switch, so nothing is
+declared repaired on a guess.
+
+**A restoration needs the proof that covers the outage.** A geofence the platform accepts is
+proof of the two grants, because geofencing requires them outright — but it is not proof the
+system location switch is on, since the platform will accept a fence it cannot then monitor.
+So a registration success lifts a withholding cause only once the switch answers too;
+otherwise the refusal stands, which keeps the recovery watch armed and leaves the outage to
+be declared over by the thing that can actually see it end. This is a demand for *more*
+proof, never a test of which cause happens to be latched: a grant restored during a services
+outage is still restored, by that watch, the moment the outage ends.
+
+**A while-in-use grant is not an edge case here.** With no foreground service on this flavor
+(§3), every read Snoozemo makes runs from the background, so an install that granted location
+but not *all the time* has no working presence signal at all — its snoozes always run to the
+timer. That is a state the user chose and can undo, so the app says so where they will see
+it: a dismissible banner on the home screen naming the consequence rather than the
+permission, backed by the permanent location row that outlives it.
+
 **What still ends the snooze is the failure we cannot name.** A geofence refused for a reason this
 build cannot classify, or a monitor that will not restart, stays fatal: there is no reason to put
 on the card and nothing for the user to act on, which is exactly the shape D7 is about.

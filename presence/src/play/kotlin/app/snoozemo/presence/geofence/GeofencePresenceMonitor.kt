@@ -365,7 +365,26 @@ class GeofencePresenceMonitor(
         // have started a grace period.
         val graceActiveMirror = java.util.concurrent.atomic.AtomicBoolean(false)
 
-        fun send(update: PresenceUpdate) {
+        // The suppressor, mirrored the same way and for the same reason. The
+        // controller classifies the mode from whether grace is actually shut,
+        // not from which cause is in a slot: a stale `GEOFENCE_NOT_AVAILABLE`
+        // arriving after the switch is back on records `LOCATION_SERVICES_OFF`
+        // with Wi-Fi working and grace live, and reading the cause there
+        // reported `Timer only` over a snooze the grace alarm could still end
+        // (Codex, PR #165, sixth pass).
+        val locationAccessLostMirror = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        fun send(
+            update: PresenceUpdate,
+            // Defaulted to the mirrors, which is right for every caller that
+            // is *not* a feed transition: a registration refusal, a services
+            // outage, a repair. Those carry no levels of their own and mean
+            // "restate whatever is current". A `deliver` passes its own
+            // snapshot instead, taken under `feedLock` with the transition
+            // that produced it.
+            graceActive: Boolean = graceActiveMirror.get(),
+            locationAccessLost: Boolean = locationAccessLostMirror.get(),
+        ) {
             // Every path that sets or clears a platform level ends here — a
             // refused registration, a services outage, a delivered fix, a
             // successful repair — so this is the one place the recovery
@@ -386,7 +405,8 @@ class GeofencePresenceMonitor(
                     // by Codex on PR #72). Both lower the mode identically,
                     // so only the recorded cause differs.
                     degradation = platformLevel() ?: update.degradation,
-                    graceActive = graceActiveMirror.get(),
+                    graceActive = graceActive,
+                    locationAccessLost = locationAccessLost,
                 ),
             )
         }
@@ -474,16 +494,29 @@ class GeofencePresenceMonitor(
             val duty: LocationDuty
             val graceDeadlineMs: Long?
             val confirmationDeferralUsed: Boolean
+            val locationAccessLost: Boolean
             val sequence: Long
             synchronized(feedLock) {
                 update = feed.accept(signal)
                 duty = feed.duty
                 graceDeadlineMs = feed.graceDeadlineMs
                 confirmationDeferralUsed = feed.confirmationDeferralUsed
+                locationAccessLost = feed.locationAccessLost
                 sequence = deliverySequence.incrementAndGet()
             }
             graceActiveMirror.set(graceDeadlineMs != null)
-            send(update)
+            locationAccessLostMirror.set(locationAccessLost)
+            // Both read back below rather than re-read from the mirrors, so
+            // this update carries the levels its *own* transition produced
+            // (Codex, PR #165, eighth pass). Two `deliver` calls on different
+            // callback threads leave `feedLock` in one order and reach `send`
+            // in either, so reading a shared mirror at publication time could
+            // pair one transition's event with another's levels.
+            send(
+                update,
+                graceActive = graceDeadlineMs != null,
+                locationAccessLost = locationAccessLost,
+            )
             // Always entered, `Departed` included, so the generation check
             // and the latch below are read and written under the same lock
             // (Codex, PR #91, eighth pass) — see `persistenceGeneration` and
@@ -700,7 +733,19 @@ class GeofencePresenceMonitor(
                     // Unavailable events keep the services slot said
                     // independently (Codex, PR #75).
                     registrationDegradation.set(failure.cause)
-                    if (failure.cause.isGrantLoss) {
+                    // `blocksLocationReads`, not `isGrantLoss` (Codex, PR
+                    // #165, fourth pass). A registration refused because
+                    // location services are off withholds the SSID exactly as
+                    // a dead grant does, so the engine needs the same
+                    // suppressor — and without it there was a path where
+                    // nothing delivered one at all: this branch recorded
+                    // `LOCATION_SERVICES_OFF` in the slot and stayed silent,
+                    // and the redacted Wi-Fi read that followed found its own
+                    // cause already latched and returned early, having already
+                    // armed grace through the tracker. The card read
+                    // `Timer only` while the alarm still ended the snooze at
+                    // the anchor.
+                    if (failure.cause.blocksLocationReads) {
                         // Through `deliver`, not `send`, and the slot is set
                         // first so this update already carries the cause.
                         // The engine has to hear about a dead grant because
@@ -830,7 +875,49 @@ class GeofencePresenceMonitor(
                         // so success here proves nothing about services —
                         // that slot waits for a delivered fix (Codex, PR
                         // #75).
-                        if (registrationDegradation.getAndSet(null) != null) {
+                        val latched = registrationDegradation.get()
+                        if (latched == null) return@addOnSuccessListener
+                        // The switch has to answer too (Codex, PR #165,
+                        // fifth pass). This handler has always said a
+                        // registration proves nothing about services, and
+                        // that was harmless while only a grant loss reached
+                        // the engine. It stopped being harmless when this PR
+                        // let `LOCATION_SERVICES_OFF` reach it: a repair
+                        // accepted during an outage would clear the refusal,
+                        // withdraw the suppressor, and tear down the mode
+                        // watch that the non-null slot was arming — the only
+                        // thing left able to lift the latch — leaving a
+                        // fix-only anchor reporting `FULL` over a fence the
+                        // platform still cannot monitor.
+                        when (val outcome = registrationRefutes(latched, locationMode.isEnabled() == true)) {
+                            is RegistrationOutcome.Nothing -> {
+                                SnoozeDebugLog.event(
+                                    "geofence re-registered, but location is not readable as on;" +
+                                        " the refusal stands",
+                                )
+                                return@addOnSuccessListener
+                            }
+                            is RegistrationOutcome.Reclassify -> {
+                                // The grants came back mid-outage. Keep the
+                                // latch and the watch — reads are still
+                                // blocked — and rename the cause so the card
+                                // stops asking for a permission the user has
+                                // already restored.
+                                if (registrationDegradation.compareAndSet(latched, outcome.cause)) {
+                                    SnoozeDebugLog.event(
+                                        "geofence re-registered under a services outage;" +
+                                            " the grant cause is stale and was replaced",
+                                    )
+                                    send(PresenceUpdate(event = null, degradation = null))
+                                }
+                                return@addOnSuccessListener
+                            }
+                            is RegistrationOutcome.Refuted -> Unit
+                        }
+                        // Compare-and-set, not `getAndSet`: the guard above
+                        // decided against a value, so clearing a different
+                        // one would clear a refusal nothing has refuted.
+                        if (registrationDegradation.compareAndSet(latched, null)) {
                             SnoozeDebugLog.event("geofence re-registered; registration level cleared")
                             // The engine's grace suppressor is refuted by
                             // exactly this and nothing else (Codex, PR #150).
@@ -978,12 +1065,69 @@ class GeofencePresenceMonitor(
             }
         }
 
+        /**
+         * A Wi-Fi read came back with the network's name withheld.
+         *
+         * The one report on this path that needs no probe to justify it. A
+         * redacted name *is* the outage — the platform refusing to answer,
+         * at the moment the answer was needed — so this latches and declares
+         * unconditionally, and [redactionCause] only decides what the card
+         * calls it. That is the difference from [latchIfGrantGone], which
+         * asks three permission questions and stays silent when none of them
+         * explains what just happened.
+         *
+         * `deliver`, not `send`, and for the reason `reportRegistration`
+         * gives: a §6.6 grace deadline is engine state no platform slot
+         * touches, and only a delivered [PresenceSignal.LocationAccessLost]
+         * shuts the arming paths, cancels a deadline already armed, and
+         * makes the cancellation durable.
+         *
+         * **Cancelling one already armed is the case that matters**, not a
+         * fallback (Codex, PR #165). The watch reports a redaction *after*
+         * the loss it produced, deliberately, because reporting first runs
+         * everything below — including the recovery this latch arms — ahead
+         * of that loss.
+         *
+         * The compare-and-set is what keeps a steady outage quiet: every
+         * capabilities callback during it reads redacted, and re-delivering
+         * on each would restate a state nothing has changed about.
+         */
+        fun reportRedactedRead() {
+            // Safe to skip the delivery when the cause is unchanged *only*
+            // because every path that records a `blocksLocationReads` cause
+            // now delivers the suppressor with it — `reportRegistration`
+            // above included. The slot standing for "the engine has been
+            // told" is what broke before (Codex, PR #165, fourth pass): they
+            // are different facts, and the two are kept in step by having one
+            // rule for both writers rather than by this read guessing.
+            val latched = registrationDegradation.get()
+            val cause = redactionCause(
+                hasFineLocation = hasFineLocation(),
+                grantsHeld = hasGeofencingGrants(),
+                servicesOn = locationMode.isEnabled() == true,
+            )
+            if (latched == cause) return
+            if (!registrationDegradation.compareAndSet(latched, cause)) return
+            SnoozeDebugLog.warning("the Wi-Fi name came back withheld; location access is gone")
+            deliver(PresenceSignal.LocationAccessLost(readElapsedRealtimeMs()))
+        }
+
         fun buildWifiWatch(ssid: String): AutoCloseable =
-            PlatformWifiWatch(appContext, ssid, readElapsedRealtimeMs) { signal ->
+            PlatformWifiWatch(
+                appContext,
+                ssid,
+                readElapsedRealtimeMs,
+                onRedactedRead = ::reportRedactedRead,
+            ) { signal ->
                 // Before the loss, not after: `reportRegistration` delivers
                 // `LocationAccessLost`, which is what shuts both grace-arming
                 // paths, so asking first means the deadline is never armed
                 // rather than armed and then canceled.
+                //
+                // Still asked for a loss the watch did not call redacted: the
+                // network genuinely changed, and a grant may have gone at the
+                // same time — the redaction path only covers the reads the
+                // platform refused to answer.
                 if (signal is PresenceSignal.AnchorWifiLost) latchIfGrantGone()
                 deliver(signal)
             }
@@ -1674,19 +1818,56 @@ class GeofencePresenceMonitor(
          * pokes a repair the moment location comes back, so the latch is not
          * waiting on the fifteen-minute cadence alone.
          *
-         * **Clears only a grant cause, unlike the registration-success path.**
-         * There, a registration the platform accepted is proof the whole
-         * subsystem works, so it clears the slot whatever is in it. A
-         * permission read proves something much narrower — that these two
-         * grants are held — and says nothing about location services, so a
-         * latched [DegradationCause.LOCATION_SERVICES_OFF] has to survive it
-         * or an outage would read as repaired every fifteen minutes.
+         * **Clears any cause that withheld location data, and only because
+         * it reads the switch as well as the grants.** The registration-success
+         * path clears the slot whatever is in it, since a registration the
+         * platform accepted is proof the whole subsystem works. This proves
+         * less, but not as little as it once did: it reads [servicesOn]
+         * alongside the two grants, so a restoration declared here is backed
+         * by the same three facts an SSID read needs. That is what makes
+         * [DegradationCause.blocksLocationReads] the right predicate rather
+         * than `isGrantLoss` (Codex, PR #165) — under the narrower one a
+         * latched [DegradationCause.LOCATION_SERVICES_OFF] could never be
+         * lifted at all on a fenceless anchor, which has no registration
+         * success to lift it by. What still must not happen is a
+         * restoration on a *guess*, and it cannot: [servicesOn] false
+         * includes unreadable, so an unreadable switch stays latched.
          *
          * Answers [Nothing] for a loss already latched under the same cause,
          * so a steady reported state is not re-delivered four times an hour;
          * the cause is compared rather than mere presence, so a grant that
          * moves from one shape of loss to the other still updates.
          */
+        /**
+         * What to call a **redacted Wi-Fi read** on the card.
+         *
+         * The read itself is the detection, and it is cause-agnostic: the
+         * platform withheld the network's name, which every route to that
+         * outcome has in common and which no permission probe has to be
+         * consulted to establish. This only picks the *label*, and being
+         * total is the whole point — a redaction it could not explain used
+         * to fall through the [grantRecheck] probe and latch nothing, which
+         * is how location switched off system-wide still ended a Wi-Fi-only
+         * snooze five minutes later (`TODO.md`, deferred from PR #157).
+         *
+         * Ordered by what the user would have to do about it, most specific
+         * first, and the final branch is deliberately not a fourth question:
+         * every gate reads healthy and the name came back redacted anyway,
+         * so the honest label is the one that says location cannot be read
+         * in the background — which is what just happened, whatever the
+         * platform's reason for it.
+         */
+        internal fun redactionCause(
+            hasFineLocation: Boolean,
+            grantsHeld: Boolean,
+            servicesOn: Boolean,
+        ): DegradationCause = when {
+            !hasFineLocation -> DegradationCause.LOCATION_PERMISSION_GONE
+            !grantsHeld -> DegradationCause.NO_LOCATION_IN_BACKGROUND
+            !servicesOn -> DegradationCause.LOCATION_SERVICES_OFF
+            else -> DegradationCause.NO_LOCATION_IN_BACKGROUND
+        }
+
         internal fun grantRecheck(
             latched: DegradationCause?,
             grantsHeld: Boolean,
@@ -1694,7 +1875,22 @@ class GeofencePresenceMonitor(
             servicesOn: Boolean,
         ): GrantRecheck = when {
             grantsHeld ->
-                if (latched?.isGrantLoss == true && servicesOn) {
+                // `blocksLocationReads`, not `isGrantLoss` (Codex, PR #165).
+                // A redacted read now latches `LOCATION_SERVICES_OFF` too,
+                // and under the narrower predicate nothing could ever lift
+                // it: a fenceless anchor has no registration success to
+                // declare a restoration for it, so the engine's
+                // `locationAccessLost` stayed set for the life of the
+                // snooze, no §6.6 grace could arm, and a real departure ran
+                // silently to the cap — principle 1's failure, introduced by
+                // latching a non-grant cause into a grant-shaped restore.
+                //
+                // Safe to widen precisely because `servicesOn` is already a
+                // condition of this branch: a restoration here needs the two
+                // grants *and* the switch, which is exactly what an SSID
+                // read needs, so a services outage is only ever declared
+                // over once it is actually over.
+                if (latched?.blocksLocationReads == true && servicesOn) {
                     GrantRecheck.Restore
                 } else {
                     GrantRecheck.Nothing
@@ -1707,6 +1903,60 @@ class GeofencePresenceMonitor(
                 }
                 if (latched == cause) GrantRecheck.Nothing else GrantRecheck.Latch(cause)
             }
+        }
+
+        /**
+         * Whether a registration the platform has just accepted refutes what
+         * is sitting in the registration slot.
+         *
+         * A value for the same reason [grantRecheck] is one: the answer turns
+         * on which *kind* of outage was latched, and the two kinds have
+         * different proofs.
+         *
+         * **Acceptance proves the grants, and only the grants.** Geofencing
+         * needs `ACCESS_BACKGROUND_LOCATION` outright on API 29+, so a fence
+         * the platform took is proof both grants are held — which is why this
+         * path clears a grant loss at all. It says nothing about the system
+         * location switch, as this file has noted since PR #75: `addGeofences`
+         * will accept a fence the platform still cannot monitor.
+         *
+         * That gap was harmless while a grant loss was the only cause that
+         * reached the engine. PR #165 let `LOCATION_SERVICES_OFF` reach it
+         * too, and then a periodic repair accepted *during* an outage would
+         * clear the refusal, withdraw `locationAccessLost`, and — because the
+         * non-null slot is exactly what arms [LocationModeWatch] — tear down
+         * the recovery watch that was the only thing left able to lift the
+         * latch. A fix-only fenced anchor has no Wi-Fi callback to re-latch
+         * it, so the card returned to `FULL` over a fence nothing could
+         * monitor and a snooze that would run to its cap (Codex, PR #165).
+         *
+         * So a cause that withholds location reads needs the switch to answer
+         * as well. Holding the refusal is the safe direction here: the slot
+         * stays non-null, the mode watch stays armed, and its recovery runs
+         * [grantRecheck], which restores on the two grants *and* the switch —
+         * the same three facts a location read needs.
+         *
+         * **Not a gate on which cause is in the slot.** PR #150's regression
+         * was skipping the restoration because a non-grant cause happened to
+         * be latched; this asks for more proof, never for a different cause,
+         * and a grant restored during an outage is still restored — by the
+         * mode watch, the moment the outage ends.
+         */
+        internal fun registrationRefutes(
+            latched: DegradationCause?,
+            servicesOn: Boolean,
+        ): RegistrationOutcome = when {
+            latched == null -> RegistrationOutcome.Nothing
+            !latched.blocksLocationReads || servicesOn -> RegistrationOutcome.Refuted
+            // The grants are proven back and the switch is still off, so the
+            // outage is real but the *label* is stale (Codex, PR #165, seventh
+            // pass). Leaving it reads `Fix the location permission` at a user
+            // who has just fixed it, for the rest of the outage — the card
+            // asking for the one thing that is no longer wrong. The latch and
+            // the watch both stay; only the name changes, to the blocker that
+            // is actually left.
+            latched.isGrantLoss -> RegistrationOutcome.Reclassify(DegradationCause.LOCATION_SERVICES_OFF)
+            else -> RegistrationOutcome.Nothing
         }
 
         /**
@@ -1881,6 +2131,26 @@ class GeofencePresenceMonitor(
  * collapsing them is how a latch either outlives its refutation or is dropped
  * while it still holds.
  */
+/**
+ * What a registration the platform has just accepted does to the registration
+ * slot. A value for the same reason [GrantRecheck] is one: three outcomes, and
+ * the wrong one is invisible on the card.
+ */
+internal sealed interface RegistrationOutcome {
+    /** The refusal is refuted — clear the slot and declare restored. */
+    data object Refuted : RegistrationOutcome
+
+    /**
+     * The outage stands but under a different name: the grants are proven held
+     * and the switch is still off. The latch and the recovery watch both stay;
+     * the card stops naming a permission that is no longer missing.
+     */
+    data class Reclassify(val cause: DegradationCause) : RegistrationOutcome
+
+    /** Nothing latched, or nothing this proof can say anything about. */
+    data object Nothing : RegistrationOutcome
+}
+
 internal sealed interface GrantRecheck {
     /** The slot already says what the grant says. */
     data object Nothing : GrantRecheck

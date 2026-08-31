@@ -109,6 +109,251 @@ class GeofencePresenceMonitorTest {
     }
 
     @Test
+    fun `a withheld Wi-Fi name always names a cause`() {
+        // The property that matters more than any single label: this is
+        // total. The detection is the redacted read itself, so every route
+        // to one has to come back with something the card can say — a
+        // redaction that fell through used to latch nothing at all, and the
+        // Wi-Fi loss behind it then armed a five-minute grace deadline
+        // against a phone that had not moved.
+        val causes = listOf(true, false).flatMap { fine ->
+            listOf(true, false).flatMap { grants ->
+                listOf(true, false).map { services ->
+                    GeofencePresenceMonitor.redactionCause(
+                        hasFineLocation = fine,
+                        grantsHeld = grants,
+                        servicesOn = services,
+                    )
+                }
+            }
+        }
+        assertEquals(8, causes.size)
+    }
+
+    @Test
+    fun `an unexplained redaction labels a cause the probes can refute`() {
+        // The shape behind PR #165's third finding, pinned as a value so the
+        // hazard is visible without reproducing the whole callback chain.
+        //
+        // The fallback fires exactly when all three probes read healthy, and
+        // it must still name something (see the totality test above). But the
+        // cause it names is one `grantRecheck` will restore on those same
+        // healthy probes — so latching it arms the recovery watch, whose
+        // "already on" sample refutes the latch immediately. That is only
+        // safe because the watch reports the redaction *after* the tracker's
+        // loss: `PlatformWifiWatch.deliverCurrent` orders it that way, and
+        // `LocationAccessLost` withdraws a deadline rather than declining to
+        // arm one. Reversing either half ends a snooze whose user has not
+        // moved.
+        val unexplained = GeofencePresenceMonitor.redactionCause(
+            hasFineLocation = true,
+            grantsHeld = true,
+            servicesOn = true,
+        )
+
+        assertEquals(
+            "the fallback is restorable by the probes, so ordering carries the safety",
+            GrantRecheck.Restore,
+            GeofencePresenceMonitor.grantRecheck(
+                latched = unexplained,
+                grantsHeld = true,
+                hasFineLocation = true,
+                servicesOn = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `a registration accepted during a services outage does not lift the latch`() {
+        // PR #165's fifth finding. `addGeofences` accepts a fence the platform
+        // still cannot monitor, so a periodic repair succeeding mid-outage
+        // used to clear the refusal and withdraw `locationAccessLost` — and
+        // because the non-null slot is what arms the recovery watch, that
+        // teardown took away the only thing left able to lift the latch. A
+        // fix-only fenced anchor has no Wi-Fi callback to re-latch it, so the
+        // card returned to `FULL` over a fence nothing could monitor.
+        assertEquals(
+            "a services outage is not refuted by a registration the platform accepted",
+            RegistrationOutcome.Nothing,
+            GeofencePresenceMonitor.registrationRefutes(
+                DegradationCause.LOCATION_SERVICES_OFF,
+                servicesOn = false,
+            ),
+        )
+        assertEquals(
+            "and it is refuted once the switch answers as well",
+            RegistrationOutcome.Refuted,
+            GeofencePresenceMonitor.registrationRefutes(
+                DegradationCause.LOCATION_SERVICES_OFF,
+                servicesOn = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `a grant restored mid-outage renames the cause rather than holding it`() {
+        // PR #165's seventh finding, and the cost of the fifth's fix. A
+        // registration the platform accepts proves the grants are back; if the
+        // switch is still off the outage is real, but the *label* is not — the
+        // card would keep asking the user to fix a permission they have just
+        // fixed, for the rest of the outage.
+        //
+        // The latch and the recovery watch stay; only the name moves to the
+        // blocker actually left.
+        DegradationCause.entries.filter { it.isGrantLoss }.forEach { cause ->
+            assertEquals(
+                "$cause is stale once a registration proves the grants back",
+                RegistrationOutcome.Reclassify(
+                    DegradationCause.LOCATION_SERVICES_OFF,
+                ),
+                GeofencePresenceMonitor.registrationRefutes(cause, servicesOn = false),
+            )
+        }
+    }
+
+    @Test
+    fun `a registration refutes every withholding cause only with the switch on`() {
+        // Stated over the enum rather than per cause: acceptance proves the
+        // grants and nothing else, so any cause that withholds location reads
+        // needs the switch to answer too. A cause added later cannot quietly
+        // inherit the grant-shaped proof.
+        //
+        // The converse half matters as much — this must not become a gate on
+        // *which* cause is latched, which is the regression PR #150 fixed. A
+        // cause that does not withhold reads is refuted outright, switch or
+        // no switch.
+        val withholding = DegradationCause.entries.filter { it.blocksLocationReads }
+        assertTrue("or this asserts nothing", withholding.isNotEmpty())
+
+        withholding.forEach { cause ->
+            assertTrue(
+                "$cause must not be refuted while location is unreadable",
+                GeofencePresenceMonitor.registrationRefutes(cause, servicesOn = false) !=
+                    RegistrationOutcome.Refuted,
+            )
+            assertEquals(
+                "$cause must be refuted once the switch reads on",
+                RegistrationOutcome.Refuted,
+                GeofencePresenceMonitor.registrationRefutes(cause, servicesOn = true),
+            )
+        }
+
+        val other = DegradationCause.entries.filter { !it.blocksLocationReads }
+        assertTrue("or the converse asserts nothing", other.isNotEmpty())
+        other.forEach { cause ->
+            assertEquals(
+                "$cause is refuted by the registration alone",
+                RegistrationOutcome.Refuted,
+                GeofencePresenceMonitor.registrationRefutes(cause, servicesOn = false),
+            )
+        }
+    }
+
+    @Test
+    fun `an empty registration slot is refuted by nothing`() {
+        // The caller reads this as "there is something to clear", so a null
+        // slot must answer `Nothing` rather than sending the handler on to
+        // clear a level that was never set.
+        assertEquals(
+            RegistrationOutcome.Nothing,
+            GeofencePresenceMonitor.registrationRefutes(null, servicesOn = true),
+        )
+    }
+
+    @Test
+    fun `every cause that withholds location reads is one the engine is told about`() {
+        // The invariant behind PR #165's fourth finding, as a property rather
+        // than a scenario. Two paths record these causes — a refused geofence
+        // registration and a redacted Wi-Fi read — and the read's path skips
+        // its delivery when the slot already holds the same cause. That skip
+        // is sound only if the *other* writer always delivered too.
+        //
+        // It did not: `reportRegistration` gated on `isGrantLoss`, so a
+        // registration refused for `LOCATION_SERVICES_OFF` recorded the cause
+        // silently, and the redacted read behind it then found its own cause
+        // already latched and returned early — after the tracker had armed
+        // grace. The card said `Timer only` while the alarm ended the snooze
+        // at the anchor.
+        //
+        // Asserted over the whole enum so a cause added later cannot land on
+        // the recording side without the delivering side.
+        val withholding = DegradationCause.entries.filter { it.blocksLocationReads }
+
+        assertEquals(
+            "every withholding cause must be one both writers deliver a suppressor for",
+            withholding.toSet(),
+            DegradationCause.entries.filter { it.isGrantLoss || it == DegradationCause.LOCATION_SERVICES_OFF }
+                .toSet(),
+        )
+        assertTrue(
+            "and the set is not empty, or this asserts nothing",
+            withholding.isNotEmpty(),
+        )
+    }
+
+    @Test
+    fun `a withheld Wi-Fi name with no fine grant is a revoked permission`() {
+        assertEquals(
+            DegradationCause.LOCATION_PERMISSION_GONE,
+            GeofencePresenceMonitor.redactionCause(
+                hasFineLocation = false,
+                grantsHeld = false,
+                servicesOn = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `a withheld Wi-Fi name under a while-in-use grant names the background gap`() {
+        // The case the maintainer called out as first-class rather than an
+        // edge: a fully-granted install where the user simply did not pick
+        // "all the time". Nothing was revoked, so a permission-change story
+        // would be wrong — and this flavor holds no foreground service, so
+        // every read runs from the background and comes back withheld.
+        assertEquals(
+            DegradationCause.NO_LOCATION_IN_BACKGROUND,
+            GeofencePresenceMonitor.redactionCause(
+                hasFineLocation = true,
+                grantsHeld = false,
+                servicesOn = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `a withheld Wi-Fi name with both grants held is the services switch`() {
+        // The deferred bug this closes: with both grants held the permission
+        // probe finds nothing wrong and stays silent, so location switched
+        // off system-wide reached the engine as a plain Wi-Fi loss and ended
+        // a Wi-Fi-only snooze on grace (`TODO.md`, from PR #157).
+        assertEquals(
+            DegradationCause.LOCATION_SERVICES_OFF,
+            GeofencePresenceMonitor.redactionCause(
+                hasFineLocation = true,
+                grantsHeld = true,
+                servicesOn = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `a withheld Wi-Fi name every gate calls healthy still degrades`() {
+        // The branch that keeps this total. Nothing known produces it today,
+        // and that is exactly why it is here: the next platform gate Android
+        // adds arrives as a redaction with three healthy answers behind it,
+        // and the failure to avoid is latching nothing and letting the loss
+        // through as a departure.
+        assertEquals(
+            DegradationCause.NO_LOCATION_IN_BACKGROUND,
+            GeofencePresenceMonitor.redactionCause(
+                hasFineLocation = true,
+                grantsHeld = true,
+                servicesOn = true,
+            ),
+        )
+    }
+
+    @Test
     fun `a restored grant lifts a grant latch`() {
         assertEquals(
             GrantRecheck.Restore,
@@ -122,20 +367,40 @@ class GeofencePresenceMonitorTest {
     }
 
     @Test
-    fun `a restored grant does not lift a services outage`() {
-        // The asymmetry against the registration-success path, and the reason
-        // this decision exists separately: a registration the platform
-        // accepted proves the whole subsystem works, but a permission read
-        // proves only that two grants are held. Clearing an outage on it would
-        // read as repaired every fifteen minutes for as long as the outage
-        // lasted.
+    fun `a services outage is lifted once the switch is back on`() {
+        // Reversed from what this test used to assert (Codex, PR #165). It
+        // read `Nothing`, on the reasoning that a permission read proves only
+        // that two grants are held — but this decision reads the switch too,
+        // so a restoration here rests on all three facts an SSID read needs.
+        // Under the old behavior a `LOCATION_SERVICES_OFF` latch could never
+        // be lifted on a fenceless anchor, which has no registration success
+        // to lift it by: the engine's `locationAccessLost` stayed set for the
+        // life of the snooze, no grace could arm, and a real departure ran
+        // silently to the cap.
+        assertEquals(
+            GrantRecheck.Restore,
+            GeofencePresenceMonitor.grantRecheck(
+                latched = DegradationCause.LOCATION_SERVICES_OFF,
+                grantsHeld = true,
+                hasFineLocation = true,
+                servicesOn = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `a services outage stays latched while the switch is still off`() {
+        // The half that has to keep holding, and the reason widening the
+        // predicate is safe: `servicesOn` is already a condition of the
+        // restore branch, and it reads false for *unreadable* as well as
+        // off — so an outage is only ever declared over once it is over.
         assertEquals(
             GrantRecheck.Nothing,
             GeofencePresenceMonitor.grantRecheck(
                 latched = DegradationCause.LOCATION_SERVICES_OFF,
                 grantsHeld = true,
                 hasFineLocation = true,
-                servicesOn = true,
+                servicesOn = false,
             ),
         )
     }
@@ -538,10 +803,15 @@ class GeofencePresenceMonitorTest {
     fun `a missing grant outranks a latched services outage`() {
         // Codex, PR #149. The services slot clears only on a delivered fix,
         // and no fix can arrive once the grant is gone — so without this the
-        // cause would outlive its own refutation, name the wrong remedy for
-        // the rest of the snooze, and (because `LOCATION_SERVICES_OFF` is not
-        // a duration-only cause) leave an SSID anchor claiming `WIFI_ONLY`
-        // with no grant to read that SSID with.
+        // cause would outlive its own refutation and name the wrong remedy
+        // for the rest of the snooze.
+        //
+        // The mode half of that reasoning is gone (Codex, PR #165):
+        // `LOCATION_SERVICES_OFF` is a duration-only cause now, so an SSID
+        // anchor no longer claims `WIFI_ONLY` under either of these. What
+        // survives is the remedy — "turn location back on" and "grant the
+        // permission" are different things to tell the user, and only one of
+        // them is true here.
         for (grant in listOf(
             DegradationCause.LOCATION_PERMISSION_GONE,
             DegradationCause.NO_LOCATION_IN_BACKGROUND,

@@ -178,6 +178,16 @@ internal class PresenceFeed(
         get() = state.confirmationDeferralUsed
 
     /**
+     * Whether the engine is suppressing §6.6 grace because location data is
+     * being withheld. The monitor mirrors this onto every [PresenceUpdate] so
+     * the controller can classify the tracking mode from what is actually
+     * shut rather than from the cause recorded beside it — the two come apart
+     * in both directions (Codex, PR #165).
+     */
+    val locationAccessLost: Boolean
+        get() = state.locationAccessLost
+
+    /**
      * Feeds one signal through and returns what to report: the event (usually
      * null) and the degradation level restated, exactly the two halves
      * [PresenceUpdate] documents.
