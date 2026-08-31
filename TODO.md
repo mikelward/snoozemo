@@ -2999,46 +2999,30 @@ question.
 
 ## Deferred
 
-- **The shared logger's opt-out does not do what `SPEC.md` §4.6 promises**
-  (Codex, PR #153; needs a maintainer decision, and a library change).
-  §4.6 says *"Turning the setting off deletes what was kept, immediately: the
-  current run and every earlier one still held, pinned crashes included."*
-  `mikelward/androidlog`'s `purgeOnWorker` deletes **only** `current` and
-  `temp`; prior runs deliberately survive an opt-out, a decision recorded in
-  that repository (Codex, its PR #4). Moving this app onto the library is what
-  put the two in conflict, so the conflict arrives with this PR.
-  **Every opt-out is affected, not just the interrupted one.** An ordinary
-  On→Off toggle, with the sink installed and the purge completing normally,
-  also leaves every `androidlog-prev-*.log` — pinned crashes included — while
-  the setting and `optOutPurgeFailed` both report success. So the common path
-  is the one that breaks the promise, and a later re-enable and share can carry
-  logs the user was told were deleted immediately. The startup case is a second
-  route to the same place, not the whole of it.
-  **A second defect compounds it.** `DebugFileSink.start()` rotates
-  unconditionally — it takes no notion that recording is off — so a start that
-  finds the log already disabled moves `androidlog.log` to
-  `androidlog-prev-N.log` *before* any purge. The content the user opted out of
-  is then a prior run, which the opt-out purge does not touch and which a later
-  share would carry. Verified by running it: with the setting off and two files
-  present, both survived a fresh `install`, one of them newly rotated.
-  **An app-side fix was tried and is wrong.** Replaying the missed transition
-  (`fileSink.onCleared()` after attaching, for the process-death case Codex
-  raised) purges only `current` — already rotated away by then — so it
-  publishes `optOutPurgeFailed = false` over two surviving files: a silent leak
-  plus a false success, worse than the gap it closes. Reverted rather than
-  landed.
-  **The decision is which side moves**, and it is not autopilot's:
-  1. **The library's opt-out deletes prior runs too**, matching §4.6. Costs
-     every consumer the same change of behavior, and destroys unshared crash
-     evidence at opt-out — which §4.6 already says is the right way round, but
-     the library's own review decided the opposite.
-  2. **`SPEC.md` §4.6 changes** to say prior runs survive an opt-out and age
-     out normally. Cheapest, but it weakens a privacy promise already written
-     down, and the "those files would no longer rotate" argument in §4.6 would
-     need re-checking against the library's rotation.
-  Either way `start()` must stop rotating into the shareable set when recording
-  is off — that part is a bug on any reading.
-
+- [x] **The shared logger's opt-out now does what `SPEC.md` §4.6 promises**
+  (raised by Codex, PR #153; **answered by the maintainer 2026-08-31**, and
+  fixed in `mikelward/androidlog`). §4.6 says *"Turning the setting off deletes
+  what was kept, immediately: the current run and every earlier one still held,
+  pinned crashes included."* The library's `purgeOnWorker` deleted **only**
+  `current` and `temp` — prior runs survived an opt-out by a decision recorded
+  in that repository (Codex, its PR #4) — so every On→Off toggle left each
+  `androidlog-prev-*.log`, pinned crashes included, while the setting and
+  `optOutPurgeFailed` both reported success.
+  **Resolved the app's way, not the library's**: the opt-out now deletes prior
+  runs too. The cost is real and was taken deliberately — an opt-out destroys a
+  crash the user has not sent yet — on the grounds that §4.6 had already
+  promised it, and that a control reporting success over files it left behind
+  is the worse failure. Snoozemo is the only consumer with a switch, so it is
+  the only app whose behavior changes today.
+  **The compounding `start()` defect is fixed with it.** A start that finds
+  recording off now purges instead of rotating, so content the user opted out
+  of is no longer moved into the shareable prior-run set — and that also closes
+  the "killed before the purge drained" window the library had left open, since
+  the persisted setting is itself the durable record that gap needed.
+  **The app-side replay stays reverted.** `fileSink.onCleared()` after
+  attaching purges only `current`, already rotated away by then, so it
+  published `optOutPurgeFailed = false` over surviving files. The library fix
+  makes it unnecessary.
 
 - **An oversized crash log can never be consumed by sharing** (Codex, PR #153;
   route 3 landed, the real fix still open). `DebugReport.omitted` refuses to consume the
