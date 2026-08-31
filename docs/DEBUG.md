@@ -63,11 +63,14 @@ ClothesCast, but differs in two ways forced by its own architecture and SPEC:
 
 ## What Snoozemo's version needs
 
-### 1. Reading `DebugFileSink`'s files
+### 1. Reading the persisted files
 
-New methods on `DebugFileSink`, all enqueued on its existing FIFO worker (never blocking the
-caller) and answering through a callback, the same shape `DebugLogging.setEnabled` already
-uses:
+Methods on **`DebugLogging`**, the app's wrapper — not on the sink. When this was planned the
+sink was this app's own; it is `mikelward/androidlog`'s now, and the split fell out as: the
+library owns the files (`readPreviousRun`, `clearPreviousRun`, `acknowledgeCrashBanner`,
+`requestCrashRecompute`, `addCrashListener`), and `DebugLogging` owns the app-shaped question
+each of these asks of it. All are enqueued on `DebugLogging`'s own FIFO worker (never blocking
+the caller) and answer through a callback, the same shape `DebugLogging.setEnabled` uses:
 
 - `hasPinnedCrash(onResult: (pinned: Boolean, checkSucceeded: Boolean) -> Unit)` — whether an
   unacknowledged crash run is still on disk, and whether the check could be made at all.
@@ -79,15 +82,16 @@ uses:
   files it was built from, so two overlapping shares cannot have the first destroy a run only
   the second had read.
 - `consumeCrashPin(run: PreviousRun?, onResult: (Boolean) -> Unit)` — what a landed Share
-  performs: clears exactly the files behind `run`, then acknowledges the banner. A null handle
-  consumes nothing, which is the safe direction for a caller that was given nothing.
-- `dismissCrashPin()` — Dismiss without sending. Takes the run off its crash-suffixed name,
-  after which it is an ordinary prior run: still shareable, pruned by age like any other. A
-  refusal leaves the banner **up**, by construction rather than by a second code path.
+  performs: `clearPreviousRun(run)` for exactly the files behind `run`, then
+  `acknowledgeCrashBanner()`. A null handle consumes nothing, which is the safe direction for a
+  caller that was given nothing.
+- `dismissCrashPin()` — Dismiss without sending, over the library's
+  `acknowledgeCrashBanner()`. Takes the run off its crash-suffixed name, after which it is an
+  ordinary prior run: still shareable, pruned by age like any other. A refusal leaves the
+  banner **up**, by construction rather than by a second code path.
 
-`DebugLogging` gets thin pass-throughs (`hasPinnedCrash`, `readPreviousOrCrash`,
-`consumeCrashPin`) that no-op safely (`onResult` with the "nothing to report" answer) when no
-sink is installed yet — mirrors `DebugLogging.setEnabled`'s own "not installed" handling.
+Each no-ops safely (`onResult` with the "nothing to report" answer) when no sink is installed
+yet — mirroring `DebugLogging.setEnabled`'s own "not installed" handling.
 
 ### 2. Building the payload
 
@@ -177,10 +181,13 @@ the one piece of crash evidence that explains a stuck or early-ended snooze).
 
 ### 6. Tests
 
-- `DebugFileSinkTest` — the three new read/consume methods: rename semantics, the copy+delete
-  fallback (crucially reading `crash.delete()`'s own return, not `runCatching{}.isSuccess`,
-  which reads true on a refused delete that threw nothing — Codex, PR #89), idempotency of
-  `consumeCrashPin` when the file is already gone.
+- The file-level read/consume behavior — rename semantics, the copy+delete fallback
+  (crucially reading `crash.delete()`'s own return, not `runCatching{}.isSuccess`, which reads
+  true on a refused delete that threw nothing — Codex, PR #89), idempotency when the file is
+  already gone. **Owned by `mikelward/androidlog`'s own `DebugFileSinkTest` now**, not this
+  repository's — the sink moved there, and so did its tests. What stays here is
+  `DebugLoggingTest`, covering the wrapper: the "not installed" answers, the settings gate, the
+  legacy-directory migration, and the screen-facing outcome mirrors.
 - A payload-builder test (mirrors Simmo's `buildDebugReportPayload` / ClothesCast's
   `buildBugReportPayload`) — pure function, unit-tested for section assembly and truncation.
 - A share-flow test (mirrors `DebugReportShareTest` / `BugReportShareTest`) — the four
