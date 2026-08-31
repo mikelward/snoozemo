@@ -194,6 +194,27 @@
     <string name="tile_banner_body">One tap, without unlocking. It\'s how Snoozemo is meant to be used.</string>
     <string name="tile_banner_add">Add tile</string>
     <string name="tile_banner_dismiss">Don\'t ask again</string>
+
+    <!--
+      The background-location banner (SPEC.md §8.1). Shown whenever the
+      permission is missing, dismissible for good like the tile banner, and
+      backed by the permanent location row on PermissionsScreen.
+
+      Copy approved by the maintainer, 2026-08-31, after a first draft that
+      led with the consequence ("Snoozes will run to the timer") and spent
+      two sentences on the mechanism. An offer beats a warning here: the
+      user has not lost anything, there is a capability they can switch on,
+      and one line of benefit says it. The answers are worded as answers to
+      the question, not as generic actions.
+    -->
+    <!-- TODO: translate -->
+    <string name="background_location_banner_title" tools:ignore="MissingTranslation">Enable location support?</string>
+    <!-- TODO: translate -->
+    <string name="background_location_banner_body" tools:ignore="MissingTranslation">You can end snoozes when you leave a location.</string>
+    <!-- TODO: translate -->
+    <string name="background_location_banner_allow" tools:ignore="MissingTranslation">Yes please</string>
+    <!-- TODO: translate -->
+    <string name="background_location_banner_dismiss" tools:ignore="MissingTranslation">No thanks</string>
     <string name="setup_action_add">Add</string>
     <string name="failure_could_not_add_tile">Couldn\'t add the tile</string>
     <string name="failure_could_not_open_settings">Couldn\'t open Settings</string>

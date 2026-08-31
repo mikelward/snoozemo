@@ -387,6 +387,26 @@ class MainActivity : ComponentActivity() {
      * two states to tell apart.
      */
     private var tileBannerDismissed by mutableStateOf(true)
+
+    /**
+     * Whether `ACCESS_BACKGROUND_LOCATION` is missing on a flavor whose
+     * tracking needs it — what `MainScreen`'s banner reads.
+     *
+     * Kept beside [location] rather than derived from it, because
+     * [LocationPermission] deliberately collapses the two grants into one
+     * verdict: `ASKABLE` says *something* is missing, not which. The banner
+     * has to name the background half specifically, since the foreground
+     * half missing is a different message with a different consequence.
+     *
+     * Defaults to **false**, the same direction [tileBannerDismissed]
+     * defaults to dismissed: unread is not "missing", and a banner that
+     * flashed on every cold start before the first read would be worse than
+     * one that appears a frame late.
+     */
+    private var backgroundLocationMissing by mutableStateOf(false)
+
+    /** Dismissed until read, for the reason [tileBannerDismissed] is. */
+    private var backgroundLocationBannerDismissed by mutableStateOf(true)
     private var lastOutcome by mutableStateOf<String?>(null)
 
     /**
@@ -863,6 +883,8 @@ class MainActivity : ComponentActivity() {
                             degradation = activeSnooze?.degradation,
                             playUpdate = displayedPlayUpdate,
                             playUpdateRestartFailed = playUpdateRestartFailed,
+                            backgroundLocationMissing = backgroundLocationMissing,
+                            backgroundLocationBannerDismissed = backgroundLocationBannerDismissed,
                             lastOutcome = lastOutcome,
                             crashPending = crashPending,
                             shareFailed = shareFailed,
@@ -873,6 +895,24 @@ class MainActivity : ComponentActivity() {
                             onOpenSettings = { screen = Screen.SETTINGS },
                             onAddTile = ::addTile,
                             onDismissTileBanner = { tileStore.dismissBanner() },
+                            // The location row's own routing, reused whole:
+                            // an askable state launches the foreground
+                            // request (already-granted returns immediately
+                            // and its callback raises the disclosure), and a
+                            // blocked one opens app settings, which is the
+                            // only live route left. A banner-specific path
+                            // would have to re-derive all of that, and would
+                            // be the one that forgets the disclosure Play
+                            // requires before the background prompt.
+                            onAllowBackgroundLocation = ::fixLocation,
+                            onDismissBackgroundLocationBanner = {
+                                // Written and reflected in the same breath:
+                                // unlike the tile store there is no listener
+                                // on this file, because nothing outside this
+                                // activity ever writes it.
+                                locationPromptStore.dismissBackgroundBanner()
+                                backgroundLocationBannerDismissed = true
+                            },
                             onArm = ::armFromScreen,
                             onRelease = ::endFromScreen,
                             onShareDebugLog = ::shareDebugLog,
@@ -1294,6 +1334,12 @@ class MainActivity : ComponentActivity() {
                 // front of the first frame.
                 tileAdded = tileStore.isAdded()
                 tileBannerDismissed = tileStore.isBannerDismissed()
+                // Beside the tile banner's, and off the first-frame path for
+                // the same reason: another small preferences read, and this
+                // activity is the only writer, so once is enough — no
+                // listener the way the tile store needs one.
+                backgroundLocationBannerDismissed =
+                    locationPromptStore.isBackgroundBannerDismissed()
                 // `zenRuleId` is deliberately not read here. Unlike the two
                 // stores above, `zen.ruleId()` is the *unverified* persisted
                 // value — see `zenRuleId`'s own comment — so it is left for
@@ -1506,6 +1552,13 @@ class MainActivity : ComponentActivity() {
             backgroundRequired = locationTrackingNeedsBackgroundPermission,
         )
         location = current
+        // The banner's own reading, taken here so it moves with every other
+        // permission read rather than needing its own refresh site. Gated on
+        // the flavor for the same reason the history above is: `direct`
+        // declares no such permission, so `checkSelfPermission` reads denied
+        // forever and the banner would be permanent and unfixable.
+        backgroundLocationMissing =
+            locationTrackingNeedsBackgroundPermission && !backgroundGranted
         if (current == LocationPermission.GRANTED) clearFailure(SetupRowId.LOCATION)
         return current
     }

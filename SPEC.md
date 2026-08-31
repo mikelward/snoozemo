@@ -2474,8 +2474,9 @@ outage is still restored, by that watch, the moment the outage ends.
 (§3), every read Snoozemo makes runs from the background, so an install that granted location
 but not *all the time* has no working presence signal at all — its snoozes always run to the
 timer. That is a state the user chose and can undo, so the app says so where they will see
-it: a dismissible banner on the home screen naming the consequence rather than the
-permission, backed by the permanent location row that outlives it.
+it: a dismissible banner on the home screen naming the consequence rather than the permission
+— the permanent location row already names the permission — and worded as an offer rather
+than a warning, since nothing is broken and there is a capability to switch on.
 
 **What still ends the snooze is the failure we cannot name.** A geofence refused for a reason this
 build cannot classify, or a monitor that will not restart, stays fatal: there is no reason to put

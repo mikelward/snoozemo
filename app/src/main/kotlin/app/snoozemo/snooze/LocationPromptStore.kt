@@ -46,6 +46,31 @@ class LocationPromptStore(context: Context) {
     fun backgroundEverDenied(): Boolean = prefs.getBoolean(KEY_EVER_DENIED_BACKGROUND, false)
 
     /**
+     * Whether the user has dismissed the banner asking for background
+     * location.
+     *
+     * The same shape as the tile banner's own dismissal, and for the same
+     * reason: someone who has said "not now" once has been told, and the
+     * permanent location row on `PermissionsScreen` outlives the banner, so
+     * the route stays open without asking again.
+     *
+     * **Remembered forever, and deliberately not cleared by a later grant.**
+     * The denial history above resets on a grant because the *platform's*
+     * prompt availability resets with it; this records what the user asked
+     * of Snoozemo, which nothing about a permission moving undoes. A grant
+     * hides the banner anyway — there is nothing left to ask for — so
+     * clearing the flag would only bring it back if the grant were revoked
+     * again, which is the one case the user has already answered.
+     */
+    fun isBackgroundBannerDismissed(): Boolean =
+        prefs.getBoolean(KEY_BACKGROUND_BANNER_DISMISSED, false)
+
+    /** The user has dismissed the background-location banner. Not undone. */
+    fun dismissBackgroundBanner() {
+        prefs.edit().putBoolean(KEY_BACKGROUND_BANNER_DISMISSED, true).apply()
+    }
+
+    /**
      * A grant **clears** [key] rather than leaving it set — granting resets the
      * denial history the system counts, so a permission later revoked from
      * Settings starts again with its prompts available.
@@ -65,5 +90,6 @@ class LocationPromptStore(context: Context) {
         const val FILE_NAME = "location_prompt"
         const val KEY_EVER_DENIED_FOREGROUND = "ever_denied_foreground"
         const val KEY_EVER_DENIED_BACKGROUND = "ever_denied_background"
+        const val KEY_BACKGROUND_BANNER_DISMISSED = "background_banner_dismissed"
     }
 }
