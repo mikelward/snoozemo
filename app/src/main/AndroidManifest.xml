@@ -62,6 +62,23 @@
     -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!--
+      Reads the next meeting's end time, so a snooze taken for a meeting can be
+      set to end when the meeting does (SPEC.md §4.3). Read on this phone only:
+      the time goes onto the ongoing notification's third action and nowhere
+      else, no event title or identity is read at all, and nothing about it is
+      transmitted or written to the debug log.
+
+      In the main manifest rather than `play`'s, unlike the background location
+      grant: this is a plain runtime permission with no Play declaration behind
+      it, so both flavors can offer the feature. It also carries no network
+      implication, which is what `direct` exists to avoid.
+
+      Landed ahead of the Play declarations with the maintainer's decision
+      (2026-08-31), overriding `TODO.md`'s note that it should wait for them.
+    -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+
     <application
         android:name=".SnoozemoApplication"
         android:allowBackup="false"
@@ -193,6 +210,15 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.TIME_SET" />
+                <!--
+                  A timezone change moves no deadline — the alarms count in
+                  elapsed realtime — but it does move how the ongoing card's
+                  `Until <time>` action reads (SPEC.md §4.3), so the receiver
+                  reposts. Also an implicit broadcast still delivered to
+                  manifest receivers, and private for the same reason TIME_SET
+                  is.
+                -->
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
             </intent-filter>
         </receiver>
     </application>

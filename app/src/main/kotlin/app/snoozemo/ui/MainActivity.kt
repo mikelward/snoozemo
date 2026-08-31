@@ -45,6 +45,7 @@ import app.snoozemo.playUpdateDismissalKey
 import app.snoozemo.progressForInstallStatus
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.EndReason
+import app.snoozemo.core.CalendarPermission
 import app.snoozemo.core.LocationPermission
 import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
@@ -66,6 +67,7 @@ import app.snoozemo.snooze.EndChoiceController
 import app.snoozemo.snooze.EndChoiceOutcome
 import app.snoozemo.snooze.EndSheetStore
 import app.snoozemo.snooze.DebugReport
+import app.snoozemo.snooze.CalendarPromptStore
 import app.snoozemo.snooze.LocationPromptStore
 import app.snoozemo.snooze.NotificationPromptStore
 import app.snoozemo.snooze.RecreationMarker
@@ -196,6 +198,7 @@ class MainActivity : ComponentActivity() {
     )
     private lateinit var promptStore: NotificationPromptStore
     private lateinit var locationPromptStore: LocationPromptStore
+    private lateinit var calendarPromptStore: CalendarPromptStore
     private lateinit var tileStore: TilePresenceStore
     private var recordWatch: AutoCloseable? = null
     private var tileWatch: AutoCloseable? = null
@@ -299,6 +302,14 @@ class MainActivity : ComponentActivity() {
      * [notifications] uses for the same reason.
      */
     private var location by mutableStateOf<LocationPermission?>(null)
+
+    /**
+     * Null until read, for the same reason [location] is — and the least
+     * consequential of the three: missing this costs the ongoing
+     * notification's `Until <time>` action and nothing else (`SPEC.md` §4.3),
+     * so the row states a gap in what is offered, never a broken snooze.
+     */
+    private var calendar by mutableStateOf<CalendarPermission?>(null)
 
     /**
      * Whether the background-location rationale dialog is on screen. Only the
@@ -737,6 +748,23 @@ class MainActivity : ComponentActivity() {
         }
 
     /**
+     * `READ_CALENDAR`, launched from the calendar row (`SPEC.md` §4.3). No
+     * disclosure precedes it: this is an ordinary runtime permission with no
+     * Play declaration behind it, unlike the background half of location.
+     *
+     * The repost a grant needs is [refreshCalendar]'s, not this callback's: it
+     * fires on any transition into `GRANTED`, which covers this dialog and the
+     * trip to Settings the `BLOCKED` row takes alike. Asking for one here as
+     * well started the service twice and queued two provider reads before
+     * either answered (Codex, PR #156). Re-read whatever the answer, since a
+     * denial moves the row too.
+     */
+    private val calendarPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            refreshCalendar()
+        }
+
+    /**
      * Play's in-app update confirmation sheet. Backing out of it fires no
      * install event, and the next resume's check reports the same update
      * with an `UNKNOWN` status that deliberately preserves `Starting` — so
@@ -809,6 +837,7 @@ class MainActivity : ComponentActivity() {
         store = ActiveSnoozeStore(applicationContext)
         promptStore = NotificationPromptStore(applicationContext)
         locationPromptStore = LocationPromptStore(applicationContext)
+        calendarPromptStore = CalendarPromptStore(applicationContext)
         tileStore = TilePresenceStore(applicationContext)
         playUpdateChecker = PlayUpdateChecker(application)
         // Set once, for the activity's whole lifetime: unlike `recordWatch`/
@@ -865,6 +894,7 @@ class MainActivity : ComponentActivity() {
                                 notifications = notifications,
                                 notificationsReachTheUser = notificationsReachTheUser,
                                 location = location,
+                                calendar = calendar,
                                 settingsFailure = settingsFailure,
                                 crashPending = crashPending,
                                 shareFailed = shareFailed,
@@ -873,6 +903,7 @@ class MainActivity : ComponentActivity() {
                                 onAccessRow = ::openPolicyAccessSettings,
                                 onNotificationsRow = ::fixNotifications,
                                 onLocationRow = ::fixLocation,
+                                onCalendarRow = ::fixCalendar,
                                 onDone = { screen = permissionsOrigin },
                                 onShareDebugLog = ::shareDebugLog,
                                 onDismissCrash = ::dismissCrash,
@@ -1257,6 +1288,7 @@ class MainActivity : ComponentActivity() {
                 window.decorView.post {
                 refreshNotifications()
                 refreshLocation()
+                refreshCalendar()
                 // Read here rather than in `onStart` for the same reason as the
                 // rest: it is a preferences file, and no disk read belongs in
                 // front of the first frame.
@@ -1519,6 +1551,89 @@ class MainActivity : ComponentActivity() {
     internal fun beginBackgroundLocationRequest() {
         showBackgroundLocationRationale = false
         backgroundLocationPermission.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+    }
+
+    /**
+     * Re-reads `READ_CALENDAR` onto the screen and returns what it read — the
+     * same shape and the same main-thread reasoning as [refreshLocation].
+     */
+    private fun refreshCalendar(): CalendarPermission {
+        val granted = checkSelfPermission(Manifest.permission.READ_CALENDAR) == PERMISSION_GRANTED
+        val rationale = shouldShowRequestPermissionRationale(Manifest.permission.READ_CALENDAR)
+        // Unconditional, like the other two histories: a reading with nothing
+        // new in it is already a no-op in the store.
+        calendarPromptStore.record(granted = granted, rationale = rationale)
+        val current = CalendarPermission.of(
+            granted = granted,
+            everDenied = calendarPromptStore.everDenied(),
+            rationale = rationale,
+        )
+        val previous = calendar
+        calendar = current
+        if (current == CalendarPermission.GRANTED) clearFailure(SetupRowId.CALENDAR)
+        // A change that arrived while this screen was in the background — the
+        // `BLOCKED` row opens Settings rather than a runtime prompt, and a
+        // revocation has no in-app route at all, so this reading is the only
+        // thing that sees either (Codex, PR #156). Without a repost, a snooze
+        // already running keeps the card it had, and on a duration-only snooze
+        // nothing rebuilds it again before the cap.
+        //
+        // **Both directions**, because the card is wrong either way: a grant
+        // never shows the action for the snooze it was granted during, and a
+        // revocation leaves `Until <time>` standing over a calendar Snoozemo
+        // can no longer read — which the offer cache's own key promises it
+        // will not.
+        //
+        // Keyed on readability rather than the enum, so the transitions that
+        // change nothing about the card — `ASKABLE` to `BLOCKED`, say — do not
+        // repost.
+        //
+        // An **unread** `previous` reposts too, which is not the same as a
+        // transition and is why it is spelled out separately. The tile arms
+        // without this screen ever being created (SPEC.md §4.2), so a card can
+        // already be up, built and cached under whatever the permission was
+        // then — and a grant taken in system App info before the app is first
+        // opened would otherwise never reach it. Once per activity instance,
+        // and only while a snooze is running; the offer cache makes it a plain
+        // rebuild rather than a second calendar read when nothing changed.
+        val couldRead = previous == CalendarPermission.GRANTED
+        val canRead = current == CalendarPermission.GRANTED
+        // **Only while a snooze is actually running**, and that gate covers both
+        // branches. `ACTION_REFRESH` with no record is not a no-op: it replays
+        // whatever the last arm failed on, and failing that falls through to a
+        // policy-access check that posts `Couldn't snooze`. On a fresh setup —
+        // no snooze, Do Not Disturb access not granted yet — allowing the
+        // calendar row would then raise a card about an arm nobody attempted
+        // (Codex, PR #156).
+        //
+        // The record is read straight from the store rather than from
+        // `snoozing`, which a worker fills in with no ordering against this:
+        // on a first read the two race, and the `previous == null` branch is
+        // exactly the one that would lose it, with nothing to recheck when the
+        // load lands. Reading here removes the second source of truth instead
+        // of interlocking with it, and costs a preferences hit on a path that
+        // already takes two beside it, well past the first frame.
+        val readabilityChanged = if (previous == null) true else couldRead != canRead
+        if (readabilityChanged && store.load() != null) SnoozeService.refresh(this)
+        return current
+    }
+
+    /**
+     * What tapping the calendar row does — [fixLocation]'s shape exactly:
+     * `ASKABLE` launches the prompt, and both other states go to the app's own
+     * permission settings, since the platform offers no single-permission deep
+     * link for the calendar either.
+     */
+    private fun fixCalendar() {
+        when (refreshCalendar()) {
+            CalendarPermission.ASKABLE -> calendarPermission.launch(Manifest.permission.READ_CALENDAR)
+            CalendarPermission.GRANTED, CalendarPermission.BLOCKED ->
+                openSettings(
+                    SetupRowId.CALENDAR,
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                        .setData(Uri.fromParts("package", packageName, null)),
+                )
+        }
     }
 
     /**

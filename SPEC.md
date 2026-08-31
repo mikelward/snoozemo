@@ -33,8 +33,9 @@ DND back off.
 ### Non-goals (v1)
 
 - Scheduled DND. The OS already does this well; Snoozemo is the *ad-hoc, place-scoped* case it does
-  badly. The calendar is read once, at arm time, only to seed a suggested end time (§4.4) — the app
-  never triggers itself from your calendar.
+  badly. The calendar is read only to offer an end time on the ongoing notification (§4.3) — the app
+  never triggers itself from your calendar. Nothing watches it: no observer, no sync adapter, no
+  background job, and a time already chosen does not move when the meeting does.
 - Cross-device sync or accounts. Nothing about a snooze, a place, or the user's settings leaves
   the phone. The `play` flavor does declare `INTERNET`, for crash reporting alone (§12); `direct`
   declares none at all.
@@ -59,7 +60,7 @@ DND back off.
 | D6 | **Three independent exits**: departure, max duration, manual | Any one sensor can fail; the phone must always come back |
 | D7 | **Fail open, always** | Every ambiguous state resolves toward ending the snooze, not extending it |
 | D8 | **Build the `play` flavor first, on Pixel** | Pixel and Play are the priority targets. Nothing blocks developing `play` — the declaration gates *distribution*, not local installs — so the earlier testability argument for `direct`-first does not hold |
-| D9 | **Arm first, refine second** — the tile arms on tap, and a sheet then offers a time (default now + 1 h) or "until I leave" | Keeps the zero-friction one-tap path intact while making a time bound one tap away. Calendar seeding deferred to v1.1 (§4.4) |
+| D9 | **Arm first, refine second** — the tile arms on tap, and a sheet then offers a time (default now + 1 h) or "until I leave" | Keeps the zero-friction one-tap path intact while making a time bound one tap away. The calendar landed instead on the ongoing notification (§4.3), leaving the arm path untouched |
 
 ---
 
@@ -520,10 +521,43 @@ Channel `snooze_active`, `IMPORTANCE_DEFAULT`, ongoing, not dismissible while th
 ```
 🌙  Snoozing                          3:40:12
     Ends when you leave
-    [ End now ]   [ +30 min ]
+    [ End now ]   [ +30 min ]   [ Until 17:00 ]
 ```
 
 `+30 min` matches the sheet's step (§4.4), so extending uses the same mental unit as choosing.
+
+**The third action is the next meeting's end, and it is there only when there is one worth
+offering** (maintainer, 2026-08-31). The idea is the case the app is most often used for: a snooze
+taken *for* a meeting should be able to end when the meeting does, without the user working out
+the time and stepping to it. Snoozemo reads `READ_CALENDAR` for event **end times only** —
+bounded by the snooze's own cap, since nothing past it can be offered — and shows the earliest end
+that is both later than the 30-minute floor and earlier than the cap. Anything else is a button
+that can only fail or that would change no deadline at all, and either is worse than two buttons
+that work.
+
+**Absent, never disabled, and never a promise.** No calendar permission, no meeting, nothing
+inside the cap: the card carries its usual two actions and says nothing about a capability the
+user did not ask for. That is also why this is the one permission whose absence costs a single
+action rather than a mode — it is stated on the permissions screen as a gap in what is *offered*,
+not a degraded snooze.
+
+**The time is formatted by the phone, not by Snoozemo**, through the same helper the sheet uses —
+so the button reads `17:00` or `5:00 PM` exactly as the rest of the device does, and the two
+surfaces cannot render the same instant two ways.
+
+**The read happens after the card is posted, never before it.** A `ContentResolver` query into
+another app's provider is precisely the kind of call §6.9 keeps off the arm path, so the
+notification goes up with the two actions it has always had and gains the third a moment later if
+there is one — the same show-now-fill-in-later trade every screen here makes. The answer is cached
+against the snooze's identity *and* its current cap, so a `+30 min` re-asks and a card reposted on
+every state change does not.
+
+**The action carries the snooze it was offered for, and the service declines a claim that no
+longer matches** (§4.4's identity check). A notification is exactly where that matters: the card
+sits in the shade while the phone is in a pocket, and a snooze that ended and was replaced in
+between must not take a time chosen for the previous one. A refusal this action meets — an offered
+time that has since fallen inside the floor — is said in the shade, because unlike a sheet row it
+has nowhere to say it inline.
 
 Tapping the card itself, rather than one of its two actions, opens `MainScreen` (landed
 2026-08-23) — the notification is the one thing a snoozing user is already looking at, so it is
@@ -711,7 +745,7 @@ either path.
 | **I leave here** | §6 presence engine | **v1** on `play`, offered whenever the build tracks departure. `direct` is duration-only until Phase 7 (§3), and drops the row rather than promising it |
 | **A time, adjustable** | none | **v1.** Seeded at now + 1 h; also the §7 cap |
 | **Whichever comes first** | both | **v1.** Not a third row — implied. Setting a time leaves departure tracking armed |
-| **This meeting ends** | `READ_CALENDAR` | **v1.1.** Strong, but deferred — see below |
+| **This meeting ends** | `READ_CALENDAR` | **Landed 2026-08-31**, as a notification action rather than a sheet row — see below |
 | **My next alarm** | `AlarmManager.getNextAlarmClock()` | **Explore.** No permission at all, and a natural fit for a bedtime snooze. Offer only when the next alarm is 3–12 h out, so it doesn't propose a 4-minute snooze |
 | **Wi-Fi goes** | `NetworkCallback.onLost` | **Fallback only, if §6.10 measurement forces it.** Instant and free, but it inverts D4 — it *is* the failure mode we designed around |
 | **I start moving** | `TYPE_SIGNIFICANT_MOTION` | **Fallback only, same condition (§6.10).** No permission, already wired for §6.7. But "moved" is not "left" — standing up for coffee would end it |
@@ -719,7 +753,7 @@ either path.
 | **Sunset / bedtime window** | none | **Rejected.** The OS's own scheduled Modes do this properly |
 | **Screen unlocked N times** | none | **Rejected.** A proxy for attention, not place or time, and wrong in both directions |
 
-#### Calendar: recommend deferring past v1
+#### Calendar: deferred past v1, then reversed
 
 The obvious next step is seeding that time from the meeting you are actually in — `until 14:00 ·
 Design review` — with a small **Use my calendar** button on the card triggering the `READ_CALENDAR`
@@ -741,9 +775,90 @@ designed promo: the permission has to earn itself, and if nobody taps it, that i
 The v1 sheet is forward-compatible with it: the calendar only changes what the time is *seeded to*
 and adds a subtitle. No new rows, no new exits, no state-machine change.
 
-#### If and when it lands
+**Reversed, and built now** (maintainer, 2026-08-31, asked directly and answered "build it now,
+`READ_CALENDAR` and all"). The two arguments above are answered rather than overturned:
 
-`READ_CALENDAR`, queried against `CalendarContract.Instances` for events overlapping now:
+1. The Play-review argument was about **ordering**, and the order is the maintainer's to set. The
+   declarations are not filed yet (`docs/play-store-declarations.md` still owes all three of its
+   "do these first" items), so this is a decision to present both permissions together, taken with
+   §3.5's risk in view rather than in spite of it. Nothing about the Data Safety answers moves:
+   the calendar is read on the device, one column, and no part of it is transmitted, written, or
+   put in the debug log — so it is not *collection* in the form's sense, and §12's floor is
+   untouched.
+2. The `−`/`+` argument was right about *effort* and wrong about *knowing*: the taps are cheap,
+   but they still require the user to work out what time the meeting ends. A button that already
+   says `Until 17:00` removes the part that was never about tapping.
+
+**Two things changed shape in the building**, and both are improvements on what is written above
+rather than concessions:
+
+- **It is a notification action, not a sheet seed.** The maintainer's own framing was
+  `[End now] [+30 min] [Until 17:00]` — a third button on the card §4.3 already puts in front of a
+  snoozing user, rather than a change to a sheet that only appears at arm time and only for a user
+  who opted into it. It is also the surface where the answer is still useful an hour in: the sheet
+  is gone by then, and the card is not. The `Use my calendar` button described above was never
+  built; the permission is asked for from the permissions screen's own row instead, where every
+  other capability is.
+- **The soonest end after the floor, not the meeting overlapping *now*.** The overlap filter loses
+  the case the feature is most for: a snooze armed at 13:55 for a 14:00 meeting overlaps nothing
+  yet, and would be offered nothing. The floor and the cap already bound it to ends that would
+  actually change something, so no third rule is needed to keep it sensible.
+
+**And one thing did not change**: the read is still stateless, still nothing watched, and still
+ends at one event without chaining into the next.
+
+#### As built
+
+`READ_CALENDAR`, queried against `CalendarContract.Instances` between now and the snooze's own cap
+— the cap bounds it because the service honors a time at or past the cap by doing nothing, so a
+wider window would read more of the user's calendar than the feature could ever use. The bound is
+asked for, not filtered for: a range URI selects instances that merely *overlap* it, so a meeting
+straddling the cap would otherwise have its end read and then discarded, which is weaker than what
+`docs/PRIVACY.md` promises. Rows from a calendar the user has
+switched off are excluded, along with all-day rows, declined invitations, canceled meetings and "free"/FYI blocks; the earliest remaining end that clears the
+30-minute floor is the one offered. **Ends only** — one column, no title, organizer, location or
+event id, because a time is the whole of what the button needs and a title would put a meeting's
+name on a lock screen.
+
+The read runs off the main thread and **after** the card is posted, not before it: a
+`ContentResolver` query into another app's provider is exactly what §6.9 keeps off the arm path.
+The answer is cached against the snooze's identity and its current cap, so a `+30 min` re-asks and
+a card reposted on every state change does not.
+
+**A timezone change reposts the card.** The offer is held as an instant, which no timezone
+touches, but the button's *label* is a local time formatted once and then left on screen for hours
+— so flying with a snooze armed would leave it naming a wall-clock time the phone no longer agrees
+with, over an end that is in fact correct. Rebuilding re-formats it in the zone now in force.
+Nothing else here moves on a timezone change: every alarm counts in elapsed realtime and every
+stored time is absolute.
+
+**The cache is keyed on calendar access as well as the snooze.** "No permission" is cached as
+firmly as a time, so without that key a grant arriving mid-snooze would be answered from the denied
+entry for the rest of it — the third action never appearing for the snooze the user granted access
+*for* — and a revoked permission would leave its offer standing. A repost follows any change in
+whether the calendar can be read — the in-app grant, a grant or revocation taken in Settings, which
+has no result callback of its own, and the app's first look at a snooze the tile armed without it.
+
+**An answer that outlives its snooze is dropped, not posted — and the check is atomic with
+teardown.** The query is long enough for the snooze to end or be replaced while it is out, and the
+answer *reposts*, so a calendar read could otherwise put `Snoozing` back over a phone that had just
+been let ring, with nothing scheduled to take it down. Checking the record's *identity* before posting is
+not enough on its own, twice over: teardown is free to cancel the card before erasing the record,
+and in that order the record still reads as a snooze running; and a snooze whose tracking has since
+degraded keeps its identity, so posting a card built before the degradation would put `Ends when you
+leave` back over what is now only a timer. So the check and the post are serialized against taking
+the card down, and what they check is the record's identity and cap (an
+extension makes the answer stale rather than wrong), everything else the card is drawn from, and a
+counter the takedown bumps — every takedown, the ordinary ending as much as an aborted arm, since
+the ordinary one is the teardown a stale answer is most likely to race. Calendar access is re-read
+there too, so a permission taken back mid-query cannot be overwritten by the answer it authorized. A change to any of it drops the *stale* card but keeps the answer, and
+rebuilds from the record as it now stands — dropping it outright would leave a snooze that degraded
+mid-query sitting on two actions until some unrelated transition, which on a duration-only snooze
+may be the cap. Nothing on the arm path pays
+for this: the lock covers a preferences read and a `NotificationManager` call, with the card built
+outside it.
+
+The shape originally written down, for the record:
 
 ```kotlin
 val now = System.currentTimeMillis()
@@ -756,17 +871,26 @@ CalendarContract.Instances.query(contentResolver, PROJECTION, now, now + 12.hour
 
 **There is no calendar "trigger."** Worth stating plainly, because it removes a lot of imagined
 machinery: nothing watches the calendar. No observer, no sync adapter, no background job, no
-broadcast. The query above is a single synchronous `ContentProvider` read against a local database,
-run once, when the sheet is built. Meeting end is just a number used to seed a time picker.
+broadcast. The query is a single `ContentProvider` read against a local database, and the answer is
+cached for as long as the process lives. Meeting end is just a number on a button.
 
-That makes it stateless too: arm at 13:12, and if the meeting is later moved to end at 15:00,
-Snoozemo neither notices nor cares — it committed to 14:00. That is correct. A snooze that silently
-re-times itself under you is worse than one that is occasionally stale, and `+30 min` (§4.3) covers
-the overrun.
+**The cache is per-process, and a re-read after process death is correct rather than a gap.** The
+offer commits nothing: it is a suggestion the user may tap, and until they do, the snooze ends
+where it always would. So a restored snooze asking again — and possibly offering a different end,
+because the meeting moved — is the button being *right*, not the app re-timing anything behind the
+user's back. What would be wrong is the opposite: a durable record of an old answer, outliving the
+process to offer a time that no longer matches the calendar.
+
+**A time the user has actually chosen is a different thing, and that one does not move.** Tapping
+`Until 17:00` sets the cap and is done with the calendar; if the meeting is later moved to 18:00,
+Snoozemo neither notices nor cares. A snooze that silently re-times itself under you is worse than
+one that is occasionally stale, and `+30 min` (§4.3) covers the overrun.
 
 Remaining constraints: read-only, never written, never leaves the device (nothing transmits it —
-crash reporting is the only thing on the network and it carries no calendar data, §12); and v1.1
-ends at the current event and does **not** chain into the next one — chaining is how you end up silenced all afternoon by a calendar you forgot about.
+crash reporting is the only thing on the network and it carries no calendar data, §12); nothing
+calendar-derived reaches the debug log either (§12's floor); and the offer ends at one event and
+does **not** chain into the next one — chaining is how you end up silenced all afternoon by a
+calendar you forgot about.
 
 ### 4.5 Ending
 
@@ -1727,9 +1851,9 @@ unchanged and remains the only hard bound (D7).
 <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
 <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-<!-- v1.1 only, not v1 (§4.4). Requested in-context from the arm sheet,
-     never during onboarding; the feature hides itself if denied. -->
-<!-- <uses-permission android:name="android.permission.READ_CALENDAR" /> -->
+<!-- Landed 2026-08-31 (§4.3). Requested from the permissions screen's own
+     row, never during onboarding; the feature hides itself if denied. -->
+<uses-permission android:name="android.permission.READ_CALENDAR" />
 
 <service android:name=".presence.SnoozeService"
          android:foregroundServiceType="location"
@@ -1785,8 +1909,9 @@ passes through. It is skipped on the lock screen, where a dialog can't be answer
 is a supported case, and the platform's own two-refusal cap stops it becoming a nag.
 
 It uses a **transparent** theme (`Theme.Material3.DayNight.Dialog` over a translucent window), not
-`Theme.NoDisplay`, because it hosts the §4.4 sheet and issues the `READ_CALENDAR` runtime request —
-neither is possible from a no-display activity. It finishes as soon as the sheet is dismissed or a
+`Theme.NoDisplay`, because it hosts the §4.4 sheet and the notification-permission dialog — neither
+is possible from a no-display activity. It issues no runtime permission request of its own: the
+`READ_CALENDAR` request belongs to the permissions screen (§4.3), deliberately off the arm path. It finishes as soon as the sheet is dismissed or a
 row is committed, and finishes immediately in `onCreate` if the sheet is disabled in settings.
 
 This activity is on the critical path of the app's only interaction, so it carries a hard budget:
@@ -2788,10 +2913,13 @@ merge result.
 | Arm on Samsung with Sleeping Apps on, wait 4 h | Still tracking |
 | Arm while DND already on from a bedtime schedule, then leave | Snoozemo's rule off, bedtime rule untouched |
 | Arm with no meeting in progress | No sheet, armed in one tap |
-| Arm during a meeting, choose "until it ends", then leave early | Ends on departure, not at the meeting end |
-| Arm during a meeting, choose "until it ends", stay put | Ends at the meeting end |
+| Arm during a meeting, tap `Until <time>`, then leave early | Ends on departure, not at the meeting end |
+| Arm during a meeting, tap `Until <time>`, stay put | Ends at the meeting end |
 | Arm during an all-day event or a "free" calendar block | Not offered as a meeting |
-| Deny `READ_CALENDAR` | Option absent everywhere; nothing else changes |
+| Arm minutes before a meeting starts | Its end is offered, since the offer is not gated on overlapping now |
+| Arm with the next meeting ending past the cap | No third action; the cap already ends the snooze sooner |
+| Tap `Until <time>` on a card left in the shade past the offered time | Refused, and said in the shade |
+| Deny `READ_CALENDAR` | Third action absent everywhere; nothing else changes |
 
 The force-stop and Samsung rows are the ones most likely to find something. Run them first.
 
@@ -2806,8 +2934,9 @@ The force-stop and Samsung rows are the ones most likely to find something. Run 
 - **`ZenDeviceEffects`** — grayscale, dim wallpaper, night mode while snoozed (§5.5).
 - **"Until I get home"** and other saved-place reverse geofences (§4.4), which follow from saved
   places plus background location, so `play`-flavor only.
-- **Calendar-seeded end times** (§4.4) — the first thing to add once the Play declarations land.
-- **Chaining back-to-back meetings** (§4.4), if using the app shows people actually want it.
+- **Chaining back-to-back meetings** (§4.3), if using the app shows people actually want it. The
+  offer deliberately ends at one event: a card that walked itself forward through a packed
+  afternoon would keep the phone quiet for a stretch nobody asked for.
 - **Wear OS tile.**
 
 ---

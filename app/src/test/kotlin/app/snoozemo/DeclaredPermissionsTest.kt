@@ -62,6 +62,22 @@ class DeclaredPermissionsTest {
     }
 
     @Test
+    fun `both flavors hold the calendar read, and it is not restricted`() {
+        // In the main manifest rather than `play`'s, unlike background
+        // location: this is a plain runtime permission with no Play
+        // declaration behind it and no network implication, so it does not
+        // cross the line `direct` exists to hold (SPEC.md §3.4, §4.3).
+        assertTrue(Manifest.permission.READ_CALENDAR in declared)
+        // And it stays a *read*. Nothing in this app writes to a calendar, so
+        // a WRITE grant appearing here would be a dependency pulling in a
+        // capability the policy does not describe.
+        assertFalse(
+            "Snoozemo never writes to a calendar (docs/PRIVACY.md)",
+            Manifest.permission.WRITE_CALENDAR in declared,
+        )
+    }
+
+    @Test
     fun `only the play flavor carries the restricted background grant`() {
         val restricted = Manifest.permission.ACCESS_BACKGROUND_LOCATION in declared
         if (isDirectFlavor) {

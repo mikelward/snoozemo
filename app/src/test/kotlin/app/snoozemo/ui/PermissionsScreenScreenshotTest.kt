@@ -16,6 +16,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import app.snoozemo.core.CalendarPermission
 import app.snoozemo.core.LocationPermission
 import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
@@ -351,6 +352,78 @@ class PermissionsScreenScreenshotTest {
 
         composeRule.onAllNodesWithText("Allowed").assertCountEquals(3)
         composeRule.onNodeWithText("Couldn't open Settings").assertDoesNotExist()
+    }
+
+    @Test
+    fun `the calendar row states what is lost, not that anything is broken`() {
+        var tapped = 0
+
+        capture("permissions-screen-calendar-askable.png") {
+            PermissionsScreen(
+                // The three rows above left unread, so the single `Allow` this
+                // test clicks is unambiguously the calendar's.
+                access = null,
+                notifications = null,
+                notificationsReachTheUser = true,
+                location = null,
+                calendar = CalendarPermission.ASKABLE,
+                settingsFailure = null,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onLocationRow = {},
+                onCalendarRow = { tapped++ },
+                onDone = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Calendar").assertExists()
+        composeRule.onNodeWithText("Snoozemo can't offer your next meeting's end time").assertExists()
+        composeRule.onNodeWithText("Allow").performClick()
+        assertEquals(1, tapped)
+    }
+
+    @Test
+    fun `a granted calendar reads Allowed and offers nothing`() {
+        capture {
+            PermissionsScreen(
+                access = null,
+                notifications = null,
+                notificationsReachTheUser = true,
+                location = null,
+                calendar = CalendarPermission.GRANTED,
+                settingsFailure = null,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onLocationRow = {},
+                onCalendarRow = {},
+                onDone = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Allowed").assertExists()
+        composeRule.onNodeWithText("Allow").assertDoesNotExist()
+    }
+
+    @Test
+    fun `an unread calendar draws no row at all`() {
+        // The default, and what every screenshot recorded before this row
+        // existed still renders: unread is not "denied", the same discipline
+        // the three rows above it keep.
+        capture {
+            PermissionsScreen(
+                access = null,
+                notifications = null,
+                notificationsReachTheUser = true,
+                location = null,
+                settingsFailure = null,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onLocationRow = {},
+                onDone = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Calendar").assertDoesNotExist()
     }
 
     @Test

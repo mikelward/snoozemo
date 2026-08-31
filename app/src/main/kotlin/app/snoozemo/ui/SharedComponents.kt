@@ -102,6 +102,7 @@ enum class SetupRowId {
     DND,
     NOTIFICATIONS,
     LOCATION,
+    CALENDAR,
     TILE,
     FILTERS,
 }
