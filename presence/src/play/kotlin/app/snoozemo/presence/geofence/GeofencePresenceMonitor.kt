@@ -344,8 +344,12 @@ class GeofencePresenceMonitor(
         // SPEC.md §8.4's recovery watch. Built here rather than beside the
         // burst and the trigger because `send`, just below, is what
         // reconciles it.
-        val locationModeWatch =
-            LocationModeWatch(PlatformLocationModeWatch(appContext)) { onLocationRecovered() }
+        // Held as its own reference, not just handed to the watch: the grant
+        // recheck below reads the live setting through it. That read needs no
+        // permission — it says whether the *device's* location switch is on,
+        // never where anything is.
+        val locationMode = PlatformLocationModeWatch(appContext)
+        val locationModeWatch = LocationModeWatch(locationMode) { onLocationRecovered() }
 
         // A level like `registrationDegradation`/`servicesDegradation` above,
         // for the same reason: `send` is called from restates that never
@@ -756,7 +760,11 @@ class GeofencePresenceMonitor(
         )
 
         var bridge: AutoCloseable? = null
-        var wifiWatch: AutoCloseable? = null
+        // Atomic for the reason [active] and the bridge slot are: the
+        // restoration below replaces this from whichever thread delivered the
+        // recheck, and the teardown closes it from the flow's own — a plain
+        // `var` there leaks the replacement or closes a watch twice.
+        val wifiWatch = java.util.concurrent.atomic.AtomicReference<AutoCloseable?>(null)
 
         // Registration, callable twice: once from setup, and again as the
         // repair a warm backstop wake asks for through the bridge — a fence
@@ -909,6 +917,181 @@ class GeofencePresenceMonitor(
         // stop() path, and holding one while asking for the other is the
         // deadlock shape. Re-guarded on arrival: a repair queued behind this
         // flow's own stop must find the generation moved and do nothing.
+        /**
+         * Re-asks the location grant directly, and moves the registration slot
+         * to match — the Wi-Fi-only anchor's stand-in for what `addGeofences`
+         * being refused or accepted tells every other snooze.
+         *
+         * Only that anchor shape, because only it lacks the registration whose
+         * outcome would answer this. An anchor with a fix is served by the real
+         * thing, and asking here as well would let a permission read that
+         * happens to pass clear a cause the fence itself is still refusing.
+         *
+         * **Clears only a grant cause, unlike the success path.** There, a
+         * registration the platform accepted is proof the whole subsystem
+         * works, so it clears the slot whatever is in it. A permission read
+         * proves something much narrower: that these two grants are held. It
+         * says nothing about location services, so a latched
+         * `LOCATION_SERVICES_OFF` — which the slot can hold — has to survive
+         * it, or an outage would read as repaired every fifteen minutes.
+         *
+         * Acts on transitions only. Re-delivering `LocationAccessLost` on
+         * every firing would rewrite persisted grace state four times an hour
+         * for a snooze in a steady, already-reported state; the cause is
+         * recomputed rather than merely presence-checked, so a grant
+         * downgraded from one shape of loss to another still moves.
+         */
+        /**
+         * Asks the grant when Wi-Fi reports a *loss*, before that loss is spent.
+         *
+         * The recheck below owns the periodic case and the restore owns the
+         * cold one, but neither covers the commonest: a snooze running while
+         * the user walks into Settings and revokes location. The capabilities
+         * callback fires within moments, redacted, and D7 reads that as a
+         * loss — which arms a five-minute grace deadline and ends the snooze
+         * roughly ten minutes before the next 15-minute recheck could have
+         * suppressed it. The premature departure this whole change exists to
+         * stop, surviving in the one path a live monitor actually takes
+         * (Codex, PR #157).
+         *
+         * Only the latch half of [grantRecheck] is acted on here. A loss is
+         * not the moment to declare a restoration — and declaring one would
+         * rebuild the watch from inside its own callback.
+         *
+         * The decision itself is [latchGrantLoss], which is also where the
+         * compare-and-set guarding it against a concurrent restore lives.
+         *
+         * Costs two `checkSelfPermission` lookups, against the package
+         * manager's cache rather than a binder, and only on a real transition:
+         * the tracker reports losses, not repeats.
+         */
+        fun latchIfGrantGone() {
+            if (!needsWifiRecheck(anchor)) return
+            latchGrantLoss(
+                registrationDegradation,
+                ::hasGeofencingGrants,
+                ::hasFineLocation,
+                servicesOn = { locationMode.isEnabled() == true },
+            ) {
+                SnoozeDebugLog.warning("a location grant is missing when Wi-Fi reported a loss")
+                reportRegistration(GeofenceRegistrationFailure.Recoverable(it))
+            }
+        }
+
+        fun buildWifiWatch(ssid: String): AutoCloseable =
+            PlatformWifiWatch(appContext, ssid, readElapsedRealtimeMs) { signal ->
+                // Before the loss, not after: `reportRegistration` delivers
+                // `LocationAccessLost`, which is what shuts both grace-arming
+                // paths, so asking first means the deadline is never armed
+                // rather than armed and then canceled.
+                if (signal is PresenceSignal.AnchorWifiLost) latchIfGrantGone()
+                deliver(signal)
+            }
+
+        /**
+         * Installs a fresh Wi-Fi watch, and does not leave one behind if the
+         * flow closed while it was being built.
+         *
+         * `buildWifiWatch` registers its `NetworkCallback` as it constructs,
+         * and only the `getAndSet` below publishes it — so a teardown
+         * completing in that gap closes the *old* watch, clears the slot, and
+         * never sees the new one, leaving a callback registered with nothing
+         * holding a reference to unregister it (Codex, PR #157, eighth pass).
+         * The rebuild runs on whichever thread delivered the recheck while
+         * `awaitClose` runs on the flow's own, which is what makes the gap
+         * reachable at all.
+         *
+         * So the lifecycle is re-read *after* publishing, and the candidate is
+         * taken back and closed if the flow has since closed. The
+         * compare-and-set is what keeps that from double-closing: a teardown
+         * racing this line takes the watch out of the slot itself, and only
+         * one of the two can win it.
+         *
+         * Published first and re-checked second, rather than gated before the
+         * build: closing a watch that is genuinely live would stop a running
+         * snooze watching Wi-Fi, which is the worse of the two failures. This
+         * order can only leak in the window it then closes, never blind a
+         * snooze that is still going.
+         */
+        fun publishWifiWatch(ssid: String) {
+            if (!publishWatch(wifiWatch, buildWifiWatch(ssid)) { isClosedForSend }) {
+                SnoozeDebugLog.event("the Wi-Fi watch was built into a closed flow; closed it")
+            }
+        }
+
+        fun reconcileGrants() {
+            if (!needsWifiRecheck(anchor)) return
+            // Captured, not re-read. The decision below is made against this
+            // exact value, so the compare-and-set has to name it: re-reading
+            // the slot inside the branch and comparing it against itself would
+            // clear a *newer* loss that a registration answer had latched in
+            // between, and announce a restoration nothing had refuted (Codex,
+            // PR #157). Losing the race now means doing nothing, which is the
+            // half that keeps a real loss latched.
+            val latched = registrationDegradation.get()
+            when (
+                val next = grantRecheck(
+                    latched,
+                    hasGeofencingGrants(),
+                    hasFineLocation(),
+                    servicesOn = locationMode.isEnabled() == true,
+                )
+            ) {
+                GrantRecheck.Nothing -> Unit
+                GrantRecheck.Restore ->
+                    if (registrationDegradation.compareAndSet(latched, null)) {
+                        SnoozeDebugLog.event(
+                            "the location grant is back; lifting the Wi-Fi-only latch",
+                        )
+                        // Driven from [restoreSteps] rather than written out
+                        // here, so which steps run and in what order is a value
+                        // a test can assert. Deleting the rebuild or moving it
+                        // ahead of the restoration are both real regressions
+                        // that every other test on this path stays green
+                        // through (Codex, PR #157), and the `when` below is
+                        // exhaustive, so a step cannot be dropped silently.
+                        restoreSteps(anchor).forEach { step ->
+                            when (step) {
+                                // The engine's own latch, which is what
+                                // actually re-opens grace — the slot alone only
+                                // decides the mode line.
+                                RestoreStep.DeclareRestored -> deliver(
+                                    PresenceSignal.LocationAccessRestored(readElapsedRealtimeMs()),
+                                )
+                                // Symmetric with the registration-success path:
+                                // nothing here requests fixes, but the
+                                // requester is suspended process-wide and
+                                // `resume` refuses on a closed instance, so
+                                // leaving it suspended is the only outcome with
+                                // a cost.
+                                RestoreStep.ResumeChecking -> resumeChecking()
+                                RestoreStep.RebuildWifiWatch ->
+                                    anchor.ssid?.let { publishWifiWatch(it) }
+                                RestoreStep.RestateLevel -> send(
+                                    PresenceUpdate(
+                                        event = null,
+                                        degradation = synchronized(feedLock) { feed.degradation },
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                // Named in a compare-and-set for the same reason the restore
+                // above is, and against the same captured value: a restore
+                // landing while the two permission lookups ran would otherwise
+                // be overwritten by a loss it had already refuted, shutting
+                // grace with nothing to reopen it for fifteen minutes. See
+                // [latchGrantLoss], which is this decision on the callback
+                // path — the reads are already in hand here, so the
+                // compare-and-set is written out rather than re-asked.
+                is GrantRecheck.Latch ->
+                    if (registrationDegradation.compareAndSet(latched, next.cause)) {
+                        SnoozeDebugLog.warning("a location grant is missing at the Wi-Fi recheck")
+                        reportRegistration(GeofenceRegistrationFailure.Recoverable(next.cause))
+                    }
+            }
+        }
+
         fun repairFence() {
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 synchronized(registrationLock) {
@@ -963,10 +1146,28 @@ class GeofencePresenceMonitor(
         // only to tidy a notification label could end the snooze outright,
         // with no departure evidence prompting it. That is the trade D4 exists
         // to refuse.
+        //
+        // Driven from [recoverySteps] rather than written out here, for the
+        // reason [restoreSteps] is: a step that only *some* anchor shapes
+        // need is one a later edit can drop without any other test noticing
+        // (Codex, PR #157).
         onLocationRecovered = {
-            repairFence()
-            checkingFixes?.retryNow()
-            sanityProbe()
+            recoverySteps(anchor).forEach { step ->
+                when (step) {
+                    // A fenced anchor learns its grant is back from a
+                    // registration the platform accepts. A Wi-Fi-only
+                    // anchor never calls `addGeofences` at all, so nothing
+                    // on this callback would have re-asked — and since the services
+                    // gate holds the latch shut while location is off, this
+                    // recovery is the moment it becomes liftable. Without it
+                    // the latch waits out the 15-minute recheck, and an
+                    // association cannot clear it (Codex, PR #157).
+                    RecoveryStep.ReconcileGrants -> reconcileGrants()
+                    RecoveryStep.RepairFence -> repairFence()
+                    RecoveryStep.RetryFixes -> checkingFixes?.retryNow()
+                    RecoveryStep.SanityProbe -> sanityProbe()
+                }
+            }
         }
 
         // The whole setup — bridge attachment included — runs as one section
@@ -1000,13 +1201,7 @@ class GeofencePresenceMonitor(
                 // would resolve `Departed` and shut the engine down
                 // (`PresenceState.resolved` ignores every later signal) before
                 // the seed — let alone the callback — was ever heard.
-                anchor.ssid?.let { ssid ->
-                    wifiWatch = PlatformWifiWatch(
-                        appContext,
-                        ssid,
-                        readElapsedRealtimeMs,
-                    ) { deliver(it) }
-                }
+                anchor.ssid?.let { publishWifiWatch(it) }
                 // Asked *before* the bridge attaches, for the same reason
                 // the Wi-Fi watch is built before it (Codex, PR #150). A
                 // grant revoked while the process was dead is not known to
@@ -1020,14 +1215,23 @@ class GeofencePresenceMonitor(
                 // A live permission read costs two binder-free lookups and
                 // gets the fact in ahead of the replay.
                 //
-                // Scoped to an anchor that will actually register a fence,
-                // deliberately. A Wi-Fi-only anchor never reaches
-                // `addGeofences`, so it would have no way to *lift* a latch
-                // set here — and under a while-in-use grant that would
-                // suppress grace for the rest of a snooze whose user really
-                // did leave. That gap stays open and tracked rather than
-                // half-closed in the too-quiet direction (TODO.md).
-                if (anchor.hasUsableFix && !hasGeofencingGrants()) {
+                // Asked for a Wi-Fi-only anchor too, which it was not until
+                // the recheck below became its refutation. The objection was
+                // never that the latch is wrong there — it is the same
+                // revoked grant with the same consequence, and D7 makes the
+                // redacted read that follows report a departure the user
+                // never made — but that nothing on that path could ever lift
+                // it, and a permanent latch silences a user who really did
+                // leave: the too-quiet direction principle 1 refuses. The
+                // 15-minute `WifiRecheck` re-asks this same question and
+                // clears it, so the latch is now bounded by that rather than
+                // by the snooze.
+                //
+                // Restricted to anchors with an SSID (`needsWifiRecheck`),
+                // because that is both what makes a grant loss *matter* here
+                // — no SSID, nothing to misread — and what guarantees the
+                // recheck alarm that refutes it is actually armed.
+                if (watchesGrants(anchor) && !hasGeofencingGrants()) {
                     SnoozeDebugLog.warning(
                         "a location grant is missing at restore; suppressing grace before the replay",
                     )
@@ -1052,12 +1256,17 @@ class GeofencePresenceMonitor(
                         // backstop restore creates.
                         // The recheck found a monitor after all, so the
                         // Wi-Fi watch is already running and already knows
-                        // the association — nothing to read. All this
-                        // firing has left to do is keep the chain alive:
-                        // the alarm is one-shot, and only a monitor arms
-                        // the next one.
-                        is GeofenceObservation.WifiRecheck ->
+                        // the association — nothing to read there. What this
+                        // firing does own is the grant: a Wi-Fi-only anchor
+                        // has no `addGeofences` to be refused by a revoked
+                        // one or accepted by a restored one, so this is the
+                        // only place either becomes known. Then keep the
+                        // chain alive: the alarm is one-shot, and only a
+                        // monitor arms the next one.
+                        is GeofenceObservation.WifiRecheck -> {
+                            reconcileGrants()
                             WifiRecheckAlarm.reconcile(appContext, needsWifiRecheck(anchor))
+                        }
                         is GeofenceObservation.SanityPoke -> sanityProbe()
                         // A warm wake asking for the fence to be re-attempted
                         // — repair without replacing the collection, so the
@@ -1088,8 +1297,33 @@ class GeofencePresenceMonitor(
                         // the snooze. The due check is unaffected: handling
                         // time is never earlier than the fire time, so a
                         // genuinely due deadline still resolves.
-                        is GeofenceObservation.GraceElapsed ->
+                        // The grant is asked here too, and **before** the
+                        // deadline is spent — the same order, and for the
+                        // same reason, as the Wi-Fi loss handler. A grant
+                        // revoked *after* grace was already armed reaches
+                        // neither of the other two paths: the tracker only
+                        // reports transitions, so a redacted read arriving
+                        // while it already holds *not associated* is a repeat
+                        // and says nothing, and the fifteen-minute recheck
+                        // sits well past a five-minute deadline. The case
+                        // that leaves is narrow and real — the user is at the
+                        // anchor, their Wi-Fi flaps so a loss arms grace, and
+                        // they revoke location inside those five minutes, so
+                        // the re-association that would have canceled grace
+                        // can only be read redacted and is heard as a repeat.
+                        // The snooze then ends on a user who never left
+                        // (Codex, PR #157, ninth pass).
+                        //
+                        // Asking first is what makes it work: a latch
+                        // delivers `LocationAccessLost`, which clears the
+                        // deadline and cancels the alarm on the same pass, so
+                        // the elapsed signal below finds nothing due. Asking
+                        // after would end the snooze and then say the grant
+                        // was gone.
+                        is GeofenceObservation.GraceElapsed -> {
+                            latchIfGrantGone()
                             deliver(PresenceSignal.GraceElapsed(readElapsedRealtimeMs()))
+                        }
                         // The alarm's own prompt, not its payload — the
                         // decision lives in `CapabilityLossStore`, keyed to
                         // *this* monitor's own `armedAtEpochMs`, so a firing
@@ -1217,7 +1451,7 @@ class GeofencePresenceMonitor(
             // — like the fence, its deadline must outlive a routine service
             // destroy, or a Wi-Fi-only snooze whose grace was running would
             // never end; a stale firing is a no-op by the engine's check.
-            wifiWatch?.close()
+            wifiWatch.getAndSet(null)?.close()
             // Deliberately NOT the fence. The registration is the one durable
             // thing this monitor owns, and durability is its entire point:
             // Android stops an ordinary background service routinely, the
@@ -1399,6 +1633,225 @@ class GeofencePresenceMonitor(
         internal fun needsWifiRecheck(anchor: Anchor): Boolean =
             !anchor.hasUsableFix && anchor.ssid != null
 
+        /**
+         * Whether this snooze's tracking depends on a location grant that can
+         * be lost mid-snooze — so the monitor watches the grant directly.
+         *
+         * Both anchor shapes, for the same reason and by different routes. An
+         * anchor with a fix learns of a lost grant when `addGeofences` is
+         * refused, and learns it is back when one succeeds. A Wi-Fi-only
+         * anchor never calls either, so it asks the permission directly at
+         * restore and again on every `WifiRecheck`; that is the whole of the
+         * difference.
+         *
+         * An anchor with neither a fix nor an SSID is excluded, because
+         * nothing about it reads location at all: it is duration-only already,
+         * there is no signal a revoked grant could corrupt, and no recheck
+         * alarm is armed to re-ask (see [needsWifiRecheck]).
+         */
+        /**
+         * What re-asking the location grant should do to the registration slot,
+         * as a pure decision so it can be asserted (the same reason
+         * [platformLevelOf] is up here).
+         *
+         * [grantsHeld] is the live read of both grants; [hasFineLocation]
+         * splits a loss into the two states the card names, exactly as a
+         * refused registration is split.
+         *
+         * **A restoration needs the grant *and* the services switch.** Wi-Fi
+         * identifiers are gated on both: with system location off, a
+         * `NetworkCapabilities` read comes back redacted however healthy the
+         * two permissions are. Declaring a restoration there would clear the
+         * engine's suppressor and hand the rebuilt watch a redacted read,
+         * which D7 makes a loss — grace arms and the snooze ends on a user
+         * who never left, the exact failure this whole change exists to stop
+         * (Codex, PR #157, seventh pass).
+         *
+         * [servicesOn] false includes *unreadable*, deliberately. Staying
+         * latched costs a snooze that runs duration-only and says so on the
+         * card, bounded by the mandatory cap and re-asked at the next
+         * recheck; restoring on a guess costs the snooze. The recovery watch
+         * pokes a repair the moment location comes back, so the latch is not
+         * waiting on the fifteen-minute cadence alone.
+         *
+         * **Clears only a grant cause, unlike the registration-success path.**
+         * There, a registration the platform accepted is proof the whole
+         * subsystem works, so it clears the slot whatever is in it. A
+         * permission read proves something much narrower — that these two
+         * grants are held — and says nothing about location services, so a
+         * latched [DegradationCause.LOCATION_SERVICES_OFF] has to survive it
+         * or an outage would read as repaired every fifteen minutes.
+         *
+         * Answers [Nothing] for a loss already latched under the same cause,
+         * so a steady reported state is not re-delivered four times an hour;
+         * the cause is compared rather than mere presence, so a grant that
+         * moves from one shape of loss to the other still updates.
+         */
+        internal fun grantRecheck(
+            latched: DegradationCause?,
+            grantsHeld: Boolean,
+            hasFineLocation: Boolean,
+            servicesOn: Boolean,
+        ): GrantRecheck = when {
+            grantsHeld ->
+                if (latched?.isGrantLoss == true && servicesOn) {
+                    GrantRecheck.Restore
+                } else {
+                    GrantRecheck.Nothing
+                }
+            else -> {
+                val cause = if (hasFineLocation) {
+                    DegradationCause.NO_LOCATION_IN_BACKGROUND
+                } else {
+                    DegradationCause.LOCATION_PERMISSION_GONE
+                }
+                if (latched == cause) GrantRecheck.Nothing else GrantRecheck.Latch(cause)
+            }
+        }
+
+        /**
+         * Publishes [fresh] into [slot], and hands it straight back if the
+         * flow closed while it was being built. Returns whether it is live.
+         *
+         * A watch registers its platform callback as it is constructed, so
+         * there is always a gap between that registration and this
+         * publication. A teardown completing inside it closes whatever the
+         * slot held and clears it, never seeing [fresh] — which then stays
+         * registered with nothing holding a reference to unregister it
+         * (Codex, PR #157, eighth pass).
+         *
+         * The compare-and-set is what stops the repair from becoming a
+         * double close: a teardown racing this line takes [fresh] out of the
+         * slot itself, and only one of the two can win it. Losing means the
+         * teardown already owns it and will close it.
+         *
+         * [flowClosed] is a lambda because the gap is the whole subject: a
+         * test drives the interleaving by tearing the slot down from inside
+         * it, which is where the real window is.
+         */
+        internal fun publishWatch(
+            slot: java.util.concurrent.atomic.AtomicReference<AutoCloseable?>,
+            fresh: AutoCloseable,
+            flowClosed: () -> Boolean,
+        ): Boolean {
+            slot.getAndSet(fresh)?.close()
+            if (flowClosed() && slot.compareAndSet(fresh, null)) {
+                fresh.close()
+                return false
+            }
+            return true
+        }
+
+        /**
+         * Asks the grant and latches a loss **only if nothing moved the slot
+         * while it was being asked**.
+         *
+         * The read is not free — two `checkSelfPermission` lookups — and a
+         * restore can land inside it, on the recheck's own thread or the
+         * registration callback's. It clears the slot and declares
+         * [PresenceSignal.LocationAccessRestored]; an unconditional report
+         * afterwards would re-latch a loss the grant no longer supports, and
+         * nothing would refute it for fifteen minutes. That matters more than
+         * a wrong mode line, because only `LocationAccessRestored` clears the
+         * engine's own `locationAccessLost` — not the association the rebuilt
+         * watch is about to report (`Presence.kt`) — so §6.6 grace would stay
+         * shut and a real departure would run to the cap. A quiet phone: the
+         * failure this whole path exists to prevent, one race deeper (Codex,
+         * PR #157).
+         *
+         * So the decision names the value it was made against, exactly as the
+         * restore branch does. **Losing means doing nothing**, and every way
+         * of losing leaves grace *armed* rather than shut — the safe direction
+         * (principle 1). If a restore won, the grant is genuinely held and a
+         * Wi-Fi loss is a real departure. If another loss won, the slot
+         * already holds one and the engine has already been told.
+         *
+         * The permission reads are lambdas because that gap is the whole
+         * subject: a test drives the interleaving by mutating [slot] from
+         * inside [grantsHeld], which is where the real window is.
+         *
+         * Not airtight, and deliberately not claimed to be: [report] sets the
+         * slot again on its way to delivering, so a restore landing in *that*
+         * span still loses. The slot and the engine's latch are two pieces of
+         * state with no single atomic covering both; this closes the wide
+         * window (two IPCs) and leaves an instruction-scale one, which is the
+         * same residual the restore branch carries.
+         */
+        internal fun latchGrantLoss(
+            slot: java.util.concurrent.atomic.AtomicReference<DegradationCause?>,
+            grantsHeld: () -> Boolean,
+            hasFineLocation: () -> Boolean,
+            servicesOn: () -> Boolean,
+            report: (DegradationCause) -> Unit,
+        ): Boolean {
+            val latched = slot.get()
+            val next = grantRecheck(latched, grantsHeld(), hasFineLocation(), servicesOn())
+            if (next !is GrantRecheck.Latch) return false
+            if (!slot.compareAndSet(latched, next.cause)) return false
+            report(next.cause)
+            return true
+        }
+
+        /**
+         * What restoring the grant has to do, in order, as a value so it can be
+         * asserted (the same reason [platformLevelOf] and [grantRecheck] are up
+         * here).
+         *
+         * **The rebuild is the step worth pinning.** A grant coming back does
+         * not repair what its absence wrote: every redacted callback stored the
+         * placeholder in the watch's per-network SSID map and left its tracker
+         * holding *not associated*, and a restored grant dispatches no callback
+         * of its own, so both survive it. The tracker would then read a real
+         * departure as a repeat of the loss it already reported and emit
+         * nothing, leaving a Wi-Fi-only snooze quiet to its cap — the direction
+         * principle 1 refuses. Re-registering is what fixes it: a fresh
+         * registration dispatches the current networks, now unredacted, into a
+         * tracker whose first report is a transition by definition.
+         *
+         * **And it comes after the restoration, not before.** The new watch's
+         * seed read can report a loss, and delivering that into an engine still
+         * holding `locationAccessLost` would spend the signal with grace still
+         * shut — a user who really had left, missed.
+         *
+         * Only for an anchor with an SSID: there is no watch to rebuild
+         * otherwise, and `getAndSet` on an empty slot would install one for a
+         * snooze that never had it.
+         */
+        internal fun restoreSteps(anchor: Anchor): List<RestoreStep> = buildList {
+            add(RestoreStep.DeclareRestored)
+            add(RestoreStep.ResumeChecking)
+            if (anchor.ssid != null) add(RestoreStep.RebuildWifiWatch)
+            add(RestoreStep.RestateLevel)
+        }
+
+        /**
+         * What switching system location back on should poke, in order.
+         *
+         * A value for the same reason [restoreSteps] is one: the grant re-ask
+         * is needed by one anchor shape only, so deleting it leaves every
+         * other test on this path green while a Wi-Fi-only snooze sits latched
+         * until the next 15-minute recheck (Codex, PR #157).
+         *
+         * **The grant first.** The other three ask the platform for evidence,
+         * and the engine's `locationAccessLost` latch is what decides whether
+         * evidence can act — so it is lifted before anything that might arrive
+         * is read against a suppressor this same callback is about to remove.
+         * The same ordering, and the same reason, as `DeclareRestored`.
+         *
+         * Gated on [needsWifiRecheck], the same predicate [reconcileGrants]
+         * returns on — one predicate asked twice, not two copies of a rule.
+         * That call keeps its own guard because the recheck alarm calls it too.
+         */
+        internal fun recoverySteps(anchor: Anchor): List<RecoveryStep> = buildList {
+            if (needsWifiRecheck(anchor)) add(RecoveryStep.ReconcileGrants)
+            add(RecoveryStep.RepairFence)
+            add(RecoveryStep.RetryFixes)
+            add(RecoveryStep.SanityProbe)
+        }
+
+        internal fun watchesGrants(anchor: Anchor): Boolean =
+            anchor.hasUsableFix || needsWifiRecheck(anchor)
+
         /** Serializes claim-and-register with owner-checked removal. */
         private val registrationLock = Any()
 
@@ -1417,4 +1870,68 @@ class GeofencePresenceMonitor(
                 PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
     }
+}
+
+/**
+ * What re-asking the location grant means for the registration slot
+ * ([GeofencePresenceMonitor.grantRecheck]).
+ *
+ * A type rather than a nullable cause because "do nothing" and "clear what is
+ * there" are different instructions that a null would collapse into one — and
+ * collapsing them is how a latch either outlives its refutation or is dropped
+ * while it still holds.
+ */
+internal sealed interface GrantRecheck {
+    /** The slot already says what the grant says. */
+    data object Nothing : GrantRecheck
+
+    /** Both grants are held again, and a grant cause is latched. */
+    data object Restore : GrantRecheck
+
+    /** A grant is missing, and this is the state to name on the card. */
+    data class Latch(val cause: DegradationCause) : GrantRecheck
+}
+
+/**
+ * One step of the restoration a returning location grant triggers
+ * ([GeofencePresenceMonitor.restoreSteps]).
+ *
+ * An ordered list of these rather than four statements in a row, because two of
+ * the properties that matter — that the watch is rebuilt at all, and that it
+ * happens after the restoration is declared — are otherwise asserted by nothing
+ * and regress silently.
+ */
+/**
+ * What a location-services recovery pokes
+ * ([GeofencePresenceMonitor.recoverySteps]).
+ *
+ * An enum so the `when` executing it is exhaustive, and so the sequence is a
+ * value a test can assert rather than a shape read off the code.
+ */
+internal enum class RecoveryStep {
+    /** Re-ask the location grant, for the anchor shape no registration answers. */
+    ReconcileGrants,
+
+    /** Re-register the fence the outage may have left unmonitored. */
+    RepairFence,
+
+    /** Ask again on a departure check the outage began during. */
+    RetryFixes,
+
+    /** Ask once for a resting snooze; a declared no-op mid-check. */
+    SanityProbe,
+}
+
+internal enum class RestoreStep {
+    /** Lift the engine's `locationAccessLost` latch; this is what re-opens grace. */
+    DeclareRestored,
+
+    /** Un-suspend the process-wide fix requester. */
+    ResumeChecking,
+
+    /** Re-register the Wi-Fi watch, discarding what the revocation wrote into it. */
+    RebuildWifiWatch,
+
+    /** Restate the feed's level, so the card stops saying the mode is degraded. */
+    RestateLevel,
 }

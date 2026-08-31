@@ -66,6 +66,39 @@ class AnchorWifiTrackerTest {
     }
 
     @Test
+    fun `a departure after a redacted read is swallowed by the stale state`() {
+        // Why a restored grant rebuilds the watch rather than merely clearing
+        // the latch (Codex, PR #157). Redaction leaves the tracker holding
+        // *not associated*, and a grant coming back dispatches no callback of
+        // its own — so this instance survives it. A real departure then reads
+        // as a repeat of the loss already reported and says nothing, and a
+        // Wi-Fi-only snooze stays quiet to its cap: the direction principle 1
+        // refuses.
+        //
+        // The tracker is right to behave this way — a repeat is not a
+        // transition (D7) — which is exactly why the fix belongs in the watch
+        // that owns the instance, not here.
+        tracker.onWifiSsid("\"ExampleWifi\"", 1_000)
+        assertEquals(
+            "the redacted read reports the loss",
+            PresenceSignal.AnchorWifiLost(2_000),
+            tracker.onWifiSsid("<unknown ssid>", 2_000),
+        )
+
+        assertNull(
+            "and the real departure that follows is silent",
+            tracker.onWifiSsid(null, 3_000),
+        )
+
+        // A watch rebuilt on restoration starts one of these, whose first
+        // report is a transition by definition — so the same departure speaks.
+        assertEquals(
+            PresenceSignal.AnchorWifiLost(4_000),
+            AnchorWifiTracker("ExampleWifi").onWifiSsid(null, 4_000),
+        )
+    }
+
+    @Test
     fun `a seed read finding Wi-Fi present is unconfirmed, not a loss`() {
         // The regression this pins: the seed read cannot name the network it
         // found, because a direct capabilities read hands back a redacted

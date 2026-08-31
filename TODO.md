@@ -1540,7 +1540,31 @@ the point is that every other line of the app is worthless if it isn't true.
       - Not persisted, deliberately: the monitor re-derives it on every restart when its
         registration is refused again, and a second durable copy behind a different refutation is
         the two-slot mistake of PR #75. `SPEC.md` §6.6 carries the reasoning.
-- [ ] **The new degradation does not reach a Wi-Fi-only anchor at all** (Codex, PR #149,
+- [ ] **The grant slot and the engine's latch are not updated atomically** (Codex, PR #157,
+      sixth pass — deferred there, and this entry is the durable record of it). Both latch
+      paths now compare-and-set the cause they decided against, which closes the wide window
+      (the two `checkSelfPermission` lookups). What remains is instruction-scale and cannot
+      be closed by the compare-and-set alone: `reportRegistration` writes the slot again on
+      its way to `deliver`, so a restore landing between the winning compare-and-set and that
+      write puts the stale loss back *and* delivers `LocationAccessLost` after the
+      restoration. Only `LocationAccessRestored` clears the engine's `locationAccessLost`, so
+      §6.6 grace stays shut and a real departure runs to the cap until the next 15-minute
+      recheck.
+      **The cheap version does not work, which is why this is deferred rather than fixed.**
+      Reporting without rewriting the slot — the obvious minimal change — leaves the slot
+      correct but still delivers `LocationAccessLost` after the restoration, so the engine
+      latch, the half that actually suppresses grace, is untouched. The real fix is to hold
+      the decision and the delivery under one lock on both the latch and restore paths. That
+      is a structural change to a concurrency-sensitive path: `deliver` persists state and
+      `GraceAlarm.reconcile` runs on the same pass, so holding a lock across it is a genuine
+      contention and re-entrancy question, and neither can be validated in the sandbox.
+      **The same residual has always existed on the restore branch** (compare-and-set, then a
+      sequence of deliveries), so this is a property of the design rather than something PR
+      #157 introduced — it is only visible now because that PR is what made the two paths
+      race at all. Worth doing if the field shows it, or alongside any other rework of the
+      registration slot; not worth a seventh round on a window a few instructions wide that
+      also needs a concurrent grant restoration to hit.
+- [x] **The new degradation does not reach a Wi-Fi-only anchor at all** (Codex, PR #149,
       deferred there). An anchor with an SSID but no usable fix has `Presence.duty == NONE`
       always (`!anchor.hasUsableFix -> LocationDuty.NONE`), and `registerFence` returns early on
       the same test — so neither permission-classifying path is ever entered for it. A grant lost
@@ -1563,10 +1587,20 @@ the point is that every other line of the app is worthless if it isn't true.
         there could never be lifted: the snooze would run to its cap even after the user
         re-granted and genuinely left. Whatever closes this has to bring its own refutation,
         not just its own detection.
-      So the shape is: teach the Wi-Fi tracker to report *unreadable* distinctly from *lost*
-      (today `AnchorWifiTracker` folds the redaction placeholder into not-associated by design,
-      D7), and pair it with a proof the read works again. That is a change to the tracker's
-      contract, not a check bolted onto the monitor.
+      **Landed 2026-08-31, and not by that shape.** The tracker's contract is untouched: D7's
+      reading of a redacted SSID is right, and the problem was never that the read is
+      ambiguous — it is that nothing on that path ever asked *why* it was redacted. The monitor
+      asks the permission directly instead (`watchesGrants`, `grantRecheck`), at restore and on
+      each 15-minute `WifiRecheck`, which is both the detection and the refutation the shape
+      above went looking for in the tracker.
+      Both objections recorded here are answered rather than traded off. Suppressing grace for a
+      while-in-use user is not a new cost: `DegradationCause.isGrantLoss` already suppresses it
+      for exactly those users on every other path, by the 2026-08-30 decision, because the cap
+      bounds duration-only. And the missing restoration proof was only missing in the form of
+      `LocationAccessRestored`-from-`addGeofences`; a live permission read can simply be
+      re-asked, so the latch is bounded by 15 minutes rather than by the snooze. It clears a
+      grant cause only — a permission read says nothing about location services, so an outage
+      would otherwise read as repaired every recheck.
 - [ ] **A restored location grant is not noticed until the half-hour backstop** (Codex, PR #150,
       sixth round on this seam; **stopped and handed to the maintainer rather than fixed there**).
       Nothing in the monitor observes a *permission* change. `LocationModeWatch` watches location
