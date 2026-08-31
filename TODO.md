@@ -3009,6 +3009,23 @@ that can only be settled on a real device, ordered by risk.
   Deliberately not guessed: this is a shared-library change or new user-facing
   copy, and it sits on a seam that has already taken several review rounds.
 
+- **A skipped ordinary run is never announced in the report** (Codex, PR #153;
+  same family as the entry above). When the library cannot read one retained
+  run and a readable one sits beside it, `PreviousRun.complete` is false, but
+  nothing in the rendered report says a run was left out — the recipient reads
+  a partial diagnostic as a whole one.
+  **The finding's proposed fix does not work**, which is why this is recorded
+  rather than applied: making `DebugReport.omitted` crash-independent would
+  change only `pinConsumeSafe`, and the "could not be included" notice lives
+  behind `if (previousRun.isNullOrBlank())` — unreachable whenever there is
+  text to render. With no crash pinned there is also nothing to consume, so
+  the change would be a no-op for exactly the case it names.
+  What would actually close it is a **new line in the rendered section** when
+  the handle reports itself incomplete. That is report copy a user reads and
+  sends, so it wants sign-off; and it can only say *that* a run was skipped,
+  never which, for the same missing per-run visibility as the entry above.
+  Worth deciding together with it.
+
 
 - **A seven-failure unit-test run seen once, never reproduced** (2026-08-31).
   One `:app:testDirectDebugUnitTest` run went red with seven failures whose
