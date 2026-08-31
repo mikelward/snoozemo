@@ -3409,8 +3409,8 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   `onLegacyPurged`, logcat, and a line in the log itself.
 
 - **Move this app onto `mikelward/androidlog`, the shared debug log**
-  (autopilot, 2026-08-30). This entry covers the wiring, which has landed; the
-  logger swap itself is blocked on one maintainer question below.
+  (autopilot, 2026-08-30). Landed whole: the wiring, the recording half, and
+  the file handling.
   - **Done: the composite build.** `settings.gradle.kts` includes the library
     from `.androidlog/` or a sibling `../androidlog`, `:core` takes
     `logging-core` as `api` (it is a plain Kotlin JVM module and
@@ -3426,11 +3426,13 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     checkout it would die on settings evaluation and the only symptom would be
     a weekly dependency PR that silently stopped arriving. Found the hard way
     in clothescast (#1176).
-  - **Next: `SnoozeDebugLog` and `LogValue.kt` themselves**, plus the
-    1,154-line `DebugLogFiles.kt`, which is the file the library's
-    `DebugFileSink` was extracted from. The three levels here (`event`,
-    `warning`, `failure`) already match the library exactly, so unlike
-    clothescast there is no facade gymnastics — but see the question below.
+  - **Done: `SnoozeDebugLog`, `LogValue.kt` and the file handling.**
+    `LogValue.kt` is gone, `SnoozeDebugLog` is 74 lines delegating to the
+    library, and `DebugLogFiles.kt` is down from 1,154 to the app-specific
+    part — the settings gate, the preferences write, the legacy-directory
+    migration, and the screen-facing outcome mirrors. The three levels here
+    (`event`, `warning`, `failure`) matched the library exactly, so unlike
+    clothescast there was no facade gymnastics.
   - **Legacy log files must be deleted on migration, not read** — done in
     PR #151. The reduced rendering is not retroactive, so removing them is the
     only thing that stops lines written under the old full rendering being
@@ -3513,6 +3515,11 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   first because the reverse order means a logger with no redaction is one line
   from becoming an upload channel. Reversible: deleting `LogValue.kt` and taking
   `event(message: String)` back is mechanical, and no behavior depends on it yet.
+
+  **Since superseded on the reversibility half**: the type rule is
+  `mikelward/androidlog`'s now, shared with three other apps, so reverting it
+  here is no longer this app's call alone. The decision itself still stands as
+  recorded.
 
   **What this does *not* claim: that adding the mirror is then a one-line
   change.** An earlier draft of this entry said so, and a `MirrorSink` type was
