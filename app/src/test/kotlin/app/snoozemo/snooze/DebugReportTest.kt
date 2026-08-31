@@ -112,7 +112,7 @@ class DebugReportTest {
     fun `omits the previous-run section when there is nothing to show`() {
         val payload = payload(previousRun = null)
 
-        assertFalse(payload.contains("Previous run"))
+        assertFalse(payload.contains("Earlier runs"))
     }
 
     @Test
@@ -124,18 +124,22 @@ class DebugReportTest {
         // not read as a clean report (Codex, PR #89).
         val omitted = payload(previousRun = null, previousRunOmitted = true)
 
-        assertTrue(omitted.contains("--- Previous run ---"))
+        assertTrue(omitted.contains("--- Earlier runs ---"))
         assertTrue(omitted.contains("could not be included in this report"))
     }
 
     @Test
-    fun `labels an ordinary previous run distinctly from a crashed one`() {
+    fun `labels an ordinary earlier run distinctly from a crashed one`() {
         val ordinary = payload(previousRun = "state=ARMED", previousRunCrashed = false)
         val crashed = payload(previousRun = "state=ARMED", previousRunCrashed = true)
 
-        assertTrue(ordinary.contains("--- Previous run ---"))
+        assertTrue(ordinary.contains("--- Earlier runs ---"))
         assertFalse(ordinary.contains("uncaught exception"))
-        assertTrue(crashed.contains("--- Previous run (ended in an uncaught exception) ---"))
+        // Plural, and the crash named as one *of* them: the section can carry
+        // several runs and only one of them crashed, so labeling the whole
+        // aggregate as the crash misclassifies the ordinary restarts beside it
+        // (Codex, PR #153).
+        assertTrue(crashed.contains("--- Earlier runs (one ended in an uncaught exception) ---"))
     }
 
     @Test
@@ -172,7 +176,7 @@ class DebugReportTest {
         val payload = payload(previousRun = hugePreviousRun)
 
         val previousSection = payload
-            .substringAfter("--- Previous run ---")
+            .substringAfter("--- Earlier runs ---")
             .substringBefore("--- Recent log")
         assertTrue(previousSection.length < 30_000)
         // The newest lines are kept, not the oldest — a crash entry is always
