@@ -1,6 +1,6 @@
 package app.snoozemo.core
 
-import com.mikelward.androidlog.REDACTED_PLACEHOLDER
+import com.mikelward.androidlog.OFF_DEVICE_PLACEHOLDER
 import com.mikelward.androidlog.formatLogMessage
 import java.time.Instant
 import org.junit.Assert.assertEquals
@@ -94,10 +94,10 @@ class SnoozeDebugLogTest {
 
         val line = SnoozeDebugLog.snapshot().last { !it.contains("timezone offset") }
         assertTrue("this device's own log keeps it", line.contains("candidate-1"))
-        assertFalse("and does not hide it", line.contains(REDACTED_PLACEHOLDER))
+        assertFalse("and does not hide it", line.contains(OFF_DEVICE_PLACEHOLDER))
 
         assertEquals(
-            "candidate=$REDACTED_PLACEHOLDER",
+            "candidate=$OFF_DEVICE_PLACEHOLDER",
             formatLogMessage("candidate=%s", arrayOf<Any?>("candidate-1"), leavingDevice = true),
         )
     }
