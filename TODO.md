@@ -2268,6 +2268,31 @@ the point is that every other line of the app is worthless if it isn't true.
       with no subsequent refresh ever succeeding, is a real (if narrow) gap. Worth a proper look at
       `refreshAccess()`'s failure handling in general — what it does for `access` itself, not a
       Filters-specific patch — if this comes up again or gets revisited for other reasons.
+      **`access` settled 2026-08-31 (maintainer): keep the last reading, and say so accurately.**
+      The box stays unchecked because one part does not close with it — see the Filters residue
+      below. What was real about `access` is narrower than the entry above says, and was being
+      mis-stated: the catch
+      claimed the next refresh would ask again, which holds for `onStart` and a record change but
+      not for the access *broadcast*, where the failed read was itself the notification and nothing
+      is queued behind it.
+      Two alternatives were weighed and declined. Clearing `access` to unknown reads like the safe
+      answer and is not: `MainScreen` gates the entire primary-action block on `GRANTED`, so it
+      would take `Release` away from a running snooze over a binder blip, and on a first-read
+      failure it changes nothing since `access` is already null. Retrying behind an injected
+      executor is the only option that closes the window and stays available if this is ever seen
+      in the field — the seam is proven in `SnoozeNotifications`, and an injected clock is what the
+      testing rules *require* for time-dependent behavior rather than something to avoid — but it
+      was not worth the machinery for a read that fails only when the process is going down anyway.
+      **Still open: the stale-*granted* Filters row.** An earlier draft of this entry claimed
+      Codex's original `zenRuleId` ask was moot because `filtersRuleId` gates on
+      `access == GRANTED`. That gate covers one direction only (Codex, PR #159): it hides the row
+      on a stale *denied* reading, and a failed revocation broadcast leaves the opposite — `access`
+      stale at `GRANTED`, so the row is still offered, deep-linking a zen rule the revocation
+      removed. Left as-is rather than fixed, and recorded rather than closed: it needs the
+      revocation and the read failure *together*, it costs a dead link rather than a snooze, and
+      clearing `zenRuleId` in the catch would blank a working row every time the read merely
+      blipped. Whatever eventually closes the `access` window — the injected-executor retry above
+      is the candidate — closes this with it, since the stale reading is the shared cause.
 - [x] `docs/PRIVACY.md` must describe what the log carries **before** the sharing surface ships —
       that ordering is the rule, not a preference (AGENTS.md, *Privacy*). **Landed** alongside the
       sharing surface above: "The debug log" section now describes the `Share debug logs` button
