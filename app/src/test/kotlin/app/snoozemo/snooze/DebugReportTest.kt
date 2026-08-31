@@ -129,6 +129,42 @@ class DebugReportTest {
     }
 
     @Test
+    fun `says a crash was too large to include, and how to clear the banner`() {
+        // The guard that refuses to consume the pin when the render dropped
+        // part of what was read never lifts for a crash bigger than the
+        // section's bound -- the same runs truncate the same way every retry,
+        // so sharing can never lower the banner and Dismiss is the only route.
+        // Saying so beats leaving the user tapping Share (maintainer,
+        // 2026-08-31; the proper fix needs per-run visibility the library does
+        // not expose, and is tracked in TODO.md).
+        val truncated = payload(
+            previousRun = "state=ARMED",
+            previousRunCrashed = true,
+            previousRunCrashTooLarge = true,
+        )
+
+        assertTrue(
+            truncated.contains("(crash details too large to include - dismiss the banner to clear)"),
+        )
+        // Ahead of the text, since a line after 25,000 characters is one
+        // nobody reaches.
+        assertTrue(
+            truncated.indexOf("too large to include") < truncated.indexOf("state=ARMED"),
+        )
+    }
+
+    @Test
+    fun `an earlier run that fit says nothing about being too large`() {
+        val whole = payload(
+            previousRun = "state=ARMED",
+            previousRunCrashed = true,
+            previousRunCrashTooLarge = false,
+        )
+
+        assertFalse(whole.contains("too large to include"))
+    }
+
+    @Test
     fun `labels an ordinary earlier run distinctly from a crashed one`() {
         val ordinary = payload(previousRun = "state=ARMED", previousRunCrashed = false)
         val crashed = payload(previousRun = "state=ARMED", previousRunCrashed = true)
@@ -278,6 +314,7 @@ class DebugReportTest {
         previousRun: String? = null,
         previousRunCrashed: Boolean = false,
         previousRunOmitted: Boolean = false,
+        previousRunCrashTooLarge: Boolean = false,
         recentLog: List<String> = emptyList(),
     ): String = buildDebugReportPayload(
         nowMillis = 0L,
@@ -302,6 +339,7 @@ class DebugReportTest {
         previousRun = previousRun,
         previousRunCrashed = previousRunCrashed,
         previousRunOmitted = previousRunOmitted,
+        previousRunCrashTooLarge = previousRunCrashTooLarge,
         recentLog = recentLog,
     )
 }
