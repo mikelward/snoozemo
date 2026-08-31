@@ -27,10 +27,10 @@ dependencies {
     // The shared debug log. `api` for the same reason: `SnoozeDebugLog` extends
     // `DebugLog`, and `safe(...)` / `sensitive(...)` are called from `:app`.
     //
-    // The version is inert — composite substitution matches on group and name
-    // and swaps in the local build before anything resolves remotely. It is
-    // written here only because Gradle's DSL wants a coordinate.
-    api("com.mikelward.androidlog:logging-core:0.0")
+    // A published coordinate now, pinned in gradle/libs.versions.toml and moved
+    // by the weekly Gradle batch. `-PandroidlogLocal` substitutes a local
+    // checkout when both repositories are being changed at once.
+    api(libs.androidlog.logging.core)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
 

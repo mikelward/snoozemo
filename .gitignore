@@ -44,5 +44,7 @@ replay_pid*.log
 __pycache__/
 *.pyc
 
-# mikelward/androidlog, checked out for the composite build (settings.gradle.kts).
+# mikelward/androidlog. Resolved as a published coordinate normally; a checkout
+# here is only for working on the library and this app together, via
+# `-PandroidlogLocal` (settings.gradle.kts).
 .androidlog/

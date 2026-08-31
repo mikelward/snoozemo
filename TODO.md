@@ -3557,15 +3557,17 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 - **Does `androidlog` get a row on the Licenses screen?** (Codex, PR #153, and
   the same finding on clothescast#1176 before it.) `exportBundledLicenses`
   keeps only `ModuleComponentIdentifier` artifacts, and an included-build
-  substitution resolves to a `ProjectComponentIdentifier`, so the shared logger
-  is filtered out of both `aboutlibraries.json` files even though it is
-  compiled into every APK. Declined on clothescast as the wrong place to settle
-  it: the screen attributes *other people's* work, `androidlog` is this
-  account's own code, and it carries no `LICENSE` — that decision is open in
-  its own `TODO.md`. So this is downstream of an unanswered question, not a bug
-  introduced here. If it does get a license, the filter needs extending to keep
-  included-build components under their substituted coordinates, in **both**
-  consuming apps — a fleet change, not a snoozemo one.
+  substitution resolved to a `ProjectComponentIdentifier`, so the shared logger
+  was filtered out of both `aboutlibraries.json` files even though it is
+  compiled into every APK. **Answered by the move to a published coordinate**:
+  a resolved module is a `ModuleComponentIdentifier`, so both entries now
+  appear on their own, with no filter to extend. What is still open is the
+  POM metadata behind them: androidlog's `maven-publish` block declares
+  neither a name nor a license, so both rows carry `"licenses": []` and fall
+  back to group-and-artifact for their title — the screen reads `androidlog
+  logging-core` where every neighbor reads a real name. The fix belongs in that
+  repository's publication block, and it will read the same way in every app
+  that migrates.
 
   - **An empty crash log now raises no banner.** A crash marker can land without
     the run's content ever reaching disk — process death between the two writes
@@ -3600,21 +3602,31 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 - **Move this app onto `mikelward/androidlog`, the shared debug log**
   (autopilot, 2026-08-30). Landed whole: the wiring, the recording half, and
   the file handling.
-  - **Done: the composite build.** `settings.gradle.kts` includes the library
-    from `.androidlog/` or a sibling `../androidlog`, `:core` takes
+  - **Done: the wiring, now a published coordinate.** `:core` takes
     `logging-core` as `api` (it is a plain Kotlin JVM module and
     `:core:verifyNoAndroid` still passes with it on the classpath — the
-    library's core is Android-free by the same guard), and CI, the weekly
-    `gradle-update` caller and the session-start hook all provision it. No
-    version, tag or SHA anywhere: a merge there is in this app's next build.
-  - **Every workflow that runs Gradle needs the checkout, not just `ci.yml`.**
-    Grepping for `gradlew` finds only `ci.yml` and is the wrong check — a
-    reusable-workflow *caller* never contains `gradlew`, the shared workflow
-    does. `gradle-update.yml` calls `mikelward/gradle-update`, whose update job
-    runs `./gradlew test` + `./gradlew lint` in a clean workspace; without a
-    checkout it would die on settings evaluation and the only symptom would be
-    a weekly dependency PR that silently stopped arriving. Found the hard way
-    in clothescast (#1176).
+    library's core is Android-free by the same guard) and `:app` takes
+    `logging-android`, both pinned in `gradle/libs.versions.toml` and resolved
+    from the library's own `maven` branch over `raw.githubusercontent.com`.
+  - **The composite build is gone, and that was the point.** It started as a
+    composite with no version anywhere, so a merge in the library was in this
+    app's next build. What that bought in immediacy it paid for in lockstep: a
+    composite puts two AGP versions in one Gradle invocation and
+    `AgpVersionCompatibilityRule` refuses to compare them, so androidlog moving
+    9.3.1 → 9.3.2 broke every consumer at once (2026-08-30). A resolved AAR
+    carries no `AgpVersionAttr`, so a coordinate has no such rule to break.
+    Working on both together is `-PandroidlogLocal`, which restores the
+    composite for that one invocation.
+  - **What the coordinate deleted, beyond the breakage.** Three CI checkout
+    steps and the `androidlog_sha` machinery that existed only so parallel jobs
+    could not resolve `main` differently — a pinned version answers that
+    outright. Also the session-start hook's clone and the `gradle-update`
+    caller's `checks` override, which existed because the update job runs
+    `./gradlew test` + `./gradlew lint` in a clean workspace and settings
+    evaluation would have died without a checkout. That caller now declares
+    `extra-repositories` and `no-cooldown-for` instead, so the weekly batch can
+    see a new androidlog release at all — without it the pin would sit still
+    with no failing run to say so.
   - **Done: `SnoozeDebugLog`, `LogValue.kt` and the file handling.**
     `LogValue.kt` is gone, `SnoozeDebugLog` is 74 lines delegating to the
     library, and `DebugLogFiles.kt` is down from 1,154 to the app-specific
