@@ -3270,6 +3270,33 @@ Nothing here is scheduled; each is a sequel that follows from something already 
       posted the card they had already built — about four binder calls off the main thread,
       invisible, since the card is `setOngoing` + `setOnlyAlertOnce` with a stable `setWhen`
       and so neither alerts nor re-sorts.
+- [ ] **A refused record write can still let an offer's repost restore an old mode line**
+      (Codex, PR #161; narrowed and partly fixed 2026-08-31). The worker rebuilds from the
+      record it loads under the lock, which is the *persisted* one.
+      `SnoozeService.onTrackingChanged` posts the correct in-memory card even when
+      `store.save` is refused — deliberately, and it says so — so in that window the store is
+      behind what is displayed, and a repost built from it puts the pre-degradation mode line
+      back. It stands until the next state change, since no repost site is periodic.
+      **The half PR #161 introduced is closed.** The pre-PR worker built its card as
+      `found?.let { buildOngoing(…) }` and posted it through `card?.let`, so with **no
+      eligible meeting it reposted nothing at all**; the rebuild-at-post-time shape reposted
+      unconditionally, which newly exposed every snooze with no meeting rather than only
+      those with one. The repost is now skipped when the answer is empty — a condition about
+      the worker's own answer, not about what the card reads, so it is not the field list
+      that change removed.
+      **What remains is the case where there IS a meeting**, and it is a real trade rather
+      than an oversight: the repost then adds the third action, which is the whole point, and
+      the same load can carry a stale mode. Codex's cheaper suggestion — capture the
+      generation before the query — would reject the repost on *any* state transition during
+      the query, which reopens the freshness window the entry above closes, to protect a case
+      that additionally needs a refused disk write.
+      **The clean fix is to make the refusal visible** rather than to guess from a counter:
+      `onTrackingChanged` is the one place that knows the store is behind, so it can hand the
+      unsaved record to the notifications layer for the worker to prefer. That is a
+      cross-layer change and a field set only on the failure path.
+      **Severity: principle 2, bounded.** The cap is untouched and the snooze still ends on
+      time; what is wrong is the reason the card gives. The same refused write already leaves
+      a cold start misstating tracking, which `onTrackingChanged` accepts in as many words.
 - [ ] **Saved places** — name an anchor, give it its own policy and duration cap; the tile
       long-press becomes a picker. The `Anchor` type is already shaped for it.
 - [ ] **Settle the backup story** (maintainer, 2026-08-11) — before the first release with
