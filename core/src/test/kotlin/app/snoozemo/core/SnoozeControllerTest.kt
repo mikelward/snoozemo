@@ -438,7 +438,14 @@ class SnoozeControllerTest {
         event: PresenceEvent? = null,
         degradation: DegradationCause? = null,
         graceActive: Boolean = false,
-    ) = PresenceUpdate(event, degradation, graceActive)
+        // Defaults to what the monitor actually pairs with the cause, so a
+        // test naming a withholding cause gets the suppressor that always
+        // travels with it in production (Codex, PR #165, sixth pass). A case
+        // that wants a cause *without* the suppressor — a stale observation
+        // recorded after location came back — passes false explicitly, and
+        // there is a test below that does.
+        locationAccessLost: Boolean = degradation?.blocksLocationReads == true,
+    ) = PresenceUpdate(event, degradation, graceActive, locationAccessLost)
 
     @Test
     fun `grace running reports WIFI_GRACE, not WIFI_ONLY, even with FULL machinery`() {
@@ -652,6 +659,53 @@ class SnoozeControllerTest {
     }
 
     @Test
+    fun `a withholding cause without the suppressor keeps Wi-Fi mode`() {
+        // Codex, PR #165, sixth pass. The mode follows what is actually
+        // suppressed, not which cause is in the slot, and the two come apart:
+        // a `GEOFENCE_NOT_AVAILABLE` observation delivered late — after the
+        // user has switched location back on — records
+        // `LOCATION_SERVICES_OFF` while Wi-Fi is reading names again and no
+        // suppressor was ever delivered. Grace can still arm and end the
+        // snooze at the anchor, so `Timer only` would promise the cap over a
+        // snooze that ends minutes later.
+        //
+        // This is the mirror image of the failure the branch above fixes, and
+        // reading the cause produced one or the other whichever way it was
+        // written.
+        armFully()
+
+        controller.onPresenceUpdate(
+            update(
+                degradation = DegradationCause.LOCATION_SERVICES_OFF,
+                locationAccessLost = false,
+            ),
+        )
+
+        assertEquals(TrackingMode.WIFI_ONLY, controller.active?.mode)
+        assertEquals(
+            DegradationCause.LOCATION_SERVICES_OFF,
+            controller.active?.degradation,
+        )
+    }
+
+    @Test
+    fun `the suppressor outranks a running grace period whatever named it`() {
+        // The suppressor is delivered on causes the permission probe cannot
+        // name at all, so this must not quietly depend on a cause being
+        // present: a redaction no gate explains latches and declares with the
+        // slot holding a best-effort label, and the mode has to follow the
+        // declaration.
+        armFully()
+
+        controller.onPresenceUpdate(
+            update(degradation = null, graceActive = true, locationAccessLost = true),
+        )
+
+        assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
+    }
+
+
+    @Test
     fun `a lost grant never falls back to Wi-Fi, even with an anchor SSID`() {
         // Reading an SSID needs the same grant that just went — there is no
         // separate Wi-Fi permission — and a background read under a
@@ -664,6 +718,13 @@ class SnoozeControllerTest {
         for (cause in listOf(
             DegradationCause.LOCATION_PERMISSION_GONE,
             DegradationCause.NO_LOCATION_IN_BACKGROUND,
+            // Location switched off system-wide belongs with the two grants
+            // (Codex, PR #165): it withholds the SSID by the same mechanism,
+            // and the monitor now says so the moment a read comes back
+            // redacted. Left out, the card claimed `Wi-Fi only` while the
+            // engine had already shut every grace path — a snooze running to
+            // the cap under a line saying something else was tracking it.
+            DegradationCause.LOCATION_SERVICES_OFF,
         )) {
             controller.onPresenceUpdate(update(event = null, degradation = cause))
 
@@ -685,6 +746,7 @@ class SnoozeControllerTest {
         for (cause in listOf(
             DegradationCause.LOCATION_PERMISSION_GONE,
             DegradationCause.NO_LOCATION_IN_BACKGROUND,
+            DegradationCause.LOCATION_SERVICES_OFF,
         )) {
             controller.onPresenceUpdate(update(degradation = cause, graceActive = true))
 
@@ -694,16 +756,26 @@ class SnoozeControllerTest {
 
     @Test
     fun `every other cause still yields to grace`() {
-        // Guards the narrowness of the line above: it must be the grant
-        // causes that outrank grace, not degradation in general, or PR #31's
-        // bug returns wearing the fix for PR #149's.
+        // Guards the narrowness of the line above: it must be the causes
+        // that *withhold location data* which outrank grace, not degradation
+        // in general, or PR #31's bug returns wearing the fix for PR #149's.
+        //
+        // The example moved from `LOCATION_SERVICES_OFF` to these two (Codex,
+        // PR #165) because the services switch turned out to belong on the
+        // other side of the line — it withholds the SSID like a dead grant
+        // does. What is left here is the shape this test was always about:
+        // location is working and simply not answering usefully, so Wi-Fi is
+        // genuinely intact and a grace period bounding a departure is honest.
         armFully()
 
-        controller.onPresenceUpdate(
-            update(degradation = DegradationCause.LOCATION_SERVICES_OFF, graceActive = true),
-        )
+        for (cause in listOf(
+            DegradationCause.NO_LOCATION_FIX,
+            DegradationCause.FIXES_TOO_VAGUE,
+        )) {
+            controller.onPresenceUpdate(update(degradation = cause, graceActive = true))
 
-        assertEquals(TrackingMode.WIFI_GRACE, controller.active?.mode)
+            assertEquals(TrackingMode.WIFI_GRACE, controller.active?.mode)
+        }
     }
 
     @Test

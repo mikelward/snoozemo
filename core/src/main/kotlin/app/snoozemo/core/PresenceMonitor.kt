@@ -124,6 +124,22 @@ data class PresenceUpdate(
      * confirm presence, not *why* a grace period exists at all.
      */
     val graceActive: Boolean = false,
+    /**
+     * Whether the engine is currently suppressing §6.6 grace because location
+     * data is being withheld — the durable effect of
+     * [PresenceSignal.LocationAccessLost], mirrored here as a level for the
+     * same reason [graceActive] is.
+     *
+     * [SnoozeController] needs the *suppression*, not the cause that led to
+     * it, and the two are not the same question (Codex, PR #165, sixth pass).
+     * A cause can reach the level without the suppressor: a stale
+     * `GEOFENCE_NOT_AVAILABLE` observation delivered after the location switch
+     * is back on records `LOCATION_SERVICES_OFF` while Wi-Fi is working and
+     * grace is live. Classifying the mode from the cause reported `Timer only`
+     * there while the grace alarm could still end the snooze; classifying it
+     * from this reports what is actually running.
+     */
+    val locationAccessLost: Boolean = false,
 )
 
 /** What the presence engine has concluded, in increasing order of confidence. */
@@ -250,6 +266,28 @@ enum class DegradationCause {
      */
     val isGrantLoss: Boolean
         get() = this == NO_LOCATION_IN_BACKGROUND || this == LOCATION_PERMISSION_GONE
+
+    /**
+     * Whether this cause makes the platform **withhold location data**, which
+     * takes Wi-Fi with it.
+     *
+     * [isGrantLoss] plus [LOCATION_SERVICES_OFF], and the wider one is what
+     * the two questions above actually turn on. Reading an SSID needs
+     * `ACCESS_FINE_LOCATION`, the background grant when the read happens in
+     * the background, *and* the system location switch — there is no
+     * separate Wi-Fi permission — so all three of these produce the same
+     * redaction placeholder, and under any of them `WIFI_ONLY` would report
+     * a departure on every wake with the phone sitting on its own network.
+     *
+     * Kept distinct from [isGrantLoss] rather than folded into it, because
+     * a *grant* is a different fact about the world from a *switch*: only
+     * the grant question is answerable by a permission read, which is what
+     * a registration failure has in hand, while a switch coming back is
+     * observed by the location-mode watch. Collapsing them would make one
+     * of those two answers claim more than it knows.
+     */
+    val blocksLocationReads: Boolean
+        get() = isGrantLoss || this == LOCATION_SERVICES_OFF
 }
 
 /**

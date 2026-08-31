@@ -1542,8 +1542,8 @@ the point is that every other line of the app is worthless if it isn't true.
       - Not persisted, deliberately: the monitor re-derives it on every restart when its
         registration is refused again, and a second durable copy behind a different refutation is
         the two-slot mistake of PR #75. `SPEC.md` §6.6 carries the reasoning.
-- [ ] **Location services off system-wide still ends a Wi-Fi-only snooze on grace**
-      (Codex, PR #157; deferred 2026-08-31 — needs a maintainer decision). Android gates
+- [x] **Location services off system-wide still ends a Wi-Fi-only snooze on grace**
+      (Codex, PR #157; deferred 2026-08-31, fixed 2026-08-31 without widening `isGrantLoss`). Android gates
       Wi-Fi identifiers on the location *switch*, not only on the grants, so with both
       permissions held and system location off the SSID read is redacted, D7 reads that as
       not associated, grace arms, and the snooze ends about five minutes later with the
@@ -1570,6 +1570,44 @@ the point is that every other line of the app is worthless if it isn't true.
       engine suppressor" — is a new mechanism rather than a smaller one.
       **Fails safe**, which is why it is deferrable: the snooze ends early rather than
       leaving a phone silent, and the duration cap is untouched.
+      **Fixed by a different route, and `isGrantLoss` keeps its meaning** (maintainer,
+      2026-08-31). The decision to widen the predicate was never taken, because the
+      redacted read itself turned out to be the better trigger: the platform withholding
+      the network's name is direct evidence that location access is gone, at the moment it
+      matters, and it needs no probe to establish. So `PlatformWifiWatch` now reports a
+      redacted read of its own, the monitor declares `LocationAccessLost` on it
+      unconditionally, and `redactionCause` — which is *total*, unlike `grantRecheck` —
+      only decides what the card calls it.
+      **Downstream did have to change, and the first attempt got that wrong** (Codex,
+      PR #165). Latching `LOCATION_SERVICES_OFF` into paths keyed on `isGrantLoss` left
+      two holes: `modeFor` still claimed `WIFI_ONLY` with every grace path already shut,
+      and `grantRecheck` could never lift the latch on a fenceless anchor — which has no
+      geofence registration to succeed and clear it — so a real departure after the
+      outage ran silently to the cap. `isGrantLoss` keeps meaning "a missing grant";
+      the two sites now ask `blocksLocationReads`, which is the question they were
+      always really asking.
+- [ ] **An unexplained SSID redaction latches and restores on every callback**
+      (Codex, PR #165, third pass; deferred there — this entry is the durable record).
+      `redactionCause`'s fallback fires when a read comes back withheld while all three
+      gates read healthy, and it must name *something*, so it names
+      `NO_LOCATION_IN_BACKGROUND` — a cause `grantRecheck` restores on those same healthy
+      probes. Latching it arms `LocationModeWatch`, whose immediate "already on" sample
+      refutes the latch, so each redacted callback spends a latch, a restore and a Wi-Fi
+      watch rebuild.
+      **The snooze-ending half is fixed; this is what is left.** Reporting the redaction
+      after the tracker rather than before means the loss arms grace and the report
+      cancels it, so no snooze ends — see `PlatformWifiWatch.deliverCurrent`. What
+      remains is wasted work while the condition persists, and it costs battery on a
+      path SPEC.md §9 budgets.
+      **The coherent fix is symmetric with the rest of this change**: the redacted read
+      is the evidence of the outage, so an actually-readable read should be the evidence
+      it is over, rather than a probe that cannot see redaction at all. That needs a way
+      to tell a redaction-originated latch from a registration-originated one — the two
+      share `registrationDegradation`, and a second slot behind a different refutation is
+      the mistake PR #75 recorded — so it is a real design decision, not a line.
+      **Reachable only through a race** (the probes read a moment after the callback), and
+      **fails safe**: the snooze survives every cycle.
+
 - [ ] **The grant slot and the engine's latch are not updated atomically** (Codex, PR #157,
       sixth pass — deferred there, and this entry is the durable record of it). Both latch
       paths now compare-and-set the cause they decided against, which closes the wide window
@@ -4514,6 +4552,26 @@ Phase 3's wake-up sources give the rest for free.
 Two structural rules fall out of the above and constrain future work: the **cap never depends on a
 process staying alive**, and the **release obligation never lives only in memory** — alarm first,
 in-process second (`SPEC.md` §8.1).
+
+## Deferred review findings (Codex, PR #165)
+
+- [ ] **Two `deliver` calls can publish their updates out of order.** `feedLock` serializes the
+  feed transition, but the `trySend` that follows it is outside the lock, so two callbacks on
+  different platform threads can transition in one order and publish in the other. The stale
+  update lands last and the controller holds its levels until the next signal happens to correct
+  them — a restored snooze that keeps reading `Timer only`, say.
+
+  **Half of it is fixed.** Each update now carries the levels its *own* transition produced,
+  captured under `feedLock` and passed into `send`, so no update is internally inconsistent — an
+  event is never paired with another transition's grace or suppression state.
+
+  **What is left is publication order**, which predates PR #165 and applies to `graceActive`
+  exactly as it does to the suppressor: the fix is a sequence guard on `trySend`, using the
+  `deliverySequence` the persistence side already carries. It was not taken in that PR because
+  dropping a superseded update outright would drop its `PresenceEvent` with it — a departure —
+  so the guard has to publish the event while refusing the stale levels, which is a change to the
+  delivery contract rather than a lock widening. Bounded by the next signal, and every signal
+  restates the levels, so nothing is permanently wrong.
 
 ## Deferred review findings (Codex, PR #8)
 
