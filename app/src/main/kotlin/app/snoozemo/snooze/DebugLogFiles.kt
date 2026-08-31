@@ -277,22 +277,24 @@ internal object DebugLogging {
     }
 
     /**
-     * Reports a failure from a call into the shared sink, or from the enqueue
-     * that would have made one.
+     * Reports a caught failure into the debug log, where the report the user
+     * shares will carry it.
      *
-     * None of those calls throws today — each is contained whole on the
+     * Two kinds of caller. Calls into the shared sink, and the enqueues that
+     * would have made one, do not throw today — each is contained whole on the
      * library's side, and the ones with an outcome the screen needs publish it
-     * rather than propagating. So every catch these guard is for a contract
-     * that changes under us: the library is tracked at `@main` with nothing
-     * pinned, and a silent catch is exactly what would hide that (Codex,
-     * PR #153).
+     * rather than propagating; those catches guard a contract that changes
+     * under us, since the library is tracked at `@main` with nothing pinned.
+     * The pre-migration purge is the live kind: `cacheDir` resolution and
+     * `deleteRecursively` can genuinely throw. Either way a silent catch is
+     * what would hide it (Codex, PR #153).
      *
      * Contained itself, because it runs inside catches whose whole job is to
      * stop a failure escaping — and it goes through the log rather than a bare
      * `Log.e` so the *Privacy* rule's floor applies to it too. The messages
      * name the operation and nothing else.
      */
-    private fun logSinkFailure(cause: Throwable, what: String) {
+    private fun logFailure(cause: Throwable, what: String) {
         runCatching { SnoozeDebugLog.failure(cause, what) }
     }
 
@@ -384,10 +386,23 @@ internal object DebugLogging {
             val dir = File(app.cacheDir, LEGACY_DIR_NAME)
             !dir.exists() || (dir.deleteRecursively() && !dir.exists())
         }
-            .onFailure { runCatching { Log.w(TAG, "Removing the old debug-log directory threw.", it) } }
+            .onFailure {
+                // Both channels, deliberately. Logcat is the only one that
+                // works when recording is off -- which is exactly when this
+                // runs on an install that starts disabled -- but logcat is not
+                // in the report the user shares, so the type and frames would
+                // never reach whoever has to explain the failure (Codex,
+                // PR #153). `failure` records the throwable's type and stack
+                // and never its message, so the floor holds.
+                runCatching { Log.w(TAG, "Removing the old debug-log directory threw.", it) }
+                logFailure(it, "removing the pre-migration log directory threw")
+            }
             .getOrDefault(false)
         val recorded = gone && runCatching { store.markLegacyLogsPurged() }
-            .onFailure { runCatching { Log.w(TAG, "Recording the debug-log migration threw.", it) } }
+            .onFailure {
+                runCatching { Log.w(TAG, "Recording the debug-log migration threw.", it) }
+                logFailure(it, "recording the pre-migration log removal threw")
+            }
             .getOrDefault(false)
         if (!gone) {
             runCatching {
@@ -501,12 +516,12 @@ internal object DebugLogging {
                     // A recompute that never ran leaves the screen deriving
                     // from a stale value with nothing to say so.
                     runCatching { installed.requestCrashRecompute() }
-                        .onFailure { logSinkFailure(it, "a crash recompute could not be requested") }
+                        .onFailure { logFailure(it, "a crash recompute could not be requested") }
                     onResult(pinnedCrash, true)
                 }
             }
         }.onFailure {
-            logSinkFailure(it, "debug-log worker refused a crash check")
+            logFailure(it, "debug-log worker refused a crash check")
             onResult(false, false)
         }
     }
@@ -551,13 +566,13 @@ internal object DebugLogging {
                     runCatching { installed.readPreviousRun() }
                         .onSuccess { onResult(it, pinnedCrash, true) }
                         .onFailure {
-                            logSinkFailure(it, "the previous runs could not be read")
+                            logFailure(it, "the previous runs could not be read")
                             onResult(null, pinnedCrash, false)
                         }
                 }
             }
         }.onFailure {
-            logSinkFailure(it, "debug-log worker refused a previous-run read")
+            logFailure(it, "debug-log worker refused a previous-run read")
             onResult(null, false, false)
         }
     }
@@ -588,10 +603,10 @@ internal object DebugLogging {
                     // here loses is the diagnostic, not the evidence.
                     if (run != null) {
                         runCatching { installed.clearPreviousRun(run) }
-                            .onFailure { logSinkFailure(it, "a shared run could not be cleared") }
+                            .onFailure { logFailure(it, "a shared run could not be cleared") }
                     }
                     runCatching { installed.acknowledgeCrashBanner() }
-                        .onFailure { logSinkFailure(it, "a crash banner could not be acknowledged after a share") }
+                        .onFailure { logFailure(it, "a crash banner could not be acknowledged after a share") }
                 }
                 // Unconditional, because "a consume completed" is its own event
                 // and not the same fact as "the pin state changed". The sink's
@@ -613,7 +628,7 @@ internal object DebugLogging {
                 onResult(true)
             }
         }.onFailure {
-            logSinkFailure(it, "debug-log worker refused a crash-pin consume")
+            logFailure(it, "debug-log worker refused a crash-pin consume")
             onResult(false)
         }
     }
@@ -679,7 +694,7 @@ internal object DebugLogging {
                     // banner up with nothing anywhere saying why (Codex,
                     // PR #153).
                     localDismissFailed = true
-                    logSinkFailure(e, "a crash-banner dismissal failed before it was queued")
+                    logFailure(e, "a crash-banner dismissal failed before it was queued")
                 }
                 runCatching { onDismissOutcome?.invoke() }
             }
@@ -688,7 +703,7 @@ internal object DebugLogging {
             // it, so nothing over there has an outcome to publish and the
             // screen would keep reading the previous answer.
             localDismissFailed = true
-            logSinkFailure(e, "debug-log worker refused a crash-banner dismissal")
+            logFailure(e, "debug-log worker refused a crash-banner dismissal")
             runCatching { onDismissOutcome?.invoke() }
         }
     }
