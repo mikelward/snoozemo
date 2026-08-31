@@ -65,6 +65,18 @@
     <string name="setup_location_allowed">Allowed</string>
     <string name="setup_location_missing">Snoozemo can\'t tell when you\'ve left</string>
     <!--
+      The calendar row (SPEC.md §4.3). Same `Allow` / `Allowed` pair as every
+      other row. The missing line names what is lost rather than what is
+      unread — this permission blocks nothing, it only removes the ongoing
+      notification's third action.
+    -->
+    <!-- TODO: translate -->
+    <string name="setup_calendar_title" tools:ignore="MissingTranslation">Calendar</string>
+    <!-- TODO: translate -->
+    <string name="setup_calendar_allowed" tools:ignore="MissingTranslation">Allowed</string>
+    <!-- TODO: translate -->
+    <string name="setup_calendar_missing" tools:ignore="MissingTranslation">Snoozemo can\'t offer your next meeting\'s end time</string>
+    <!--
       The one disclosure this app shows (SPEC.md §12): a small dialog before
       the background-location prompt specifically, since that is the
       Play-restricted permission the declaration requires it precede — the
@@ -220,6 +232,11 @@
     <string name="ongoing_cause_permission_gone" tools:ignore="MissingTranslation">location permission off</string>
     <string name="action_end_now">End now</string>
     <string name="action_extend">+30 min</string>
+    <!-- The next meeting's end (SPEC.md §4.3). The placeholder is the time as
+         the phone itself writes it — 17:00 or 5:00 PM — so the button reads the
+         way the rest of the device does. -->
+    <!-- TODO: translate -->
+    <string name="action_end_at" tools:ignore="MissingTranslation">Until %1$s</string>
     <string name="ended_departure">Snooze ended — you left</string>
     <string name="ended_cap">Snooze ended — time limit reached</string>
     <!-- Deliberately not "lost access": this covers every capability loss, and

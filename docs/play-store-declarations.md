@@ -49,6 +49,8 @@ Three things gate the rest, in this order:
    Phase 7's foreground monitor lands, so every `direct` snooze is a timer today.
    Checking that what the policy says Snoozemo keeps and does matches what each shipped
    flavor actually keeps and does is the part that has to be true on the day it is hosted.
+   The **Calendar** section added on 2026-08-31 is in the same position as the rest: it
+   describes what the code does, and the code is built but has not run on a handset.
 3. **Film the demonstration video** (`TODO.md` Phase 3, steps 2–7). Nothing else
    blocks the permissions declaration, and the permissions declaration blocks
    *publishing* a bundle carrying `ACCESS_BACKGROUND_LOCATION` — on the internal track
@@ -84,7 +86,7 @@ Answers, and why each one is what it is.
 | **Target audience and content** | **13 and over**; not directed at children | Maintainer's answer (2026-08-24), from what has cleared review on their other listings. A Do Not Disturb utility has no content or feature aimed at kids, and leaving the under-13 boxes clear is how Play expresses "not directed at children" — which keeps Snoozemo out of the Families program without declaring an adults-only audience it does not have. That matters because `docs/PRIVACY.md` says outright that the app works the same for a user of any age; 13+ agrees with that, where 18+ would not. Note the sibling Simmo repo records 18+ for its own listing, on a rationale specific to it (future travel-eSIM commerce links). |
 | **News app** | No | |
 | **COVID-19 contact tracing / status** | No | |
-| **Data safety** | Collects **crash logs**, **diagnostics**, and **device or other IDs**; shares nothing; all optional | See below — this is the one with substance, and it changed when Crashlytics landed. |
+| **Data safety** | Collects **crash logs**, **diagnostics**, and **device or other IDs**; shares nothing; all optional | See below — this is the one with substance, and it changed when Crashlytics landed. **`READ_CALENDAR` (landed 2026-08-31, `SPEC.md` §4.3) does not move it**: the read is on-device, one column of end times, and no part of it is transmitted, stored, or logged — so nothing is *collected* in the form's sense. It is not a restricted permission and files no declaration of its own; it does appear on the store listing's permission list. |
 | **Government apps** | No | |
 | **Financial features** | None | |
 | **Health apps** | No | Not a health app; DND is not a health feature. |

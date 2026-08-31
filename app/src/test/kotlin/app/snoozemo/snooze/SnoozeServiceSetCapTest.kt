@@ -285,6 +285,57 @@ class SnoozeServiceSetCapTest {
     }
 
     @Test
+    fun `a notification's chosen time that is refused says so in the shade`() {
+        // The ongoing notification's `Until <time>` action carries no request
+        // id, because there is no sheet behind it — so the refusal above has
+        // nowhere to show inline the way a row does, and would otherwise be a
+        // button that silently did nothing (SPEC.md §4.5; AGENTS.md,
+        // principle 2). The case is real: the card is only rebuilt on a state
+        // change, so an offered time can fall inside the floor while it sits
+        // in the shade.
+        val record = snoozeFixture(now)
+        val service = startService(SnoozeService.ACTION_RESTORE, record)
+
+        service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
+            putExtra(
+                SnoozeService.EXTRA_CAP_EXPIRES_AT,
+                now.plus(Duration.ofMinutes(2)).toEpochMilli(),
+            )
+            putExtra(SnoozeService.EXTRA_CHOICE_FOR_SNOOZE, record.startedAt.toEpochMilli())
+        }
+
+        assertEquals(
+            "the cap the user never chose must not be written",
+            record.capExpiresAt,
+            ActiveSnoozeStore(appContext).load()?.capExpiresAt,
+        )
+        assertTrue(
+            "a tap with no sheet behind it still has to be answered somewhere",
+            shadeShows(stringOf(R.string.failure_could_not_set_end)),
+        )
+    }
+
+    @Test
+    fun `a notification's chosen time that applies posts no failure`() {
+        // The other half of the guard above: it fires on `REFUSED` alone, so
+        // an ordinary sheet-less commit must not leave a card behind it.
+        val record = snoozeFixture(now)
+        val service = startService(SnoozeService.ACTION_RESTORE, record)
+        val chosen = now.plus(Duration.ofHours(1))
+
+        service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
+            putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, chosen.toEpochMilli())
+            putExtra(SnoozeService.EXTRA_CHOICE_FOR_SNOOZE, record.startedAt.toEpochMilli())
+        }
+
+        assertEquals(chosen, ActiveSnoozeStore(appContext).load()?.capExpiresAt)
+        assertFalse(
+            "nothing failed, so nothing is reported",
+            shadeShows(stringOf(R.string.failure_could_not_set_end)),
+        )
+    }
+
+    @Test
     fun `a chosen time with no snooze running changes nothing and posts nothing`() {
         // The sheet outlived its snooze — a refused arm, or the cap or a
         // departure getting there first. Whichever happened has already posted

@@ -2964,6 +2964,24 @@ that can only be settled on a real device, ordered by risk.
         one reflective read). Once is enough; after that every pull request exercises the
         pipeline.
 
+### The calendar action
+
+Added 2026-08-31 with the feature (`SPEC.md` §4.3). Neither can be answered in this
+sandbox: Robolectric has no calendar provider, and Quick Settings' truncation is a device
+question.
+
+- [ ] **A real provider answers the `Instances` query.** Grant `READ_CALENDAR`, arm with a
+      meeting ending inside the cap, and confirm the third action appears with that end
+      time — then that it is *absent* for an all-day entry, a declined invitation, a "free"
+      block, and a meeting ending past the cap.
+- [ ] **`Until 17:00` fits beside `End now` and `+30 min`.** Three actions is the most this
+      card has ever carried, and a notification truncates action labels before it wraps
+      them. Check both a 12-hour and a 24-hour device setting, since `5:00 PM` is the longer
+      of the two.
+- [ ] **The card gains the action rather than flickering.** The read runs after the post, so
+      the card goes up with two actions and is reposted with three — confirm that reads as a
+      fill-in and not as a card that redrew itself.
+
 ### Samsung, at Phase 8
 
 10. [ ] Does `setAutomaticZenRuleState` silence a One UI 8 device, and is the rule visible
@@ -3083,10 +3101,33 @@ Nothing here is scheduled; each is a sequel that follows from something already 
       - Worth a device check before designing: how do several app-owned rules present in
         the Modes UI, and does the user experience them as clutter?
 
-- [ ] **Calendar-seeded end times** — the first thing to add once the Play declarations
-      land. `READ_CALENDAR`, requested in-context from the sheet, feature hides itself if
-      denied. Kept out of v1 so a second sensitive permission doesn't ride along with the
-      one that can sink the project.
+- [x] **Calendar end times** — landed 2026-08-31 as the ongoing notification's third
+      action (`Until 17:00`), not as a sheet seed; `SPEC.md` §4.3 records the reversal and
+      why the shape changed. The maintainer chose to build it ahead of the Play
+      declarations rather than after them, so the deferral above is spent, not forgotten.
+      Still owed on a handset: that a real calendar provider answers the `Instances` query
+      the way the emulator-free unit tests assume, and that the third action reads
+      acceptably on a Quick Settings-width card.
+- [ ] **Calendar action: the last freshness windows, deferred for the maintainer's call**
+      (PR #156, Codex rounds 10-11). Two remain, both in the gap between a card being built
+      and being posted, and both fixable by versioning the record the same way takedown is
+      already versioned:
+      - A **timezone change** in that gap leaves `Until 17:00` reading in the old zone. The
+        receiver's repost queues a worker, that worker finds the cache populated and returns
+        without rebuilding, and the in-flight card wins.
+      - A **second record change** in that gap — another degradation, a cap move, a
+        replacement — is not caught by the rebuild's generation guard, which the takedown
+        bumps and nothing else does. The rebuild can overwrite the newer card with the
+        record it loaded a moment earlier.
+      **Not taken, deliberately.** Nine rounds of review on this PR each closed a hole and
+      each opened the next, all inside one mechanism: what invalidates the cached offer and
+      what may repost the card. `AGENTS.md` *Working with PRs* says to stop pushing at that
+      point rather than keep patching, so this is where it stops. What it costs while
+      unfixed: a wrong wall-clock time on one button, for one snooze, only for a user who
+      changes timezone mid-snooze, over an end that is itself correct — nothing is
+      mis-scheduled and no snooze is affected. Worth reopening if the maintainer wants the
+      mechanism finished; worth leaving if a cosmetic label in a rare case is not worth
+      more machinery on the notification path.
 - [ ] **Saved places** — name an anchor, give it its own policy and duration cap; the tile
       long-press becomes a picker. The `Anchor` type is already shaped for it.
 - [ ] **Settle the backup story** (maintainer, 2026-08-11) — before the first release with

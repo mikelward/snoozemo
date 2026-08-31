@@ -1,6 +1,6 @@
 # Snoozemo privacy policy
 
-**Last updated: 2026-08-29. Covers Snoozemo v1 for Android.**
+**Last updated: 2026-08-31. Covers Snoozemo v1 for Android.**
 
 ## The short version
 
@@ -173,6 +173,33 @@ denying location also costs you this. The permission is used for the departure d
 described above and for the two Wi-Fi values described here — the things this policy has
 already listed — and for nothing else.
 
+## Calendar
+
+If you allow it, Snoozemo reads your calendar for one thing: **when your next meeting
+ends**, so the snooze notification can offer a button that ends the snooze at that time —
+`Until 17:00`.
+
+**Only end times.** Snoozemo does not read the title, the organizer, the location, the
+guests, or any identifier of any event. It asks your calendar for one column, the time an
+event finishes, and that is all it ever sees. Calendars you have hidden, all-day entries,
+invitations you have declined, canceled meetings, and blocks marked "free" are skipped.
+
+**Only as far ahead as the snooze can last.** The question is bounded by the snooze's own
+time limit, because an end time past it could not change anything anyway — so Snoozemo
+never reads further into your calendar than the running snooze could reach. That limit is
+part of the question your calendar is asked, not a filter applied to the answer: a meeting
+running past the limit is not returned at all, rather than returned and then ignored.
+
+**Nothing about it leaves your phone, and nothing about it is written down.** The time is
+used to draw one button and is not sent anywhere, not in a crash report, not stored, and —
+unlike almost everything else Snoozemo does — not recorded in the debug log either. If a
+calendar read fails, the log notes only that it failed and the kind of error; it never
+names the query or anything in it.
+
+**Refusing it costs one button and nothing else.** No calendar permission means the
+notification simply carries its usual two actions. Every other part of Snoozemo works
+exactly the same.
+
 ## Do Not Disturb access
 
 Snoozemo asks for Do Not Disturb access so it can turn its own rule on and off. It creates
@@ -213,6 +240,8 @@ that stopped Snoozemo — for an app update, the installer.
 **What it never records**, as a hard rule with its own automated test: your coordinates,
 the name or identifier of any Wi-Fi network, and any place name you typed. The distance
 number says whether the departure test worked; where you were is not in the log at all.
+**Nothing from your calendar is in it either** — no event, no time, no title — not even
+the end time the notification offers you.
 
 **Where it lives and how long**: in Snoozemo's private cache on your phone, which other
 apps cannot read, Android's backup does not copy, and Android may clear on its own under

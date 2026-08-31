@@ -1616,10 +1616,23 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // exit clears it, including the one that applies by doing nothing and
         // any written later.
         if (result == EndChoiceResult.APPLIED) notifications.cancelFailure()
+        val requestId = intent?.getLongExtra(EXTRA_CHOICE_REQUEST_ID, 0L) ?: 0L
+        // No request id means no sheet behind this choice — the ongoing
+        // notification's `Until <time>` action, which has nowhere to show a
+        // refusal inline the way a row does. So it says so in the shade
+        // instead. The refusal that reaches here and nowhere else is the time
+        // falling inside the floor between the card being posted and the tap;
+        // `applyChosenEnd`'s own hard failures already post this card, and
+        // posting it twice replaces one one-shot with itself.
+        //
+        // Only `REFUSED`. `GONE` means the snooze this was for is over, and
+        // whatever ended it has already posted its own card — a second one
+        // would report the same event twice.
+        if (result == EndChoiceResult.REFUSED && requestId == 0L) notifications.showCouldNotSetEnd()
         // Addressed to the commit that asked, never broadcast: the other host
         // may have a commit outstanding too, and an answer delivered to it
         // would dismiss the wrong sheet and strand this one.
-        EndChoiceOutcome.report(intent?.getLongExtra(EXTRA_CHOICE_REQUEST_ID, 0L) ?: 0L, result)
+        EndChoiceOutcome.report(requestId, result)
     }
 
     /**

@@ -413,6 +413,7 @@ class TileTrampolineActivity : ComponentActivity() {
         SnoozeService.ACTION_END -> SnoozeService.ACTION_END
         SnoozeService.ACTION_EXTEND -> SnoozeService.ACTION_EXTEND
         SnoozeService.ACTION_RELEASE_STUCK -> SnoozeService.ACTION_RELEASE_STUCK
+        SnoozeService.ACTION_SET_CAP -> SnoozeService.ACTION_SET_CAP
         else -> SnoozeService.ACTION_ARM
     }
 
@@ -426,7 +427,25 @@ class TileTrampolineActivity : ComponentActivity() {
         // interaction. A crash here is a tap that does nothing and takes the
         // trampoline down with it.
         val started = runCatching {
-            startService(Intent(this, SnoozeService::class.java).setAction(action))
+            startService(
+                Intent(this, SnoozeService::class.java).setAction(action).also { forward ->
+                    // The notification's `Until <time>` action is the one tap
+                    // that carries data — the time it offered and the snooze it
+                    // offered it for — and the service declines a claim that no
+                    // longer matches. Copied by name rather than wholesale so a
+                    // start can never smuggle an extra this activity has not
+                    // considered into the service.
+                    if (action != SnoozeService.ACTION_SET_CAP) return@also
+                    forward.putExtra(
+                        SnoozeService.EXTRA_CAP_EXPIRES_AT,
+                        intent?.getLongExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, 0L) ?: 0L,
+                    )
+                    forward.putExtra(
+                        SnoozeService.EXTRA_CHOICE_FOR_SNOOZE,
+                        intent?.getLongExtra(SnoozeService.EXTRA_CHOICE_FOR_SNOOZE, 0L) ?: 0L,
+                    )
+                },
+            )
         }.onFailure {
             Log.e(TAG, "Starting the snooze service from the tile was refused.", it)
         }.getOrNull() != null
@@ -679,6 +698,12 @@ class TileTrampolineActivity : ComponentActivity() {
             // there is nothing stranded, and the tap can simply be repeated.
             SnoozeService.ACTION_EXTEND ->
                 SnoozeNotifications(applicationContext).showCouldNotExtend()
+            // Same shape as `+30 min`, opposite direction: the cap stands where
+            // it was, so nothing is stranded and the tap can be repeated — but a
+            // button that silently kept the old deadline is the app quietly
+            // ignoring the user (AGENTS.md, principle 2).
+            SnoozeService.ACTION_SET_CAP ->
+                SnoozeNotifications(applicationContext).showCouldNotSetEnd()
             // The last exit refusing to start is the one case with nothing
             // behind it at all — no record, no alarm, and the notification the
             // user just tapped is the only thing that was pointing at this

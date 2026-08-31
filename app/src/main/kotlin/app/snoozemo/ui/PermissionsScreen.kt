@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.snoozemo.R
+import app.snoozemo.core.CalendarPermission
 import app.snoozemo.core.LocationPermission
 import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
@@ -37,6 +38,14 @@ fun PermissionsScreen(
     notifications: NotificationPermission?,
     notificationsReachTheUser: Boolean,
     location: LocationPermission?,
+    /**
+     * Defaulted to unread, unlike the three above it. Every caller that has a
+     * reading passes one; a caller that doesn't get one — a screenshot test
+     * pinning a different row — renders the screen exactly as it looked before
+     * this row existed, rather than having to state an absence it has no
+     * opinion about.
+     */
+    calendar: CalendarPermission? = null,
     settingsFailure: SetupRowId?,
     /**
      * Whether a crashed run is currently pinned (`SPEC.md` §4.6). On a cold
@@ -56,6 +65,7 @@ fun PermissionsScreen(
     onAccessRow: () -> Unit,
     onNotificationsRow: () -> Unit,
     onLocationRow: () -> Unit,
+    onCalendarRow: () -> Unit = {},
     onDone: () -> Unit,
     onShareDebugLog: () -> Unit = {},
     onDismissCrash: () -> Unit = {},
@@ -144,6 +154,23 @@ fun PermissionsScreen(
                 onAction = onLocationRow,
                 failure = stringResource(R.string.failure_could_not_open_settings)
                     .takeIf { settingsFailure == SetupRowId.LOCATION },
+            )
+        }
+        // Last of the four, and deliberately: it is the only one whose absence
+        // costs a single notification action rather than a whole capability
+        // (SPEC.md §4.3), so it reads as the smallest thing on the screen.
+        // Same null-until-read discipline as the rows above it.
+        calendar?.let { state ->
+            val granted = state == CalendarPermission.GRANTED
+            SetupRow(
+                title = stringResource(R.string.setup_calendar_title),
+                status = stringResource(
+                    if (granted) R.string.setup_calendar_allowed else R.string.setup_calendar_missing,
+                ),
+                action = stringResource(R.string.setup_action_allow).takeUnless { granted },
+                onAction = onCalendarRow,
+                failure = stringResource(R.string.failure_could_not_open_settings)
+                    .takeIf { settingsFailure == SetupRowId.CALENDAR },
             )
         }
         // Always present and always enabled: nothing here is mandatory, so the

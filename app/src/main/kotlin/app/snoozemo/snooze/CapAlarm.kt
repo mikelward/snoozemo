@@ -1004,6 +1004,24 @@ private const val RELEASE_RETRY_MS = 5 * 60 * 1000L
  */
 class TimeChangedReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
+        // A **timezone** change moves no deadline — every alarm here counts in
+        // elapsed realtime and every stored instant is absolute — so none of
+        // the reconciliation below applies. What it does move is the one piece
+        // of text the app formats into a local time and then leaves on screen
+        // for hours: the ongoing card's `Until 17:00` action (SPEC.md §4.3).
+        // Flying with a snooze armed would otherwise leave that button naming
+        // a wall-clock time the phone no longer agrees with, while the end it
+        // actually sets is correct — the quietly-wrong outcome principle 2
+        // ranks second worst (Codex, PR #156).
+        //
+        // A repost is the whole fix: the offer is cached as an `Instant`, which
+        // no timezone touches, so rebuilding the card re-formats it in the zone
+        // now in force. Nothing to do when the start is refused — the label is
+        // cosmetic, and the next state change rebuilds it anyway.
+        if (intent?.action == Intent.ACTION_TIMEZONE_CHANGED) {
+            if (ActiveSnoozeStore(context).load() != null) SnoozeService.refresh(context)
+            return
+        }
         if (intent?.action != Intent.ACTION_TIME_CHANGED) return
         val store = ActiveSnoozeStore(context)
         val snooze = store.load() ?: return

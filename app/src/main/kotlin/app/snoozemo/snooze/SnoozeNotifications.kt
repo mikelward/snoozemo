@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import app.snoozemo.R
 import app.snoozemo.degradationReasonRes
 import app.snoozemo.tile.R as TileR
@@ -13,8 +14,14 @@ import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.TrackingMode
+import app.snoozemo.core.MeetingEnd
+import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.ui.MainActivity
+import app.snoozemo.ui.formatSheetTime
+import java.time.Instant
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 
 /**
  * The "you are snoozed" affordance (SPEC.md §4.3) and every reason a snooze
@@ -231,8 +238,42 @@ class SnoozeNotifications(private val context: Context) {
     private fun reasonFor(cause: DegradationCause?): String? =
         degradationReasonRes(cause)?.let(context::getString)
 
-    fun showOngoing(snooze: ActiveSnooze) {
+    fun showOngoing(snooze: ActiveSnooze) = showOngoing(snooze, onlyIfGeneration = null)
+
+    /**
+     * @param onlyIfGeneration when set, the post is abandoned if the ongoing
+     *   card has been taken down since that generation was observed. Only the
+     *   calendar worker passes it, and it is the one caller that needs it:
+     *   every other `showOngoing` runs on the service's own thread, which is
+     *   where teardown runs too, so those are already serialized against it.
+     */
+    private fun showOngoing(snooze: ActiveSnooze, onlyIfGeneration: Long?) {
         reapplyDndBypassOnce()
+        // Read once and threaded through both halves below, so a grant landing
+        // between them cannot build a card from one answer and cache the other.
+        // `checkSelfPermission` is a local package-manager cache hit rather
+        // than a binder round trip, which is why it is affordable here at all —
+        // the same reading the settings rows already rely on.
+        val calendarReadable = NextMeetings.isReadable(context)
+        postOngoing(buildOngoing(snooze, cachedOfferFor(snooze, calendarReadable)), onlyIfGeneration)
+        // After the card is up, never before it: this is a binder query into
+        // another app's provider and the notification is on the arm path
+        // (SPEC.md §4.1, §6.9). A first arm therefore shows two actions and
+        // gains the third a moment later, which is the same trade the screen
+        // makes everywhere else — show now, fill in when ready.
+        refreshOfferIfUnknown(snooze, calendarReadable)
+    }
+
+    /**
+     * The ongoing card as it would look for [snooze], offering [until].
+     *
+     * Split from posting it so the calendar worker can do this part — string
+     * lookups and three `PendingIntent` binder calls — *outside* the lock that
+     * serializes its post against teardown. The offer is passed rather than
+     * read from the cache, so the worker can build a card for an answer it has
+     * not committed to the cache yet.
+     */
+    private fun buildOngoing(snooze: ActiveSnooze, until: Instant?): android.app.Notification {
         val body = when (snooze.mode) {
             TrackingMode.FULL -> context.getString(R.string.ongoing_ends_when_you_leave)
             // Says what it can actually do, not what it wishes it could.
@@ -306,8 +347,232 @@ class SnoozeNotifications(private val context: Context) {
                     trampolinePendingIntent(SnoozeService.ACTION_EXTEND, REQUEST_EXTEND),
                 ).build(),
             )
+            // `Until 17:00` — the next meeting's end, and only when there is one
+            // worth offering (SPEC.md §4.3). Absent rather than disabled where
+            // there isn't: a third button that cannot be pressed is a worse
+            // answer than two that can, and the calendar being unreadable is the
+            // ordinary case, not a failure to report.
+            //
+            // The time is formatted through the platform's own time format, so
+            // it reads 17:00 or 5:00 PM exactly as the rest of the phone does.
+            .let { builder ->
+                if (until == null) {
+                    builder
+                } else {
+                    builder.addAction(
+                        android.app.Notification.Action.Builder(
+                            null,
+                            context.getString(R.string.action_end_at, formatSheetTime(context, until)),
+                            endAtPendingIntent(until, snooze),
+                        ).build(),
+                    )
+                }
+            }
             .build()
-        post(ID_ONGOING, notification)
+        return notification
+    }
+
+    /**
+     * Posts the ongoing card, serialized against [cancelOngoing].
+     *
+     * The lock exists for one caller: the calendar worker, whose post has to be
+     * atomic with the check that the snooze it is for is still running. Without
+     * that, a teardown landing between the check and the post leaves `Snoozing`
+     * standing over a phone that has been let ring, with nothing scheduled to
+     * take it down (Codex, PR #156, second round). Everything under it is a
+     * `NotificationManager` call and a preferences read — no binder round trip
+     * to another app, and no work that can block for long.
+     *
+     * [onlyIfGeneration] carries that check the rest of the way. The worker's
+     * rebuild path builds outside the lock and posts here, so without it a
+     * takedown in that gap would be overwritten by the card it validated a
+     * moment earlier — the same failure one step further along the path
+     * (Codex, PR #156).
+     */
+    private fun postOngoing(notification: android.app.Notification, onlyIfGeneration: Long? = null) {
+        synchronized(ongoingLock) {
+            if (onlyIfGeneration != null && onlyIfGeneration != ongoingGeneration) {
+                SnoozeDebugLog.event("calendar: the card came down while its rebuild was being built; dropping it")
+                return
+            }
+            post(ID_ONGOING, notification)
+        }
+    }
+
+    /**
+     * The offered meeting end for [snooze], if one has already been read.
+     *
+     * Keyed by the snooze's identity, its cap, **and** whether the calendar was
+     * readable when the answer was reached — the two times at millisecond
+     * precision, because that is the precision the record survives a reload at.
+     * Comparing `Instant`s exactly means a record built in memory never matches
+     * the same record read back from the store, and the cache silently misses
+     * on every path that reloads. The first two so the answer cannot
+     * outlive what it was computed against — a `+30 min` moves the cap, and a
+     * meeting inside the old one may be outside the new. The third because
+     * "no permission" is cached as firmly as a time, and a grant arriving
+     * mid-snooze would otherwise be answered from that cache for the rest of
+     * the snooze — the third action never appearing at all for the snooze the
+     * user granted access *for* (Codex, PR #156). Revocation is the same key
+     * read the other way: a time offered under a permission the user has since
+     * taken back is not one to keep showing.
+     */
+    private fun cachedOfferFor(snooze: ActiveSnooze, readable: Boolean): Instant? =
+        offer?.takeIf { it.matches(snooze, readable) }?.endsAt
+
+    /**
+     * Reads the calendar off the main thread and reposts if it found a time.
+     *
+     * Does nothing when the answer for this exact snooze and cap is already
+     * known — which is what keeps the repost below from looping, since by the
+     * time it runs the cache covers the card it is rebuilding.
+     */
+    private fun refreshOfferIfUnknown(snooze: ActiveSnooze, readable: Boolean) {
+        if (offer?.matches(snooze, readable) == true) return
+        // Captured before the query, so any teardown from here on is visible as
+        // a mismatch when the answer lands — including one that cancels the
+        // card *before* erasing the record, which a record check alone would
+        // read as a snooze still running.
+        val generation = ongoingGeneration
+        if (!readable) {
+            // Cached as "nothing", so a card reposted every state change does
+            // not re-ask a question whose answer is a permission check — and
+            // keyed on that answer, so a later grant is not served from it.
+            offer = MeetingOffer(
+                snooze.startedAt.toEpochMilli(),
+                snooze.capExpiresAt.toEpochMilli(),
+                readable = false,
+                endsAt = null,
+            )
+            return
+        }
+        readCalendar.execute {
+            // Asked again here, because the check above happens at *queue*
+            // time: two posts in quick succession — two state transitions, or a
+            // grant and the repost it triggers — both see no cache and both
+            // queue. One thread runs them in order, so by now the first answer
+            // may already be in hand, and re-querying for it would be two
+            // provider round trips where SPEC.md §4.3 promises one per snooze.
+            if (offer?.matches(snooze, readable) == true) return@execute
+            val now = Instant.ofEpochMilli(SnoozeClock.read().wallMillis)
+            val found = MeetingEnd.offerFor(
+                snooze,
+                NextMeetings.endsBefore(context, snooze, now),
+                now,
+            )
+            // Built here, outside the lock: this is where the binder calls are
+            // (three `PendingIntent`s), and holding a lock across them would
+            // put the service's main thread behind this worker.
+            val card = found?.let { buildOngoing(snooze, it) }
+            // **Atomic with teardown**, which is the whole point of the lock:
+            // the check that this answer still belongs to the running snooze
+            // and the post that acts on it cannot be separated by a
+            // `cancelOngoing` landing between them. Without that, a departure
+            // or the cap arriving in the gap leaves `Snoozing` standing over a
+            // phone that has just been let ring, with nothing scheduled to take
+            // it down (Codex, PR #156, second round).
+            //
+            // Two things are checked, because neither covers the other. The
+            // **generation** catches a teardown that cancelled the card before
+            // erasing the record, which a record check alone reads as a snooze
+            // still running. The **record** catches a replacement, which no
+            // cancel accompanies — and its cap as well as its identity, since a
+            // `+30 min` mid-query makes this answer stale rather than wrong.
+            //
+            // Compared at millisecond precision, because that is the precision
+            // the record survives at: the store writes epoch millis, so an
+            // in-memory `Instant` carrying finer precision than a reload can
+            // return would never match itself and the third action would never
+            // appear at all. The service's own identity check crosses the same
+            // boundary the same way.
+            //
+            // Dropped rather than cached when it does not match, so an answer
+            // for a snooze that is over cannot clobber the entry belonging to
+            // the one that replaced it.
+            // The record to rebuild from when this answer's own card is stale,
+            // handled after the lock is released — see below.
+            val rebuildFor = synchronized(ongoingLock) {
+                val live = ActiveSnoozeStore(context).load()
+                // Re-read rather than trusted from the top of `showOngoing`: a
+                // revocation during the query would otherwise let this commit
+                // `readable = true` over the `false` the lifecycle refresh just
+                // cached, and post a three-action card built under a permission
+                // the user has taken back (Codex, PR #156).
+                if (!NextMeetings.isReadable(context) ||
+                    ongoingGeneration != generation ||
+                    live == null ||
+                    live.startedAt.toEpochMilli() != snooze.startedAt.toEpochMilli() ||
+                    live.capExpiresAt.toEpochMilli() != snooze.capExpiresAt.toEpochMilli()
+                ) {
+                    SnoozeDebugLog.event(
+                        "calendar: the snooze changed while its meeting end was read; dropping it",
+                    )
+                    return@execute
+                }
+                // Cached first, and against the identity alone: the meeting
+                // end does not depend on anything else about the record, so it
+                // is a valid answer for this snooze whether or not the card
+                // below gets posted.
+                offer = MeetingOffer(
+                    snooze.startedAt.toEpochMilli(),
+                    snooze.capExpiresAt.toEpochMilli(),
+                    readable = true,
+                    endsAt = found,
+                )
+                // Only when there is something to add. Reposting to show the
+                // same two actions would be a wasted rebuild of a card nobody's
+                // view of has changed.
+                //
+                // And only when the record has not changed *at all*, not merely
+                // kept its identity and cap. The card built above carries the
+                // captured record's tracking mode and degradation, so posting
+                // it after presence dropped a snooze from `FULL` to
+                // `DURATION_ONLY` would restore `Ends when you leave` over a
+                // snooze that is now only a timer — the one thing §4.3 exists
+                // to prevent, and principle 2's failure exactly (Codex,
+                // PR #156).
+                //
+                // Skipping costs nothing: whatever changed the record posted
+                // its own card, and the offer is in the cache by the line
+                // above, so that card's own rebuild — or the next one — carries
+                // the action without another calendar read.
+                //
+                // Named fields rather than `live != snooze`, and these three
+                // because they are what the card reads beyond the identity and
+                // cap already checked: the mode and its reason are the body,
+                // and the boot reference is what `remaining` counts the
+                // chronometer from. Whole-record equality would compare an
+                // in-memory `Instant` against one reloaded at millisecond
+                // precision and never match.
+                if (live.mode != snooze.mode ||
+                    live.degradation != snooze.degradation ||
+                    live.bootReference != snooze.bootReference
+                ) {
+                    SnoozeDebugLog.event(
+                        "calendar: the snooze changed while its meeting end was read; rebuilding for the newer one",
+                    )
+                    live
+                } else {
+                    card?.let { post(ID_ONGOING, it) }
+                    null
+                }
+            }
+
+            // Rebuilt rather than dropped. Skipping the stale card is right,
+            // but the card that *is* up was posted before this answer existed —
+            // and the read it queued alongside itself now finds the cache
+            // populated and does nothing, so without this a snooze that
+            // degraded during the query would sit on two actions until some
+            // unrelated transition rebuilt it (Codex, PR #156).
+            //
+            // Outside the lock, and safe from looping: the offer is cached by
+            // the line above, so this pass finds it, posts, and its own
+            // `refreshOfferIfUnknown` returns on the cache hit.
+            // Carrying the generation it validated under, so a takedown
+            // between here and the post inside `postOngoing` abandons it rather
+            // than overwriting the takedown.
+            rebuildFor?.let { showOngoing(it, onlyIfGeneration = generation) }
+        }
     }
 
     /**
@@ -318,8 +583,27 @@ class SnoozeNotifications(private val context: Context) {
      * something has to remove the "Snoozing" the user can see over a phone that
      * is about to ring.
      */
-    fun cancelOngoing() {
-        drop(ID_ONGOING)
+    fun cancelOngoing() = dropOngoing()
+
+    /**
+     * Takes the ongoing card down, and is the **only** way it comes down.
+     *
+     * Bumped and dropped under the same lock the calendar worker posts under,
+     * so a teardown can never land between that worker's check and its post.
+     * The counter is what a *record* check cannot see: a teardown is free to
+     * cancel the card before erasing the record, and in that order the record
+     * still reads as a snooze running.
+     *
+     * Every path that removes this card goes through here — the ordinary
+     * ending in [showEnded] as much as [cancelOngoing]. A `drop(ID_ONGOING)`
+     * that skipped it would leave the most common teardown of all outside the
+     * protocol, which is the hole it was built to close (Codex, PR #156).
+     */
+    private fun dropOngoing() {
+        synchronized(ongoingLock) {
+            ongoingGeneration++
+            drop(ID_ONGOING)
+        }
     }
 
     /**
@@ -335,7 +619,10 @@ class SnoozeNotifications(private val context: Context) {
     }
 
     fun showEnded(reason: EndReason?) {
-        drop(ID_ONGOING)
+        // Through the serialized takedown, not a bare drop: this is the
+        // *ordinary* ending, so it is the teardown a stale calendar answer is
+        // most likely to race.
+        dropOngoing()
         val text = when (reason) {
             EndReason.DEPARTURE -> R.string.ended_departure
             EndReason.DURATION_CAP -> R.string.ended_cap
@@ -641,6 +928,37 @@ class SnoozeNotifications(private val context: Context) {
         )
 
     /**
+     * The `Until <time>` action: the same trampoline hop the other two take,
+     * carrying the time it is offering and the snooze it was computed for.
+     *
+     * Through the trampoline for the reason above — a refused background start
+     * of a service is consumed silently — and the recovery here is `+30 min`'s
+     * rather than `End now`'s: nothing is stranded, since the snooze keeps the
+     * cap it already had, but the tap has to say it did nothing.
+     *
+     * The snooze's identity rides along so the service can decline a tap on a
+     * card that outlived the snooze it was posted for. A notification is exactly
+     * where that happens: the shade holds the card while the phone is in a
+     * pocket, and a snooze that ended and was replaced in between would
+     * otherwise take a time chosen for the previous one.
+     *
+     * One request code, not one per time: `Intent.filterEquals` ignores extras,
+     * so `FLAG_UPDATE_CURRENT` rewrites the offer in place rather than leaving a
+     * second `PendingIntent` holding a stale one.
+     */
+    private fun endAtPendingIntent(endsAt: Instant, snooze: ActiveSnooze): PendingIntent =
+        PendingIntent.getActivity(
+            context,
+            REQUEST_END_AT,
+            Intent(context, TileTrampolineActivity::class.java)
+                .setAction(SnoozeService.ACTION_SET_CAP)
+                .putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, endsAt.toEpochMilli())
+                .putExtra(SnoozeService.EXTRA_CHOICE_FOR_SNOOZE, snooze.startedAt.toEpochMilli())
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
+    /**
      * Tapping the card itself — not one of its actions — opens the app.
      *
      * Straight to [MainActivity], unlike the two actions above: this is a plain
@@ -702,10 +1020,73 @@ class SnoozeNotifications(private val context: Context) {
         internal fun resetForTest() {
             channelsCreated = false
             bypassReapplyAttempted = false
+            offer = null
+            ongoingGeneration = 0L
+            readCalendar = Executor { it.run() }
         }
 
         /** Test-only: whether [reapplyDndBypassOnce] has marked itself done. */
         internal fun bypassReapplyAttemptedForTest(): Boolean = bypassReapplyAttempted
+
+        /**
+         * The meeting end last read for one snooze, or the fact that there
+         * isn't one.
+         *
+         * Process-scoped, like the guards above and for the same reason: the
+         * service constructs a fresh instance on every start, and the point of
+         * caching a cross-process provider query is to pay for it once rather
+         * than on every repost of a card that is reposted on every state
+         * change.
+         */
+        @Volatile
+        private var offer: MeetingOffer? = null
+
+        /** Serializes posting the ongoing card against taking it down. */
+        private val ongoingLock = Any()
+
+        /**
+         * Bumped every time the ongoing card is taken down.
+         *
+         * Process-scoped like [offer], and read by the calendar worker as the
+         * one signal a record check cannot supply — see [cancelOngoing].
+         */
+        @Volatile
+        private var ongoingGeneration: Long = 0L
+
+        /**
+         * The one thread the calendar is read on.
+         *
+         * A single thread rather than a pool: the reads are for one snooze,
+         * ordering between them is what keeps the newest answer last, and one
+         * idle thread is the cheapest thing that will never run this on the
+         * main one.
+         */
+        @VisibleForTesting
+        internal var readCalendar: Executor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "snoozemo-calendar").apply { isDaemon = true }
+        }
+
+        /**
+         * What was read, and what it was read against.
+         *
+         * [endsAt] is null for "asked, and there is nothing to offer" — which is
+         * the ordinary case (no calendar permission, no meeting, nothing inside
+         * the cap) and has to be cached as firmly as an answer, or a card
+         * reposted on every state change re-asks a question whose answer has
+         * not changed.
+         */
+        private data class MeetingOffer(
+            val forSnoozeMillis: Long,
+            val capMillis: Long,
+            val readable: Boolean,
+            val endsAt: Instant?,
+        ) {
+            /** Whether this answer still speaks for [snooze] under [readable]. */
+            fun matches(snooze: ActiveSnooze, readable: Boolean): Boolean =
+                forSnoozeMillis == snooze.startedAt.toEpochMilli() &&
+                    capMillis == snooze.capExpiresAt.toEpochMilli() &&
+                    this.readable == readable
+        }
 
         private const val TAG = "SnoozeNotifications"
 
@@ -722,6 +1103,9 @@ class SnoozeNotifications(private val context: Context) {
         const val REQUEST_RELEASE_STUCK = 12
         const val REQUEST_DISMISS_STUCK = 13
         const val REQUEST_CONTENT = 14
+
+        /** The `Until <time>` action; see [endAtPendingIntent]. */
+        const val REQUEST_END_AT = 15
 
         /** Handled by [NotificationActionReceiver]; takes the card down and nothing else. */
         const val ACTION_DISMISS_STUCK = "app.snoozemo.action.DISMISS_STUCK"
