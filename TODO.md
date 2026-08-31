@@ -3341,49 +3341,43 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     a screen picking their values back up after a restart, were removed with
     them — there is no signal left for them to assert. They come back with the
     listener.
-  **Contested by Codex on PR #153, and now the maintainer's call.** Two P1s
-  against exactly this deferral, and the first is right in a way the entry
-  above understated: the opt-out persists, `MainActivity.setDebugLog` clears
-  the warning, and the user is told a **privacy control** succeeded while
-  `androidlog.log` may still be on disk. `TODO.md` records a decision; it does
-  not protect a user. The second P1 is milder than it reads — a refused
-  `acknowledgeCrashBanner()` leaves the banner **up** by construction in the
-  shared sink, so the dismissal does not falsely report success; what is lost
-  is the *explanation* for a banner the user can see did not clear.
 
-  The fix is the same additive library change either way, and the sink already
-  holds the answer (`purgeFailed` / `purgeFailure`, set inside `onCleared`'s
-  worker task) — this is publication, not detection. The fork:
-  **(1)** hold #153 until `androidlog` grows the storage listener, then wire
-  both indicators to it, so neither ever regresses; **(2)** land #153 now and
-  follow immediately, accepting a window where the purge warning does not
-  fire. Recommended: **(1)**, since the interim ships a control that reports a
-  success it has not verified. Not resolved here in either direction — the
-  threads stay open and #153 stays unmerged until it is answered.
+    **What actually came back**, once the listener landed: three tests over the
+    two flags, driven through the shared sink rather than the deleted local
+    one — an Off toggle whose purge is refused, a dismissal the storage
+    refuses, and a share whose handle skipped an unreadable run — plus the one
+    `MainActivityLifecycleTest` case (the dismiss outcome missed while
+    stopped). Fewer than the nine, deliberately: most of the removed nine
+    asserted the *old* file sink's own delete and rename behavior, which is now
+    the library's to test and is covered by its suite.
+  **Contested by Codex on PR #153, and the deferral did not survive it.** Two
+  P1s landed against exactly this entry, and the first was right in a way the
+  text above understated: the opt-out persists, `MainActivity.setDebugLog`
+  clears the warning, and the user is told a **privacy control** succeeded
+  while `androidlog.log` may still be on disk. A `TODO.md` entry records a
+  decision; it does not protect a user. A third P1 then widened the same gap
+  — an unreadable crash file beside a readable ordinary run gives a handle
+  covering only the ordinary run, so `omitted` reads false and a landed copy
+  consumes the pin over a report that never carried the crash.
 
-  **A third P1 joined them, and it widens the same gap.** When retention holds
-  an unreadable crash file beside a readable ordinary run, `readPreviousRun()`
-  answers with a handle covering only the ordinary run. `wasCrash` is the
-  global pinned flag so it reads true, `text` is non-blank, and `omitted` is
-  therefore false — so a landed copy consumes the pin and lowers the banner
-  over a report that never contained the crash. The evidence survives on disk;
-  the prompt to send it does not. This branch introduced it: narrowing
-  `readSucceeded` to "the read ran" was argued safe because the library never
-  puts an unreadable file into the handle, which is true of clearing the
-  **files** and false of acknowledging the **banner**.
+  **Resolved by taking option (1): the library grew the signal first**
+  (androidlog#20, 2026-08-31). `PreviousRun.complete` says whether a handle
+  covers every run still on disk, and `storageOutcomes` + `addStorageListener`
+  publish the opt-out purge and crash-dismissal outcomes on the same
+  contract as `unacknowledgedCrash`. All three indicators are wired to it
+  here: `lastDisableCleanupFailed` (now the union of the sink's purge and
+  this app's own legacy-directory migration, which the sink cannot answer
+  for), `lastDismissFailed`, and `omitted`. So the window this entry
+  guessed its way into never shipped.
 
-  It cannot be fixed app-side: `PreviousRun` exposes `text` and nothing else,
-  so this app cannot tell "the handle includes the unacknowledged crash" from
-  "the handle is the ordinary run beside it". So the library owes the caller
-  **read completeness** as well as the purge outcome, which makes three of the
-  four P1s on #153 one gap rather than three findings — and makes option (1)
-  the stronger of the two.
-
-  A fourth P1 on the same review — the legacy `cacheDir/debuglog` migration
-  never retried on the Off toggle — needed no library change and is **fixed**
-  in `cc48be9`, with a test. A fifth — a pinned crash that this app's own
-  25,000-character render truncated away, consumed anyway — is **fixed** in
-  `6116cb1`, also with a test.
+  Two more P1s on the same review needed no library change and are fixed
+  with tests: the legacy `cacheDir/debuglog` migration never retried on the
+  Off toggle (`cc48be9`), and a pinned crash this app's own
+  25,000-character render truncated away, consumed anyway (`6116cb1`). A P2
+  on the report's heading is fixed too — the section can carry several runs
+  and only one of them crashed, so it reads *Earlier runs (one ended in an
+  uncaught exception)* rather than labeling every ordinary restart as the
+  crash.
 
 - **Does `androidlog` get a row on the Licenses screen?** (Codex, PR #153, and
   the same finding on clothescast#1176 before it.) `exportBundledLicenses`
