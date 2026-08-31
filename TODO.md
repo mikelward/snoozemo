@@ -2981,6 +2981,18 @@ that can only be settled on a real device, ordered by risk.
 
 ## Deferred
 
+- **A seven-failure unit-test run seen once, never reproduced** (2026-08-31).
+  One `:app:testDirectDebugUnitTest` run went red with seven failures whose
+  shape pointed at recording being *off* when a test expected it on — a
+  persisted `DebugLogStore` setting leaking between test classes is the
+  standing suspect, since the failures named the drain gate rather than a
+  timeout. Two subsequent full `--rerun-tasks` runs on the same tree were
+  green (364 tests, 45 classes), and the isolated class was green on its own,
+  so there is nothing to fix against yet. Recorded rather than dropped: if it
+  returns, make the ordering explicit — restore the persisted setting in
+  `DebugLoggingTest`'s `@After` — rather than bumping a timeout or adding a
+  sleep, which the testing rules forbid.
+
 - **Align the four app repos' debug loggers.** `ProcessExitReasons.kt` landed
   here as a deliberate copy of Type Launcher's — same file name, function
   names, log-line format and field names — so the logs read identically and a
@@ -3263,6 +3275,21 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     a snooze that ends on a duration cap needs the same controller.
 
 ## Decisions needing review
+
+- **Guessed under autopilot: reworded the debug log's cleanup-failure line to
+  be state-neutral** (2026-08-31). It read *"Off, but some saved files couldn't
+  be deleted"*; it now reads *"Some saved files couldn't be deleted"*.
+  **Why:** the flag deliberately outlives the Off toggle that set it — turning
+  the log back on removes no files, so the warning has to stand — and it is now
+  also set at startup, where the switch may be either. The old wording asserted
+  Off beside a switch that could be visibly On (Codex, PR #153).
+  **The alternative** was to keep the Off-specific wording and render it only
+  while disabled, which hides a true warning in the state where the user is
+  most likely to be looking at the row.
+  **Why it is reversible:** one string. `values-de` is deliberately *not*
+  updated — the Translations rule wants the maintainer's sign-off on English
+  first — so it carries the old wording and a `TODO: translate` marker until
+  this is settled either way.
 
 - **Guessed under autopilot: retire `DebugLogFiles.kt` now and accept a window
   without the on-screen cleanup-failure warning** (2026-08-30). The library reports
