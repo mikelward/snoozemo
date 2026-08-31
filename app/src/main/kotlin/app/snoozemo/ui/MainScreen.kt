@@ -16,6 +16,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -74,6 +75,14 @@ internal fun MainScreen(
     playUpdate: PlayUpdateState = PlayUpdateState.NotAvailable,
     /** Whether the last Restart tap on the update banner was refused. */
     playUpdateRestartFailed: Boolean = false,
+    /**
+     * Whether background location is missing *and* this flavor's tracking
+     * needs it. False on `direct`, which declares no such permission, and
+     * false while the reading is unknown — unread is not "missing".
+     */
+    backgroundLocationMissing: Boolean = false,
+    /** Whether the user has dismissed the background-location banner for good. */
+    backgroundLocationBannerDismissed: Boolean = true,
     // Only SetupRowId.TILE is ever relevant here — this banner has no other
     // capability to fail — but the type is shared with the other screens'
     // failure-routing rather than narrowed to a Boolean, so a caller reading
@@ -91,6 +100,8 @@ internal fun MainScreen(
     onStartPlayUpdate: () -> Unit = {},
     onCompletePlayUpdate: () -> Unit = {},
     onDismissPlayUpdate: () -> Unit = {},
+    onAllowBackgroundLocation: () -> Unit = {},
+    onDismissBackgroundLocationBanner: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -143,6 +154,17 @@ internal fun MainScreen(
                 onDismiss = onDismissTileBanner,
                 failure = stringResource(R.string.failure_could_not_add_tile)
                     .takeIf { settingsFailure == SetupRowId.TILE },
+            )
+        }
+        // Below both of the above, and above the update banner. A missing
+        // tile or missing Do Not Disturb access stops the product working;
+        // this only degrades it, so it must not push either of those down
+        // the screen — but it outranks an available update, which costs the
+        // user nothing to ignore.
+        if (backgroundLocationMissing && !backgroundLocationBannerDismissed) {
+            BackgroundLocationBanner(
+                onAllow = onAllowBackgroundLocation,
+                onDismiss = onDismissBackgroundLocationBanner,
             )
         }
         // Same banner `SettingsScreen` shows, for the same reason `CrashBanner`
@@ -314,6 +336,63 @@ private fun remainingText(remaining: Duration): String {
         stringResource(TileR.string.tile_remaining_hours, hours, minutes % 60)
     } else {
         stringResource(TileR.string.tile_remaining_minutes, minutes)
+    }
+}
+
+/**
+ * Background location is missing, so presence tracking cannot run at all and
+ * every snooze will sit until its timer (SPEC.md §8.1).
+ *
+ * **Not error-toned, and that is the point.** Nothing is broken: the snooze
+ * still arms, still silences the phone, and still ends — on the duration cap
+ * the user set rather than on their walking away. So it takes
+ * [TileBanner]'s tone, not [RequiredPermissionBanner]'s, and sits below both
+ * of those on the screen: a missing tile or missing Do Not Disturb access
+ * stops the product working, where this degrades it.
+ *
+ * Dismissible for good, like the tile banner and for the same reason:
+ * someone who has declined once has been asked, and the permanent location
+ * row on [PermissionsScreen] outlives the banner, so the route to granting
+ * it stays open without asking twice.
+ *
+ * **Worded as an offer, not a warning** (maintainer, 2026-08-31). Nothing
+ * has been lost and nothing is broken — there is a capability the user can
+ * switch on — so the copy asks a question and names the benefit in one
+ * line, and the buttons answer that question rather than reading as generic
+ * actions.
+ */
+@Composable
+private fun BackgroundLocationBanner(onAllow: () -> Unit, onDismiss: () -> Unit) {
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.background_location_banner_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = stringResource(R.string.background_location_banner_body),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.background_location_banner_dismiss))
+                }
+                Button(onClick = onAllow) {
+                    Text(stringResource(R.string.background_location_banner_allow))
+                }
+            }
+        }
     }
 }
 

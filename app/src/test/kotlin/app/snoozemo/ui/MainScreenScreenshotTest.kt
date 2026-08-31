@@ -745,6 +745,145 @@ class MainScreenScreenshotTest {
     }
 
     @Test
+    fun `missing background location says what it costs`() {
+        capture("main-screen-background-location.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                backgroundLocationMissing = true,
+                backgroundLocationBannerDismissed = false,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        // An offer, not a warning (maintainer, 2026-08-31): nothing has
+        // been lost, there is a capability the user can switch on, and the
+        // banner's whole job is to say so in one line.
+        composeRule.onNodeWithText("Enable location support?").assertExists()
+    }
+
+    @Test
+    fun `a dismissed background-location banner does not come back`() {
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                backgroundLocationMissing = true,
+                backgroundLocationBannerDismissed = true,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Enable location support?").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a held background grant raises no banner`() {
+        // The direction that matters more than the banner appearing: this is
+        // the default state of a correctly-set-up install, and a banner that
+        // showed here would be permanent noise on the one screen this app
+        // has.
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                backgroundLocationMissing = false,
+                backgroundLocationBannerDismissed = false,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Enable location support?").assertDoesNotExist()
+    }
+
+    @Test
+    fun `the banner's own buttons are wired`() {
+        var allowed = 0
+        var dismissed = 0
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                backgroundLocationMissing = true,
+                backgroundLocationBannerDismissed = false,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+                onAllowBackgroundLocation = { allowed++ },
+                onDismissBackgroundLocationBanner = { dismissed++ },
+            )
+        }
+
+        composeRule.onNodeWithText("Yes please").performScrollTo().performClick()
+        composeRule.onNodeWithText("No thanks").performScrollTo().performClick()
+
+        assertEquals(1, allowed)
+        assertEquals(1, dismissed)
+    }
+
+    @Test
     fun `a failure is said, not swallowed`() {
         capture("main-screen-outcome.png") {
             MainScreen(
