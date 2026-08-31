@@ -3533,6 +3533,24 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   when they first see it. Add the elapsed-offer case to the same fix: whatever identity the
   sheet carries has to cover *when* it was seeded as well as *what* it was seeded against.
 
+- **`EndChoiceOutcome` holds one listener, and this PR gives it two hosts**
+  (2026-08-30, Codex on PR #152, eleventh round — and the one worth reading first).
+  `watch` assigns a single `listener` slot, which was sufficient while the tile trampoline
+  was the only surface with a sheet. The app screen now has one too, in a separate
+  `singleInstance` task that stays alive behind it, so both can hold an outstanding commit:
+  the second `watch` replaces the first, the first service result goes to whichever host
+  registered last and dismisses the wrong sheet, that callback clears the slot, and the
+  second result lands in `pending` with nobody to take it — leaving the other sheet
+  **permanently committing**, which the swipe veto also makes undismissable.
+  **This is not the sheet-identity family and it is more serious**: it is a stuck,
+  unanswerable sheet rather than a stale offer, and unlike the rest of the list it is
+  *created by this change* rather than exposed by it. Before this PR one slot was correct.
+  The fix is the request identity deferred twice already — a per-request or multi-listener
+  channel, so a result reaches the commit that asked for it — and it is the same mechanism
+  the `startedAt` work needs, which is an argument for doing that follow-up **before** this
+  merges rather than after. Maintainer's call, and the one place on this list where the
+  ordering actually matters.
+
 - **Rounding drops a wall clock that only exists on the other side of a spring-forward gap**
   (2026-08-25, Codex on PR #118, declined — the fifth consecutive finding on this surface).
   `getValidOffsets` is empty for a local time inside the gap, so that neighbor contributes no
