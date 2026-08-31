@@ -1764,9 +1764,43 @@ class MainActivity : ComponentActivity() {
         Thread {
             // Contained: a bare thread has no handler, so a refused binder read
             // would take the process down from a screen doing nothing but
-            // reconciling. Nothing is the right outcome for a failed read — the
-            // screen keeps whatever it last knew, and the next refresh asks
-            // again.
+            // reconciling. Keeping whatever the screen last knew is the chosen
+            // outcome (maintainer, 2026-08-31), not an absence of one — and it
+            // is chosen over the two alternatives rather than by default.
+            //
+            // **"The next refresh asks again" is true of two callers and false
+            // of the third, which is the one that matters.** `onStart` and a
+            // record change both come round again on their own. The access
+            // *broadcast* does not: the platform says only that access changed,
+            // so the read that failed was itself the notification, and nothing
+            // is queued behind it. A revocation missed that way leaves the
+            // screen offering an `Arm` that cannot succeed until the user
+            // leaves and comes back.
+            //
+            // That is survivable, which is why it stands. The service owns the
+            // arm and posts `Couldn't snooze`, so the outcome is wrong rather
+            // than silent; the reverse staleness shows the banner and hides
+            // `Arm`, which is the safe direction anyway. Clearing `access` to
+            // unknown instead was considered and rejected: `MainScreen` gates
+            // the whole primary-action block on `GRANTED`, so it would take
+            // `Release` away from a running snooze to report a binder blip —
+            // and on a *first*-read failure it changes nothing, since `access`
+            // is already null there. Retrying behind an injected executor is
+            // the only option that actually closes the window, and it is
+            // available if this is ever seen in the field; it was not worth the
+            // machinery for a read that fails only when the process is going
+            // down with it.
+            //
+            // `zenRuleId` is left alone, and the gate that makes that mostly
+            // safe covers only one direction. `filtersRuleId` is
+            // `zenRuleId.takeIf { access == GRANTED }`, so a stale *denied*
+            // reading hides the row — but a stale *granted* one, which is what
+            // a failed revocation broadcast leaves, still offers a Filters row
+            // deep-linking a rule the revocation removed (Codex, PR #159).
+            // Tracked rather than fixed: it needs the revocation and the read
+            // failure together, it costs a dead link rather than a snooze, and
+            // clearing the id here would blank a working row every time the
+            // read merely blipped.
             val current = runCatching { zen.policyAccess() }.getOrElse {
                 Log.e(TAG, "Reading policy access failed; leaving the screen as it is.", it)
                 return@Thread
