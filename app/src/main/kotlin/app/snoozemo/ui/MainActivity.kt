@@ -1330,7 +1330,9 @@ class MainActivity : ComponentActivity() {
                 // now that it is: access revoked while the service was dead has
                 // to end the snooze (SPEC.md §8.2), and with the service gone
                 // this screen can be the first thing in a position to notice.
-                if (changed) refreshAccess()
+                // Not a return from Settings, so the rule state it already has
+                // is still the right thing to show while this re-reads access.
+                if (changed) refreshAccess(ruleMayHaveChanged = false)
             }
         }.start()
     }
@@ -1911,8 +1913,28 @@ class MainActivity : ComponentActivity() {
      * memory hit by this point, and reading it inside the worker would race
      * whatever [refreshSnoozing] is doing.
      */
-    private fun refreshAccess() {
+    /**
+     * [refreshAccess] for a test, which cannot reach a private method and has
+     * no seam on the background rule check itself — same reason
+     * `MainActivityFiltersIntentTest` drives [openFilters] directly.
+     */
+    internal fun refreshAccessForTest(ruleMayHaveChanged: Boolean = true) =
+        refreshAccess(ruleMayHaveChanged)
+
+    private fun refreshAccess(ruleMayHaveChanged: Boolean = true) {
         val running = snoozing == true
+        // A retained rule state belongs to the check that produced it, not to
+        // this one. Coming back from Settings, the user has very likely just
+        // changed the thing being re-read — so keeping the old answer visible
+        // means a repaired rule still reads as switched off, or a rule switched
+        // off still reads as working, until the binder call returns. Dropping
+        // it makes the row wait, the same as it does before the first check
+        // (Codex, PR #171).
+        //
+        // Not on a record change: that caller cannot follow a trip to Settings,
+        // and blanking the row on every snooze record edit would flicker it for
+        // a refresh that almost never changes the answer.
+        if (ruleMayHaveChanged) zenRuleState = null
         // Which refresh this is. Several can be in flight at once — `onStart`,
         // the access broadcast, and every record change all call this — and
         // they finish in whatever order the binder calls return, not the order
