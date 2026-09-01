@@ -4925,6 +4925,20 @@ difference between what the app sends and what the store row says is worked thro
 copy was the maintainer's reason, and it happens to remove the claim that would have needed a
 footnote.
 
+## Deferred review findings (Codex, PR #171)
+
+- [ ] **TalkBack announces the disabled-rule button as "Allow Do Not Disturb access".**
+  `SetupRow` builds each button's accessible name from the visible action plus the row
+  title (`setup_row_action_description`, `%2$s %1$s`), which is right for every other
+  state of that row and wrong for this one: access is already granted, and the button
+  opens Snoozemo's own mode in system settings rather than the access screen.
+
+  Deferred because the fix is a string — an action-specific description naming the
+  destination — and new user-facing copy waits for the maintainer. It is a refinement
+  rather than a defect that misleads: a sighted user reads the same button under the
+  same title, and what disambiguates it for both is the row's status line, which
+  TalkBack also reads.
+
 ## Deferred review findings (Codex, PR #165)
 
 - [ ] **Two `deliver` calls can publish their updates out of order.** `feedLock` serializes the
