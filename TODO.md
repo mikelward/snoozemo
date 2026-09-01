@@ -3255,6 +3255,100 @@ question.
   wedge that either happens or does not rather than a timeout that is sometimes
   beaten.
 
+  **Third hypothesis, and the first with a proven mechanism** (2026-09-01).
+  Stated as a hypothesis on purpose — what follows is verified *code*, not a
+  verified *cause*, and the first two theories also read as obvious.
+
+  The library's `DebugFileSink.readPreviousRun()` is **synchronous and
+  unbounded**: `worker.submit { readPreviousRunOnWorker() }.get()`, a block on
+  the *sink's* worker with no timeout. `DebugLogging.readPreviousOrCrash`
+  calls it from inside `worker.execute { … }` — that is, **on `DebugLogging`'s
+  own single-threaded worker**, the process-wide one every test class in a
+  Robolectric sandbox shares. One worker parks indefinitely on another.
+
+  Everything the symptoms show follows from that, with no deadlock needed:
+
+  - The work waited on is not small. `readPreviousRunOnWorker` reads **every**
+    prior-run file end to end and splits it into lines, and test classes leave
+    `androidlog-prev-*.log` behind in the sandbox's cache directory — so the
+    wait grows with the suite, which is what "only under full-suite load"
+    looks like.
+  - **The caller has a timeout; the worker does not.** The calling test gives
+    up, reports its own failure and moves on — while the worker stays parked
+    and everything queued behind it, including every later class's drain,
+    never runs.
+  - Queued-and-not-executed, at a flat ceiling, for *every* case in the class
+    including the first — i.e. already wedged before that class began.
+  - Passes in isolation, where nothing has called the blocking path.
+  - `DebugLoggingTest` and `DebugReportShareTest` both reach it, and both sort
+    before `ProcessExitReasonsTest`.
+
+  Worth distinguishing from wrong diagnosis 1, which it superficially
+  resembles: that one said the drain's own ten seconds were load-sensitive
+  wall clock. Here the drain's bound is *irrelevant* — it queues behind an
+  unbounded wait, so no timeout on the drain would ever be enough. Which is
+  also why bumping it would not have helped, and still must not be tried.
+
+  **The reporting had to be reordered before it could report this** (Codex,
+  PR #168). `awaitIdleForTest` drained the *sink* after its own latch expired
+  — and on precisely the path above, where the worker is parked waiting on the
+  sink's worker, that drain queues behind the same task and never returns. The
+  seam would have hung instead of failing with `workerStall()`: the one path
+  it most needs to report would have been the one it could not. It now returns
+  the moment its latch expires, without touching the sink.
+
+  **And the snapshot is validated, not just taken early** (Codex, PR #168).
+  Walking a stack is not instantaneous either, so the worker can advance while
+  the reading is being taken. The drain's own latch settles it: a count still
+  standing afterwards proves the worker had not reached that task by then, and
+  so had not reached it at the earlier instant the snapshot was taken — the
+  reading describes a worker genuinely behind. A count of zero means it got
+  there somewhere around the bound, which no stack read can place either side
+  of, and that is reported as a **slow** worker rather than dressed up as a
+  wedged one. What remains uncloseable by sampling — the microseconds between
+  a latch expiring and a stack being walked — would need the worker to record
+  each task as it starts; disproportionate for a test seam, and noted here in
+  case it is ever wanted.
+
+  **The snapshot is taken at the timeout, not read back afterwards**
+  (Codex, PR #168). A task that finishes just after the bound expires leaves
+  the worker idle by the time the message is built, so a live reading would
+  name anything except the operation that blew it — turning the one failure
+  this reporting exists to explain into evidence about something else. It is
+  captured inside the timeout branch and held; a later successful drain does
+  not clear it, which is also what makes the capture observable from a test.
+
+  `blockWorkerForTest` stages a wedged worker so that ordering is pinned by a
+  test. **What that test does not cover, and cannot yet:** a stalled *sink*.
+  Reaching it needs a way to hold the sink's worker and the library exposes
+  none, so reverting the early return leaves the test passing — verified, not
+  assumed. Covering the real arm needs a library seam.
+
+  **Unproven:** how slow, or how stuck, the sink's read actually gets. The
+  `workerStall()` output settles it in one shot — a stack showing
+  `readPreviousRun` → `FutureTask.get` confirms it, anything else refutes it.
+  Six full-suite runs under a two-CPU squeeze did not reproduce the stall
+  locally, so the next CI occurrence is the likeliest place to read it.
+
+  **This is not only a test problem, which is the part that matters.** The same
+  worker applies the recording gate and the user's Off toggle. A sink read that
+  stalls on a device leaves that worker parked, so the **opt-out never takes
+  effect** while Settings shows the user the choice they made — principle 2's
+  failure, on a privacy control. `TODO.md` and a chat note carry it to the
+  maintainer rather than it being fixed on a guess, because the three ways out
+  cost different things:
+
+  - **Bound the wait in the library** — `readPreviousRun(timeout)`, or an
+    async variant. The honest fix, and it is `mikelward/androidlog`'s to make;
+    every consumer gets it.
+  - **Stop blocking this worker** — do the read off `DebugLogging`'s worker.
+    Keeps the fix in this repo, but breaks the confinement invariant `sink` is
+    documented with (*"Confined to worker; nothing off that thread reads or
+    writes it"*), so it trades a liveness bug for a data-race risk.
+  - **Bound it here** — run the read on a dedicated executor with a timeout.
+    Also local, keeps confinement, and costs one thread plus a degraded answer
+    on timeout.
+
   **Do not** bump the timeout, and do not assume the next diagnosis is right
   because the previous two sounded right — both did. The stack in the next CI
   failure is the first piece of direct evidence this bug will have produced;
