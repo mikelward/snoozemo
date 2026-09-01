@@ -705,6 +705,8 @@ either path.
         📍  until I leave
 
         Ends when you leave, either way.
+
+                                        [ OK ]
 ```
 
 - **Off by default, behind `Ask when to unsnooze` in Settings.** One tap from the shade with
@@ -724,6 +726,19 @@ either path.
   and dismisses. `until I leave` is drawn only on a build that tracks departure: `direct` is
   duration-only until §3's Phase 7, and there it is a single row with no helper line, because
   a row promising an end nothing behind it can deliver is worse than no row.
+- **`OK` is the explicit way out, and it accepts the time as shown** (maintainer,
+  2026-09-01). The rows commit on tap, but they read as labels rather than buttons: after
+  stepping `−`/`+` to a time there was nothing on screen that said *done*, and the two exits
+  that were obvious — the scrim and the back gesture — both discard the time just chosen.
+  This does not add a third end condition. It is the time row's own commit under a control
+  shaped like one, so the sheet has a terminal action a user can find without having to know
+  that a card is tappable. It is on every build, including the duration-only one, since it
+  is the sheet's confirm rather than anything the departure row was carrying.
+  A user who meant `until I leave` and pressed `OK` out of habit gets a *shorter* snooze,
+  not a longer one — choosing a time only lowers the cap and leaves departure tracking armed
+  — which is the fail-open direction D7 asks for, so the ambiguity costs nothing that
+  matters. The alternative considered was making the rows a selection that only `OK`
+  commits; rejected because it charges every user a second tap on the app's one-tap path.
 - **The helper line is not decoration.** Choosing a time *lowers the cap*; it does not disable
   departure tracking (§7). Walking out at 13:40 still ends the snooze at 13:40. The rows differ only
   in whether there is a time bound below the backstop, and the sheet should say so plainly rather
