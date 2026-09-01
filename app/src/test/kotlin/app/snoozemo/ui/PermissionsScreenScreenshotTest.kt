@@ -310,6 +310,57 @@ class PermissionsScreenScreenshotTest {
     }
 
     @Test
+    fun `a disabled rule offers the button that reaches its off switch`() {
+        // The row reports work the user can still do, so SPEC.md 5.2 says it
+        // carries a button that does it — and the button routes to the mode's
+        // own settings screen, not to the policy-access one the grant already
+        // cleared (Codex, PR #171).
+        var access = 0
+        var rule = 0
+        capture {
+            PermissionsScreen(
+                access = PolicyAccess.GRANTED,
+                notifications = NotificationPermission.GRANTED,
+                notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
+                ruleState = ZenRuleState.DISABLED,
+                settingsFailure = null,
+                onAccessRow = { access++ },
+                onRuleRow = { rule++ },
+                onNotificationsRow = {},
+                onLocationRow = {},
+                onDone = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Allow").performClick()
+        assertEquals(1, rule)
+        assertEquals(0, access)
+    }
+
+    @Test
+    fun `a ready rule keeps its capability row button-less`() {
+        // The other side of the discrimination above: a working rule has
+        // nothing left to do, so the button stays absent as it always has.
+        capture {
+            PermissionsScreen(
+                access = PolicyAccess.GRANTED,
+                notifications = NotificationPermission.GRANTED,
+                notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
+                ruleState = ZenRuleState.READY,
+                settingsFailure = null,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onLocationRow = {},
+                onDone = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Allow").assertDoesNotExist()
+    }
+
+    @Test
     fun `a refused rule says so rather than claiming the capability`() {
         capture("permissions-screen-rule-failed.png") {
             PermissionsScreen(

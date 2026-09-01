@@ -4925,22 +4925,6 @@ difference between what the app sends and what the store row says is worked thro
 copy was the maintainer's reason, and it happens to remove the claim that would have needed a
 footnote.
 
-## Deferred review findings (Codex, PR #171)
-
-- [ ] **A disabled zen rule is reported on the permissions screen but cannot be repaired from
-  it.** PR #171 gave the Do Not Disturb row a real status for `ZenRuleState.DISABLED` /
-  `FAILED`, so it no longer claims a capability the rule cannot deliver. But the row's button
-  is still suppressed whenever policy access is held, so the user reads "Snoozemo's rule is
-  switched off in Settings" with no way to act on it — `SPEC.md` §5.2 says a row with work
-  left carries a button that does it. The route exists (`MainActivity.openFilters()`, which
-  opens `ACTION_AUTOMATIC_ZEN_RULE_SETTINGS` for the rule id) but is wired only to the Filters
-  row on **Settings**, a screen this user is not on.
-
-  Deferred rather than fixed in that PR because the button needs a verb that is not `Allow` —
-  the target is "turn the rule back on", not a grant — and new user-facing copy waits for the
-  maintainer. `FAILED` probably stays button-less either way: there is nothing there for the
-  user to do.
-
 ## Deferred review findings (Codex, PR #165)
 
 - [ ] **Two `deliver` calls can publish their updates out of order.** `feedLock` serializes the

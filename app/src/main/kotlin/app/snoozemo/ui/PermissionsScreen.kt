@@ -95,6 +95,14 @@ fun PermissionsScreen(
     /** Whether a share is already running, disabling the banner's Share button. */
     sharing: Boolean = false,
     onAccessRow: () -> Unit,
+    /**
+     * Opens this app's own mode in system settings, where its off switch is —
+     * the repair for [ZenRuleState.DISABLED], which the access row reports but
+     * could not act on (Codex, PR #171). Defaulted so a screenshot test pinning
+     * another row need not state an opinion; `MainActivity` passes
+     * `openFilters`, the same route the Settings screen's Filters row uses.
+     */
+    onRuleRow: () -> Unit = {},
     onNotificationsRow: () -> Unit,
     onLocationRow: () -> Unit,
     onCalendarRow: () -> Unit = {},
@@ -151,10 +159,26 @@ fun PermissionsScreen(
                 // though this one is a Settings toggle with no in-app dialog
                 // and no result callback (SPEC.md §5.2) — the mechanism
                 // differs but what the user is doing doesn't need its own verb.
-                action = stringResource(R.string.setup_action_allow).takeUnless { granted },
-                onAction = onAccessRow,
+                //
+                // A disabled rule keeps the button rather than losing it with
+                // the grant: the row reports work the user can still do, and
+                // §5.2 says such a row carries a button that does it. Same
+                // verb again, and it reads correctly on the screen it reaches
+                // — the mode's own switch (maintainer, 2026-09-01). `FAILED`
+                // gets no button: nothing there is the user's to fix.
+                action = stringResource(R.string.setup_action_allow)
+                    .takeUnless { granted && ruleState != ZenRuleState.DISABLED },
+                onAction = if (granted && ruleState == ZenRuleState.DISABLED) onRuleRow else onAccessRow,
+                // FILTERS as well as DND: in the disabled state this button
+                // opens the mode screen, and `openFilters` reports a refusal
+                // under its own row id — which belongs here when this row is
+                // the one that sent the user there, not on a Settings row they
+                // never touched.
                 failure = stringResource(R.string.failure_could_not_open_settings)
-                    .takeIf { settingsFailure == SetupRowId.DND },
+                    .takeIf {
+                        settingsFailure == SetupRowId.DND ||
+                            (granted && ruleState == ZenRuleState.DISABLED && settingsFailure == SetupRowId.FILTERS)
+                    },
             )
         }
         // Same discipline, same reason: unread is not "denied". Read after the

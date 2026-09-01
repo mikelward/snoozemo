@@ -969,6 +969,7 @@ class MainActivity : ComponentActivity() {
                                 dismissFailed = dismissFailed,
                                 sharing = sharing,
                                 onAccessRow = ::openPolicyAccessSettings,
+                                onRuleRow = ::openFilters,
                                 onNotificationsRow = ::fixNotifications,
                                 onLocationRow = ::fixLocation,
                                 onCalendarRow = ::fixCalendar,
