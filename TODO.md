@@ -3268,11 +3268,22 @@ question.
 
   Everything the symptoms show follows from that, with no deadlock needed:
 
-  - The work waited on is not small. `readPreviousRunOnWorker` reads **every**
-    prior-run file end to end and splits it into lines, and test classes leave
-    `androidlog-prev-*.log` behind in the sandbox's cache directory — so the
-    wait grows with the suite, which is what "only under full-suite load"
-    looks like.
+  - ~~The work waited on is not small.~~ **Measured, and it does not hold**
+    (2026-09-01). `readPreviousRunOnWorker` does read every prior-run file end
+    to end, so the wait *looked* like it would grow with the accumulated
+    `androidlog-prev-*.log` files — but timing every call on the worker across
+    a full `testPlayDebugUnitTest` run gives **two calls, at 15 ms and 1 ms**.
+    The path is both fast and rarely taken, so "the wait grows with the suite"
+    is unsupported and is withdrawn.
+
+    Two things survive it, and they matter in opposite directions. A passing
+    run **cannot** sample a stalled call — a call that never returns never
+    reaches the probe — so this measures the healthy path only and says
+    nothing about the sick one. And a wedge needs exactly one stalled call,
+    of which a run offers two chances; "rarely, one of these two does not come
+    back" fits an intermittent flake better than a steadily-growing wait does.
+    So the load-driven variant of this hypothesis is dead and the *stall*
+    variant is untouched.
   - **The caller has a timeout; the worker does not.** The calling test gives
     up, reports its own failure and moves on — while the worker stays parked
     and everything queued behind it, including every later class's drain,
