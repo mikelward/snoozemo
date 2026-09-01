@@ -1226,6 +1226,13 @@ screen, so the same rules apply to all three:
   The verb pairing above is unaffected — that rule governs the **button**, which still reads `Allow`
   and still disappears once there is nothing to fix. What changed is the line beneath it.
 
+  **A row that reports a problem carries the button that fixes it, whatever the problem is**
+  (maintainer, 2026-09-01). The access row keeps `Allow` when the grant is held but Snoozemo's
+  own mode is switched off, and that button opens the mode's settings screen rather than the
+  policy-access one the grant already cleared. The verb does not change with the target: it
+  reads correctly against the switch it reaches. A rule Snoozemo could not create at all keeps
+  no button — there is nothing there for the user to do.
+
   **A row names what its own permission buys, and hedges nothing else** (maintainer, 2026-09-01).
   Every capability has runtime prerequisites — the meeting has to be running, you have to actually
   leave the house — and they are obvious to the user, so qualifying the copy for them ("can offer
