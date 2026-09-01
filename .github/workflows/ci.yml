@@ -591,12 +591,17 @@ jobs:
       # comment-marker stays unset ('', the default): this repo posts its own
       # richer visual diff comment instead (post-screenshot-diff below), not
       # the hub's plain status line.
-    secrets:
-      # Named for the shared PAT convention across every caller of
-      # mikelward/ci-commit-artifact, not for anything screenshot-specific.
-      # Contents: read and write is the only permission it needs — the hub
-      # uses this token for the push alone and `github.token` for comments.
-      push-token: ${{ secrets.CI_COMMIT_ARTIFACT_TOKEN }}
+    # `inherit`, not a `secrets:` block naming CI_COMMIT_ARTIFACT_TOKEN: the
+    # hub's commit job declares the `ci-commit-artifact` environment and
+    # reads the token from it, and an environment secret reaches a called
+    # workflow no other way. A repository-level token passed by name here
+    # would also reach every job of every workflow that inherits this
+    # repository's secrets, the weekly batch's untrusted update job
+    # included. Contents: read and write is the only permission it needs —
+    # the hub uses it for the push alone and `github.token` for comments.
+    # The corresponding zizmor finding (secrets-inherit) is allowed for
+    # this file in .github/zizmor.yml, with the same reason.
+    secrets: inherit
 
   # Embeds every snapshot this PR adds, removes, or changes, pinned to commit
   # SHAs, into a single auto-updated PR comment (marker: <!-- screenshot-diff

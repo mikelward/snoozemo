@@ -39,6 +39,24 @@ rules:
         "actions/*": ref-pin
         # Everything else must pin to a hash.
         "*": hash-pin
+  secrets-inherit:
+    # Two callers pass `secrets: inherit` on purpose. The weekly batch
+    # caller: the publish job of the called workflow reads GRADLE_UPDATE_PAT
+    # from this repository's `gradle-update` environment, and an environment
+    # secret reaches a called workflow no other way. The alternative zizmor
+    # prefers -- naming the secret in a `secrets:` block -- delivers it to
+    # the runner of every job in the called workflow, the untrusted update
+    # job included, which is the exposure the environment exists to close.
+    # ci.yml's screenshot sync, for the same reason from the other side: its
+    # commit job reads CI_COMMIT_ARTIFACT_TOKEN from the `ci-commit-artifact`
+    # environment, where a repository-level copy would reach that batch job
+    # through the first caller's `inherit`. The price of `inherit` is that
+    # every repository-level secret here reaches the called jobs too, so
+    # this repository keeps its secrets environment-scoped (mikelward/repo's
+    # `repo audit` reports any that are not, and `repo setup` moves them).
+    ignore:
+      - gradle-update.yml
+      - ci.yml
   dangerous-triggers:
     # Both triggers are load-bearing and reasoned through in
     # mikelward/codex-review's docs/CONSUMER.md.
