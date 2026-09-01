@@ -1199,17 +1199,40 @@ screen, so the same rules apply to all three:
   predates the flag, and closing it needs a device to choose between the candidate signals
   (`TODO.md`) rather than a guess. An unverifiable inference was tried and withdrawn.
 - **A capability that is in place offers nothing.** The button is absent once the row has nothing to
-  fix, so the row is then a statement — `Allowed` — and the screen's remaining controls are the ones
-  that snooze. Turning either capability back *off* is Settings' job, reached deliberately, not a
+  fix, so the row is then a statement — of what snoozes can now do — and the screen's remaining
+  controls are the ones that snooze. Turning either capability back *off* is Settings' job, reached deliberately, not a
   button that looks like setup on a screen where setup is finished. The cost is real and accepted:
   there is no longer a route from this screen to the Do Not Disturb access toggle for a user who
   wants to revoke it.
 - **Every row uses the same verb, regardless of mechanism.** `Allow` while something is left to do,
-  `Allowed` once it's in place — for the Settings toggle and a runtime prompt alike. An earlier
+  and no button once it's in place — for the Settings toggle and a runtime prompt alike. An earlier
   revision split them (`Grant`/`Granted` for the toggle, `Allow`/`Allowed` for a prompt) to flag
   which was which; that distinction cost the user two words to track and told them nothing they
   needed to act on the row, so it was dropped in favor of one consistent pair (revised 2026-08-24,
   maintainer).
+- **The status line names the capability, not the grant** (revised 2026-09-01, maintainer). Each row
+  reads `Snoozes can …` when the permission is held and `Snoozes can't …` when it is not — the same
+  sentence either way, differing by one word. This **replaces** `Allowed` as the granted-state
+  status, which the 2026-08-24 revision above had standardized across every row.
+
+  The reason that standardization is no longer right: `Allowed` answers "did the grant land?", which
+  the user already knows because they just did it, and says nothing about what it bought. The screen
+  then reads as a checklist to clear rather than a description of what the app can do — and the cost
+  falls hardest on the one permission that gates nothing, where "Allowed" left a user with no way to
+  tell what they had gained by granting it or would lose by declining. Naming the capability in both
+  states makes the row answer the question the user actually has at that moment, and makes declining
+  an informed choice rather than an unexplained gap.
+
+  The verb pairing above is unaffected — that rule governs the **button**, which still reads `Allow`
+  and still disappears once there is nothing to fix. What changed is the line beneath it.
+
+  **A row names what its own permission buys, and hedges nothing else** (maintainer, 2026-09-01).
+  Every capability has runtime prerequisites — the meeting has to be running, you have to actually
+  leave the house — and they are obvious to the user, so qualifying the copy for them ("can offer
+  to end with a meeting") buys nothing and costs the plain sentence. Prerequisites carried by
+  *another row* are visible in that row: whether the notification the meeting's end time arrives on
+  can reach the user is what the notifications row says. What does get its own status is a
+  capability the build genuinely lacks — `direct` and departure (§3) — because no other row says so.
 
 ### 5.3 Rule lifecycle
 

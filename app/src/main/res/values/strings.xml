@@ -34,14 +34,23 @@
       Every row says `Allow` and `Allowed`, whether the capability is a runtime
       prompt or, like Do Not Disturb access, a Settings toggle the user goes
       and flips (SPEC.md §5.2) — the mechanism differs but the wording doesn't
-      need to.
+      need to. That is the **button**; the status line below it no longer says
+      `Allowed` (see next).
+
+      **Every row's status names the capability, in both states** (maintainer,
+      2026-09-01; SPEC.md §5.2). `Allowed` answered "did the grant land?", which
+      the user already knows because they just did it, and said nothing about
+      what it bought — so the screen read as a checklist to clear rather than a
+      description of what the app can do. The pair now differs by one word, so
+      the row reads the same either way and the difference is the capability
+      itself.
     -->
     <string name="setup_dnd_title">Do Not Disturb access</string>
-    <string name="setup_dnd_allowed">Allowed</string>
-    <string name="setup_dnd_missing">Snoozemo can\'t snooze without it</string>
+    <string name="setup_dnd_allowed">Snoozes can silence your phone</string>
+    <string name="setup_dnd_missing">Snoozes can\'t silence your phone</string>
     <string name="setup_notifications_title">Notifications</string>
-    <string name="setup_notifications_allowed">Allowed</string>
-    <string name="setup_notifications_missing">Snoozemo can\'t show what a snooze is doing</string>
+    <string name="setup_notifications_allowed">Snoozes can show status and quick actions</string>
+    <string name="setup_notifications_missing">Snoozes can\'t show status and quick actions</string>
     <string name="setup_action_allow">Allow</string>
     <!--
       Every setup row's button says the same visible "Allow" (SPEC.md §5.2), so a
@@ -56,26 +65,52 @@
       The location row (SPEC.md §3.2). Reuses `setup_action_allow` rather than
       a location-specific verb — "Allow" already says what the user gets, and
       a different verb per permission would be a distinction without a
-      difference (AGENTS.md, *Concise copy*). `setup_location_allowed` reuses
-      the same "Allowed" wording as notifications and Do Not Disturb access,
-      for the same reason: every row pairs the `Allow` verb with the `Allowed`
-      status, so the wording never depends on which mechanism grants it.
+      difference (AGENTS.md, *Concise copy*). The status line follows the same
+      capability pair as every other row — see the note above the Do Not
+      Disturb strings — so the wording still never depends on which mechanism
+      grants it.
     -->
     <string name="setup_location_title">Location</string>
-    <string name="setup_location_allowed">Allowed</string>
-    <string name="setup_location_missing">Snoozemo can\'t tell when you\'ve left</string>
+    <string name="setup_location_allowed">Snoozes can end when you leave</string>
+    <string name="setup_location_missing">Snoozes can\'t end when you leave</string>
     <!--
-      The calendar row (SPEC.md §4.3). Same `Allow` / `Allowed` pair as every
-      other row. The missing line names what is lost rather than what is
-      unread — this permission blocks nothing, it only removes the ongoing
-      notification's third action.
+      The `direct` build has no presence monitor at all (SPEC.md §3.4,
+      `PRESENCE_TRACKS_DEPARTURE`), so neither line above is true there: one
+      would promise a capability the build lacks, and the other would blame a
+      permission that is not what is missing. Shown in both states, because the
+      grant is not what stands between the user and this — and the row drops its
+      Allow button with it, since a button is a promise that granting would
+      help.
     -->
-    <!-- TODO: translate -->
-    <string name="setup_calendar_title" tools:ignore="MissingTranslation">Calendar</string>
-    <!-- TODO: translate -->
-    <string name="setup_calendar_allowed" tools:ignore="MissingTranslation">Allowed</string>
-    <!-- TODO: translate -->
-    <string name="setup_calendar_missing" tools:ignore="MissingTranslation">Snoozemo can\'t offer your next meeting\'s end time</string>
+    <string name="setup_location_no_departure">Ending when you leave isn\'t in this build yet</string>
+    <!--
+      The calendar row (SPEC.md §4.3).
+
+      **The only row whose granted state is not `Allowed`**, deliberately. The
+      other three gate the product, so "Allowed" is the whole answer — without
+      them there is nothing to say but what breaks. This one blocks nothing: it
+      adds the ongoing notification's third action and no more. So both states
+      name the same capability and differ only in whether it is there, which
+      tells a user what the permission is actually for at the moment they are
+      deciding.
+
+      **Both say "offer", and both say "a meeting".** Granting the permission
+      does not make a snooze end with a meeting — it adds an `Until 17:00`
+      action to the ongoing notification, which the user then taps or ignores.
+      And the offered time is not necessarily the meeting they are sitting in:
+      `NextMeetings` queries the instances *overlapping* now..cap, which
+      includes meetings that have not started, and `MeetingEnd.offerFor` takes
+      the earliest qualifying end. Saying "end when your meeting does" claimed
+      both an automatic ending and a specific meeting, and neither is what the
+      feature does (Codex, PR #171).
+
+      Nothing observes the calendar and nothing triggers itself from it, so
+      "your next meeting's end time" — what this line used to say — would still
+      be the wrong promise even with "offer" added.
+    -->
+    <string name="setup_calendar_title">Calendar</string>
+    <string name="setup_calendar_allowed">Snoozes can end when your meeting does</string>
+    <string name="setup_calendar_missing">Snoozes can\'t end when your meeting does</string>
     <!--
       The one disclosure this app shows (SPEC.md §12): a small dialog before
       the background-location prompt specifically, since that is the

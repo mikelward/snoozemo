@@ -364,6 +364,18 @@ class MainActivity : ComponentActivity() {
     internal var zenRuleId by mutableStateOf<String?>(null)
 
     /**
+     * The last verified [ZenRuleState], or null while unread.
+     *
+     * The permissions screen needs it because policy access alone does not mean
+     * a snooze can silence the phone: the user can switch Snoozemo's rule off in
+     * Settings, and the platform can refuse to create it. That screen does not
+     * render [lastOutcome], so without this it would claim the capability while
+     * the app knew better (Codex, PR #171). Set from the same verified result
+     * [zenRuleId] is, so the two never disagree.
+     */
+    internal var zenRuleState by mutableStateOf<ZenRuleState?>(null)
+
+    /**
      * What [zenRuleId] should actually show as, once [access] is known: a rule
      * id read before Do Not Disturb access was confirmed granted — or one left
      * over from before access was revoked — must not offer a row that deep-links
@@ -947,6 +959,10 @@ class MainActivity : ComponentActivity() {
                                 notificationsReachTheUser = notificationsReachTheUser,
                                 location = location,
                                 calendar = calendar,
+                                // The flavor seam, read at the call site like
+                                // EndConditionSheet's (SPEC.md §3.4).
+                                tracksDeparture = app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE,
+                                ruleState = zenRuleState,
                                 settingsFailure = settingsFailure,
                                 crashPending = crashPending,
                                 shareFailed = shareFailed,
@@ -2091,6 +2107,9 @@ class MainActivity : ComponentActivity() {
                 }
                 ZenRuleState.MISSING_ACCESS -> Unit
             }
+            // Behind the same staleness guard as the id above, so a superseded
+            // check cannot publish its answer over a newer one.
+            runOnUiThread { if (refresh == latestAccessRefresh) zenRuleState = state }
             val outcome = when (state) {
                 ZenRuleState.FAILED -> R.string.rule_failed
                 // Switched off in Settings: the app cannot snooze and must say
