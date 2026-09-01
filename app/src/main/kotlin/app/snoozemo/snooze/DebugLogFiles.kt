@@ -7,9 +7,25 @@ import app.snoozemo.core.SnoozeDebugLog
 import com.mikelward.androidlog.android.DebugFileSink
 import com.mikelward.androidlog.android.PreviousRun
 import java.io.File
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+
+/**
+ * How long [DebugLogging.readPreviousOrCrash] waits for a previous-run read
+ * before reporting that it could not be read.
+ *
+ * A quarter of the library's own bound, deliberately. This one is in front of
+ * a user who has asked to share their log, so the failure needs to arrive
+ * while they are still watching; the library's has to be generous enough never
+ * to fire on a slow device doing nothing wrong, since it answers a caller that
+ * cannot tell a timeout from "there is nothing to send". Here that ambiguity
+ * does not arise -- a timeout becomes `readSucceeded = false`.
+ */
+private const val PREVIOUS_RUN_READ_TIMEOUT_SECONDS = 5L
 
 private const val TAG = "SnoozemoDebugLog"
 
@@ -579,7 +595,7 @@ internal object DebugLogging {
                     // worker thread, never reaching onResult, and every caller
                     // would wait out its own timeout and report a misleading
                     // "timed out" instead of the real failure (Codex, PR #89).
-                    runCatching { installed.readPreviousRun() }
+                    runCatching { readPreviousRunBounded(installed) }
                         .onSuccess { onResult(it, pinnedCrash, true) }
                         .onFailure {
                             logFailure(it, "the previous runs could not be read")
@@ -591,6 +607,80 @@ internal object DebugLogging {
             logFailure(it, "debug-log worker refused a previous-run read")
             onResult(null, false, false)
         }
+    }
+
+    /**
+     * [DebugFileSink.readPreviousRun] on a thread that is not [worker], waited
+     * for with a bound.
+     *
+     * That call is synchronous and, until androidlog 2.0.50, waited on the
+     * sink's own worker with no timeout at all — so a sink read that never
+     * came back parked *this* worker for the life of the process, and with it
+     * everything queued behind: the recording gate, and the user's opt-out.
+     * A privacy control that never applies while Settings shows it off is
+     * principle 2's failure, not a test problem (`TODO.md`).
+     *
+     * The library now bounds its own wait, and this is deliberately kept
+     * anyway. It is the half that does not depend on which version of the
+     * library an install resolved, it fails in a quarter of the time so a user
+     * waiting on a share is not left for ten seconds, and — the part that
+     * matters most — a timeout here becomes `readSucceeded = false`, so the
+     * screen says the log could not be read rather than showing "nothing to
+     * send" over runs that are still on disk.
+     *
+     * The reference is handed off, not the field: [sink] stays confined to
+     * [worker], which reads it and passes the value. The pool is cached rather
+     * than single-threaded on purpose — a thread still stuck on a previous
+     * stalled read must not be what makes the next one time out.
+     */
+    private fun readPreviousRunBounded(installed: DebugFileSink): PreviousRun? =
+        awaitBounded { installed.readPreviousRun() }
+
+    /**
+     * Runs [read] on [blockingReads] and waits [timeoutSeconds] for it.
+     *
+     * Takes the work rather than the sink so the bound can be tested at all:
+     * `DebugFileSink` is a final class this module cannot stall — the seams
+     * that would allow it are internal to the library — so a test that had to
+     * go through one could only ever assert the happy path.
+     */
+    internal fun <T> awaitBounded(
+        timeoutSeconds: Long = PREVIOUS_RUN_READ_TIMEOUT_SECONDS,
+        read: () -> T,
+    ): T {
+        val pending = blockingReads.submit<T> { read() }
+        return try {
+            pending.get(timeoutSeconds, TimeUnit.SECONDS)
+        } catch (e: TimeoutException) {
+            // Interrupts the read, which the library's own wait reports and
+            // returns from; without that it would sit on the thread until the
+            // sink's worker freed up, or forever.
+            //
+            // It releases *this* thread and nothing further: the task the read
+            // submitted keeps its place in the sink's queue, as does everything
+            // behind it, an opt-out's purge included (Codex, PR #169; `TODO.md`
+            // carries what is still owed there). Propagating the cancellation
+            // is not the answer — the sink's executor has one thread shared by
+            // every file operation, so interrupting the task at its head could
+            // land on an unrelated write, and dequeuing the read would not
+            // unwedge a worker stuck on something else anyway.
+            pending.cancel(true)
+            throw e
+        } catch (e: ExecutionException) {
+            // The read's own failure, already logged by the library. Unwrapped
+            // so the caller's failure line names what actually went wrong
+            // rather than the wrapper this hand-off added.
+            throw e.cause ?: e
+        }
+    }
+
+    /**
+     * The pool [readPreviousRunBounded] hands the blocking read to. Cached and
+     * daemon: threads are created only when a read is in flight, a stalled one
+     * cannot hold the process open, and one left stuck does not delay the next.
+     */
+    private val blockingReads = Executors.newCachedThreadPool { runnable ->
+        Thread(runnable, "snoozemo-debug-log-read").apply { isDaemon = true }
     }
 
     /** Mirrors [watchSaveOutcome]; fed by the sink's own crash listener. */

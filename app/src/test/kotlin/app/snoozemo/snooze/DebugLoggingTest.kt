@@ -580,4 +580,118 @@ class DebugLoggingTest {
             stall.contains("cannot be placed either side of it"),
         )
     }
+
+    /**
+     * A read that never comes back must fail at the bound, not park the worker.
+     *
+     * The library's `readPreviousRun()` is synchronous, and until androidlog
+     * 2.0.50 it waited on the sink's own worker with no timeout — so a stalled
+     * read parked `DebugLogging`'s worker for the life of the process, taking
+     * the recording gate and the user's opt-out with it. The library bounds its
+     * own wait now; this bound is the half that does not depend on which
+     * version an install resolved, and it is what turns a stall into
+     * `readSucceeded = false` rather than a silent "nothing to send".
+     */
+    @Test
+    fun `a read that never returns fails at the bound and is interrupted`() {
+        val started = java.util.concurrent.CountDownLatch(1)
+        val interrupted = java.util.concurrent.CountDownLatch(1)
+
+        val startedAt = System.nanoTime()
+        val thrown = runCatching {
+            DebugLogging.awaitBounded(timeoutSeconds = 1) {
+                started.countDown()
+                try {
+                    // Longer than any bound under test, so the wait can only
+                    // end at the timeout or the interrupt below.
+                    Thread.sleep(30_000)
+                } catch (e: InterruptedException) {
+                    interrupted.countDown()
+                    throw e
+                }
+            }
+        }.exceptionOrNull()
+        val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
+
+        assertTrue("the read must have actually started", started.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        assertTrue(
+            "a stalled read must surface as a timeout, not a null result: $thrown",
+            thrown is java.util.concurrent.TimeoutException,
+        )
+        assertTrue("it must fail at its own bound, not wait the read out: $elapsedMs ms", elapsedMs < 15_000)
+        // Otherwise every stalled read leaks a thread that stays blocked for as
+        // long as whatever wedged it does. What the interrupt reaches is this
+        // *thread*, and only it — the test below is the production shape, where
+        // the work it is waiting on belongs to somebody else's executor.
+        assertTrue(
+            "the abandoned read must be interrupted rather than left running",
+            interrupted.await(5, java.util.concurrent.TimeUnit.SECONDS),
+        )
+    }
+
+    /**
+     * The interrupt releases this caller; it does not cancel the sink's work.
+     *
+     * The test above hands `awaitBounded` a lambda that does the blocking
+     * itself, so its interrupt lands on the work. Production nests: the lambda
+     * calls `DebugFileSink.readPreviousRun()`, which blocks *waiting on* the
+     * sink's own single worker, so the interrupt reaches that wait and nothing
+     * further. The read task keeps its place in the sink's queue, and so does
+     * everything behind it — an opt-out's purge included (Codex, PR #169).
+     *
+     * That residue is deliberate, not an oversight, and propagating the
+     * cancellation would be worse: the sink's executor has one thread shared by
+     * every file operation, so interrupting the task at its head could land on
+     * an unrelated write, and dequeuing the read would not unwedge a worker
+     * that is stuck on something else anyway. `TODO.md` carries what is still
+     * owed — reporting the opt-out honestly when the purge behind it cannot run.
+     */
+    @Test
+    fun `an interrupted wait leaves the work it was waiting on alone`() {
+        val sinkWorker = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "test-sink-worker").apply { isDaemon = true }
+        }
+        val running = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val workInterrupted = java.util.concurrent.atomic.AtomicBoolean(false)
+        try {
+            val onSinkWorker = sinkWorker.submit {
+                running.countDown()
+                try {
+                    release.await(30, java.util.concurrent.TimeUnit.SECONDS)
+                } catch (e: InterruptedException) {
+                    workInterrupted.set(true)
+                    Thread.currentThread().interrupt()
+                }
+            }
+            assertTrue(
+                "the sink's task must have started, or this proves nothing",
+                running.await(5, java.util.concurrent.TimeUnit.SECONDS),
+            )
+
+            val thrown = runCatching {
+                // `readPreviousRun()`'s shape: block on the sink's worker.
+                DebugLogging.awaitBounded(timeoutSeconds = 1) { onSinkWorker.get() }
+            }.exceptionOrNull()
+
+            assertTrue(
+                "the caller must still give up at its own bound: $thrown",
+                thrown is java.util.concurrent.TimeoutException,
+            )
+            assertFalse(
+                "the sink's own task must be left running, not interrupted",
+                workInterrupted.get(),
+            )
+            assertFalse("and it must still be pending", onSinkWorker.isDone)
+        } finally {
+            release.countDown()
+            sinkWorker.shutdownNow()
+        }
+    }
+
+    /** And the ordinary path still answers with what the read produced. */
+    @Test
+    fun `a read that returns in time answers with its result`() {
+        assertEquals("done", DebugLogging.awaitBounded { "done" })
+    }
 }
