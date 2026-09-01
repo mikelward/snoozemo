@@ -1,12 +1,15 @@
 package app.snoozemo.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -23,8 +26,8 @@ import app.snoozemo.R
 import app.snoozemo.core.EndCondition
 
 /**
- * The end-condition sheet's content (SPEC.md §4.4) — two rows that refine a
- * snooze which is **already running**.
+ * The end-condition sheet's content (SPEC.md §4.4) — two rows and a confirm
+ * button that refine a snooze which is **already running**.
  *
  * Split from the window that hosts it, the way the sibling repos split a dialog
  * body from its `Dialog` wrapper: this half renders inside an
@@ -49,10 +52,10 @@ internal fun EndConditionSheetContent(
     onStepUp: () -> Unit,
     failed: Boolean = false,
     /**
-     * Whether a chosen time is with the service and unanswered. The rows and
-     * steppers go inert while it is: the sheet no longer dismisses the instant a
-     * row is tapped, so without this a second tap could stack a second commit on
-     * the first.
+     * Whether a chosen time is with the service and unanswered. The rows, the
+     * steppers and `OK` all go inert while it is: the sheet no longer dismisses
+     * the instant a row is tapped, so without this a second tap could stack a
+     * second commit on the first.
      */
     committing: Boolean = false,
     /**
@@ -73,6 +76,12 @@ internal fun EndConditionSheetContent(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                // The sheet is bottom-aligned in both hosts, so content taller
+                // than the window clips from the *bottom* — which is where the
+                // confirm now sits (Codex, PR #173). Landscape and a large
+                // system font both get there. Scrolling before the padding so
+                // the 24dp below the button is reachable rather than eaten.
+                .verticalScroll(rememberScrollState())
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -123,16 +132,40 @@ internal fun EndConditionSheetContent(
                 )
             }
 
+            // The explicit way out. Both rows already commit on tap, but a card
+            // that reads as a label is a poor confirm affordance — after
+            // stepping the time there was nothing on screen that said "done",
+            // and the only exits were the scrim and the back gesture, neither
+            // of which keeps the time that was just stepped to.
+            //
+            // It accepts the time as shown, which is the sheet's one adjustable
+            // value. Choosing a time only *lowers* the cap — departure tracking
+            // stays armed either way (§4.4) — so this is the fail-open
+            // direction (principle 1) even for a user who meant "until I
+            // leave": a shorter snooze, never a longer one.
             // A tap the service refused has to say so where the tap was — the
             // sheet is about to dismiss otherwise, and the snooze would keep a
             // deadline the user did not choose with nothing to show for it.
             // Same placement rule as `SetupRow`'s own failure line.
+            //
+            // Above the confirm rather than below it: growing the content under
+            // the bottom-most control pushes that control off a short screen
+            // just as the user is being told to try again.
             if (failed) {
                 Text(
                     text = stringResource(R.string.failure_could_not_set_end),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                Button(onClick = onChooseTime, enabled = !committing) {
+                    Text(text = stringResource(R.string.sheet_ok))
+                }
             }
         }
     }

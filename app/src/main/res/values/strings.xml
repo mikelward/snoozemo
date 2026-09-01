@@ -358,6 +358,13 @@
     -->
     <!-- TODO: translate -->
     <string name="sheet_footer" tools:ignore="MissingTranslation">Ends when you leave, either way.</string>
+    <!--
+      The sheet's confirm button: closes the sheet and keeps the time as shown.
+      Deliberately not "Done" or "Set time" — it is the ordinary confirm of a
+      sheet whose one adjustable value is right above it.
+    -->
+    <!-- TODO: translate -->
+    <string name="sheet_ok" tools:ignore="MissingTranslation">OK</string>
     <!-- Content descriptions for the − / + steppers, which draw as symbols. -->
     <!-- TODO: translate -->
     <string name="sheet_earlier" tools:ignore="MissingTranslation">Half an hour earlier</string>

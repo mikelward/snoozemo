@@ -14,6 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -21,12 +22,14 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.EndCondition
 import com.github.takahirom.roborazzi.captureRoboImage
 import java.time.Instant
 import java.time.ZoneId
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -35,8 +38,8 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * The end-condition sheet (`SPEC.md` §4.4) — the two rows the trampoline offers
- * once a snooze is already armed.
+ * The end-condition sheet (`SPEC.md` §4.4) — the two rows and the confirm the
+ * trampoline offers once a snooze is already armed.
  *
  * Composed as its own content rather than through `TileTrampolineActivity`,
  * which is the reason `EndConditionSheetContent` is split out from the window
@@ -78,6 +81,7 @@ class EndConditionSheetScreenshotTest {
         // The helper line is load-bearing, not decoration: choosing a time
         // lowers the cap rather than replacing departure tracking.
         composeRule.onNodeWithText("Ends when you leave, either way.").assertExists()
+        composeRule.onNodeWithText("OK").assertExists()
     }
 
     @Test
@@ -102,6 +106,88 @@ class EndConditionSheetScreenshotTest {
 
         composeRule.onNodeWithText("until I leave").performClick()
         assertEquals(1, departure)
+    }
+
+    @Test
+    fun `OK accepts the time as shown`() {
+        // The rows read as labels, so after stepping there was nothing on screen
+        // that said "done" — the only exits kept no time at all. `OK` is that
+        // exit, and it commits exactly what the time row would.
+        var time = 0
+        var departure = 0
+
+        capture {
+            EndConditionSheetContent(
+                condition = seeded(),
+                formattedTime = "2:00 PM",
+                onChooseTime = { time++ },
+                onChooseDeparture = { departure++ },
+                onStepDown = {},
+                onStepUp = {},
+            )
+        }
+
+        composeRule.onNodeWithText("OK").performClick()
+        assertEquals(1, time)
+        assertEquals(0, departure)
+    }
+
+    @Test
+    fun `the sheet scrolls, so OK stays reachable`() {
+        // The sheet is bottom-aligned in both hosts, so content taller than the
+        // window clips from the bottom — and the confirm is the bottom-most
+        // control. Landscape gets there, and so does a large system font.
+        // Clipped, this change's whole point is gone and only the exits that
+        // discard the time are left (Codex, PR #173).
+        //
+        // This host never measures the composition against the window — the
+        // scroll range reads zero under every device qualifier — so the clipping
+        // itself cannot be reproduced here. What is pinned instead is the thing
+        // that prevents it: `performScrollTo` throws without a scrollable
+        // ancestor, so this fails on a sheet whose content cannot scroll.
+        var time = 0
+
+        capture {
+            EndConditionSheetContent(
+                condition = seeded(),
+                formattedTime = "2:00 PM",
+                onChooseTime = { time++ },
+                onChooseDeparture = {},
+                onStepDown = {},
+                onStepUp = {},
+            )
+        }
+
+        composeRule.onNodeWithText("OK").performScrollTo().performClick()
+        assertEquals(1, time)
+    }
+
+    @Test
+    fun `a refusal is placed above the confirm, not under it`() {
+        // Scrolling is what makes `OK` reachable on a short screen, and it is
+        // also what can hide the answer to pressing it: a failure line added
+        // *below* the bottom-most control lands outside the viewport, and the
+        // refused commit reads as an inert tap — principle 2's silent failure
+        // (Codex, PR #173). Above the button, it arrives in the space the user
+        // is already looking at.
+        capture {
+            EndConditionSheetContent(
+                condition = seeded(),
+                formattedTime = "2:00 PM",
+                onChooseTime = {},
+                onChooseDeparture = {},
+                onStepDown = {},
+                onStepUp = {},
+                failed = true,
+            )
+        }
+
+        val error = composeRule.onNodeWithText("Couldn\'t set the end time").fetchSemanticsNode()
+        val ok = composeRule.onNodeWithText("OK").fetchSemanticsNode()
+        assertTrue(
+            "the failure line belongs above the confirm, not under it",
+            error.positionInRoot.y < ok.positionInRoot.y,
+        )
     }
 
     @Test
@@ -195,9 +281,11 @@ class EndConditionSheetScreenshotTest {
         composeRule.onNodeWithText("until 2:00 PM").assertExists()
         composeRule.onNodeWithText("until 2:00 PM").performClick()
         composeRule.onNodeWithText("until I leave").performClick()
+        composeRule.onNodeWithText("OK").performClick()
         assertEquals(0, time)
         assertEquals(0, departure)
 
+        composeRule.onNodeWithText("OK").assertIsNotEnabled()
         composeRule.onNodeWithContentDescription("Half an hour later").assertIsNotEnabled()
     }
 
@@ -223,6 +311,9 @@ class EndConditionSheetScreenshotTest {
         composeRule.onNodeWithText("until 2:00 PM").assertExists()
         composeRule.onNodeWithText("until I leave").assertDoesNotExist()
         composeRule.onNodeWithText("Ends when you leave, either way.").assertDoesNotExist()
+        // The confirm is the sheet's way out on every build, not something the
+        // departure row was carrying.
+        composeRule.onNodeWithText("OK").assertExists()
     }
 
     @Test
