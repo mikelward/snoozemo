@@ -3341,29 +3341,65 @@ question.
   Six full-suite runs under a two-CPU squeeze did not reproduce the stall
   locally, so the next CI occurrence is the likeliest place to read it.
 
-  **This is not only a test problem, which is the part that matters.** The same
-  worker applies the recording gate and the user's Off toggle. A sink read that
-  stalls on a device leaves that worker parked, so the **opt-out never takes
-  effect** while Settings shows the user the choice they made — principle 2's
-  failure, on a privacy control. `TODO.md` and a chat note carry it to the
-  maintainer rather than it being fixed on a guess, because the three ways out
-  cost different things:
+  **Fixed both ends** (maintainer, 2026-09-01 — "let's try a+c"). The library
+  bounds its own wait (`androidlog`: `readPreviousRun` gives up after ten
+  seconds and says it timed out rather than merely failed), and
+  `DebugLogging` bounds it again at five, on a thread that is not the worker.
+  Both, not either: the library fix is the correct layer and reaches every
+  consumer, while the local one does not depend on which library version an
+  install resolved, fails in a quarter of the time in front of a user waiting
+  on a share, and — the part that matters most — turns a stall into
+  `readSucceeded = false` instead of a silent "nothing to send" over runs
+  still on disk. The abandoned read is interrupted, so a stall does not leak a
+  thread. Rejected: moving the read off the worker entirely, which would have
+  broken the confinement `sink` is documented with.
 
-  - **Bound the wait in the library** — `readPreviousRun(timeout)`, or an
-    async variant. The honest fix, and it is `mikelward/androidlog`'s to make;
-    every consumer gets it.
-  - **Stop blocking this worker** — do the read off `DebugLogging`'s worker.
-    Keeps the fix in this repo, but breaks the confinement invariant `sink` is
-    documented with (*"Confined to worker; nothing off that thread reads or
-    writes it"*), so it trades a liveness bug for a data-race risk.
-  - **Bound it here** — run the read on a dedicated executor with a timeout.
-    Also local, keeps confinement, and costs one thread plus a degraded answer
-    on timeout.
+  **This was not only a test problem, which is why it was worth fixing at
+  both ends.** The same worker applies the recording gate and the user's Off
+  toggle. A sink read that stalled left that worker parked, so the **opt-out
+  never took effect** while Settings showed the user the choice they made —
+  principle 2's failure, on a privacy control. It went to the maintainer rather
+  than being fixed on a guess, and the answer (2026-09-01) was **both** of the
+  first and third options:
+
+  - **Bound the wait in the library** — done in `mikelward/androidlog`. The
+    correct layer, and every consumer gets it.
+  - **Stop blocking this worker** — *rejected.* It would keep the fix local
+    but break the confinement invariant `sink` is documented with (*"Confined
+    to worker; nothing off that thread reads or writes it"*), trading a
+    liveness bug for a data race.
+  - **Bound it here too** — done. Independent of which library version an
+    install resolved, fails in a quarter of the time in front of a waiting
+    user, and turns a stall into `readSucceeded = false` rather than a silent
+    "nothing to send".
 
   **Do not** bump the timeout, and do not assume the next diagnosis is right
   because the previous two sounded right — both did. The stack in the next CI
   failure is the first piece of direct evidence this bug will have produced;
   read it before forming a fourth theory.
+
+  **Still owed: an opt-out taken while the sink's worker is wedged reports
+  success it cannot yet stand behind** (Codex, PR #169). Bounding the read
+  releases *this* worker, and nothing further: the read task keeps its place in
+  the sink's queue, and so does everything behind it — including the file purge
+  `setRecording(false)` enqueues through `onCleared`. So the Off toggle now
+  persists the choice, stops recording and empties the buffer (none of which
+  touches the sink's worker) and answers `onApplied(true)`, while the retained
+  files on disk may still be waiting on a worker that never comes back. Every
+  one of those was equally undeleted before the bound, with the toggle unable
+  to run at all, so this is a residue the fix exposes rather than one it
+  creates — but a privacy control saying "done" over files it has not deleted
+  is principle 2's failure, and the honest version is to say the deletion could
+  not be confirmed. That needs a user-visible surface and new copy, which is a
+  maintainer decision, not a follow-on to a bounded wait.
+
+  **What is *not* the answer: propagating the cancellation into the sink.**
+  Its executor has one thread shared by every file operation, so interrupting
+  the task at its head could land on an unrelated write, and dequeuing the read
+  does nothing to unwedge a worker stuck on something else — which is the case
+  actually observed. Two tests pin the behavior as it stands: one that the
+  wrapper thread is interrupted rather than leaked, and one in the production
+  shape proving the work it was waiting on is left alone.
 
 - [x] **The shared logger's opt-out now does what `SPEC.md` §4.6 promises**
   (raised by Codex, PR #153; **answered by the maintainer 2026-08-31**, and
