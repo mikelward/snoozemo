@@ -122,7 +122,7 @@ class MainScreenScreenshotTest {
         }
 
         composeRule.onNodeWithText("Do Not Disturb access needed").assertExists()
-        composeRule.onNodeWithText("Snoozemo can't snooze without it").assertExists()
+        composeRule.onNodeWithText("Snoozes can't silence your phone").assertExists()
         // Same gating the old DebugScreen had — neither button is a stray
         // affordance while access is missing.
         composeRule.onNodeWithText("Snooze").assertDoesNotExist()

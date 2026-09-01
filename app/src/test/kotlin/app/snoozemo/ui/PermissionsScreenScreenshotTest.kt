@@ -20,6 +20,7 @@ import app.snoozemo.core.CalendarPermission
 import app.snoozemo.core.LocationPermission
 import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
+import app.snoozemo.core.ZenRuleState
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -95,7 +96,7 @@ class PermissionsScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("Snoozemo can't snooze without it").assertExists()
+        composeRule.onNodeWithText("Snoozes can't silence your phone").assertExists()
         composeRule.onNodeWithText("Allow").performClick()
         assertEquals(1, opened)
     }
@@ -166,7 +167,7 @@ class PermissionsScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("Snoozemo can't show what a snooze is doing").assertExists()
+        composeRule.onNodeWithText("Snoozes can't show status and quick actions").assertExists()
         composeRule.onNodeWithText("Allow").assertExists()
     }
 
@@ -176,10 +177,10 @@ class PermissionsScreenScreenshotTest {
 
         capture("permissions-screen-notifications-muted.png") {
             PermissionsScreen(
-                // Left unread: an allowed access row shares "Allowed" with
-                // notifications now (AGENTS.md's standardized status text)
-                // and would otherwise leave a second `Allowed` on screen and
-                // make `assertDoesNotExist()` ambiguous about which row it
+                // Left unread: each row's status is its own sentence now
+                // (SPEC.md §5.2), so nothing is shared between rows — but a
+                // granted access row would still add a second granted status
+                // and make `assertDoesNotExist()` ambiguous about which row it
                 // means — this test is about the notifications row
                 // specifically. Same reason location stays unread below.
                 access = null,
@@ -195,9 +196,11 @@ class PermissionsScreenScreenshotTest {
         }
 
         // The permission is held, so the old reading said `Allowed` — over a
-        // snooze whose countdown and end reason were both being dropped.
-        composeRule.onNodeWithText("Snoozemo can't show what a snooze is doing").assertExists()
-        composeRule.onNodeWithText("Allowed").assertDoesNotExist()
+        // snooze whose countdown and end reason were both being dropped. The
+        // status now names the capability, which makes the wrong reading worse
+        // rather than better: it would claim the thing the user is not getting.
+        composeRule.onNodeWithText("Snoozes can't show status and quick actions").assertExists()
+        composeRule.onNodeWithText("Snoozes can show status and quick actions").assertDoesNotExist()
         // And the row still offers the fix, which is the half a status line
         // alone would lose: held-but-blocked is repairable, and the button is
         // what says so.
@@ -223,20 +226,144 @@ class PermissionsScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("Snoozemo can't tell when you've left").assertExists()
+        composeRule.onNodeWithText("Snoozes can't end when you leave").assertExists()
         composeRule.onNodeWithText("Allow").performClick()
         assertEquals(1, tapped)
     }
 
     @Test
-    fun `granted rows read Allowed, the standardized status word`() {
-        capture("permissions-screen-idle.png") {
+    fun `a build without departure tracking promises nothing and offers nothing`() {
+        // The `direct` flavor has no presence monitor (SPEC.md §3.4), but it
+        // still declares ACCESS_FINE_LOCATION from the shared manifest, so the
+        // row renders. Naming the capability there would promise something the
+        // build cannot do and invite a grant that buys nothing (Codex, PR
+        // #171) — the copy change this test guards is what introduced that.
+        capture("permissions-screen-no-departure-askable.png") {
             PermissionsScreen(
                 access = PolicyAccess.GRANTED,
-                // Left unread: a granted notifications row would leave a
-                // third `Allowed` on screen and make the count below need
-                // updating for reasons that have nothing to do with this test.
-                notifications = null,
+                notifications = NotificationPermission.GRANTED,
+                notificationsReachTheUser = true,
+                location = LocationPermission.ASKABLE,
+                tracksDeparture = false,
+                settingsFailure = null,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onLocationRow = {},
+                onDone = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Ending when you leave isn't in this build yet").assertExists()
+        composeRule.onNodeWithText("Snoozes can end when you leave").assertDoesNotExist()
+        composeRule.onNodeWithText("Snoozes can't end when you leave").assertDoesNotExist()
+        // And no offer: the permission is askable, so without this the row
+        // would still show `Allow` over a status saying it would not help.
+        composeRule.onNodeWithText("Allow").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a build without departure tracking says the same thing once granted`() {
+        capture("permissions-screen-no-departure-granted.png") {
+            PermissionsScreen(
+                access = PolicyAccess.GRANTED,
+                notifications = NotificationPermission.GRANTED,
+                notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
+                tracksDeparture = false,
+                settingsFailure = null,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onLocationRow = {},
+                onDone = {},
+            )
+        }
+
+        // The grant is not what stands between the user and this, so holding it
+        // changes nothing the row says.
+        composeRule.onNodeWithText("Ending when you leave isn't in this build yet").assertExists()
+        composeRule.onNodeWithText("Snoozes can end when you leave").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a granted access row does not claim a capability its rule cannot deliver`() {
+        // Access held, rule switched off by the user in Settings — which
+        // Snoozemo deliberately does not undo (SPEC.md §5.1). The capability
+        // claim would be a false success on the one screen that does not also
+        // render `lastOutcome` to contradict it (Codex, PR #171).
+        capture("permissions-screen-rule-disabled.png") {
+            PermissionsScreen(
+                access = PolicyAccess.GRANTED,
+                notifications = NotificationPermission.GRANTED,
+                notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
+                ruleState = ZenRuleState.DISABLED,
+                settingsFailure = null,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onLocationRow = {},
+                onDone = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Snoozemo's rule is switched off in Settings").assertExists()
+        composeRule.onNodeWithText("Snoozes can silence your phone").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a refused rule says so rather than claiming the capability`() {
+        capture("permissions-screen-rule-failed.png") {
+            PermissionsScreen(
+                access = PolicyAccess.GRANTED,
+                notifications = NotificationPermission.GRANTED,
+                notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
+                ruleState = ZenRuleState.FAILED,
+                settingsFailure = null,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onLocationRow = {},
+                onDone = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Do Not Disturb access is on, but Snoozemo could not create its rule")
+            .assertExists()
+        composeRule.onNodeWithText("Snoozes can silence your phone").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a ready rule lets the access row claim its capability`() {
+        capture("permissions-screen-rule-ready.png") {
+            PermissionsScreen(
+                access = PolicyAccess.GRANTED,
+                notifications = NotificationPermission.GRANTED,
+                notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
+                ruleState = ZenRuleState.READY,
+                settingsFailure = null,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onLocationRow = {},
+                onDone = {},
+            )
+        }
+
+        // The other direction, so the guard above is a discrimination rather
+        // than a blanket suppression of the capability line.
+        composeRule.onNodeWithText("Snoozes can silence your phone").assertExists()
+        composeRule.onNodeWithText("Snoozemo's rule is switched off in Settings").assertDoesNotExist()
+    }
+
+    @Test
+    fun `every row's status names the capability, in both states`() {
+        capture("permissions-screen-capability-pair.png") {
+            PermissionsScreen(
+                access = PolicyAccess.GRANTED,
+                // Not held, so this test carries rows in *both* states — the
+                // pair is what is under test, not the granted half of it. A
+                // `null` here would read as unread and render no status at
+                // all, which pins neither side.
+                notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
                 location = LocationPermission.GRANTED,
                 settingsFailure = null,
@@ -247,13 +374,18 @@ class PermissionsScreenScreenshotTest {
             )
         }
 
-        // AGENTS.md: status text is either "Allowed" or the capability's own
-        // missing-state copy — location used to say "Tracking your place",
-        // and Do Not Disturb access used to say "Granted".
-        composeRule.onAllNodesWithText("Allowed").assertCountEquals(2)
+        // SPEC.md §5.2 (revised 2026-09-01): the status names the capability in
+        // both states, differing by one word, so a user can tell what a grant
+        // buys them before making it. `Allowed` is what this replaced — it
+        // answered a question the user had just answered themselves. Earlier
+        // still, the rows each invented their own word: "Tracking your place",
+        // "Granted".
+        composeRule.onNodeWithText("Snoozes can silence your phone").assertExists()
+        composeRule.onNodeWithText("Snoozes can end when you leave").assertExists()
+        composeRule.onNodeWithText("Snoozes can't show status and quick actions").assertExists()
+        composeRule.onNodeWithText("Allowed").assertDoesNotExist()
         composeRule.onNodeWithText("Tracking your place").assertDoesNotExist()
         composeRule.onNodeWithText("Granted").assertDoesNotExist()
-        composeRule.onNodeWithText("Allow").assertDoesNotExist()
     }
 
     @Test
@@ -350,7 +482,7 @@ class PermissionsScreenScreenshotTest {
             )
         }
 
-        composeRule.onAllNodesWithText("Allowed").assertCountEquals(3)
+        composeRule.onNodeWithText("Snoozes can silence your phone").assertExists()
         composeRule.onNodeWithText("Couldn't open Settings").assertDoesNotExist()
     }
 
@@ -377,13 +509,13 @@ class PermissionsScreenScreenshotTest {
         }
 
         composeRule.onNodeWithText("Calendar").assertExists()
-        composeRule.onNodeWithText("Snoozemo can't offer your next meeting's end time").assertExists()
+        composeRule.onNodeWithText("Snoozes can't end when your meeting does").assertExists()
         composeRule.onNodeWithText("Allow").performClick()
         assertEquals(1, tapped)
     }
 
     @Test
-    fun `a granted calendar reads Allowed and offers nothing`() {
+    fun `a granted calendar names the capability and offers nothing`() {
         capture {
             PermissionsScreen(
                 access = null,
@@ -400,7 +532,7 @@ class PermissionsScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("Allowed").assertExists()
+        composeRule.onNodeWithText("Snoozes can end when your meeting does").assertExists()
         composeRule.onNodeWithText("Allow").assertDoesNotExist()
     }
 

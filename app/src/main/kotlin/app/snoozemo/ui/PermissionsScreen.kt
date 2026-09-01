@@ -19,6 +19,7 @@ import app.snoozemo.core.CalendarPermission
 import app.snoozemo.core.LocationPermission
 import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
+import app.snoozemo.core.ZenRuleState
 
 /**
  * The interstitial: what each capability Snoozemo can use needs, and the one
@@ -46,6 +47,37 @@ fun PermissionsScreen(
      * opinion about.
      */
     calendar: CalendarPermission? = null,
+    /**
+     * Whether this build can ever end a snooze because the user left
+     * (`PRESENCE_TRACKS_DEPARTURE`). The location row's status names that
+     * capability, so on a build that does not have it the same sentence would
+     * promise something the user cannot get — and, worse, invite a location
+     * grant that buys them nothing (Codex, PR #171).
+     *
+     * A parameter rather than the constant read here, for the same reason
+     * [EndConditionSheet] takes one: a screenshot test has to be able to render
+     * both builds, and the flavor seam belongs at the call site.
+     *
+     * Defaults to true, so the only caller that has to think about it is the
+     * one on a build where departure is unavailable.
+     */
+    tracksDeparture: Boolean = true,
+    /**
+     * The verified state of Snoozemo's own zen rule, or null while unread.
+     *
+     * Policy access is necessary for silencing the phone and not sufficient:
+     * the rule can exist and be **switched off by the user in Settings**, which
+     * Snoozemo deliberately does not undo (SPEC.md §5.1), or the platform can
+     * have refused to create it. In both cases the grant is held and a snooze
+     * still cannot silence anything — so a row that claimed the capability from
+     * `access` alone would state a success the app cannot deliver, on the one
+     * screen that does not also render `lastOutcome` to contradict it (Codex,
+     * PR #171).
+     *
+     * Null leaves the capability pair to speak for the grant, which is the
+     * right reading before any check has run.
+     */
+    ruleState: ZenRuleState? = null,
     settingsFailure: SetupRowId?,
     /**
      * Whether a crashed run is currently pinned (`SPEC.md` §4.6). On a cold
@@ -103,7 +135,17 @@ fun PermissionsScreen(
             SetupRow(
                 title = stringResource(R.string.setup_dnd_title),
                 status = stringResource(
-                    if (granted) R.string.setup_dnd_allowed else R.string.setup_dnd_missing,
+                    when {
+                        // The grant is held but the rule cannot silence
+                        // anything, so the capability claim would be false.
+                        // These two lines are the ones MainScreen already
+                        // shows for the same states, rather than new copy
+                        // saying the same thing differently.
+                        granted && ruleState == ZenRuleState.DISABLED -> R.string.rule_disabled
+                        granted && ruleState == ZenRuleState.FAILED -> R.string.rule_failed
+                        granted -> R.string.setup_dnd_allowed
+                        else -> R.string.setup_dnd_missing
+                    },
                 ),
                 // Same `Allow`/`Allowed` wording as every other row, even
                 // though this one is a Settings toggle with no in-app dialog
@@ -148,9 +190,18 @@ fun PermissionsScreen(
             SetupRow(
                 title = stringResource(R.string.setup_location_title),
                 status = stringResource(
-                    if (granted) R.string.setup_location_allowed else R.string.setup_location_missing,
+                    when {
+                        // Says the same thing whether or not the permission is
+                        // held, because the permission is not what is missing.
+                        !tracksDeparture -> R.string.setup_location_no_departure
+                        granted -> R.string.setup_location_allowed
+                        else -> R.string.setup_location_missing
+                    },
                 ),
-                action = stringResource(R.string.setup_action_allow).takeUnless { granted },
+                // No offer either: granting would change nothing here, and a
+                // button is a promise that it would.
+                action = stringResource(R.string.setup_action_allow)
+                    .takeUnless { granted || !tracksDeparture },
                 onAction = onLocationRow,
                 failure = stringResource(R.string.failure_could_not_open_settings)
                     .takeIf { settingsFailure == SetupRowId.LOCATION },
