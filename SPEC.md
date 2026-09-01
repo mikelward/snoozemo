@@ -1233,6 +1233,13 @@ screen, so the same rules apply to all three:
   a row that depends on two waits for both. A row whose *missing* state needs nothing further —
   no grant, so no rule to be in the way — still renders immediately.
 
+  **A verified answer is kept and marked stale, never thrown away.** A re-check stops the
+  screen claiming the old answer, but the answer itself survives, so a check that ends without
+  producing a new one — a refused binder read, a rule lookup that throws — leaves the row
+  saying what was last known rather than vanishing. The alternative, clearing and restoring,
+  needs a restore on every path that can end without an answer and still loses a race between
+  two overlapping re-checks.
+
   **A row that reports a problem carries the button that fixes it, whatever the problem is**
   (maintainer, 2026-09-01). The access row keeps `Allow` when the grant is held but Snoozemo's
   own mode is switched off, and that button opens the mode's settings screen rather than the

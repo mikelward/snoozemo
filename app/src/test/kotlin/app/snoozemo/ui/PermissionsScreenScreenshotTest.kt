@@ -414,6 +414,37 @@ class PermissionsScreenScreenshotTest {
     }
 
     @Test
+    fun `a rule check that found access gone reads as the missing grant`() {
+        // Access was read as granted, then revoked before the rule check looked
+        // — so the newer answer is that there is no access, and the row says
+        // that rather than claiming a capability nothing can deliver. It offers
+        // the grant back, not the mode's switch (Codex, PR #171).
+        var access = 0
+        var rule = 0
+        capture {
+            PermissionsScreen(
+                access = PolicyAccess.GRANTED,
+                notifications = NotificationPermission.GRANTED,
+                notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
+                ruleState = ZenRuleState.MISSING_ACCESS,
+                settingsFailure = null,
+                onAccessRow = { access++ },
+                onRuleRow = { rule++ },
+                onNotificationsRow = {},
+                onLocationRow = {},
+                onDone = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Snoozes can't silence your phone").assertExists()
+        composeRule.onNodeWithText("Snoozes can silence your phone").assertDoesNotExist()
+        composeRule.onNodeWithText("Allow").performClick()
+        assertEquals(1, access)
+        assertEquals(0, rule)
+    }
+
+    @Test
     fun `a refused rule says so rather than claiming the capability`() {
         capture("permissions-screen-rule-failed.png") {
             PermissionsScreen(

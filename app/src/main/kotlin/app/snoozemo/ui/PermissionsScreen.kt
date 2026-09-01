@@ -159,6 +159,13 @@ fun PermissionsScreen(
                         // saying the same thing differently.
                         granted && ruleState == ZenRuleState.DISABLED -> R.string.rule_disabled
                         granted && ruleState == ZenRuleState.FAILED -> R.string.rule_failed
+                        // The rule check found access gone after the read that
+                        // said it was there — revoked in between. Access is
+                        // what is missing, whatever the older read said, so
+                        // this reads as the missing-grant state rather than
+                        // claiming a capability nothing can deliver (Codex,
+                        // PR #171).
+                        granted && ruleState == ZenRuleState.MISSING_ACCESS -> R.string.setup_dnd_missing
                         granted -> R.string.setup_dnd_allowed
                         else -> R.string.setup_dnd_missing
                     },
@@ -175,8 +182,14 @@ fun PermissionsScreen(
                 // — the mode's own switch (maintainer, 2026-09-01). `FAILED`
                 // gets no button: nothing there is the user's to fix.
                 action = stringResource(R.string.setup_action_allow)
-                    .takeUnless { granted && ruleState != ZenRuleState.DISABLED },
+                    .takeUnless {
+                        granted &&
+                            ruleState != ZenRuleState.DISABLED &&
+                            ruleState != ZenRuleState.MISSING_ACCESS
+                    },
                 onAction = if (granted && ruleState == ZenRuleState.DISABLED) onRuleRow else onAccessRow,
+                // MISSING_ACCESS keeps the access route, not the rule one:
+                // what the user needs is the grant back.
                 // FILTERS as well as DND: in the disabled state this button
                 // opens the mode screen, and `openFilters` reports a refusal
                 // under its own row id — which belongs here when this row is
