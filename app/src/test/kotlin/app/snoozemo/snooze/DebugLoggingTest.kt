@@ -495,4 +495,89 @@ class DebugLoggingTest {
         assertFalse(DebugLogging.lastDismissFailed)
     }
 
+    /**
+     * A worker that is not coming back must make the drain **fail**, not hang.
+     *
+     * That distinction is the whole value of the stall reporting: a drain that
+     * returns false is a test failure carrying [DebugLogging.workerStall]'s
+     * stack, while one that blocks is a suite that stops with nothing said.
+     * `awaitIdleForTest` used to drain the sink after its latch expired, which
+     * on the one path worth reporting — a worker parked in `readPreviousRun()`
+     * waiting on the sink's own worker — queues behind that same task and
+     * never returns (Codex, PR #168).
+     *
+     * **What this does not cover, stated rather than implied:** the stalled
+     * *sink* itself. Reaching that needs a way to hold the sink's worker, and
+     * the library exposes none, so this stages the wedge on our side instead.
+     * The ordering it pins is what makes the report reachable either way.
+     */
+    @Test
+    fun `a wedged worker fails the drain instead of hanging`() {
+        val release = java.util.concurrent.CountDownLatch(1)
+        try {
+            DebugLogging.blockWorkerForTest(release)
+
+            val startedAt = System.nanoTime()
+            val drained = DebugLogging.awaitIdleForTest(timeoutSeconds = 1)
+            val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
+
+            assertFalse("the worker is occupied, so nothing queued behind it ran", drained)
+            // Its own bound, with room for a loaded machine -- but far short of
+            // the seam's 30 s backstop, which is what a wait on the blocked
+            // worker would have cost.
+            assertTrue("the drain must return at its own bound, not wait out the block", elapsedMs < 15_000)
+            assertTrue(
+                "the failure must be able to say what the worker was doing",
+                DebugLogging.workerStall().contains("snoozemo-debug-log-init"),
+            )
+        } finally {
+            release.countDown()
+        }
+        // The worker recovers once released: this class shares it with every
+        // other one in the sandbox, so leaving it wedged would fail them all --
+        // which is the bug being studied, not something to reproduce for real.
+        assertTrue("the worker must be usable again", DebugLogging.awaitIdleForTest())
+    }
+
+    /**
+     * The reported stall must describe the worker **at the timeout**, not
+     * whenever the failing test got round to asking.
+     *
+     * A task that finishes just after the bound expires leaves the worker idle
+     * by the time the message is built, so a live reading would name anything
+     * except the operation that blew it — and this reporting exists precisely
+     * to explain a failure nobody has caught in the act (Codex, PR #168).
+     *
+     * Deterministic rather than racing the boundary, which is the same
+     * property under test: the blocker is released *after* the drain has
+     * already timed out, and the worker is then drained to completion, so it
+     * is provably idle when the stall is read. A live reading could not
+     * mention the block; a snapshot taken at the timeout must.
+     */
+    @Test
+    fun `the reported stall describes the worker at the timeout, not afterwards`() {
+        val release = java.util.concurrent.CountDownLatch(1)
+        try {
+            DebugLogging.blockWorkerForTest(release)
+            assertFalse("precondition: the drain has to time out", DebugLogging.awaitIdleForTest(timeoutSeconds = 1))
+        } finally {
+            release.countDown()
+        }
+        // Provably past the block now, so nothing about it is still visible on
+        // the worker -- yet it is what the failure needs to name.
+        assertTrue("the worker must be usable again", DebugLogging.awaitIdleForTest())
+
+        val stall = DebugLogging.workerStall()
+        assertTrue(
+            "the stall must still name the blocked wait, not the idle worker: $stall",
+            stall.contains("CountDownLatch"),
+        )
+        // And it must be offered as a stall rather than hedged: the worker was
+        // provably still behind the drain's own task when the bound expired,
+        // which is the case the qualifier below is *not* for.
+        assertFalse(
+            "a validated snapshot must not carry the slow-worker caveat: $stall",
+            stall.contains("cannot be placed either side of it"),
+        )
+    }
 }

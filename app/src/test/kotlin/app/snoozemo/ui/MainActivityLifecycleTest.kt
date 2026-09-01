@@ -10,6 +10,7 @@ import java.io.File
 import org.junit.After
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -111,7 +112,16 @@ class MainActivityLifecycleTest {
         // thread's completion looks like landing after onStop.
         DebugLogging.install(app)
         DebugLogging.dismissCrashPin()
-        DebugLogging.awaitIdleForTest()
+        // Checked rather than assumed. The worker is shared by every test class
+        // in the sandbox, so a task an earlier class wedged it with leaves this
+        // dismissal unrun -- and the only symptom was the assertion below,
+        // which blames `onStart` for never syncing a value nothing ever
+        // produced. Failing here instead names the real fault, and prints what
+        // the worker was doing (`TODO.md`).
+        if (!DebugLogging.awaitIdleForTest()) {
+            fail("the debug-log worker did not drain, so the dismissal never " +
+                "ran.\n${DebugLogging.workerStall()}")
+        }
         shadowOf(Looper.getMainLooper()).idle()
 
         controller.start()
