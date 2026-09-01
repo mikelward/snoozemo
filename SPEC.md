@@ -1226,6 +1226,13 @@ screen, so the same rules apply to all three:
   The verb pairing above is unaffected — that rule governs the **button**, which still reads `Allow`
   and still disappears once there is nothing to fix. What changed is the line beneath it.
 
+  **A capability claim waits for everything it rests on to be read** (Codex, PR #171). The
+  grant and the rule are read separately, the second answering after the first, so a row that
+  rendered on the grant alone would claim the capability for that window and take it back when
+  the rule turned out to be off. Every row here is already absent until its own state is read;
+  a row that depends on two waits for both. A row whose *missing* state needs nothing further —
+  no grant, so no rule to be in the way — still renders immediately.
+
   **A row that reports a problem carries the button that fixes it, whatever the problem is**
   (maintainer, 2026-09-01). The access row keeps `Allow` when the grant is held but Snoozemo's
   own mode is switched off, and that button opens the mode's settings screen rather than the

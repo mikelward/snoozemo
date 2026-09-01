@@ -159,6 +159,7 @@ class PermissionsScreenScreenshotTest {
                 notifications = NotificationPermission.BLOCKED,
                 notificationsReachTheUser = true,
                 location = LocationPermission.GRANTED,
+                ruleState = ZenRuleState.READY,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
@@ -218,6 +219,7 @@ class PermissionsScreenScreenshotTest {
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
                 location = LocationPermission.ASKABLE,
+                ruleState = ZenRuleState.READY,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
@@ -245,6 +247,7 @@ class PermissionsScreenScreenshotTest {
                 notificationsReachTheUser = true,
                 location = LocationPermission.ASKABLE,
                 tracksDeparture = false,
+                ruleState = ZenRuleState.READY,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
@@ -270,6 +273,7 @@ class PermissionsScreenScreenshotTest {
                 notificationsReachTheUser = true,
                 location = LocationPermission.GRANTED,
                 tracksDeparture = false,
+                ruleState = ZenRuleState.READY,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
@@ -307,6 +311,55 @@ class PermissionsScreenScreenshotTest {
 
         composeRule.onNodeWithText("Snoozemo's rule is switched off in Settings").assertExists()
         composeRule.onNodeWithText("Snoozes can silence your phone").assertDoesNotExist()
+    }
+
+    @Test
+    fun `an unverified rule leaves the access row out rather than claiming it works`() {
+        // `access` publishes as soon as it is read; the rule check answers
+        // after it. Claiming the capability in that window would take it back
+        // a moment later on a DISABLED or FAILED rule, so the row waits —
+        // briefly absent rather than briefly wrong (Codex, PR #171).
+        capture {
+            PermissionsScreen(
+                access = PolicyAccess.GRANTED,
+                notifications = NotificationPermission.GRANTED,
+                notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
+                ruleState = null,
+                settingsFailure = null,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onLocationRow = {},
+                onDone = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Snoozes can silence your phone").assertDoesNotExist()
+        composeRule.onNodeWithText("Do Not Disturb access").assertDoesNotExist()
+        // The rows that do not depend on the rule are unaffected.
+        composeRule.onNodeWithText("Snoozes can end when you leave").assertExists()
+    }
+
+    @Test
+    fun `a refused access row does not wait on a rule it has no use for`() {
+        // Nothing for a rule to be in the way of, so this row is immediate —
+        // the wait above must not delay the state a fresh install lands on.
+        capture {
+            PermissionsScreen(
+                access = PolicyAccess.DENIED,
+                notifications = NotificationPermission.GRANTED,
+                notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
+                ruleState = null,
+                settingsFailure = null,
+                onAccessRow = {},
+                onNotificationsRow = {},
+                onLocationRow = {},
+                onDone = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Snoozes can't silence your phone").assertExists()
     }
 
     @Test
@@ -417,6 +470,7 @@ class PermissionsScreenScreenshotTest {
                 notifications = NotificationPermission.ASKABLE,
                 notificationsReachTheUser = true,
                 location = LocationPermission.GRANTED,
+                ruleState = ZenRuleState.READY,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
@@ -449,6 +503,7 @@ class PermissionsScreenScreenshotTest {
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
                 location = LocationPermission.GRANTED,
+                ruleState = ZenRuleState.READY,
                 settingsFailure = null,
                 onAccessRow = {},
                 onNotificationsRow = {},
@@ -525,6 +580,7 @@ class PermissionsScreenScreenshotTest {
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
                 location = LocationPermission.GRANTED,
+                ruleState = ZenRuleState.READY,
                 settingsFailure = SetupRowId.DND,
                 onAccessRow = {},
                 onNotificationsRow = {},
