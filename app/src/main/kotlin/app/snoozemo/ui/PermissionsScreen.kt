@@ -138,7 +138,15 @@ fun PermissionsScreen(
         // Nothing at all until access has been read, rather than a guess in
         // either direction: the wrong guess either tells a user who allowed
         // access that they haven't, or offers to arm something that can't.
-        access?.let {
+        // A granted row needs the rule state as well as the grant. `access`
+        // publishes the moment it is read, while the rule check answers on a
+        // background thread after it — so rendering on the grant alone would
+        // claim "Snoozes can silence your phone" for that window and then take
+        // it back if the rule turns out DISABLED or FAILED. Same discipline as
+        // every other row here: briefly absent rather than briefly wrong
+        // (Codex, PR #171). A missing grant needs no rule state — there is
+        // nothing for a rule to be in the way of — so that row is immediate.
+        access?.takeUnless { it == PolicyAccess.GRANTED && ruleState == null }?.let {
             val granted = it == PolicyAccess.GRANTED
             SetupRow(
                 title = stringResource(R.string.setup_dnd_title),

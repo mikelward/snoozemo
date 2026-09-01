@@ -27,6 +27,7 @@ import app.snoozemo.R
 import app.snoozemo.core.LocationPermission
 import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
+import app.snoozemo.core.ZenRuleState
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -220,6 +221,10 @@ class EdgeToEdgeScreenshotTest {
             notifications = NotificationPermission.GRANTED,
             notificationsReachTheUser = true,
             location = LocationPermission.GRANTED,
+            // A settled screen: the access row waits for the rule check as well
+            // as the grant, so without a state it would not render at all and
+            // this test's edge-to-edge assertions would have no row to measure.
+            ruleState = ZenRuleState.READY,
             settingsFailure = null,
             onAccessRow = {},
             onNotificationsRow = {},
