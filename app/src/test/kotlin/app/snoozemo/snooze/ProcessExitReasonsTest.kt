@@ -8,6 +8,7 @@ import app.snoozemo.core.SnoozeDebugLog
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -60,10 +61,18 @@ class ProcessExitReasonsTest {
      * never finish, not to leave less room for one that is merely slow.
      */
     private fun drainDebugLogWorker() {
-        assertTrue(
-            "the debug-log worker did not drain; startup collection may still be in flight",
-            DebugLogging.awaitIdleForTest(timeoutSeconds = 10),
-        )
+        // The message carries the worker's own stack, because the fact this
+        // assertion used to report -- that a trivial task did not reach the
+        // front of a FIFO queue -- never said what was ahead of it, and two
+        // diagnoses guessed from that alone were both wrong (`TODO.md`). The
+        // worker is shared by every test class in the sandbox, so the culprit
+        // is usually queued by a class that has already finished.
+        if (!DebugLogging.awaitIdleForTest(timeoutSeconds = 10)) {
+            fail(
+                "the debug-log worker did not drain; startup collection may still be " +
+                    "in flight.\n${DebugLogging.workerStall()}",
+            )
+        }
     }
 
     @After

@@ -224,7 +224,22 @@ internal object DebugLogging {
     // (deferred from Codex's PR #62 review).
     private val worker = ThreadPoolExecutor(
         1, 1, 0L, TimeUnit.MILLISECONDS, LinkedBlockingQueue(),
-    ) { runnable -> Thread(runnable, "snoozemo-debug-log-init").apply { isDaemon = true } }
+    ) { runnable ->
+        Thread(runnable, "snoozemo-debug-log-init").apply {
+            isDaemon = true
+            // Held only so a stalled drain can say what the thread was doing
+            // rather than only that it did not finish -- see [workerStall].
+            workerThread = this
+        }
+    }
+
+    /**
+     * The worker's thread, for [workerStall] alone. Written by the factory on
+     * the pool's own thread and read from a test thread, so it is volatile;
+     * nothing else in this object touches it, and no behavior depends on it.
+     */
+    @Volatile
+    private var workerThread: Thread? = null
 
     /**
      * Call once from `Application.onCreate`. Runs off the caller's thread, like
@@ -729,9 +744,104 @@ internal object DebugLogging {
     internal fun awaitIdleForTest(timeoutSeconds: Long = 5): Boolean {
         val done = java.util.concurrent.CountDownLatch(1)
         runCatching { worker.execute { done.countDown() } }.onFailure { done.countDown() }
-        val drained = done.await(timeoutSeconds, TimeUnit.SECONDS)
+        if (!done.await(timeoutSeconds, TimeUnit.SECONDS)) {
+            // Snapshotted *here*, not read back by the caller afterwards
+            // (Codex, PR #168). A task that finishes just after the timeout
+            // leaves the worker idle — or running this drain's own task — by
+            // the time a caller asks, so a live read would name anything but
+            // the operation that blew the bound. The one failure this exists
+            // to explain would arrive carrying evidence about something else.
+            //
+            // Then *validated*, because taking it is not instantaneous either
+            // and the worker can advance while a stack is being walked (Codex,
+            // PR #168). The latch settles it: a count still standing after the
+            // snapshot means the worker had not reached this drain's own task
+            // by then, and so had not reached it at the earlier moment the
+            // snapshot was taken — the reading describes a worker genuinely
+            // behind. A count of zero means it got there somewhere around the
+            // bound, which no stack read can place either side of, so that is
+            // reported as what it is rather than dressed up as a stall.
+            val snapshot = describeWorker()
+            lastStall = if (done.count > 0L) {
+                snapshot
+            } else {
+                "the drain finished around the moment its bound expired, so this " +
+                    "reading cannot be placed either side of it — treat it as a slow " +
+                    "worker rather than a wedged one: $snapshot"
+            }
+            // Returns without touching the sink, and that ordering is the
+            // whole point (Codex, PR #168). `awaitIdle()` drains the *sink's*
+            // worker, and the leading explanation for a stalled worker here is
+            // that it is itself parked in `readPreviousRun()` waiting on
+            // exactly that worker. Draining would then queue behind the same
+            // task and block, so the caller would hang instead of failing with
+            // [workerStall] — leaving the one path this seam most needs to
+            // report as the one it could not.
+            return false
+        }
         sink?.let { runCatching { it.awaitIdle() } }
-        return drained
+        return true
+    }
+
+    /**
+     * The worker as it was at the most recent [awaitIdleForTest] timeout.
+     *
+     * Deliberately **not** cleared by a later successful drain. Both callers
+     * print it only when their own drain has just timed out — which overwrote
+     * it a moment earlier — so clearing buys no accuracy, while keeping it
+     * makes the capture observable: a test can free the worker, drain it to
+     * completion, and still see the stall the timeout recorded, which is the
+     * whole property worth pinning.
+     */
+    @Volatile
+    private var lastStall: String? = null
+
+    /**
+     * Test seam: occupies the worker until [release] is counted down, so a
+     * test can see what callers do against a worker that is not coming back.
+     *
+     * That state is otherwise unreachable from a test — it arises from a
+     * *stalled* sink read — while being the state the drain's reporting has
+     * to survive, so it is worth being able to stage deliberately.
+     *
+     * The wait is bounded even so. An unreleased latch here would wedge the
+     * worker for the rest of the JVM and take every later test class in the
+     * sandbox down with it, which is precisely the bug this seam exists to
+     * study; a test that forgets its `finally` should fail alone.
+     */
+    internal fun blockWorkerForTest(release: java.util.concurrent.CountDownLatch) {
+        runCatching { worker.execute { runCatching { release.await(30, TimeUnit.SECONDS) } } }
+    }
+
+    /**
+     * Test seam: what the worker was doing when a drain did not finish.
+     *
+     * A failed [awaitIdleForTest] says only that a trivial task did not reach
+     * the front of a FIFO queue, which leaves the actual question -- *what is
+     * ahead of it* -- unanswered, and that has cost two wrong diagnoses of the
+     * `ProcessExitReasonsTest` stall already (`TODO.md`). The worker is a
+     * process-wide singleton shared by every test class in a Robolectric
+     * sandbox, so whatever wedges it was very likely queued by an *earlier*
+     * class and is invisible from the class that fails. Its stack names that
+     * caller directly.
+     *
+     * Reports the queue depth alongside, since "blocked in a task" and "never
+     * started one" are different faults with the same symptom.
+     */
+    internal fun workerStall(): String = lastStall?.let { "at the drain timeout: $it" }
+        ?: "no drain has timed out; worker as of now: ${describeWorker()}"
+
+    /** The worker's thread state and stack, as of this call. */
+    private fun describeWorker(): String {
+        val thread = workerThread
+            ?: return "the debug-log worker thread was never created; queued=${worker.queue.size}"
+        val frames = thread.stackTrace.joinToString("\n") { "    at $it" }
+        return buildString {
+            append("debug-log worker \"${thread.name}\" is ${thread.state}")
+            append(", queued=${worker.queue.size}")
+            append(", completed=${worker.completedTaskCount}")
+            if (frames.isNotEmpty()) append("\n").append(frames)
+        }
     }
 
     /** Test seam: forgets the installed sink so the next [install] rebuilds it. */

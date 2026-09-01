@@ -3217,8 +3217,48 @@ question.
   caller is already on the debug log's worker"). Look there before theorizing
   again.
 
+  **The failure now names what wedged the worker** (2026-09-01). Both waits
+  that were silently returning a bare boolean now fail loudly and print
+  `DebugLogging.workerStall()`: the worker thread's state, its stack, the
+  queue depth and the completed-task count. That was added because *every*
+  diagnosis so far has been guessed from the one fact the old message carried
+  — that a trivial task did not reach the front of a queue — which never said
+  what was ahead of it. The stack names the class that queued the blocking
+  task directly, and since that class has usually finished by the time the
+  stall surfaces, nothing else could.
+
+  `MainActivityLifecycleTest` was the second half of the same fault and now
+  says so. Its *a restart picks up a dismiss outcome missed while stopped*
+  called `awaitIdleForTest()` and **discarded the result**, so a wedged worker
+  meant the dismissal never ran and the only symptom was an assertion blaming
+  `onStart` for not syncing a value nothing had produced. It fails at the
+  drain now, with the same stack. That also explains why the two classes
+  always fail *together*: one wedge, two victims — not two flakes.
+
+  **Hypothesis tested and disproved: sink accumulation** (2026-09-01).
+  `DebugLogging.resetForTest()` sets `sink = null` without ever calling the
+  library's `removeSink`/`clearSinks`, so each subsequent `install` looked like
+  it would leave another `DebugFileSink` registered on the process-wide
+  `SnoozeDebugLog` — an unbounded fan-out that would slow every write. Measured
+  by reflecting on `sinkAnchors` from the failing class's `@Before`: the count
+  reads **2 on the first case and 0 for the rest**, not a growing number. So
+  the leak is not there.
+
+  It did turn up a real oddity worth a look on its own: after the first case
+  `DebugLogging` still holds a non-null `sink` (so `installNow` early-returns)
+  while `SnoozeDebugLog` has **no sinks registered at all**. The two records of
+  "is a sink installed" disagree for the rest of the class.
+
+  **Also ruled out, from 24 thread dumps across a passing full run**: the
+  worker is not merely slow. In every sample it was parked on an empty queue,
+  never mid-task — so when the suite passes there is no near-miss, which fits a
+  wedge that either happens or does not rather than a timeout that is sometimes
+  beaten.
+
   **Do not** bump the timeout, and do not assume the next diagnosis is right
-  because the previous two sounded right — both did.
+  because the previous two sounded right — both did. The stack in the next CI
+  failure is the first piece of direct evidence this bug will have produced;
+  read it before forming a fourth theory.
 
 - [x] **The shared logger's opt-out now does what `SPEC.md` §4.6 promises**
   (raised by Codex, PR #153; **answered by the maintainer 2026-08-31**, and
@@ -4648,6 +4688,11 @@ case fail together at a flat ~10.03 s under full-suite load and pass in isolatio
 changed the drain from a skippable production API to the unconditional test seam — a real
 fix to a real defect, and **not** a fix to this. The task is queued and not executed, so the
 worker is occupied by something earlier in the queue.
+
+They fail **together because it is one fault, not two**: a single wedged worker, with
+`MainActivityLifecycleTest` the second victim rather than a separate flake. Both waits now
+print the worker's own stack when they time out, so the next occurrence names the class that
+queued the blocking task instead of leaving it to be guessed a fourth time.
 
 ## Analytics turns on a Crashlytics breadcrumb channel — accepted (PR #166)
 
