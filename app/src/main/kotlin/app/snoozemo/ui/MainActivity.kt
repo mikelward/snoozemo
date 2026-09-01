@@ -142,6 +142,15 @@ class MainActivity : ComponentActivity() {
     private var routedToPermissionsOnce = false
 
     private lateinit var zen: ZenController
+
+    /**
+     * [zen] for a test that needs to drive a refusal from the real read — the
+     * failure path is otherwise unreachable from a JVM test, and it is the one
+     * that decides what the screen keeps.
+     */
+    internal var zenForTest: ZenController
+        get() = zen
+        set(value) { zen = value }
     private lateinit var store: ActiveSnoozeStore
 
     /**
@@ -374,6 +383,33 @@ class MainActivity : ComponentActivity() {
      * [zenRuleId] is, so the two never disagree.
      */
     internal var zenRuleState by mutableStateOf<ZenRuleState?>(null)
+
+    /**
+     * The refresh whose rule check has not answered yet, or null when none is
+     * outstanding.
+     *
+     * [zenRuleState] is the last *verified* answer and is never cleared; this
+     * says whether it is still current. A check that ends without an answer
+     * clears this and leaves that answer standing, which is why no failure path
+     * has anything to restore.
+     *
+     * Only the newest refresh clears it ([finishRuleCheck]): an older one
+     * finishing while a newer is still running would otherwise declare the
+     * newer one's answer current before it exists.
+     */
+    private var ruleCheckInFlight by mutableStateOf<Int?>(null)
+
+    /**
+     * What the permissions screen may claim: the last verified rule state, or
+     * null while a check that could change it is outstanding.
+     */
+    internal val renderableRuleState: ZenRuleState?
+        get() = zenRuleState.takeIf { ruleCheckInFlight == null }
+
+    /** Marks [refresh]'s rule check as finished, if it is still the newest. */
+    private fun finishRuleCheck(refresh: Int) {
+        if (ruleCheckInFlight == refresh) ruleCheckInFlight = null
+    }
 
     /**
      * What [zenRuleId] should actually show as, once [access] is known: a rule
@@ -962,7 +998,7 @@ class MainActivity : ComponentActivity() {
                                 // The flavor seam, read at the call site like
                                 // EndConditionSheet's (SPEC.md §3.4).
                                 tracksDeparture = app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE,
-                                ruleState = zenRuleState,
+                                ruleState = renderableRuleState,
                                 settingsFailure = settingsFailure,
                                 crashPending = crashPending,
                                 shareFailed = shareFailed,
@@ -1923,18 +1959,6 @@ class MainActivity : ComponentActivity() {
 
     private fun refreshAccess(ruleMayHaveChanged: Boolean = true) {
         val running = snoozing == true
-        // A retained rule state belongs to the check that produced it, not to
-        // this one. Coming back from Settings, the user has very likely just
-        // changed the thing being re-read — so keeping the old answer visible
-        // means a repaired rule still reads as switched off, or a rule switched
-        // off still reads as working, until the binder call returns. Dropping
-        // it makes the row wait, the same as it does before the first check
-        // (Codex, PR #171).
-        //
-        // Not on a record change: that caller cannot follow a trip to Settings,
-        // and blanking the row on every snooze record edit would flicker it for
-        // a refresh that almost never changes the answer.
-        if (ruleMayHaveChanged) zenRuleState = null
         // Which refresh this is. Several can be in flight at once — `onStart`,
         // the access broadcast, and every record change all call this — and
         // they finish in whatever order the binder calls return, not the order
@@ -1942,6 +1966,31 @@ class MainActivity : ComponentActivity() {
         // later revocation and paint the screen back to granted, re-enabling an
         // arm that cannot succeed. Only the newest result is allowed on screen.
         val refresh = ++latestAccessRefresh
+        // Coming back from Settings, the user has very likely just changed the
+        // thing being re-read, so the answer on screen is no longer one to
+        // trust: the permissions screen hides its capability claim while a
+        // check is in flight. What it does *not* do is throw the answer away —
+        // `zenRuleState` keeps the last verified one, so a check that ends
+        // without producing a new answer leaves the row saying what was last
+        // known rather than disappearing.
+        //
+        // An earlier shape cleared the state and had each failure path put it
+        // back. That needed a restore on every path that can end without an
+        // answer — there are two, and the second was missed — and two
+        // overlapping refreshes could still restore a null the other had just
+        // written (Codex, PR #171, three rounds). Marking rather than clearing
+        // has neither problem: nothing to restore, and nothing to race over.
+        //
+        // Not on a record change: that caller cannot follow a trip to Settings,
+        // so its re-read has no reason to hide an answer that is still good.
+        //
+        // It does take the marker *over* when one is already outstanding,
+        // though. Every refresh supersedes the one before it, so the older
+        // check's answer will be rejected as stale — and if the marker still
+        // named that older generation, this refresh's own check could not
+        // retire it and the row would stay hidden until some later
+        // invalidating refresh happened along (Codex, PR #171).
+        if (ruleMayHaveChanged || ruleCheckInFlight != null) ruleCheckInFlight = refresh
         Thread {
             // Contained: a bare thread has no handler, so a refused binder read
             // would take the process down from a screen doing nothing but
@@ -1984,11 +2033,29 @@ class MainActivity : ComponentActivity() {
             // read merely blipped.
             val current = runCatching { zen.policyAccess() }.getOrElse {
                 Log.e(TAG, "Reading policy access failed; leaving the screen as it is.", it)
+                // No answer is coming, so this check stops being in flight and
+                // the last verified one is current again — the screen shows
+                // what it knew rather than nothing at all.
+                runOnUiThread { finishRuleCheck(refresh) }
                 return@Thread
             }
             runOnUiThread { applyAccess(refresh, current, running) }
-        }.start()
+        }.also {
+            // Held only so a test can join it: the read runs on a raw thread
+            // with no other seam, and joining is explicit ordering rather than
+            // the sleep or poll this repo's testing rules rule out.
+            lastAccessRead = it
+            it.start()
+        }
     }
+
+    /** The thread [refreshAccess] last started. Test seam only; see above. */
+    internal var lastAccessRead: Thread? = null
+        private set
+
+    /** The same, for [ensureRuleInBackground]'s check. */
+    internal var lastRuleCheck: Thread? = null
+        private set
 
     /**
      * Decides what a policy-access reading means, and acts on it — both on the
@@ -2025,7 +2092,13 @@ class MainActivity : ComponentActivity() {
      * dead.
      */
     private fun applyAccess(refresh: Int, current: PolicyAccess, running: Boolean) {
-        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return
+        // Stopped: nothing further runs for this refresh, so it stops being in
+        // flight. A stale one is left alone — a newer refresh owns the marker,
+        // and clearing it here would declare that newer answer current early.
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            finishRuleCheck(refresh)
+            return
+        }
         if (refresh != latestAccessRefresh) return
         access = current
         // The one routing decision this screen makes on its own: land a user
@@ -2050,7 +2123,8 @@ class MainActivity : ComponentActivity() {
         // Settings, an administrator, the receiver above (flagged by Codex on
         // PR #21).
         if (current == PolicyAccess.GRANTED) clearFailure(SetupRowId.DND)
-        when (PolicyAccessChange.resolve(current, running)) {
+        val action = PolicyAccessChange.resolve(current, running)
+        when (action) {
             // The invariant from SPEC.md §8.2: access lost mid-snooze ends the
             // snooze rather than leaving the phone quiet with nothing to release
             // it. There is no rule left to drive, so the local state is
@@ -2081,6 +2155,11 @@ class MainActivity : ComponentActivity() {
             PolicyAccessAction.EnsureRule -> ensureRuleInBackground(refresh)
             PolicyAccessAction.None -> Unit
         }
+        // Every branch but the rule check itself ends this refresh here, so the
+        // marker has to come off — otherwise a revocation, which runs
+        // `EndSnooze` and never reaches a rule check, would leave the screen
+        // waiting for an answer nothing is going to produce.
+        if (action != PolicyAccessAction.EnsureRule) finishRuleCheck(refresh)
     }
 
     /**
@@ -2092,7 +2171,7 @@ class MainActivity : ComponentActivity() {
      * problem when the user tried to snooze.
      */
     private fun ensureRuleInBackground(refresh: Int) {
-        Thread {
+        val work = Thread {
             // Same trigger as the rule below: access just arrived, which is
             // exactly when a channel `warm()` created before onboarding granted
             // it needs to be re-issued so its DND-bypass actually takes
@@ -2101,6 +2180,9 @@ class MainActivity : ComponentActivity() {
             SnoozeNotifications(applicationContext).reapplyDndBypass()
             val state = runCatching { zen.ensureRule() }.getOrElse {
                 Log.e(TAG, "Ensuring the zen rule failed; leaving the screen as it is.", it)
+                // Same as the read above: no answer, so the last verified one
+                // stands rather than the row disappearing.
+                runOnUiThread { finishRuleCheck(refresh) }
                 return@Thread
             }
             // `zenRuleId`, published or cleared before anything else below
@@ -2132,7 +2214,10 @@ class MainActivity : ComponentActivity() {
             }
             // Behind the same staleness guard as the id above, so a superseded
             // check cannot publish its answer over a newer one.
-            runOnUiThread { if (refresh == latestAccessRefresh) zenRuleState = state }
+            runOnUiThread {
+                if (refresh == latestAccessRefresh) zenRuleState = state
+                finishRuleCheck(refresh)
+            }
             val outcome = when (state) {
                 ZenRuleState.FAILED -> R.string.rule_failed
                 // Switched off in Settings: the app cannot snooze and must say
@@ -2166,7 +2251,11 @@ class MainActivity : ComponentActivity() {
                 if (refresh != latestAccessRefresh) return@runOnUiThread
                 lastOutcome = getString(outcome)
             }
-        }.start()
+        }
+        // Held for the same reason the access read's thread is: a test needs to
+        // join it, and joining is explicit ordering rather than a sleep.
+        lastRuleCheck = work
+        work.start()
     }
 
     /**
