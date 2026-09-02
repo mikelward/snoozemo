@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.snoozemo.PlayUpdateState
+import app.snoozemo.core.SnoozeRinger
 import app.snoozemo.R
 
 /**
@@ -56,6 +57,16 @@ internal fun SettingsScreen(
     askWhenToUnsnooze: Boolean? = null,
     /** Whether the last tap on that switch failed to reach disk. */
     askWhenToUnsnoozeSaveFailed: Boolean = false,
+    /**
+     * How loud a snooze may be (`SPEC.md` §5.9), or null until [MainActivity]
+     * has read it — the same null-until-read discipline as the rows around it,
+     * and it earns it twice over here: the default is not the quietest option,
+     * so a row that asserted it and corrected itself a frame later would flash
+     * the wrong answer at the user who had chosen either of the others.
+     */
+    snoozeRinger: SnoozeRinger? = null,
+    /** Whether the last tap on that row failed to reach disk. */
+    snoozeRingerSaveFailed: Boolean = false,
     // `PlayUpdateState.NotAvailable` on `direct` (no flavor branch needed
     // here — that flavor's checker never reports anything else) and while
     // `MainActivity` hasn't finished its own first resume check yet.
@@ -85,6 +96,7 @@ internal fun SettingsScreen(
     onDebugLog: (Boolean) -> Unit,
     onCrashReporting: (Boolean) -> Unit = {},
     onAskWhenToUnsnooze: (Boolean) -> Unit = {},
+    onSnoozeRinger: (SnoozeRinger) -> Unit = {},
     onStartPlayUpdate: () -> Unit = {},
     onCompletePlayUpdate: () -> Unit = {},
     onDismissPlayUpdate: () -> Unit = {},
@@ -184,6 +196,19 @@ internal fun SettingsScreen(
                 onAction = onFiltersRow,
                 failure = stringResource(R.string.failure_could_not_open_settings)
                     .takeIf { settingsFailure == SetupRowId.FILTERS },
+            )
+        }
+        // Directly below the filters row, because the two are one question
+        // asked in two halves: that row edits *who* gets through a snooze, and
+        // this one how loudly they arrive. Unlike that row, this one is always
+        // present — it needs no rule and no Do Not Disturb access to be a
+        // meaningful choice, and it applies to the next snooze whenever one
+        // becomes possible.
+        snoozeRinger?.let {
+            SnoozeRingerRow(
+                chosen = it,
+                saveFailed = snoozeRingerSaveFailed,
+                onChange = onSnoozeRinger,
             )
         }
         // Below the tile row, deliberately: touched rarely — usually never.

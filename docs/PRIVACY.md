@@ -280,7 +280,9 @@ explainable, Snoozemo keeps a short technical log of what its machinery did.
 that the time-limit alarm was set and that it fired, when Do Not Disturb access got in the
 way, how far from the anchor a location fix said you were **in meters** and how accurate
 that fix claimed to be, whether the anchor's Wi-Fi was still connected as a yes or no,
-whether your phone's location setting was switched off and when it came back on, and
+whether your phone's location setting was switched off and when it came back on,
+whether the ringer was turned down for a snooze and to which of the phone's three
+settings — ring, vibrate or silent — along with the one it was put back to afterwards, and
 the app, Android version, and device model. Entries carry real times, because *when*
 something fired is usually the question.
 
@@ -347,7 +349,9 @@ Nothing is sent anywhere by Snoozemo itself.
 captured, your app version, the app's package identifier, whether it's a debug build, your
 device model and Android version, your phone's language and region setting, and whether Do
 Not Disturb access, notifications, and location are currently granted, whether location
-services and battery saver are on, and whether the Quick Settings tile has been added — all
+services and battery saver are on, whether the Quick Settings tile has been added, and which
+of ring, vibrate or silent your phone is set to right now alongside the setting you chose for
+snoozing — all
 facts that commonly explain why a snooze misbehaved, none of them anything you typed. If the
 app's previous run ended in a crash, that run's log is included too, labeled as a crash, and
 sharing it deletes exactly the runs that report carried. Dismissing the banner instead

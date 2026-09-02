@@ -6,12 +6,18 @@ import android.os.Looper
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.crash.CrashReporting
 import app.snoozemo.dnd.PrefsZenRuleIdStore
+import app.snoozemo.dnd.RingerOutcome
+import app.snoozemo.dnd.SnoozeRingerStore
+import app.snoozemo.dnd.installRingerHandBackRetry
+import app.snoozemo.dnd.installRingerStuckNotice
 import app.snoozemo.presence.installPresenceWakeup
 import app.snoozemo.snooze.ActiveSnoozeStore
 import app.snoozemo.snooze.CapAlarm
 import app.snoozemo.snooze.DebugLogging
 import app.snoozemo.snooze.EndSheetStore
 import app.snoozemo.snooze.logRecentProcessExitsInBackground
+import app.snoozemo.snooze.handBackRingerNow
+import app.snoozemo.snooze.reconcileRingerInBackground
 import app.snoozemo.snooze.SnoozeNotifications
 import app.snoozemo.snooze.SnoozeService
 
@@ -53,6 +59,11 @@ class SnoozemoApplication : Application(), androidx.work.Configuration.Provider 
         // would land in front of the sheet's first frame over a transparent
         // window, and off by default means most installs never read it at all.
         EndSheetStore(this).warm()
+        // How loud a snooze may be (SPEC.md §5.9). Warmed for the same reason
+        // as the rule id: the arm path reads it — after the rule is on, never
+        // before it — so a cold tap should find it in memory rather than
+        // waiting on the file.
+        SnoozeRingerStore(this).warm()
         // The debug log's rotation and file sink (SPEC.md §4.6). Spawns its
         // own thread, so the cold tap above never waits on it; entries
         // recorded before the sink registers still reach the file, since the
@@ -67,6 +78,37 @@ class SnoozemoApplication : Application(), androidx.work.Configuration.Provider 
         // the user's setting says Off. Must stay after install() for the FIFO
         // ordering to mean anything.
         logRecentProcessExitsInBackground(this)
+        // What to do when a hand-back fails every immediate attempt (SPEC.md
+        // §5.9), installed **before** anything can attempt one (Codex, PR #176).
+        // The other way round, the check below could find a stale loan, fail its
+        // hand-back fast, and ask for a retry while this was still null — and
+        // that check is the very one it would have been asking to repeat.
+        //
+        // It exists because a completed release erases the record and cancels
+        // the alarms: the loan alone schedules nothing, and neither a process
+        // restart nor the app being opened is *guaranteed* to happen. An alarm
+        // is, and it wakes nothing in the normal case — armed only after
+        // refused writes, which a successful borrow makes very unlikely
+        // (SPEC.md §9). How long to wait comes from the loan's own tally of
+        // failures, so a refusal that is permanent stops asking rather than
+        // waking the phone every minute for good.
+        installRingerHandBackRetry { delay -> ringerHandBackRefused(delay) }
+        // And what to do when those run out: the phone is quieter than its owner
+        // set it, the snooze has ended so the ongoing card is gone, and nothing
+        // left in the app will fix it by itself — so they are told (principle 2,
+        // SPEC.md §5.9 rule 5). Installed here for the same ordering reason as
+        // the retry above: the check below can reach either report.
+        installRingerStuckNotice { stuck ->
+            val notifications = SnoozeNotifications(this)
+            if (stuck) notifications.showRingerStuck() else notifications.dropRingerStuck()
+        }
+        // The ringer itself, if a snooze ended without handing it back (SPEC.md
+        // §5.9). Its own thread like the two above, so nothing diagnostic or
+        // corrective sits in front of a cold tile tap. The loan and the record
+        // are checked together under the ringer controller's own lock, so a cold
+        // tile tap arming alongside this cannot end up with no ceiling — see
+        // `reconcileRingerInBackground`.
+        reconcileRingerInBackground(this)
         // Crash reporting's own gate (SPEC.md §12). Spawns its own worker like
         // the line above, so the cold tap never waits on the preferences read
         // — and it is what makes the opt-out real: the play manifest starts
@@ -96,6 +138,58 @@ class SnoozemoApplication : Application(), androidx.work.Configuration.Provider 
         // retry refused again on firing stays bounded by it.
         installPresenceWakeup { presenceWake() }
     }
+
+    /**
+     * The ringer is owed back and every immediate attempt failed.
+     *
+     * The same two-rung ladder [presenceWake] uses, and for the same reason: an
+     * `AlarmManager` wake-up is the durable successor, and where even that is
+     * refused this process is alive — it is running this very callback — so its
+     * own handler is a real, bounded one. If the process dies before either
+     * lands, the loan is still on disk and the start-up check picks it up.
+     *
+     * [delayMillis] is the caller's, not this ladder's: the pacing belongs to
+     * the loan, which knows how many rounds it has already spent. The in-process
+     * rung keeps its own short interval, since it exists for a refused *alarm*
+     * rather than a refused write.
+     */
+    private fun ringerHandBackRefused(delayMillis: Long) {
+        if (CapAlarm.armRingerRetry(this, delayMillis)) {
+            ringerRetries = 0
+            return
+        }
+        if (ringerRetries++ >= MAX_IN_PROCESS_WAKE_RETRIES) {
+            SnoozeDebugLog.warning("ringer: hand-back retries exhausted; the loan waits for the next start or app open")
+            return
+        }
+        SnoozeDebugLog.warning("ringer: the hand-back alarm was refused; retrying in process")
+        // Inline in the callback, not handed to a background thread (Codex,
+        // PR #176). By the time this rung is reached there is no alarm
+        // scheduled and quite possibly no active component owning the process,
+        // so a thread spawned here can be killed before it writes — and the
+        // whole point of this rung is that it is the last thing left. Doing
+        // the work *inside* the callback means a process that lives long
+        // enough to run it at all finishes the hand-back.
+        //
+        // Main-thread I/O on purpose, and none of the paths that rule protects:
+        // this is not the tile tap, the trampoline, or a screen's first frame.
+        // It is three warm preference reads and one `setRingerMode`, half a
+        // minute after startup, on a path that only runs when `AlarmManager`
+        // has already refused.
+        wakeRetryHandler.postDelayed(
+            {
+                // And the budget is spent per *episode*, not for the life of
+                // the process (Codex, PR #176): only a successful alarm reset
+                // it, so a rung that worked here left the count raised and the
+                // next stranded loan inherited it. Anything but a refusal means
+                // the loan is resolved — handed back, disowned, or never there.
+                if (handBackRingerNow(this) !is RingerOutcome.Refused) ringerRetries = 0
+            },
+            IN_PROCESS_WAKE_RETRY_MS,
+        )
+    }
+
+    private var ringerRetries = 0
 
     /**
      * One rung down when even the alarm is refused: this process is alive —

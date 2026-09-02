@@ -176,3 +176,17 @@ enum class ZenFailure {
             PLATFORM_REFUSED -> false
         }
 }
+
+/**
+ * Whether this outcome means nothing of Snoozemo's is silencing the phone.
+ *
+ * The question a *failed release* turns on, and the same one
+ * [SnoozeController], `SnoozeService` and `CapAlarm` already ask inline — named
+ * here so the answers cannot drift apart. They finalize the snooze on it, so
+ * anything that keeps per-snooze state must let go on exactly the same reading
+ * or it holds state for a snooze the rest of the app has ended (Codex, PR #176:
+ * the ringer's ceiling record was doing that on a revoked-access release).
+ */
+val ZenOutcome.confirmsNothingSilencing: Boolean
+    get() = this !is ZenOutcome.NotApplied || reason.nothingLeftToRelease
+

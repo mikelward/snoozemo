@@ -385,6 +385,53 @@
     <!-- TODO: translate -->
     <string name="setup_ask_unsnooze_description" tools:ignore="MissingTranslation">Offer an end time when a snooze starts</string>
 
+    <!--
+      Appended to the ongoing card when the phone is louder than the chosen
+      ceiling (SPEC.md §5.9) — a ceiling the user chose and did not get is
+      something they will hear, so the card says so rather than leaving them to
+      guess (principle 2). Keyed on the *live* mode rather than on a remembered
+      failure, so each names what is actually happening.
+    -->
+    <!-- TODO: translate -->
+    <string name="ongoing_cause_still_ringing" tools:ignore="MissingTranslation">still ringing</string>
+    <!-- TODO: translate -->
+    <string name="ongoing_cause_still_vibrating" tools:ignore="MissingTranslation">still vibrating</string>
+    <!--
+      The third answer: a ceiling is in force and the live ringer mode could not
+      be read at all, so the ceiling is certainly not holding and *which* mode
+      the phone is in is the part that is unknown. "may" is the honest word —
+      the two clauses above name what the phone is doing, and here that is
+      exactly what nobody knows (copy approved by the maintainer, 2026-09-02).
+    -->
+    <string name="ongoing_cause_ringer_unknown">may still ring</string>
+
+    <!--
+      How loud a snooze may be (SPEC.md §5.9). A ceiling, not a value forced on
+      the phone.
+
+      Copy approved by the maintainer, 2026-09-02: the row is named for the
+      choice it offers, the description runs straight into the dropdown that
+      completes it, and each option is one word. `Ring` is the option that
+      imposes no ceiling and so never touches the ringer — a phone its owner
+      keeps on vibrate goes on vibrating under it.
+    -->
+    <string name="setup_ringer_title">Ring/vibrate</string>
+    <string name="setup_ringer_description">When snoozing set the phone to</string>
+    <string name="setup_ringer_ring">Ring</string>
+    <string name="setup_ringer_vibrate">Vibrate</string>
+    <string name="setup_ringer_silent">Silent</string>
+
+    <!--
+      Handing the ringer back has run out of retries (SPEC.md §5.9 rule 4), so
+      the phone is quieter than its owner set it and nothing left in the app
+      will fix it by itself. The snooze has ended, so the ongoing card is gone
+      and this is the only channel left — principle 2's "do the safe thing and
+      say so". Copy approved by the maintainer, 2026-09-02: the title names the
+      state, the body names the one place the user can fix it.
+    -->
+    <string name="failure_ringer_stuck">Ringer not restored</string>
+    <string name="failure_ringer_stuck_body">Change it in the volume panel.</string>
+
     <!-- The app version, at the foot of Settings — same format as the sibling Simmo repo. -->
     <string name="settings_version">Version %1$s</string>
 

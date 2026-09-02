@@ -1,6 +1,9 @@
 package app.snoozemo.snooze
 
+import android.media.AudioManager
 import app.snoozemo.R
+import app.snoozemo.core.SnoozeRinger
+import app.snoozemo.dnd.PrefsRingerLoanStore
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.TrackingMode
 import java.time.Instant
@@ -36,6 +39,73 @@ class SnoozeNotificationsDegradationTest {
     @Before
     fun reset() {
         SnoozeNotifications.resetForTest()
+        // No ceiling in force, so the ringer clause (SPEC.md §5.9) adds nothing
+        // and these assertions stay about the *mode* line they exist for. The
+        // three tests that are about the clause record one for themselves.
+        PrefsRingerLoanStore(appContext).recordChoice(null)
+        appContext.getSystemService(AudioManager::class.java).ringerMode =
+            AudioManager.RINGER_MODE_NORMAL
+    }
+
+    /**
+     * The other axis (SPEC.md §5.9), and it is a separate clause on purpose:
+     * the mode line says whether the snooze will end correctly, this says
+     * whether it is as quiet as the user asked. A ceiling that did not hold is
+     * something the user *hears*, so the card names it rather than leaving the
+     * debug log as the only record.
+     */
+    @Test
+    fun `a phone louder than the chosen ceiling says so on the card`() {
+        PrefsRingerLoanStore(appContext).recordChoice(SnoozeRinger.VIBRATE)
+        appContext.getSystemService(AudioManager::class.java).ringerMode =
+            AudioManager.RINGER_MODE_NORMAL
+
+        assertEquals(
+            expected(R.string.ongoing_ends_when_you_leave, R.string.ongoing_cause_still_ringing),
+            postedOngoing(TrackingMode.FULL, cause = null),
+        )
+    }
+
+    @Test
+    fun `a vibrating phone under a silent ceiling is named as vibrating`() {
+        PrefsRingerLoanStore(appContext).recordChoice(SnoozeRinger.SILENT)
+        appContext.getSystemService(AudioManager::class.java).ringerMode =
+            AudioManager.RINGER_MODE_VIBRATE
+
+        // Not "still ringing", which over a buzzing phone is simply wrong.
+        assertEquals(
+            expected(R.string.ongoing_ends_when_you_leave, R.string.ongoing_cause_still_vibrating),
+            postedOngoing(TrackingMode.FULL, cause = null),
+        )
+    }
+
+    @Test
+    fun `a ceiling over an unreadable ringer hedges rather than naming a mode`() {
+        PrefsRingerLoanStore(appContext).recordChoice(SnoozeRinger.VIBRATE)
+        // No `AudioManager` to read: the ceiling is not holding, and which mode
+        // the phone is in is what nobody can say (copy approved by the
+        // maintainer, 2026-09-02).
+        shadowOf(appContext as android.app.Application)
+            .setSystemService(android.content.Context.AUDIO_SERVICE, null)
+
+        assertEquals(
+            expected(R.string.ongoing_ends_when_you_leave, R.string.ongoing_cause_ringer_unknown),
+            postedOngoing(TrackingMode.FULL, cause = null),
+        )
+    }
+
+    @Test
+    fun `a phone at or below the ceiling adds no clause`() {
+        PrefsRingerLoanStore(appContext).recordChoice(SnoozeRinger.VIBRATE)
+        appContext.getSystemService(AudioManager::class.java).ringerMode =
+            AudioManager.RINGER_MODE_SILENT
+
+        // Quieter than the `Vibrate` ceiling, which is left alone rather
+        // than raised — so there is nothing to report.
+        assertEquals(
+            stringOf(R.string.ongoing_ends_when_you_leave),
+            postedOngoing(TrackingMode.FULL, cause = null),
+        )
     }
 
     /** What the ongoing card most recently said. */

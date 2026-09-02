@@ -4,6 +4,7 @@ import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import app.snoozemo.core.SnoozeRinger
 import org.junit.Test
 
 /**
@@ -81,6 +82,8 @@ class DebugReportTest {
             locationServicesEnabled = null,
             batterySaverOn = null,
             tileAdded = null,
+            ringerMode = null,
+            snoozeRingerCeiling = null,
         )
 
         assertTrue(payload.contains("Do Not Disturb access: unknown"))
@@ -90,6 +93,35 @@ class DebugReportTest {
         assertTrue(payload.contains("Location services on: unknown"))
         assertTrue(payload.contains("Battery saver on: unknown"))
         assertTrue(payload.contains("Quick Settings tile added: unknown"))
+        assertTrue(payload.contains("Ringer now: unknown"))
+        assertTrue(payload.contains("Snooze ringer ceiling: unknown"))
+    }
+
+    @Test
+    fun `the ceiling line says whether it is in force or only chosen`() {
+        // A running snooze is judged against its own ceiling; the saved choice
+        // is only what the *next* one will use, so the two are labeled apart —
+        // unlabeled, a mid-snooze change read as a snooze that had broken
+        // (Codex, PR #176).
+        assertEquals(
+            "VIBRATE (in force)",
+            ringerCeilingLabel(inForce = SnoozeRinger.VIBRATE, chosen = SnoozeRinger.SILENT),
+        )
+        assertEquals(
+            "SILENT (next snooze)",
+            ringerCeilingLabel(inForce = null, chosen = SnoozeRinger.SILENT),
+        )
+    }
+
+    @Test
+    fun `the report pairs the live ringer with the ceiling it is judged against`() {
+        // Either alone explains nothing: a ringing phone is only a bug if a
+        // ceiling said it should not have been (SPEC.md §5.9), and this pair is
+        // what answers "why did it still ring" — the report's whole job.
+        val payload = payload(ringerMode = "ring", snoozeRingerCeiling = "VIBRATE")
+
+        assertTrue(payload.contains("Ringer now: ring"))
+        assertTrue(payload.contains("Snooze ringer ceiling: VIBRATE"))
     }
 
     @Test
@@ -311,6 +343,8 @@ class DebugReportTest {
         locationServicesEnabled: Boolean? = true,
         batterySaverOn: Boolean? = false,
         tileAdded: Boolean? = true,
+        ringerMode: String? = "ring",
+        snoozeRingerCeiling: String? = "VIBRATE",
         previousRun: String? = null,
         previousRunCrashed: Boolean = false,
         previousRunOmitted: Boolean = false,
@@ -336,6 +370,8 @@ class DebugReportTest {
         locationServicesEnabled = locationServicesEnabled,
         batterySaverOn = batterySaverOn,
         tileAdded = tileAdded,
+        ringerMode = ringerMode,
+        snoozeRingerCeiling = snoozeRingerCeiling,
         previousRun = previousRun,
         previousRunCrashed = previousRunCrashed,
         previousRunOmitted = previousRunOmitted,

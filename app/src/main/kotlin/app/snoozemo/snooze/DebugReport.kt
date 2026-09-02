@@ -8,14 +8,18 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.location.LocationManager
+import android.media.AudioManager
 import android.os.Build
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.content.ContextCompat
 import app.snoozemo.R
 import app.snoozemo.core.PolicyAccess
+import app.snoozemo.core.SnoozeRinger
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.dnd.AndroidZenController
+import app.snoozemo.dnd.PrefsRingerLoanStore
+import app.snoozemo.dnd.SnoozeRingerStore
 import app.snoozemo.tile.TilePresenceStore
 import app.snoozemo.ui.locationTrackingNeedsBackgroundPermission
 import com.mikelward.androidlog.android.PreviousRun
@@ -372,6 +376,8 @@ internal object DebugReport {
             locationServicesEnabled = isLocationServicesEnabled(context),
             batterySaverOn = isBatterySaverOn(context),
             tileAdded = isTileAdded(context),
+            ringerMode = ringerMode(context),
+            snoozeRingerCeiling = snoozeRingerCeiling(context),
             previousRun = previousRunRead.text,
             previousRunCrashed = previousRunRead.wasCrash,
             previousRunOmitted = previousRunOmitted,
@@ -518,6 +524,48 @@ internal object DebugReport {
             .onFailure { Log.w(TAG, "DebugReport could not read battery-saver state.", it) }
             .getOrNull()
 
+    /**
+     * The ringer, and the ceiling it is judged against (SPEC.md §5.9).
+     *
+     * Together, because either alone explains nothing: "the phone was ringing"
+     * is a bug only if a ceiling said it should not have been, and a ceiling is
+     * only interesting beside what the phone actually did. This is the pair that
+     * answers "why did it still ring", which is the report's whole job.
+     *
+     * Null on its own exception, like every reader above it and for the same
+     * reason: a check that could not run is not the same fact as a confirmed
+     * mode.
+     */
+    private fun ringerMode(context: Context): String? =
+        runCatching {
+            when (context.getSystemService(AudioManager::class.java)?.ringerMode) {
+                AudioManager.RINGER_MODE_NORMAL -> "ring"
+                AudioManager.RINGER_MODE_VIBRATE -> "vibrate"
+                AudioManager.RINGER_MODE_SILENT -> "silent"
+                else -> null
+            }
+        }.onFailure { Log.w(TAG, "DebugReport could not read the ringer mode.", it) }.getOrNull()
+
+    /**
+     * The ceiling **in force for the running snooze** where there is one, and
+     * only otherwise the choice saved for next time — labeled, so the reader
+     * knows which they are looking at (Codex, PR #176).
+     *
+     * Reading the setting alone diagnosed a healthy snooze as broken: a choice
+     * changed mid-snooze governs the *next* one, so a running `VIBRATE` snooze
+     * beside a freshly-picked `SILENT` read as `Ringer now: vibrate` under
+     * `ceiling: SILENT` — a mismatch the reader would chase.
+     */
+    private fun snoozeRingerCeiling(context: Context): String? =
+        runCatching {
+            ringerCeilingLabel(
+                inForce = PrefsRingerLoanStore(context).activeChoice(),
+                chosen = SnoozeRingerStore(context).chosen(),
+            )
+        }
+            .onFailure { Log.w(TAG, "DebugReport could not read the ringer ceiling.", it) }
+            .getOrNull()
+
     private fun isTileAdded(context: Context): Boolean? =
         runCatching { TilePresenceStore(context).isAdded() }
             .onFailure { Log.w(TAG, "DebugReport could not read the tile's presence.", it) }
@@ -577,6 +625,16 @@ internal object DebugReport {
  * The pure payload builder — no Android dependencies beyond [Build]/[Locale],
  * so its shape is unit-testable without Robolectric.
  */
+/**
+ * Which ceiling the report names, and which of the two it is.
+ *
+ * Pure so both branches can be enumerated: the distinction is the whole point
+ * of the line, and reading only the setting diagnosed a healthy snooze as
+ * broken (Codex, PR #176).
+ */
+internal fun ringerCeilingLabel(inForce: SnoozeRinger?, chosen: SnoozeRinger): String =
+    if (inForce != null) "${inForce.name} (in force)" else "${chosen.name} (next snooze)"
+
 internal fun buildDebugReportPayload(
     nowMillis: Long,
     versionName: String,
@@ -597,6 +655,8 @@ internal fun buildDebugReportPayload(
     locationServicesEnabled: Boolean?,
     batterySaverOn: Boolean?,
     tileAdded: Boolean?,
+    ringerMode: String? = null,
+    snoozeRingerCeiling: String? = null,
     previousRun: String?,
     previousRunCrashed: Boolean,
     previousRunOmitted: Boolean = false,
@@ -640,6 +700,8 @@ internal fun buildDebugReportPayload(
         appendLine("Location services on: ${boolLabel(locationServicesEnabled)}")
         appendLine("Battery saver on: ${boolLabel(batterySaverOn)}")
         appendLine("Quick Settings tile added: ${boolLabel(tileAdded)}")
+        appendLine("Ringer now: ${ringerMode ?: "unknown"}")
+        appendLine("Snooze ringer ceiling: ${snoozeRingerCeiling ?: "unknown"}")
     }
     val boundedHead = if (head.length > MAX_STRUCTURED_CHARS) {
         head.take(MAX_STRUCTURED_CHARS) + "\n…(details truncated to keep the report shareable)\n"

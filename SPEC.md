@@ -1448,6 +1448,189 @@ Two neighboring cases are deliberately out of scope: the user turning DND *on* w
 (at worst the tile reads `not snoozing` beside a quiet phone), and another app's rule ending while
 ours is on (nothing to do).
 
+### 5.9 How loud a snooze may be
+
+Do Not Disturb decides **who** reaches you during a snooze; it says nothing about **how loudly**
+they arrive. §5.5's policy lets calls and messages from the senders the user has chosen through, and
+those then ring at the normal ringer volume — which is the wrong answer for the commonest reason to
+reach for a snooze. Neither `ZenPolicy` nor `ZenDeviceEffects` carries a ring-or-vibrate choice, and
+the platform's own Modes UI offers none: the ringer is a separate axis, and the global ringer mode
+is the only thing that can express it.
+
+So Snoozemo carries a **ceiling** — `Ring`, `Vibrate`, `Silent`, defaulting to `Vibrate`
+(maintainer, 2026-09-02) — and lowers the ringer to it for the duration of a snooze. Settings
+offers it as one sentence completed by a dropdown: *When snoozing set the phone to* `Vibrate`.
+
+**A ceiling, not a value forced on the phone** (maintainer, 2026-09-02), which is the same thing the
+volume panel's own bell / vibrate / mute control is, so it is what a user already expects. Two
+consequences follow, and both are deliberate:
+
+- A phone **already quieter** than the ceiling is left alone. Silent under a `Vibrate` snooze
+  stays silent; raising it would be the app making a phone louder than its owner set it, which is
+  not this setting's job in either direction.
+- `Ring` is not "force audible" — it imposes nothing and never touches the ringer, so a
+  phone its owner keeps on vibrate goes on vibrating.
+
+`Vibrate` is a ceiling on the platform's terms too. `RINGER_MODE_VIBRATE` always vibrates the
+*ringer*, but a notification vibrates only if the user's own vibrate setting is on — so an allowed
+*message* may arrive with no buzz at all. Accepted rather than worked around: there is no API to
+force it, and forcing it would assert a floor this setting deliberately does not have.
+
+**No new permission.** `AudioManager.setRingerMode` is documented as disallowed, from API 24
+onward, for adjustments that would toggle Do Not Disturb unless the app holds Notification Policy
+Access — which is §5.2's `ACCESS_NOTIFICATION_POLICY`, the grant without which there is no snooze to
+be quiet for. Android 15's restriction on changing global Do Not Disturb names `setInterruptionFilter`
+and `setNotificationPolicy` only; the ringer is untouched by it.
+
+**The ringer is borrowed, and the loan is what gives it back.** Ringer mode is global device state
+that outlives the process and the reboot, so a snooze that quiets the phone and then loses the way
+back leaves it quiet with nothing anywhere that knows better — principle 1's failure, in its most
+literal form. Six rules keep that from happening, and each one prefers the audible mistake:
+
+1. **The way back is recorded before the ringer moves**, durably, and the borrow is *declined* if
+   that record cannot be written — and the *cached* record is dropped with it, because a `commit`
+   that returns false has still updated this process's own copy. Left there, a service recreated
+   without the process dying would finish that phantom borrow and quiet the phone, and the next
+   process death would reload a disk with no loan at all. Ringing through one snooze is the cheaper
+   error. That ordering
+   leaves a window — a loan on disk and a ringer that has not moved — so the record carries whether
+   the change was **applied**, and a snooze re-asserted with an unapplied loan *finishes* it rather
+   than skipping it. Skipping was the failure: a process death in that window left the phone loud
+   for the snooze's whole length, with rule 2 politely declining to touch it. Both halves of that
+   marker are evidence rather than assumption: it is set only by a write that could be **read
+   back**, since a setter that silently did nothing while the read-back failed would otherwise be
+   recorded as applied and every later re-assertion would take no action at all; and finishing an
+   unapplied loan requires the live mode to be exactly where the record says it was **found**,
+   since anything else means somebody else moved it first and finishing would raise a phone its
+   owner has since quieted.
+2. **The loan is never overwritten, and neither is the choice.** An arm re-asserted after process
+   death, or by the cap alarm's own re-arm, finds a loan outstanding and takes nothing — a second
+   borrow would record the quiet mode as the way back and no later release could make the phone
+   audible again. The *choice* the snooze is running under is captured once, at its first arm, and a
+   re-assertion reuses it rather than reading the setting again: otherwise a ceiling changed
+   mid-snooze would be applied by the next restore, which is precisely what this design defers.
+3. **The ceiling is forgotten only once the release is confirmed.** The ringer is handed back
+   *before* the zen rule goes off, so that a refused rule write cannot leave a quiet phone with no
+   loan — and a refused rule write **keeps the snooze running**. Clearing the record with the
+   hand-back would then leave a live snooze whose ceiling nothing remembers: the card could not
+   report the shortfall it is now certainly having, and the next restore would adopt the choice
+   meant for the following snooze. Confirmed does not only mean the rule was turned off: a release
+   that finds no policy access, no rule, or the rule already disabled has established that nothing
+   of Snoozemo's is silencing the phone, which is the same thing the ceiling was recorded to
+   outlast. Only a platform that *refused* the write leaves something still to release, and only
+   there is the record kept. An **arm** reaching those same readings ends the snooze rather than
+   starting one, so it hands the ringer back and forgets the ceiling exactly as a release does —
+   because nothing else would. A re-assertion that finds nothing to silence is finalized without a
+   second zen call, which would otherwise leave a loan taken before the process died holding the
+   phone quiet with no retry scheduled. A *refused* arm is deliberately not in that set: it keeps
+   the snooze armed for the cap to retry, so the loan is still owed to a snooze still running. And
+   a refused *release* is the mirror of it — the snooze keeps running, so the ringer handed back
+   before the rule write goes back down again. That hand-back is unconditional on purpose, and the
+   window it buys is microseconds wide only when the release succeeds; on a refusal it would
+   otherwise stay open, phone above its ceiling, until some later re-assertion. The idle check below drops it on its own terms: having established
+   that no snooze is running, it clears the ceiling on **every** path out — loan or no loan, handed
+   back or not — because nothing calls the release path's forget for a snooze that ended without
+   one, and a record left there is read by the next arm as its own.
+4. **A ringer the user moved mid-snooze is theirs.** The loan records what Snoozemo set as well as
+   what it found, so a live mode that no longer matches means the user has taken over: the record is
+   dropped and the mode left alone — and *stays* alone: the hand-back reports the disown, so a
+   release the platform then refuses does not re-apply the ceiling over it, which would find no
+   loan, borrow again, and undo the very change this recognized. Where the live mode *cannot be read*, the ringer is handed back
+   anyway — the user's own change cannot be ruled out, but a phone left quiet after a snooze it was
+   told had ended is the worse of the two.
+5. **A refused hand-back is retried, not finalized.** The release path retries the write a bounded
+   few times — a borrow that succeeded proves the device accepts the call, so a refusal there is
+   almost certainly transient. Where all of them fail it asks for a **durable successor**: an
+   `AlarmManager` wake-up whose receiver re-runs the hand-back with no service and no snooze to
+   resolve, since the loan is its whole subject. That alarm exists because a completed release
+   erases the record and cancels every other alarm, so the loan on its own schedules nothing — and
+   the checks at process start and app-open are likely rather than guaranteed. It is armed only
+   after those refused writes, so in the normal case it wakes nothing (§9). A tally that cannot be
+   stored **ends** the sequence rather than restarting it: each firing may wake a fresh process, which
+   would read the same stale count and schedule the same first delay forever, which is the unbounded
+   wake-up the pacing exists to prevent. **When the sequence ends,
+   the user is told** — a notification (`Ringer not restored` / `Change it in the volume panel.`),
+   because the snooze has ended and taken the ongoing card with it, and the loan alone is not
+   something a user can read; it comes down again the moment any later hand-back succeeds or the
+   user's own change disowns the loan. **Its interval doubles
+   and its sequence ends** — a minute, then two, up to an hour, for ten rounds — because a refusal
+   can also be *permanent* (a fixed-volume policy appeared, notification-policy access was revoked),
+   and nothing about the next attempt would be different: a fixed interval would buy a wake-up a
+   minute, indefinitely, for a write that cannot land. The tally lives on the loan, so an alarm
+   waking a fresh process resumes the sequence rather than restarting it. Ending the *scheduling* is
+   not giving the ringer up: the loan stays, and the two checks below plus the next snooze's release
+   still retry from it. A record that cannot be **read** takes the same ladder rather than being
+   mistaken for a finished hand-back: there may be a loan under it, and the release that reaches
+   it would otherwise turn the rule off and forget the ceiling with nothing left watching. The
+   idle check takes it too, and more sharply: that is what the retry alarm's own receiver runs, so
+   a one-shot alarm reaching an unreadable record is already spent and returning without a
+   successor would leave nothing scheduled at all. A **record that will not go away** takes the
+   ladder as well: `commit` returning false leaves the row on disk while this process reads it as
+   gone, so the next process finds it back — a stale ceiling can quiet a snooze configured as
+   `Ring`, and a stale loan whose set mode the user happens to pick becomes a hand-back that
+   overrides them. So does an unreadable answer to *whether a snooze is running*: that resolves to
+   "running", which keeps a phone meant to be quiet quiet, but it is not an answer — and reached
+   from the one-shot alarm it would otherwise spend that alarm and schedule nothing over a loan
+   that may be genuinely stranded. With nothing borrowed it asks for nothing, since there is
+   nothing to come back for. Those retries carry no notice at either end, since the ringer itself is already
+   where it belongs. Where
+   even the tally cannot be written there the wake-ups stop *silently* — a store that cannot be
+   read cannot say a loan exists, and a stuck-ringer notice over a phone nothing ever touched is a
+   false alarm. Where the *alarm itself* is refused there is one rung below it — this process is
+   alive, since it is running that very callback, so its own delayed handler is a real successor.
+   Its budget is per episode rather than per process — a rung that succeeds clears the count, or it
+   would be spent on behalf of the next stranded loan — and the work happens **inside** that
+   callback rather than on a thread it starts: with no alarm
+   scheduled and possibly no component owning the process, a thread started and abandoned there can
+   be killed before it writes, and this rung exists precisely because it is the last thing left.
+   Alongside it: the loan
+   is re-checked at process start and whenever the app is opened, and the next snooze's release is
+   the last backstop, since its arm declines to borrow over a stale loan.
+6. **The loan's decisions are serialized process-wide.** Reading the loan and reading whether a
+   snooze is running have to be one atomic decision, not two ordered reads: a cold tile tap runs an
+   arm alongside the start-up check, and separately they can interleave into the check handing back
+   a stale loan just after the arm declined to borrow over that same loan — a running snooze with no
+   ceiling at all. So the hand-back check evaluates "is a snooze running" inside the same lock the
+   borrow takes.
+
+**A ceiling that does not hold is said out loud.** Refusals are rare — a fixed-volume device, a
+loan that could not be written, a platform rejection — but the user *hears* the difference, so the
+ongoing notification carries it as its own clause beside the tracking mode (`Ends when you leave —
+still ringing`). It is **observed, not remembered**: the card re-reads the live mode against the
+ceiling on every post, which covers a refused borrow and a ringer the user turned back up
+mid-snooze with one mechanism, and clears itself when either is put right. The ceiling it is judged
+against is the one **in force for the running snooze**, from the choice recorded when that snooze
+armed and forgotten when it ends. Its own record rather than the loan's: a ceiling can be in force
+with nothing borrowed — a phone already quiet enough is left alone, and a refused change is exactly
+the case worth reporting — and the live setting cannot stand in for it either, since a choice changed
+mid-snooze governs the *next* snooze and reading it would make the card lie in both directions. It
+records the **choice**, not the mode it implies, so that `Ring` — which has no ceiling — is still a
+record: without one, a re-assertion would find nothing and adopt whatever the setting said by then.
+An outstanding loan is not a substitute for that record in either direction, because it does not say
+*whose* snooze it is: one left behind by a refused hand-back would otherwise become the next
+snooze's ceiling, running it quieter or louder than the user chose and reporting no shortfall.
+
+A live mode that cannot be read at all is a third answer rather than silence (`may still ring`):
+arming faced the same unreadable mode and declined to borrow, so a ceiling in force is certainly not
+holding — and *which* mode the phone is in is precisely the unknown, so the clause hedges instead of
+naming one.
+The two clauses are independent because they answer different questions — whether the snooze will end correctly, and
+whether it is as quiet as was asked.
+
+**Driven from the zen controller, not from each caller.** `setSnoozed` is the one call every arm and
+release in the app already passes through — the service, the cap alarm, the release backstop, the
+restore path — so the ceiling is applied there and no path can forget it. The order is nested:
+arming sets the rule first and lowers the ringer only once the rule is confirmed on (nothing may
+come between the tap and `STATE_TRUE`, and a refused arm has taken nothing to give back), while
+releasing hands the ringer back *before* the rule goes off, so a failed release still has the loan
+and every retry path intact. A failed ringer change never fails the snooze; it is reported and the
+snooze stands.
+
+The choice governs the **next** snooze, not one already running. Retargeting a live loan has no
+ordering that survives a process death in the middle — the record can name the old mode over a phone
+in the new one, or the reverse, and a later release then cannot tell a stale loan from the user's own
+change. Deferred rather than guessed at (`TODO.md` Phase 4).
+
 ---
 
 ## 6. Presence: deciding when you have left
@@ -2787,7 +2970,8 @@ interaction.
 :tile         SnoozeTileService — thin, delegates to :core
 :core         SnoozeController (state machine), Anchor, exits, persistence,
               and the interfaces the controller is injected with
-:dnd          ZenRuleManager — all NotificationManager/AutomaticZenRule contact
+:dnd          the device's quiet state — all NotificationManager/AutomaticZenRule
+              contact, and the ringer ceiling (§5.9) driven with it
 :presence     PresenceMonitor implementations
               ├── geofence/    GeofencePresenceMonitor                    (`play` flavor)
               └── foreground/  ForegroundPresenceMonitor + SnoozeService  (`direct` flavor)
