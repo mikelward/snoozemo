@@ -1200,6 +1200,48 @@ the point is that every other line of the app is worthless if it isn't true.
       `setRingerMode` is gated on the same notification-policy access §5.2 already
       requires.
 
+- [ ] **Decide what to do about leaving `RINGER_MODE_SILENT` on a `Silent`-ceiling
+      release** (Codex, PR #176 — P1; needs a maintainer decision *and* a device check).
+
+      The mechanics are not in dispute. A `Silent` ceiling borrows from `NORMAL` or
+      `VIBRATE` and sets `SILENT`, so the hand-back is a silent-to-audible transition —
+      and `AudioManager.setRingerMode`'s own reference says that from API 24 onward
+      "ringer mode adjustments that would toggle Do Not Disturb are not allowed unless
+      the app has been granted Notification Policy Access". Snoozemo *has* that grant,
+      so such an adjustment is permitted rather than blocked. If that coupling is still
+      live on API 35+, the hand-back could turn off a manual Do Not Disturb or another
+      app's rule — breaking `SPEC.md` §5.6, one of the three hard invariants.
+
+      **What could not be established here**: whether the coupling still applies on
+      API 35+. The docs describe it only in that one sentence;
+      `android.googlesource.com` is blocked in the sandbox; and Android 15's own
+      global-DND restriction names `setInterruptionFilter` and `setNotificationPolicy`
+      and *not* `setRingerMode`, which argues both ways — either the ringer no longer
+      toggles zen for a targeting-35 app, or it is an unclosed hole.
+
+      **Why no mitigation was shipped.** The obvious one — release our rule first, then
+      hand the ringer back only if `getCurrentInterruptionFilter()` reads
+      `INTERRUPTION_FILTER_ALL` — reads the filter immediately after
+      `setAutomaticZenRuleState(STATE_FALSE)` and so races the platform's own
+      recomputation. A stale non-`ALL` read defers the hand-back, and deferring leaves
+      the phone silent after the snooze it was told had ended: that trades a *possible*
+      breach of §5.6 for a *likely* breach of principle 1, which is the worse of the
+      two. Enumerating the other rules instead needs an answer about how manual Do Not
+      Disturb is represented on API 35+ that could not be pinned down either.
+
+      **The choices, and what each costs**: ship `Silent` as it is and accept the
+      exposure (it needs `Silent` chosen *and* another Do Not Disturb source active at
+      the same time); defer the hand-back behind a filter read and accept the
+      principle-1 risk above; or drop the `Silent` option and cap the ceiling at
+      vibrate, which removes a capability the maintainer asked for by name. Not resolved
+      either way here, per *Working with PRs*: a genuine conflict between a rule and
+      what the product needs is the maintainer's call.
+
+      **The device check that would settle it**: with a manual Do Not Disturb (or a
+      bedtime schedule) active, arm a `Silent`-ceiling snooze and end it — then look at
+      whether the other source is still on. Worth doing on both a Pixel and a One UI
+      device, since this is exactly the kind of behavior an OEM fork diverges on.
+
 - [ ] **Apply a changed ceiling to a snooze already running.** Today the choice governs
       the next snooze; changing it mid-snooze does nothing until then, which is the one
       thing a user testing the feature is most likely to try.
@@ -4956,6 +4998,70 @@ and anonymous usage stats so bugs get fixed." and stops there; `docs/PRIVACY.md`
 difference between what the app sends and what the store row says is worked through. Simpler
 copy was the maintainer's reason, and it happens to remove the claim that would have needed a
 footnote.
+
+## Deferred review findings (Codex, PR #176)
+
+- [ ] **The ongoing card can lag a ringer the user turns up mid-snooze.** The shortfall
+  clause (`SPEC.md` §5.9) is read when the card is posted, and nothing listens for
+  `AudioManager.RINGER_MODE_CHANGED_ACTION` — so on a duration-only snooze a phone
+  turned back up above its ceiling may keep a healthy-looking card until the next
+  unrelated repost, up to the 30-minute backstop.
+
+  Deferred because the obvious fix does not close the case it is for. That broadcast
+  is implicit, so since Android 8 it reaches only a **dynamically registered**
+  receiver — which needs a live process, and a duration-only snooze is exactly the
+  one that may not have one. Building it would add a registration to the snooze
+  lifecycle and still miss the named scenario. The honest options are to read the
+  mode when something already wakes (the cap alarm, a restore, an app open) or to
+  accept the lag and say so in the spec; that is a product call, and it comes with a
+  battery line either way (`SPEC.md` §9).
+
+- [ ] **The ceiling in force is not tied to the snooze that set it.** `activeChoice`
+  is a single record, cleared on the release, on a disowned loan, and by the idle
+  check. A failed clear is now retried on the hand-back ladder, but the retry can
+  still lose a race to a cold tile arm, and the next arm then reuses the previous
+  snooze's choice — a stale `Silent` quieting a snooze the user configured as `Ring`.
+
+  Deferred because the durable fix is an identity, not a retry: the record would carry
+  the snooze it belongs to, and `inForce` would honor it only for that snooze. `:dnd`
+  cannot see `:app`'s active-snooze record — the idle check already has its predicate
+  passed in for that reason — so this needs the snooze identity threaded through
+  `setSnoozed` into the ringer, which is a wider change than this PR should carry.
+
+- [ ] **The loan cannot tell Snoozemo's own write from the user's across a process
+  boundary.** Two review findings reduce to this, and neither is fixable without the
+  identity work above:
+
+  - A hand-back whose writes are all *accepted but unverifiable* reports `Refused` and
+    keeps its applied loan, so a zen release refused in the same call re-applies nothing:
+    `RingerHandover.quiet` reads `applied = true` and takes no action even though the
+    phone may now be back at `NORMAL`. Re-applying `setTo` there would be right — but from
+    the decision's side, "the loan says vibrate and the phone says normal" is exactly the
+    *user takeover* signal rule 4 disowns on, so it cannot be acted on without knowing who
+    wrote last.
+  - A confirmed write whose `applied = true` marker fails to persist leaves the loan
+    reading unapplied. If the user then deliberately returns the ringer to `restoreTo` and
+    the process dies, the re-assertion's evidence test (`current == restoreTo`) reads their
+    change as proof the borrow never landed and quiets the phone again.
+
+  Both need the record to say *when* and *by whom*, which is the same identity the entry
+  above wants — a marker retry closes neither, because what is ambiguous is the state, not
+  its durability. Both are compound storage failures (a `commit` returning false, or three
+  writes accepted with every read-back throwing) and in both the card still reports the
+  shortfall honestly, so nothing is silently wrong; what is missing is the correction.
+
+- [ ] **A stuck-ringer notice cannot reach a user who has denied notifications.** The
+  terminal warning (`SPEC.md` §5.9 rule 5) is posted with `notify`, which silently
+  no-ops when notifications are off or the channel is disabled, and the app has no
+  in-app surface for the same state.
+
+  Not deferred for lack of a replay — the loan plus its spent tally *is* the durable
+  record, and both the process-start and app-open checks re-run the hand-back, which
+  re-escalates and re-posts the notice, including the `onStart` right after a user
+  grants the permission. What is genuinely missing is a surface for someone who never
+  grants it, and that is a product decision about where it lives and what it says
+  (the main screen is the obvious home), so it waits for approved copy rather than
+  being guessed at.
 
 ## Deferred review findings (Codex, PR #171)
 

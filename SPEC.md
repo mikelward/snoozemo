@@ -1626,6 +1626,15 @@ releasing hands the ringer back *before* the rule goes off, so a failed release 
 and every retry path intact. A failed ringer change never fails the snooze; it is reported and the
 snooze stands.
 
+**One thing about `Silent` is unresolved and flagged rather than guessed at** (`TODO.md`).
+A `Silent` ceiling is the only one whose hand-back leaves `RINGER_MODE_SILENT`, and
+`setRingerMode`'s reference says an adjustment that *would toggle* Do Not Disturb is permitted
+precisely when the app holds notification-policy access — which Snoozemo does. If that coupling is
+still live on API 35+, such a hand-back could turn off a manual Do Not Disturb or another app's
+rule, which §5.6 forbids outright. The premise could not be settled from the documentation, and
+each candidate mitigation trades that possible breach for a likely breach of principle 1, so the
+option ships as the maintainer asked for it with the decision and the device check recorded.
+
 The choice governs the **next** snooze, not one already running. Retargeting a live loan has no
 ordering that survives a process death in the middle — the record can name the old mode over a phone
 in the new one, or the reverse, and a later release then cannot tell a stale loan from the user's own
