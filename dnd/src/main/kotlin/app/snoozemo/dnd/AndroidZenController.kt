@@ -10,26 +10,39 @@ import android.service.notification.Condition
 import android.service.notification.ZenPolicy
 import android.util.Log
 import app.snoozemo.core.PolicyAccess
+import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.RuleOwnership
 import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenRuleActivation
 import app.snoozemo.core.ZenFailure
+import app.snoozemo.core.RingerFollowUp
 import app.snoozemo.core.ZenOutcome
+import app.snoozemo.core.ringerFollowUp
+import app.snoozemo.core.confirmsNothingSilencing
 import app.snoozemo.core.ZenRuleState
 import app.snoozemo.core.ZenTrigger
 
 /**
  * The only place in the app that touches `NotificationManager` or
- * `AutomaticZenRule` (SPEC.md §11).
+ * `AutomaticZenRule` (SPEC.md §11), and the one that drives the ringer with
+ * them ([RingerController]) — `:dnd` owns the device's quiet state, both
+ * halves of it.
  *
  * @param configurationActivity the settings screen the platform deep-links to
  *   from the rule in Settings and in the Modes UI. Passed in rather than
  *   referenced directly, so `:dnd` doesn't depend on `:app`.
+ * @param ringer how loud a running snooze is allowed to be (SPEC.md §5.9).
+ *   Driven from here, and that is the whole reason it lives here: `setSnoozed`
+ *   is the one call every arm and release in the app already passes through —
+ *   the service, the cap alarm, the backstop, the restore path — so a ceiling
+ *   applied here cannot be forgotten by one of them. Wired into the six
+ *   existing call sites separately, it would have been six chances to miss.
  */
 class AndroidZenController(
     private val context: Context,
     private val store: ZenRuleIdStore,
     private val configurationActivity: ComponentName,
+    private val ringer: RingerController,
 ) : ZenController {
 
     private val notificationManager: NotificationManager
@@ -215,7 +228,104 @@ class AndroidZenController(
             )
     }
 
+    /**
+     * The rule, and the ringer with it (SPEC.md §5.9).
+     *
+     * The ringer is nested *inside* the rule, in both directions, and the
+     * asymmetry is deliberate:
+     *
+     * - **Arming** sets the rule first and lowers the ringer only once the rule
+     *   is confirmed on. Nothing may come between the tap and `STATE_TRUE`
+     *   (`AGENTS.md`, the arm path), and a *fresh* arm that is then refused has
+     *   taken nothing to give back. A **re-assertion** is the exception, and
+     *   `RingerFollowUp` is where it is decided: one that establishes nothing
+     *   was silencing the phone ends the snooze without a second zen call
+     *   anywhere in the app, so it owes back whatever an earlier arm took.
+     * - **Releasing** hands the ringer back *before* the rule goes off, because
+     *   the loan record is what a retry reads and a release can fail: undoing
+     *   the quiet while the record still exists leaves every retry path intact,
+     *   where doing it after a release that cleared the record would leave a
+     *   phone on vibrate with nothing left that knows better. The cost is a
+     *   microseconds-wide window where the ringer is back and the rule is still
+     *   on, which can only ever make the phone *louder* than intended for one
+     *   call it was about to allow anyway — microseconds only when the release
+     *   succeeds, so a refused one re-applies the ceiling rather than leaving
+     *   that window open until the next re-assertion.
+     *
+     * A failed ringer change never fails the snooze. It is reported — the debug
+     * log carries the reason either way — and the arm or release stands: the
+     * worst it costs is a phone that rings for the people Do Not Disturb was
+     * already letting through, which is not the failure this app fears.
+     */
     override fun setSnoozed(
+        snoozed: Boolean,
+        trigger: ZenTrigger,
+        placeName: String,
+    ): ZenOutcome {
+        // Carried across the rule write, because a hand-back that recognized the
+        // user's own mid-snooze change must not be undone by the re-quiet below
+        // (Codex, PR #176): that path would find no loan, borrow again, and
+        // lower the very ringer rule 4 had just left as theirs.
+        val disowned = !snoozed && giveBackTheRinger() is RingerOutcome.Disowned
+        val outcome = setRuleState(snoozed, trigger, placeName)
+        when (ringerFollowUp(snoozed, outcome, ringerDisowned = disowned)) {
+            RingerFollowUp.QUIET -> quietTheRinger()
+            RingerFollowUp.HAND_BACK_AND_FORGET -> {
+                // Already done above on the release path; an **arm** that ended
+                // the snooze has not done it at all (Codex, PR #176).
+                if (snoozed) giveBackTheRinger()
+                forgetTheCeiling()
+            }
+            // The hand-back above ran unconditionally, and the window that
+            // buys is microseconds wide only when the release succeeds. On a
+            // refusal the snooze runs on, so it would last until some later
+            // re-assertion with the phone above its ceiling the whole time
+            // (Codex, PR #176). Borrowing again here records the mode just
+            // restored, which is the pre-snooze one, so the way back is
+            // unchanged. A ringer the hand-back disowned never reaches here —
+            // `ringerDisowned` sends it to `NOTHING`, since it is theirs for
+            // the rest of the snooze.
+            RingerFollowUp.RE_QUIET -> quietTheRinger()
+            RingerFollowUp.NOTHING -> Unit
+        }
+        return outcome
+    }
+
+    /**
+     * Contained, because this is not the snooze. An exception escaping the
+     * ringer would unwind `end()` and then `onStartCommand` — the same failure
+     * the diagnosis branch below is contained against — and cost the release
+     * that the wake-up existed to perform, over a phone that is merely a little
+     * louder than asked.
+     */
+    private fun quietTheRinger() {
+        runCatching { ringer.quiet() }.onFailure {
+            SnoozeDebugLog.failure(it, "ringer: applying the chosen ceiling threw; the snooze stands")
+        }
+    }
+
+    /**
+     * Contained for the same reason, and the stakes here are the release's.
+     *
+     * Returns what it managed, so the caller can tell a *disowned* ringer from
+     * one that was handed back or never taken. A throw reads as neither: with
+     * nothing known, re-applying the ceiling is the direction that keeps a
+     * running snooze quiet.
+     */
+    private fun giveBackTheRinger(): RingerOutcome? = runCatching { ringer.giveBack() }
+        .onFailure {
+            SnoozeDebugLog.failure(it, "ringer: handing it back threw; the loan is kept so this retries")
+        }
+        .getOrNull()
+
+    /** Contained like the two above; losing this record costs a line of honesty. */
+    private fun forgetTheCeiling() {
+        runCatching { ringer.forgetCeiling() }.onFailure {
+            SnoozeDebugLog.failure(it, "ringer: forgetting the ceiling threw; the next arm overwrites it")
+        }
+    }
+
+    private fun setRuleState(
         snoozed: Boolean,
         trigger: ZenTrigger,
         placeName: String,
@@ -474,6 +584,7 @@ class AndroidZenController(
                 context = app,
                 store = PrefsZenRuleIdStore(app),
                 configurationActivity = ComponentName(app.packageName, CONFIGURATION_ACTIVITY_CLASS),
+                ringer = AudioRingerController.default(app),
             )
         }
     }

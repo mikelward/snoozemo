@@ -63,6 +63,29 @@ class SnoozeNotificationsChannelTest {
         assertEquals(SnoozeNotifications.CHANNEL_URGENT, posted.channelId)
     }
 
+    @Test
+    fun `the ringer notice names the state and where to fix it`() {
+        val notifications = SnoozeNotifications(appContext)
+
+        notifications.showRingerStuck()
+
+        val posted = shadowOf(manager).allNotifications
+            .last { shadowOf(it).contentTitle?.toString() == stringOf(R.string.failure_ringer_stuck) }
+        // The snooze has ended, so this belongs beside the other after-the-fact
+        // explanations rather than on the Do-Not-Disturb-bypassing channel.
+        assertEquals(SnoozeNotifications.CHANNEL_ENDED, posted.channelId)
+        assertEquals(stringOf(R.string.failure_ringer_stuck_body), shadowOf(posted).contentText?.toString())
+
+        // And it comes down when the ringer is back, since nothing else would
+        // take it down and it would otherwise outlive the problem.
+        notifications.dropRingerStuck()
+        assertTrue(
+            shadowOf(manager).allNotifications.none {
+                shadowOf(it).contentTitle?.toString() == stringOf(R.string.failure_ringer_stuck)
+            },
+        )
+    }
+
     /**
      * `showOngoing()` reposts on every ARMED/CHECKING transition — including
      * presence evidence flip-flopping while a snooze runs, not just the

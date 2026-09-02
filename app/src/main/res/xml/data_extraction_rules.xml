@@ -73,5 +73,21 @@
           and the prompt that would have offered to add it stays hidden.
         -->
         <exclude domain="sharedpref" path="tile_presence.xml" />
+
+        <!--
+          The borrowed ringer mode, the retry tally against it, and the ceiling
+          the running snooze is holding (SPEC.md §5.9). All three are about *this*
+          phone's ringer: transferred, the new handset's first hand-back check
+          finds a loan no snooze here ever took and — if the live mode happens to
+          match what the old phone set — puts the ringer back to a mode the old
+          phone had, overriding what its owner chose (Codex, PR #176). The
+          transferred choice is as bad the other way: a fresh arm here would
+          reuse the old phone's ceiling instead of the setting.
+
+          `snooze_ringer.xml` is deliberately **not** excluded: the chosen
+          ceiling is the user's configuration and must survive a phone swap
+          (principle 3). This file is the runtime state that serves it.
+        -->
+        <exclude domain="sharedpref" path="ringer_loan.xml" />
     </device-transfer>
 </data-extraction-rules>

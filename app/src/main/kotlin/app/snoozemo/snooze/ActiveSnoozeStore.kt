@@ -85,10 +85,19 @@ class ActiveSnoozeStore(context: Context) {
     /**
      * The record exactly as written, refusal and all.
      *
-     * Only the discard path may use this, and only because it is the one caller
-     * that needs to act *on* an unusable record rather than around it — naming
-     * it in a retry, and knowing whether a notification was posted for it.
-     * Everything else goes through [load], which is where the refusal lives.
+     * Two callers only, and each because [load]'s question is not theirs.
+     *
+     * The discard path needs to act *on* an unusable record rather than around
+     * it — naming it in a retry, and knowing whether a notification was posted
+     * for it. The ringer hand-back check (`RingerReconcile`) needs "is there a
+     * record at all", because the `ARMING` transition's [saveAsync] skips the
+     * device-stamp lookup: for the moment before the post-arm blocking [save]
+     * stamps it, [load] rejects a live arming record as unattributed, and a
+     * check that believed that would hand the ringer back over a snooze that
+     * had just armed (Codex, PR #176).
+     *
+     * Everything that asks "is there a snooze to run" still goes through
+     * [load], which is where the refusal lives.
      */
     internal fun readUnverified(): ActiveSnooze? = read()
 

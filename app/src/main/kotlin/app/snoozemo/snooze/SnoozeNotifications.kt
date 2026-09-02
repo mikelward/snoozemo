@@ -8,14 +8,17 @@ import android.content.Intent
 import android.util.Log
 import androidx.annotation.VisibleForTesting
 import app.snoozemo.R
+import app.snoozemo.core.RingerMode
+import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.degradationReasonRes
+import app.snoozemo.dnd.AudioRingerController
+import app.snoozemo.dnd.RingerShortfall
 import app.snoozemo.tile.R as TileR
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.MeetingEnd
-import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.ui.MainActivity
 import app.snoozemo.ui.formatSheetTime
@@ -238,6 +241,46 @@ class SnoozeNotifications(private val context: Context) {
     private fun reasonFor(cause: DegradationCause?): String? =
         degradationReasonRes(cause)?.let(context::getString)
 
+    /**
+     * What to say about the ceiling in force, or null when there is nothing to
+     * say (SPEC.md §5.9; Codex, PR #176).
+     *
+     * The ceiling failing is something the user *hears* — an allowed caller
+     * ringing when they chose vibrate — so the ongoing card is where it belongs;
+     * the debug log alone only reaches someone who already knows to share it.
+     *
+     * Observed, not remembered: it re-reads the live mode on every post, so it
+     * covers a refused borrow and a ringer the user turned back up mid-snooze
+     * with one mechanism, and goes away by itself when either is put right.
+     * One `AudioManager` read, contained, and only after the rule is on — the
+     * card is posted from the arm path.
+     */
+    private fun ringerShortfall(): String? = runCatching {
+        when (val shortfall = AudioRingerController.default(context).shortfall()) {
+            null -> null
+            // A ceiling in force over a mode nothing could read: it is not
+            // holding, and which mode the phone is in is the unknown part — so
+            // the clause hedges rather than naming one (Codex, PR #176).
+            RingerShortfall.Unknown -> context.getString(R.string.ongoing_cause_ringer_unknown)
+            is RingerShortfall.Louder -> context.getString(
+                when (shortfall.mode) {
+                    RingerMode.NORMAL -> R.string.ongoing_cause_still_ringing
+                    // A `Silent` ceiling over a vibrating phone. Named rather
+                    // than lumped in with ringing, because "still ringing" over
+                    // a phone that is buzzing is simply wrong.
+                    RingerMode.VIBRATE -> R.string.ongoing_cause_still_vibrating
+                    // Nothing is louder than silent, so `shortfall` never
+                    // returns it; named so a fourth mode cannot ship rendering
+                    // as one of these.
+                    RingerMode.SILENT -> return@runCatching null
+                },
+            )
+        }
+    }.getOrElse {
+        SnoozeDebugLog.failure(it, "ringer: could not tell whether the ceiling is holding; the card says nothing")
+        null
+    }
+
     fun showOngoing(snooze: ActiveSnooze) = showOngoing(snooze, onlyIfGeneration = null)
 
     /**
@@ -261,8 +304,12 @@ class SnoozeNotifications(private val context: Context) {
         // the same reading the settings rows already rely on.
         val calendarReadable = NextMeetings.isReadable(context)
         val builtWith = cachedOfferFor(snooze, calendarReadable)
+        // Read here rather than inside `buildOngoing`, which stays a pure
+        // function of its arguments, and read *once* so the two posts below
+        // cannot disagree about the same card.
+        val ringerShortfall = ringerShortfall()
         betweenReadAndPost()
-        val posted = postOngoing(buildOngoing(snooze, builtWith), onlyIfGeneration)
+        val posted = postOngoing(buildOngoing(snooze, builtWith, ringerShortfall), onlyIfGeneration)
         // The cache is read above but written under the lock this post takes,
         // so the worker can commit an answer in between and lose its own
         // repost to this one — the newer post wins the generation, and the
@@ -279,7 +326,7 @@ class SnoozeNotifications(private val context: Context) {
             val settled = cachedOfferFor(snooze, calendarReadable)
             if (settled != builtWith) {
                 betweenReadAndPost()
-                postOngoing(buildOngoing(snooze, settled), onlyIfGeneration = posted)
+                postOngoing(buildOngoing(snooze, settled, ringerShortfall), onlyIfGeneration = posted)
             }
         }
         // After the card is up, never before it: this is a binder query into
@@ -299,7 +346,11 @@ class SnoozeNotifications(private val context: Context) {
      * read so that the caller decides which answer the card is built against,
      * and so this stays a pure function of its arguments.
      */
-    private fun buildOngoing(snooze: ActiveSnooze, until: Instant?): android.app.Notification {
+    private fun buildOngoing(
+        snooze: ActiveSnooze,
+        until: Instant?,
+        ringerShortfall: String? = null,
+    ): android.app.Notification {
         val body = when (snooze.mode) {
             TrackingMode.FULL -> context.getString(R.string.ongoing_ends_when_you_leave)
             // Says what it can actually do, not what it wishes it could.
@@ -324,10 +375,20 @@ class SnoozeNotifications(private val context: Context) {
                 } ?: body
             TrackingMode.FULL, TrackingMode.WIFI_GRACE -> body
         }
+        // A second, independent clause, and independent on purpose: the mode
+        // above says whether the snooze will end correctly, and this says
+        // whether it is as quiet as the user asked (SPEC.md §5.9). They are
+        // different axes, so this is not folded into the exclusions above —
+        // `WIFI_GRACE` carries no mode reason by choice and still needs to say
+        // that the phone is ringing. Both at once is rare and the extra clause
+        // is two words.
+        val withRinger = ringerShortfall?.let {
+            context.getString(R.string.ongoing_degraded_reason, withReason, it)
+        } ?: withReason
         val notification = android.app.Notification.Builder(context, CHANNEL_ACTIVE)
             .setSmallIcon(TileR.drawable.ic_tile_snooze)
             .setContentTitle(context.getString(R.string.ongoing_title))
-            .setContentText(withReason)
+            .setContentText(withRinger)
             .setOngoing(true)
             // This card is reposted on every ARMED/CHECKING transition, which
             // includes presence evidence flip-flopping (ProbablyLeft then
@@ -756,6 +817,37 @@ class SnoozeNotifications(private val context: Context) {
 
     /** The record wouldn't erase, so it may come back until its cap (SPEC.md §8.1). */
     fun showNotForgotten() = showOneShot(R.string.failure_not_forgotten)
+
+    /**
+     * Handing the ringer back has run out of retries, so the user is the only
+     * one who can put it right (SPEC.md §5.9 rule 5).
+     *
+     * Posted from the code that gives up, like [showStuckRule] and for the same
+     * reason: no detection after the fact is needed, and once in the shade the
+     * card outlives the process that posted it. The snooze has already ended, so
+     * the ongoing card — where every other ringer report goes — is gone.
+     *
+     * **Its own id**, not the one-shots' shared one: an unrelated failure must
+     * not replace the only thing telling the user their phone is quiet. And
+     * `setAutoCancel` rather than `setOngoing`, unlike the stuck-rule card,
+     * because this one carries no action to protect — the fix is in the volume
+     * panel, and a user who has read it should be able to swipe it away.
+     *
+     * [dropRingerStuck] is the other half: a later hand-back makes this untrue,
+     * and nothing else would take it down.
+     */
+    fun showRingerStuck(): Boolean = post(
+        ID_RINGER,
+        android.app.Notification.Builder(context, CHANNEL_ENDED)
+            .setSmallIcon(TileR.drawable.ic_tile_snooze)
+            .setContentTitle(context.getString(R.string.failure_ringer_stuck))
+            .setContentText(context.getString(R.string.failure_ringer_stuck_body))
+            .setAutoCancel(true)
+            .build(),
+    )
+
+    /** Takes the notice above down once the ringer is back. */
+    fun dropRingerStuck() = drop(ID_RINGER)
 
     /**
      * Every automatic attempt to turn the rule off has failed, so the user is
@@ -1195,6 +1287,7 @@ class SnoozeNotifications(private val context: Context) {
         const val ID_FAILURE = 3
         const val ID_STUCK = 4
         const val ID_END_FAILURE = 5
+        const val ID_RINGER = 6
         const val REQUEST_END = 10
         const val REQUEST_EXTEND = 11
         const val REQUEST_RELEASE_STUCK = 12

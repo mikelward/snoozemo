@@ -117,6 +117,32 @@ object CapAlarm {
      * nothing can move it — the same reasoning as [armCheckIn], for the same
      * reason.
      */
+    /**
+     * Arms a wake-up that retries handing the ringer back (SPEC.md §5.9).
+     *
+     * The durable rung under a hand-back that failed every immediate attempt.
+     * It exists because a completed release leaves nothing else watching: the
+     * record is erased and every other alarm canceled, so the loan on its own
+     * schedules nothing, and a phone left silent after a snooze it was told had
+     * ended is principle 1's failure (Codex, PR #176).
+     *
+     * **Elapsed realtime**, for [armDiscardRetry]'s reason and more strongly:
+     * this alarm is the only scheduled exit from that silence, and an
+     * `RTC_WAKEUP` one slides with the wall clock — winding the clock back
+     * would postpone it by the shift with nothing else left to notice.
+     *
+     * Carries no identity extra and needs none. It names no record and resolves
+     * none; the loan is the whole subject, and a hand-back with no loan
+     * outstanding does nothing at all.
+     */
+    fun armRingerRetry(context: Context, delayMillis: Long): Boolean =
+        schedule(
+            context,
+            SystemClock.elapsedRealtime() + delayMillis.coerceAtLeast(0L),
+            AlarmManager.ELAPSED_REALTIME_WAKEUP,
+            SnoozeService.ACTION_RINGER_RETRY,
+        )
+
     fun armDiscardRetry(context: Context, delayMillis: Long): Boolean =
         schedule(
             context,
@@ -293,6 +319,12 @@ object CapAlarm {
                 // The presence retry likewise: a restore with no record to
                 // restore does nothing, so leaving it armed only costs a wake.
                 existing(context, SnoozeService.ACTION_RESTORE)?.let(alarmManager::cancel)
+                // The ringer retry is deliberately **not** cancelled here, and
+                // this is the one exception worth stating: every alarm above is
+                // about a snooze, and `cancelAll` runs precisely because that
+                // snooze is over — which is the very moment the ringer may still
+                // be owed back (SPEC.md §5.9). Cancelling it would drop the
+                // durable rung exactly when it is the only thing left.
             }
         }.onFailure {
             // An alarm that outlives its snooze is harmless — the service
@@ -360,6 +392,7 @@ object CapAlarm {
         SnoozeService.ACTION_ERASE_RETRY -> REQUEST_ERASE_RETRY
         SnoozeService.ACTION_CAP_LOST -> REQUEST_RELEASE_RETRY
         SnoozeService.ACTION_RESTORE -> REQUEST_PRESENCE_RETRY
+        SnoozeService.ACTION_RINGER_RETRY -> REQUEST_RINGER_RETRY
         else -> REQUEST_CAP
     }
 
@@ -375,6 +408,7 @@ object CapAlarm {
     private const val REQUEST_ERASE_RETRY = 2
     private const val REQUEST_RELEASE_RETRY = 3
     private const val REQUEST_PRESENCE_RETRY = 4
+    private const val REQUEST_RINGER_RETRY = 5
 }
 
 /**
@@ -406,6 +440,26 @@ class CapAlarmReceiver : BroadcastReceiver() {
             if (!SnoozeService.retryErase(context, recordStartedAt)) {
                 eraseDirectly(context, recordStartedAt)
             }
+            return
+        }
+        if (intent?.action == SnoozeService.ACTION_RINGER_RETRY) {
+            // No service and no thread, unlike every branch above. The
+            // hand-back is a preferences read and one `AudioManager` call, and
+            // it re-checks the record itself under the ringer lock — so it needs
+            // neither a snooze to resolve nor a foreground start window. A
+            // no-op if any of the other checks has handed the loan back since.
+            //
+            // Inline rather than handed to a thread, which is the *more*
+            // reliable of the two here: a broadcast keeps its process alive only
+            // for `onReceive`, so an unowned thread can be killed halfway, and
+            // this alarm is the last scheduled exit from a silent phone —
+            // half-finished is the one outcome it must not have. `goAsync` would
+            // hold the process instead, but it has no pending result to hand
+            // back when a receiver is invoked directly, so the safe form of it
+            // is a null check around the very thing that guarantees completion.
+            // A few milliseconds on the receiver's thread, against ~10 seconds
+            // of budget, buys the guarantee outright.
+            handBackRingerNow(context)
             return
         }
         if (intent?.action == SnoozeService.ACTION_DISCARD_RETRY) {
@@ -1252,6 +1306,18 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action !in HANDLED_ACTIONS) return
         SnoozeDebugLog.event("boot/update wake-up: %s", safe(intent?.action))
+
+        // Inline, and before the early returns below, because this receiver's
+        // process may be all there is (Codex, PR #176). `Application.onCreate`
+        // starts the same check on its own thread, but a process spun up only
+        // to deliver this broadcast can be killed the moment `onReceive`
+        // returns — and a reboot has already cleared the retry alarm, so for a
+        // loan left by a refused hand-back this is the recovery, not a backup
+        // for it. Cheap enough to own: a preferences read and at most one
+        // `AudioManager` call, and a no-op when a snooze is running or nothing
+        // is outstanding.
+        handBackRingerNow(context)
+
         val store = ActiveSnoozeStore(context)
 
         // Before anything else, because these are the two moments it matters:

@@ -1193,6 +1193,27 @@ the point is that every other line of the app is worthless if it isn't true.
 
 `SPEC.md` §4.4 is explicitly provisional — treat its mockups as a starting point.
 
+- [x] **How loud a snooze may be** (`SPEC.md` §5.9) — a ceiling of `Ring` / `Vibrate` /
+      `Silent`, defaulting to `Vibrate`, applied to the global ringer
+      mode for the duration of a snooze and handed back at the end. Driven from
+      `setSnoozed`, so every arm and release in the app gets it. Needs no new permission:
+      `setRingerMode` is gated on the same notification-policy access §5.2 already
+      requires.
+
+- [ ] **Apply a changed ceiling to a snooze already running.** Today the choice governs
+      the next snooze; changing it mid-snooze does nothing until then, which is the one
+      thing a user testing the feature is most likely to try.
+
+      Deferred rather than guessed at, because the ordering does not obviously work.
+      Retargeting a live loan has to move two things — the record and the ringer — and a
+      process death between them leaves the record naming the old mode over a phone in the
+      new one, or the reverse. Either way the next release cannot tell a stale loan from
+      the user's own mid-snooze change (§5.9's rule 3), so it would either override a
+      deliberate choice or leave the phone quiet. What would fix it is making the record
+      able to name *both* modes across the change, or accepting a coarser "is this any
+      mode we could have set" test — neither is a five-minute call, and the cost of
+      getting it wrong is exactly the failure §5.9 exists to prevent.
+
 - [ ] **Round the end-condition seed to 15 minutes on epoch millis, not 30 on the wall
       clock.** Open question raised by the maintainer (2026-08-28), not yet decided.
 
@@ -3042,6 +3063,17 @@ that can only be settled on a real device, ordered by risk.
        steps the right granularity, and does anyone reach for the time row often enough to
        justify the calendar in v1.1?
 9. [ ] Does the trampoline activity produce any visible flash (`SPEC.md` §6.9)?
+9a. [ ] **The ringer ceiling, on a device** (`SPEC.md` §5.9). Everything about it is covered
+        by unit tests over a Robolectric `AudioManager`, which cannot answer the questions
+        that matter: does an allowlisted **call** actually buzz rather than ring under
+        `Vibrate`; does an allowlisted **message** buzz (the platform makes that
+        conditional on the user's own notification-vibrate setting, so expect it not to on
+        some devices); does the volume panel's own icon agree with what the app set; and is
+        the pre-snooze mode — including its *volume* — really what comes back at the end,
+        given `RINGER_MODE_NORMAL` restores "audible if it was audible before". Also worth
+        one pass on a fixed-volume device if one is to hand, where `setRingerMode` is
+        documented to do nothing and the app is expected to report that rather than claim a
+        ceiling it did not get.
 10. [ ] **Check the raised ongoing notification on a device** (`SPEC.md` §4.3). It moved from
         `IMPORTANCE_LOW` to `IMPORTANCE_DEFAULT` (maintainer, 2026-08-12) — low grouped it,
         which made it less discoverable and put an extra tap in front of `End now` and

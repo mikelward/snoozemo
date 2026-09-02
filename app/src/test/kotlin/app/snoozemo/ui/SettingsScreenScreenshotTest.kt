@@ -16,6 +16,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import app.snoozemo.PlayUpdateState
 import app.snoozemo.UpdateProgress
+import app.snoozemo.core.SnoozeRinger
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -905,6 +906,104 @@ class SettingsScreenScreenshotTest {
         // The switch has already snapped back by now; this line is what stops
         // the snap-back reading as a missed tap.
         composeRule.onAllNodesWithText("Couldn't save this setting")[0].assertExists()
+    }
+
+    @Test
+    fun `the ringer ceiling sits with the filters row it complements`() {
+        var chosen: SnoozeRinger? = null
+
+        capture("settings-screen-snooze-ringer.png") {
+            SettingsScreen(
+                tileAdded = true,
+                // Present, because the two rows are one question in two halves:
+                // that row edits who gets through, this one how loudly.
+                filtersRuleId = "rule-1",
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                askWhenToUnsnooze = false,
+                snoozeRinger = SnoozeRinger.VIBRATE,
+                debugLogCleanupFailed = false,
+                shareFailed = false,
+                versionName = SAMPLE_VERSION_NAME,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onSnoozeRinger = { chosen = it },
+                onShareDebugLog = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Ring/vibrate").assertExists()
+        // The description runs into the dropdown that completes it, so the
+        // stored value is the only option visible until it is opened.
+        composeRule.onNodeWithText("When snoozing set the phone to").assertExists()
+        composeRule.onNodeWithText("Vibrate").assertExists()
+        composeRule.onNodeWithText("Silent").assertDoesNotExist()
+
+        composeRule.onNodeWithText("Vibrate").performClick()
+        // All three once open, loudest first, so a ceiling can be raised as
+        // well as lowered without leaving the screen.
+        composeRule.onNodeWithText("Ring").assertExists()
+        composeRule.onNodeWithText("Silent").assertExists()
+        composeRule.onNodeWithText("Silent").performClick()
+        assertEquals(SnoozeRinger.SILENT, chosen)
+    }
+
+    @Test
+    fun `the ringer row waits for the store rather than asserting a default`() {
+        // Null until read, and it matters more here than for the switch above:
+        // the default is not the first option, so a row that asserted one and
+        // corrected itself a frame later would flash the wrong answer at
+        // whoever had chosen either of the others.
+        capture {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                snoozeRinger = null,
+                debugLogCleanupFailed = false,
+                shareFailed = false,
+                versionName = SAMPLE_VERSION_NAME,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onShareDebugLog = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Ring/vibrate").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a refused ringer save says so above the options`() {
+        capture("settings-screen-snooze-ringer-save-failed.png") {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                snoozeRinger = SnoozeRinger.SILENT,
+                snoozeRingerSaveFailed = true,
+                debugLogCleanupFailed = false,
+                shareFailed = false,
+                versionName = SAMPLE_VERSION_NAME,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onShareDebugLog = {},
+            )
+        }
+
+        // The selection has already snapped back to the stored value by now;
+        // this line is what stops the snap-back reading as a missed tap.
+        composeRule.onAllNodesWithText("Couldn\'t save this setting")[0].assertExists()
     }
 
     private fun capture(name: String? = null, content: @Composable () -> Unit) {

@@ -2480,6 +2480,19 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         const val ACTION_DISCARD_RETRY = "app.snoozemo.action.DISCARD_RETRY"
 
         /**
+         * Retries handing the ringer back after a snooze has ended and every
+         * immediate attempt was refused (SPEC.md §5.9).
+         *
+         * Its own action, and the only one here whose receiver starts no
+         * service: the hand-back is a preferences read and one `AudioManager`
+         * call, so it runs on the receiver's own background thread. Sharing
+         * another action would have been worse than verbose — every one of
+         * them resolves a *snooze* to act on, and this fires precisely when
+         * there is no longer a snooze at all.
+         */
+        const val ACTION_RINGER_RETRY = "app.snoozemo.action.RINGER_RETRY"
+
+        /**
          * The user tapping `Unsnooze` on the stuck-rule notification — the last
          * exit, and the only one driven entirely by them.
          *

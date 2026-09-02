@@ -53,6 +53,7 @@ import app.snoozemo.core.PolicyAccessAction
 import app.snoozemo.core.PolicyAccessChange
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.StaleRuleClaim
+import app.snoozemo.core.SnoozeRinger
 import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenRuleState
 import app.snoozemo.dnd.AndroidZenController
@@ -61,11 +62,14 @@ import app.snoozemo.crash.CrashReporting
 import app.snoozemo.snooze.DebugLogStore
 import app.snoozemo.snooze.DebugLogging
 import app.snoozemo.snooze.EndSheetSetting
+import app.snoozemo.snooze.reconcileRingerInBackground
+import app.snoozemo.snooze.SnoozeRingerSetting
 import app.snoozemo.core.EndCondition
 import java.time.Instant
 import app.snoozemo.snooze.EndChoiceController
 import app.snoozemo.snooze.EndChoiceOutcome
 import app.snoozemo.snooze.EndSheetStore
+import app.snoozemo.dnd.SnoozeRingerStore
 import app.snoozemo.snooze.DebugReport
 import app.snoozemo.snooze.CalendarPromptStore
 import app.snoozemo.snooze.LocationPromptStore
@@ -576,6 +580,24 @@ class MainActivity : ComponentActivity() {
     private var askWhenToUnsnoozeWatch: AutoCloseable? = null
 
     /**
+     * How loud a snooze may be (SPEC.md §5.9). Null until the store has been
+     * read, the same discipline as [askWhenToUnsnooze] — and it matters more
+     * here, because the default is not the first option: a row that asserted
+     * it and corrected itself a frame later would flash the wrong answer at
+     * whoever had chosen either of the others.
+     */
+    private var snoozeRinger by mutableStateOf<SnoozeRinger?>(null)
+
+    /** Whether the last tap on that row failed to reach disk. */
+    private var snoozeRingerSaveFailed by mutableStateOf(false)
+
+    /** How many of its writes are still on the worker; see [askWhenToUnsnoozeWrites]. */
+    private var snoozeRingerWrites = 0
+
+    /** The handle for its save-outcome watch; see [onStart]. */
+    private var snoozeRingerWatch: AutoCloseable? = null
+
+    /**
      * How many debug-log writes are still on the worker. Main thread only,
      * like the generation counters: while it is non-zero, the switch shows the
      * user's tap and every read-back holds off — a start or store change
@@ -1026,6 +1048,8 @@ class MainActivity : ComponentActivity() {
                                 crashReportingSaveFailed = crashReportingSaveFailed,
                                 askWhenToUnsnooze = askWhenToUnsnooze,
                                 askWhenToUnsnoozeSaveFailed = askWhenToUnsnoozeSaveFailed,
+                                snoozeRinger = snoozeRinger,
+                                snoozeRingerSaveFailed = snoozeRingerSaveFailed,
                                 playUpdate = displayedPlayUpdate,
                                 playUpdateRestartFailed = playUpdateRestartFailed,
                                 debugLogCleanupFailed = debugLogCleanupFailed,
@@ -1040,6 +1064,7 @@ class MainActivity : ComponentActivity() {
                                 onDebugLog = ::setDebugLog,
                                 onCrashReporting = ::setCrashReporting,
                                 onAskWhenToUnsnooze = ::setAskWhenToUnsnooze,
+                                onSnoozeRinger = ::chooseSnoozeRinger,
                                 onStartPlayUpdate = ::startPlayUpdate,
                                 onCompletePlayUpdate = ::completePlayUpdate,
                                 onDismissPlayUpdate = ::dismissPlayUpdate,
@@ -1223,6 +1248,15 @@ class MainActivity : ComponentActivity() {
                 if (askWhenToUnsnoozeWrites == 0) {
                     askWhenToUnsnooze = EndSheetStore(this).isEnabled()
                     askWhenToUnsnoozeSaveFailed = EndSheetSetting.lastSaveRefused
+                }
+            }
+        }
+        // The same watch, for the same reason, on the row below it.
+        snoozeRingerWatch = SnoozeRingerSetting.watchSaveOutcome {
+            runOnUiThread {
+                if (snoozeRingerWrites == 0) {
+                    snoozeRinger = SnoozeRingerStore(this).chosen()
+                    snoozeRingerSaveFailed = SnoozeRingerSetting.lastSaveRefused
                 }
             }
         }
@@ -1474,6 +1508,22 @@ class MainActivity : ComponentActivity() {
                     // a tap that worked.
                     askWhenToUnsnoozeSaveFailed = EndSheetSetting.lastSaveRefused
                 }
+                // Its own one-key file too, and read here for the same reason
+                // as the rows above: this runs after the first frame, so a cold
+                // launch never waits on it, and the read is held off while a
+                // tap's write is still on the worker.
+                if (snoozeRingerWrites == 0) {
+                    snoozeRinger = SnoozeRingerStore(this).chosen()
+                    snoozeRingerSaveFailed = SnoozeRingerSetting.lastSaveRefused
+                }
+                // And the other half of that setting: if a snooze ended without
+                // handing the ringer back, put it back now (SPEC.md §5.9).
+                // Opening the app is the moment a user whose phone is
+                // unexpectedly quiet is most likely to reach, and `onCreate`'s
+                // own check only runs on a fresh process — a long-lived one
+                // would never reach it (Codex, PR #176). Its own thread, and a
+                // no-op with nothing outstanding.
+                reconcileRingerInBackground(this)
                 // Its own one-key file too. `compareAndSet`-style guard isn't
                 // needed the way a coroutine version would need one: this is
                 // a single main-thread assignment, and a dismissal made
@@ -1903,6 +1953,8 @@ class MainActivity : ComponentActivity() {
         tileWatch = null
         askWhenToUnsnoozeWatch?.close()
         askWhenToUnsnoozeWatch = null
+        snoozeRingerWatch?.close()
+        snoozeRingerWatch = null
         debugLogWatch?.close()
         debugLogWatch = null
         crashReportingWatch?.close()
@@ -2399,6 +2451,38 @@ class MainActivity : ComponentActivity() {
                     // argument, so it reads the same value the watch would — one
                     // source, whichever path gets here first.
                     askWhenToUnsnoozeSaveFailed = EndSheetSetting.lastSaveRefused
+                }
+            }
+        }
+    }
+
+    /**
+     * The chosen ceiling, optimistically shown and reconciled from the worker —
+     * the same shape as the switch above, and with the same reason for the
+     * write counter: a rotation mid-write must not repaint the stored value
+     * over a tap that has not landed yet.
+     *
+     * Applies to the next snooze, not one already running: see
+     * [SnoozeRingerSetting.setChosen].
+     *
+     * `chooseSnoozeRinger` rather than `setSnoozeRinger`, because the latter is
+     * the JVM signature the nullable [snoozeRinger] property's own setter
+     * already takes — a nullable and a non-null `SnoozeRinger` erase to the
+     * same parameter type, so the two would clash. (The switch above gets away
+     * with the `set` prefix only because `Boolean?` boxes and `Boolean` does
+     * not.)
+     */
+    private fun chooseSnoozeRinger(ceiling: SnoozeRinger) {
+        if (snoozeRinger == null) return
+        snoozeRingerSaveFailed = false
+        snoozeRingerWrites++
+        snoozeRinger = ceiling
+        SnoozeRingerSetting.setChosen(this, ceiling) { _ ->
+            runOnUiThread {
+                snoozeRingerWrites--
+                if (snoozeRingerWrites == 0) {
+                    snoozeRinger = SnoozeRingerStore(this).chosen()
+                    snoozeRingerSaveFailed = SnoozeRingerSetting.lastSaveRefused
                 }
             }
         }

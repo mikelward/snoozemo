@@ -1,17 +1,23 @@
 package app.snoozemo.ui
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -19,17 +25,22 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.snoozemo.core.SnoozeRinger
 import app.snoozemo.R
 import app.snoozemo.UpdateProgress
 
@@ -581,6 +592,110 @@ internal fun CrashReportingRow(
         ),
         onChange = onChange,
     )
+}
+
+/**
+ * How loud a snooze may be (SPEC.md §5.9): a ceiling, defaulting to vibrate.
+ *
+ * A dropdown rather than three rows (maintainer, 2026-09-02): the description
+ * runs straight into it — `When snoozing set the phone to  [ Vibrate ]` — so
+ * the sentence and the control read as one thing.
+ *
+ * Structurally identical to [SwitchRow] (maintainer, 2026-09-02): one card, one
+ * 16dp padding, title and description in a weighted column, and the control
+ * centered against **both** lines at the trailing edge rather than beside the
+ * description alone. That is what keeps the row the same height and the same
+ * shape as the switches and the Filters row around it — a settings screen where
+ * one setting is built differently reads as two screens.
+ */
+@Composable
+internal fun SnoozeRingerRow(
+    chosen: SnoozeRinger,
+    saveFailed: Boolean,
+    onChange: (SnoozeRinger) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.setup_ringer_title),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    text = stringResource(R.string.setup_ringer_description),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                // Inside the column, like SwitchRow's failure line and for the
+                // same reason: the selection has already snapped back to the
+                // stored value by the time this shows, and the line is what
+                // stops that reading as a missed tap.
+                if (saveFailed) {
+                    Text(
+                        text = stringResource(R.string.setup_debug_log_save_failed),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+            Box {
+                OutlinedButton(
+                    onClick = { open = true },
+                    // 40dp is the button's own height; this clears Android's
+                    // 48dp minimum target without a fixed height that would
+                    // clip a scaled-up font.
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) {
+                    Text(text = stringResource(chosen.labelRes()))
+                    Text(
+                        text = " ▾",
+                        // Decorative: the value beside it is the label, and
+                        // TalkBack reading the glyph's Unicode name after it is
+                        // noise.
+                        modifier = Modifier.clearAndSetSemantics {},
+                    )
+                }
+                DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                    // Loudest first, matching the volume panel's own order and
+                    // `SnoozeRinger`'s declaration.
+                    SnoozeRinger.entries.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(stringResource(option.labelRes())) },
+                            onClick = {
+                                open = false
+                                onChange(option)
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The user-facing name of a ceiling.
+ *
+ * Exhaustive rather than defaulted, so a fourth option cannot ship rendering
+ * as one of the three that already exist.
+ */
+@StringRes
+private fun SnoozeRinger.labelRes(): Int = when (this) {
+    SnoozeRinger.RING -> R.string.setup_ringer_ring
+    SnoozeRinger.VIBRATE -> R.string.setup_ringer_vibrate
+    SnoozeRinger.SILENT -> R.string.setup_ringer_silent
 }
 
 /**
