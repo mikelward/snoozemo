@@ -170,6 +170,19 @@ jobs:
           # the shared cache.
           cache-read-only: ${{ github.event_name != 'push' }}
 
+      - name: Test the release-publishing script
+        # The only coverage `scripts/publish-github-release.sh` can get:
+        # `deploy` is main-only, so the step that calls it never runs on a
+        # pull request and a regression there would first surface after
+        # reaching `main`. Drives the real script against a stubbed `gh` and
+        # a throwaway git repository, pinning each recovery branch and — the
+        # load-bearing part — that every path which uploads uploads before it
+        # publishes, so a release never becomes visible without its bundle.
+        #
+        # Ahead of the Gradle work because it takes about a second and needs
+        # nothing but the checkout.
+        run: python3 scripts/publish_github_release_test.py
+
       - name: Check the core module stays free of Android
         # :core is a plain Kotlin JVM module on purpose (SPEC.md §11) — the state
         # machine must stay testable with no Android SDK and no Robolectric.
@@ -1079,7 +1092,11 @@ jobs:
       HAS_PLAY_SA: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
       HAS_FIREBASE_CONFIG: ${{ secrets.GOOGLE_SERVICES_JSON != '' }}
     permissions:
-      contents: read
+      # Write, not read, for "Publish a GitHub release" below: it creates the
+      # release and the tag that carries it. Nothing else in this job writes
+      # to the repository, and the checkout below still discards its
+      # credentials.
+      contents: write
       # "Build release notes" walks recent main runs of this workflow via
       # the Actions API to find the last one that actually published, so the
       # notes cover every commit since — not just the ones in this push.
@@ -1092,7 +1109,9 @@ jobs:
           persist-credentials: false
 
       - name: Build release notes
-        # Walks every commit in this push oldest-first and collects the
+        # Walks the range oldest-first — from the last run that actually
+        # published to Play, so it can span several pushes (see the
+        # `prev_sha` walk below) — and collects the
         # subject line of each one worth shipping as a Play "What's new"
         # entry (AGENTS.md, *Commit messages*):
         #   - skip commits whose subject starts with a non-user-facing
@@ -1110,10 +1129,13 @@ jobs:
         # The qualifying subjects are emitted as a "• "-bulleted list,
         # oldest-first — always bulleted, even for a single qualifying
         # commit, so the Play "What's new" card always renders the same
-        # shape. If no commit in the push qualifies, sets
-        # RELEASE_NOTES_SKIP=true and the upload step below skips — a push
-        # of only prefixed or housekeeping commits doesn't ship a redundant
-        # release with no user-facing notes.
+        # shape. If nothing in the range qualifies, sets
+        # RELEASE_NOTES_SKIP=true and the publishing steps below skip —
+        # there is no user-facing note to ship, so a release would be
+        # redundant. Note "in the range", not "in this push": a push of
+        # only prefixed or housekeeping commits still publishes when an
+        # earlier push's subjects are queued behind a failed or skipped
+        # upload.
         #
         # A manual workflow_dispatch is the one exception: it's an explicit
         # "publish the current tip anyway" request, so it never sets
@@ -1406,7 +1428,7 @@ jobs:
               echo "No release-worthy commits, but this is a manual workflow_dispatch — publishing the current tip anyway with a generic note."
               subjects+=("Internal test build")
             else
-              echo "No release-worthy commits in this push (all ci: / docs: / internal: / refactor: / test: / tests: prefixed or docs / dotfile housekeeping); skipping the Play upload."
+              echo "No release-worthy commits queued since the last publication (all ci: / docs: / internal: / refactor: / test: / tests: prefixed or docs / dotfile housekeeping); skipping the release and the Play upload."
               echo "RELEASE_NOTES_SKIP=true" >> "$GITHUB_ENV"
               exit 0
             fi
@@ -1527,6 +1549,64 @@ jobs:
           name: app-release-aab
           path: app/build/outputs/bundle/playRelease
 
+      - name: Publish a GitHub release
+        # Makes the signed bundle durable and the push's outcome legible.
+        # The run's own artifact expires and is reachable only from that
+        # run's page, which is what makes "did this push ship?" unanswerable
+        # from the Actions list: a run is titled by its last commit, so a
+        # push tipped with a housekeeping commit reads as housekeeping even
+        # when it built, signed and published. A release is permanent,
+        # linkable, listed on a page of its own, and `gh release download`
+        # works against it. Nobody installs an AAB — this is a record of
+        # what shipped and the copy a maintainer hands to Play Console, not
+        # a second distribution channel.
+        #
+        # Play's own upload needs everything this needs and the service
+        # account besides, so the invariant is one-way: every Play upload is
+        # preceded by a release, never the reverse, and a repository holding
+        # only the upload keystore still gets a discoverable build. Ahead of
+        # the upload deliberately — a rejection is exactly when having the
+        # bundle to hand matters. Not gated on PLAY_UPLOAD_BLOCKED either:
+        # that guard is about Play's own state, and a bundle Play won't take
+        # is one you especially want a copy of.
+        #
+        # Prerelease because nothing in this pipeline promotes a build past
+        # Play's internal track.
+        #
+        # Supersession is the script's own check, not this `if:`. Nothing
+        # here reaches Play, so nothing rejects a stale bundle the way
+        # Play's API does, and the Releases page orders by publication time
+        # — so an older push whose deploy runs late would sit on top reading
+        # as current. It asks the release list, which is the record of what
+        # published; folding it into "Build release notes"' probe instead
+        # would be wrong, because that probe keys on a successful *Play*
+        # upload precisely because it doubles as the notes' range base.
+        #
+        # When it finds itself superseded the script sets RELEASE_SUPERSEDED,
+        # and the Play steps below skip on it too (Codex, PR #178): stopping
+        # at this step would leave the older bundle going to Play whenever the
+        # newer run's own upload skipped or failed — which is precisely the
+        # case where a newer prerelease exists and no newer Play release does.
+        # This step's own condition is a superset of theirs, so whenever they
+        # run it has run and the variable is set.
+        #
+        # The body lives in `scripts/publish-github-release.sh`, which
+        # `scripts/publish_github_release_test.py` drives against a stubbed
+        # `gh` on every pull request. This job cannot run on one, so an
+        # inline body could only ever be verified by merging it. Nothing in
+        # that script is app-specific: the bundle path and asset base name
+        # come in here, so the file stays byte-identical across the siblings
+        # that publish this way.
+        if: |
+          needs.release-build.outputs.signed == 'true' &&
+          env.RELEASE_NOTES_SKIP != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.sha }}
+          AAB_PATH: app/build/outputs/bundle/playRelease/app-play-release.aab
+          ASSET_BASE: snoozemo
+        run: scripts/publish-github-release.sh
+
       - name: Compose Play Store release notes
         # The upload-google-play action takes a directory of whatsnew-<locale>
         # files. The bulleted list of qualifying commit subjects was already
@@ -1534,11 +1614,13 @@ jobs:
         # 500-character per-locale cap); this step just writes it to disk in
         # the layout the action expects. When that earlier step set
         # RELEASE_NOTES_SKIP=true (every commit in the push was housekeeping)
-        # the gate below skips this and the upload step.
+        # the gate below skips this and the upload step, as does
+        # RELEASE_SUPERSEDED from the release step above.
         if: |
           needs.release-build.outputs.signed == 'true' &&
           env.HAS_PLAY_SA == 'true' &&
-          env.RELEASE_NOTES_SKIP != 'true'
+          env.RELEASE_NOTES_SKIP != 'true' &&
+          env.RELEASE_SUPERSEDED != 'true'
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/whatsnew"
@@ -1567,7 +1649,10 @@ jobs:
         # Skips loudly rather than failing: a red main on every push until a
         # variable is set is noise, but a silent skip would look like a
         # successful release. The warning names what to do.
-        if: needs.release-build.outputs.signed == 'true' && env.HAS_PLAY_SA == 'true'
+        if: |
+          needs.release-build.outputs.signed == 'true' &&
+          env.HAS_PLAY_SA == 'true' &&
+          env.RELEASE_SUPERSEDED != 'true'
         env:
           DATA_SAFETY_DECLARED: ${{ vars.PLAY_DATA_SAFETY_DECLARED }}
         run: |
@@ -1589,13 +1674,16 @@ jobs:
         # RELEASE_NOTES_SKIP=true — no Play-worthy "What's new" entry exists,
         # so shipping a release would be redundant — and when the step above
         # found crash reporting enabled without the Data Safety declaration
-        # confirmed. See docs/play-store-internal-track.md for the Play Console
-        # / service account setup this depends on.
+        # confirmed, and when the release step found a later push had already
+        # published — Play must never receive a bundle older than the newest
+        # prerelease. See docs/play-store-internal-track.md for the Play
+        # Console / service account setup this depends on.
         if: |
           needs.release-build.outputs.signed == 'true' &&
           env.HAS_PLAY_SA == 'true' &&
           env.RELEASE_NOTES_SKIP != 'true' &&
-          env.PLAY_UPLOAD_BLOCKED != 'true'
+          env.PLAY_UPLOAD_BLOCKED != 'true' &&
+          env.RELEASE_SUPERSEDED != 'true'
         uses: r0adkll/upload-google-play@a80b0bcdcfdfcc2d026f2bc73f726760b2cbc967  # post-v1.1.5: fixes DEP0040/DEP0169 Node.js deprecation warnings
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}

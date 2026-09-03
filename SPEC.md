@@ -270,10 +270,22 @@ clever; it does not stop working, and it never gets less safe.
 
 **The Play internal track is the channel this repo is building toward, and Firebase App
 Distribution is deliberately not a second one.** Today `deploy` builds the signed AAB and publishes
-it as a workflow artifact; the internal-track upload step is wired but gates on
+it two ways — as a workflow artifact, and attached to a **GitHub prerelease** named by its
+`versionCode` — while the internal-track upload step is wired but gates on
 `PLAY_SERVICE_ACCOUNT_JSON`, which stays unset until the Play Console declarations are filed
 (`docs/play-store-internal-track.md`), so a build currently reaches a tester through a hand seed
-upload. The `direct` flavor of §3.4 does not ride this channel at all — it is sideloaded today and
+upload. The prerelease is what makes that hand seed practical rather than a scramble: the artifact
+expires and is reachable only from its own run, so "which build is current, and where is it" had no
+durable answer. It is not a second distribution channel — nobody installs an AAB — but a permanent,
+linkable record of what shipped, carrying the same "What's new" text the Play card will. Its
+condition is the Play upload's without the service account, which is a strict subset, so the
+invariant runs one way: every Play upload will be preceded by a prerelease, never the reverse, and
+this repo's present keystore-only state is exactly the case that buys. For that record to answer
+"which build is current" it has to be read top-down, so a build whose deploy runs late — the shared
+queue is not ordered by push — publishes nothing rather than landing an older `versionCode` at the
+top of the list. **Nothing**, not just no prerelease: it stands its Play upload down too, since Play
+accepts an older bundle whenever the newer run's own upload skipped or failed, and a Play release
+ahead of the newest prerelease is the invariant above running backwards. The `direct` flavor of §3.4 does not ride this channel at all — it is sideloaded today and
 F-Droid is its intended path at scale — since its whole point is a route Play does not gate.
 
 App Distribution is the obvious second channel and was rejected on the sibling repos' evidence
@@ -3326,6 +3338,13 @@ including bad-accuracy jumps; cap arithmetic across DST boundaries.
 
 **Instrumented** — mock location provider to drive synthetic departure traces; `ZenRuleManager`
 against a real `NotificationManager` with policy access granted.
+
+**Release publishing** — driven against a stubbed release API on every pull request, because the
+release job runs only on `main` and would otherwise first be exercised by the merge that ships it.
+Its logic exists for publications that have already partly failed, which is the worst place to
+find a mistake, and the invariants it holds are ones no reader can check by inspection: a release
+never becomes visible without its bundle, and a superseded run publishes nothing, so the newest
+publication is always the newest build.
 
 **Screenshot** — every state a screen can reach, recorded with Roborazzi under Robolectric and
 committed to the repo. The point is the *states*, not the pixels: the surfaces this app has are

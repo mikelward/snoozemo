@@ -1,13 +1,22 @@
 # Play Store internal testing track
 
-CI builds a signed release AAB on every push to `main` and publishes it as a
-downloadable workflow artifact. Once `PLAY_SERVICE_ACCOUNT_JSON` is
-configured (see "Required secrets" below), it also uploads that AAB to the
-Play internal testing track automatically, with release notes built from the
-push's own qualifying commit subjects. Until that secret is added, uploading
-the artifact through Play Console by hand (the "seed upload" every new Play
-app needs at least once anyway, and the only path for the very first
-release) is the whole publishing step.
+CI builds a signed release AAB on every push to `main` that changes something
+shippable, and always publishes it as a downloadable workflow artifact. When
+there are release notes to attach, it also publishes it as a **GitHub
+prerelease** tagged `v<versionCode>` with the bundle attached — and, once
+`PLAY_SERVICE_ACCOUNT_JSON` is configured (see "Required secrets" below),
+uploads it to the Play internal testing track. Those two share one condition
+and one set of notes, built from every qualifying commit subject still queued
+for release — usually more than the newest push's, since subjects stay queued
+while no upload lands. Option A under *Upload the first AAB* below has the
+precise rule for when each of the three exists.
+
+Until that secret is added, someone uploads the bundle through Play Console by
+hand — the "seed upload" every new Play app needs at least once anyway, and
+the only path for the very first release. The prerelease is what makes that
+practical rather than a scramble: it is permanent, linkable, and lists every
+build in one place, where the artifact expires and is reachable only from its
+own run.
 
 **Do not add `PLAY_SERVICE_ACCOUNT_JSON` — the switch that turns automatic
 upload on — until the Play Console declarations below are actually filed**
@@ -16,9 +25,11 @@ form once Phase 3/6's demonstration video is ready) **and the service
 account's granted access is confirmed to be the minimum this doc asks for**
 ("Releases: Release to testing tracks" only — never a production-track
 grant). The upload workflow itself is safe to merge without the secret: every
-step it adds gates on `PLAY_SERVICE_ACCOUNT_JSON` being present, so a repo
-without it still gets a green `deploy` job that builds and artifacts the AAB
-exactly as before, uploading nothing.
+step that talks to Play gates on `PLAY_SERVICE_ACCOUNT_JSON` being present,
+so a repo without it still gets a green `deploy` job, uploading nothing to
+Play. The prerelease step deliberately does **not** gate on it — that is the
+point of it, since a repository holding only the upload keystore still gets a
+durable, discoverable build.
 
 **This isn't only a policy nicety for the automated path — the Play
 Developer Publishing API this action calls enforces it as a hard
@@ -85,9 +96,31 @@ there's no API path for it — automatic upload (steps 4-6 below) only works
 for a listing that already has at least one release.
 
 **Option A — let CI build it (recommended).** Add the four release-keystore
-secrets from the table below and push to `main`. The `Build release AAB` step
-always publishes the signed AAB as a workflow artifact called
-`app-release-aab` — download it from the Actions UI.
+secrets from the table below and push to `main`. The signed AAB is published
+two ways:
+
+- **A GitHub prerelease** under [Releases](https://github.com/mikelward/snoozemo/releases),
+  tagged `v<versionCode>` with `snoozemo-<versionCode>.aab` attached. This is the
+  one to use — it does not expire, and its notes carry the same "What's new" text
+  the Play card will. The newest is the highest `versionCode`: a run superseded by
+  a later push publishes nothing rather than landing an older one on top.
+- **A workflow artifact** called `app-release-aab`, on the run's own page in the
+  Actions UI. Same bundle, but it expires.
+
+Neither is on every `main` run. A **docs-only** push builds no release bundle
+at all (`release-build` is skipped for it), so it leaves neither — correctly,
+since nothing shippable changed. A push that does build one always leaves the
+artifact, and adds the prerelease whenever there is "What's new" text to
+publish — that is, whenever any release-worthy commit (one whose subject has
+no housekeeping prefix, per `AGENTS.md`) is **still queued for release**, not
+merely present in this push. So a `ci:`-only push still carries a prerelease
+if earlier subjects are waiting, and a push with nothing queued behind it
+carries none.
+
+So if the tip you want has no prerelease, take the artifact from the newest
+`main` run that built one. This workflow has no manual release trigger to
+force a fresh build with (`workflow_dispatch` here reports on a pull
+request, unlike the siblings').
 
 **Option B — build locally:**
 
