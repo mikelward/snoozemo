@@ -2605,8 +2605,12 @@ the point is that every other line of the app is worthless if it isn't true.
       `RELEASE_KEYSTORE_FILE` and its companion env vars, attaching only when they're present so
       a fresh clone still builds unsigned; the `deploy` job in
       `.github/workflows/ci.yml` builds `:app:bundlePlayRelease` on every push to `main`
-      and publishes it as a downloadable `app-release-aab` workflow artifact, for the manual seed
-      upload Play requires (`docs/play-store-internal-track.md`). R8 was the one piece held back
+      and publishes it two ways: as a downloadable `app-release-aab` workflow artifact, and attached
+      to a **GitHub prerelease** named by its versionCode (`scripts/publish-github-release.sh`) —
+      the artifact expires and is reachable only from its own run, so the prerelease is the durable
+      answer to "which build is current" for the manual seed upload Play requires
+      (`docs/play-store-internal-track.md`). A run superseded by a later push publishes no
+      prerelease, so the newest one is always the newest build. R8 was the one piece held back
       from this slice; it has since landed as its own follow-up, below.
 - [x] **Run the shipping build through R8 — shrinking, optimization and obfuscation**
       (`SPEC.md` §3.7). **Landed**: `isMinifyEnabled` and `isShrinkResources` are on for the
@@ -3181,8 +3185,8 @@ that can only be settled on a real device, ordered by risk.
         but a shrinking bug is by definition one the reports did not predict, and no build
         this repo has ever installed on a phone was minified, and obfuscation makes that gap
         matter more than shrinking alone did. **It has to be a release build**: nothing in CI
-        uploads an APK (Codex, PR #121 — `deploy` publishes only the `app-release-aab`
-        artifact), and a debug APK would not do even if one were published, since AGP disables
+        publishes an APK (Codex, PR #121 — `deploy` publishes the bundle only, as the
+        `app-release-aab` artifact and as a GitHub prerelease asset), and a debug APK would not do even if one were published, since AGP disables
         optimization and obfuscation for debuggable builds.
         **Build it signed, or it will not install** (Codex, PR #121): the release
         `signingConfig` attaches only when all four `RELEASE_KEYSTORE_*` / `RELEASE_KEY_*`
