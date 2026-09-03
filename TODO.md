@@ -2605,12 +2605,33 @@ the point is that every other line of the app is worthless if it isn't true.
       `RELEASE_KEYSTORE_FILE` and its companion env vars, attaching only when they're present so
       a fresh clone still builds unsigned; the `deploy` job in
       `.github/workflows/ci.yml` builds `:app:bundlePlayRelease` on every push to `main`
-      and publishes it two ways: as a downloadable `app-release-aab` workflow artifact, and attached
-      to a **GitHub prerelease** named by its versionCode (`scripts/publish-github-release.sh`) —
-      the artifact expires and is reachable only from its own run, so the prerelease is the durable
-      answer to "which build is current" for the manual seed upload Play requires
-      (`docs/play-store-internal-track.md`). A run superseded by a later push publishes no
-      prerelease, so the newest one is always the newest build. R8 was the one piece held back
+      and publishes it two ways: as a downloadable `app-release-aab` workflow artifact, and — on a
+      **release-worthy** push only (Codex, 2026-09-03) — attached
+      to a **GitHub prerelease** named by its versionCode (`scripts/publish-github-release.sh`).
+      A push whose whole queued range is housekeeping sets `RELEASE_NOTES_SKIP=true` and the
+      release step is gated on it, so such a push leaves the artifact alone.
+      That artifact expires and is reachable only from its own run, so the prerelease is the durable
+      answer to "which build is **released**" for the manual seed upload Play requires
+      (`docs/play-store-internal-track.md`) — **released, not current** (Codex, 2026-09-03),
+      and a `main` tip can be behind it in two different ways (Codex, 2026-09-03, again —
+      the first correction lumped them together and claimed an artifact that a docs-only
+      push never produces):
+      - **A code-lane push whose entire *queued range* is housekeeping** builds the AAB and
+        uploads the `app-release-aab` artifact, then skips the prerelease on
+        `RELEASE_NOTES_SKIP`. **The range, not the push** (Codex, 2026-09-03) — the
+        workflow computes notes from the last run that actually published, so a `ci:`-only
+        push still publishes when an earlier push's subjects are queued behind a failed or
+        skipped upload, and only a range with nothing release-worthy in it skips. Where it
+        does skip, the newest run's artifact is the only build of that tip, which is what
+        `docs/play-store-internal-track.md` tells a reader to fetch.
+      - **A docs-only push** never reaches `release-build` at all (`classify` sets
+        `docs_only` and the job is gated on it), so there is no artifact *and* no
+        prerelease. Nothing in the APK changed, so the newest prerelease still describes
+        what is installed — and anything queued behind a failed upload stays queued for the
+        next code push rather than being lost.
+
+      A run superseded by a later push publishes no prerelease, so among prereleases the
+      newest is always the newest release-worthy build. R8 was the one piece held back
       from this slice; it has since landed as its own follow-up, below.
 - [x] **Run the shipping build through R8 — shrinking, optimization and obfuscation**
       (`SPEC.md` §3.7). **Landed**: `isMinifyEnabled` and `isShrinkResources` are on for the
@@ -2999,8 +3020,22 @@ the point is that every other line of the app is worthless if it isn't true.
       (this doc's "Store listing" section). The feature graphic currently carries
       `README.md`'s line as a stand-in and follows the approved short description once
       there is one.
+- [ ] **The listing half of the discovery work, which is not gated on
+      monetization** (Codex, 2026-09-03): spend the 30-character title on the
+      terms people actually search (*do not disturb*, *silence phone*, *focus*,
+      *DND until I leave*), and add a screenshot of the Quick Settings tile —
+      "one tap from the shade, phone locked" photographs well. **Not *auto DND***
+      (Codex, 2026-09-03): auto-arm is deferred and hardware-gated
+      (`SPEC.md` §14), and today the product needs an explicit tile tap — putting
+      that term in the title would advertise behavior the release cannot perform.
+      It becomes available if auto-arm ships. Both are preparation and
+      neither needs the app to be installable by a stranger. It lived only inside
+      the deferred "Ship a price" item, which had the effect of postponing it
+      behind prerequisites it does not share.
 - [ ] Ship to the internal track — the point at which the declaration outcome becomes
-      known.
+      known. Phase 7 follows this item; the public rollout and discovery work
+      that also follows it lives in its own section below, since it gates
+      nothing here.
 
 ## Release secrets and docs — needs a maintainer pass
 
@@ -3042,6 +3077,21 @@ whole project.
       devices without Play Services.
 - [ ] No restricted permissions, no Play Services dependency — verify by inspecting the
       merged manifest of the `direct` variant in CI.
+- [ ] **`direct`'s departure detection verified on a handset, with its duty cycle**
+      (hardware item 2b). Phase 3 and hardware item 2 measure the **`play` geofence**;
+      `ForegroundPresenceMonitor` is a different detector, so none of that carries over.
+      Log departures against ground truth over ordinary use, and measure what the §6.7
+      duty cycle actually costs in battery over an eight-hour armed snooze,
+      **compared against §9's existing `direct` figures** — which are estimates from
+      the mechanism for a *four-hour* snooze (<0.5% on anchor Wi-Fi, ~1% stationary,
+      ~2–3% intermittent movement), not measurements, and are exactly what this run
+      exists to confirm or replace. **Run the four-hour window, or normalize before
+      comparing**: drain accumulates with runtime, so an eight-hour run of a
+      correct implementation reads about double and would be misfiled as over
+      budget. If the full-length case matters on its own — an eight-hour snooze is
+      the app's own worst case — measure both and say which is which. This is a gate on pricing `direct` at all
+      (`MONETIZATION.md`), and it is here rather than "to be added later" so that
+      advancing Phase 7 on a declaration refusal cannot ship the detector without it.
 
 ## Phase 8 (M8) — Samsung One UI
 
@@ -3058,6 +3108,58 @@ from the start so this is additive rather than surgery.
       into the label if it doesn't.
 - [ ] Re-measure geofence delivery under Sleeping Apps (hardware item 2 on Samsung).
 
+## Public rollout and discovery — after the internal track, and not a Phase 7 predecessor
+
+**Deliberately outside the numbered phases** (Codex, 2026-09-03). These two items
+follow the internal-track release in Phase 6, but Phase 7 follows that release
+too, and they do not gate it: leaving them inside Phase 6 made the phased order
+read as "ship publicly, then build `direct`", which is backwards in the one case
+that matters — **if the declaration is refused, the Play release below cannot
+happen at all and Phase 7 becomes the whole project.** That case is why the
+section carries two rollout routes rather than one: on a refusal, the `direct`
+route is the only one left, and it depends on Phase 7 rather than preceding it.
+
+- [ ] **Ship a public Play release** — intended, and every app in the fleet is
+      meant to be on the Play Store (maintainer, 2026-09-03). **Blocked on the
+      demonstration video and Play's review approval** — the filming plan
+      (steps 2-7 outstanding) and the background-location declaration `SPEC.md`
+      describes. The 14-day / 12-tester closed test that `SPEC.md` §3.5 and
+      `docs/play-store-declarations.md` describe **does not apply to this
+      account** (maintainer, 2026-09-03): it binds personal developer accounts
+      created after 13 Nov 2023, and this one has already shipped other apps to
+      production without hitting it. Recorded because it was raised as a blocker
+      here and is not one. Nothing new to decide here; this item
+      exists only because it is the predecessor the outreach item below needs —
+      the internal track is a tester channel and gives a stranger no install
+      path.
+- [ ] **A public `direct` route, if the declaration is refused** (Codex,
+      2026-09-03) — conditional on that outcome, and not startable until Phase 7
+      is built. `SPEC.md` §3 names `direct` via sideload or F-Droid as the
+      complete fallback — *"you lose distribution reach, not the app"* — but
+      Phase 7 only **builds** the flavor, and nothing in this plan ever puts it
+      where a stranger can install it. The release pipeline does not close that
+      gap either: `deploy` publishes `app-play-release.aab`, which is the `play`
+      flavor and is a bundle, not something anyone can sideload. So on a refusal
+      the fallback exists and is undiscoverable, and the outreach item below has
+      no predecessor it could ever reach. **What that route is stays open**: a
+      signed `direct` APK attached to a GitHub release is the cheap version and
+      the repo already publishes releases; F-Droid is `SPEC.md`'s intended path
+      at scale and is a submission with its own review and its own
+      reproducible-build constraints. Which, or both, is a distribution decision
+      for the maintainer — this item exists so the refusal case has a rollout
+      step at all, not to pick one.
+- [ ] **The outreach half, which needs a public install path first** (Codex,
+      2026-09-03): answer "how do I make my phone shut up in meetings" in the
+      digital-wellbeing and Android-automation forums where it is asked —
+      `MONETIZATION.md`'s Marketing section argues this is better distribution
+      than any listing edit. It goes **after a public install path** — an open or
+      production Play track, or the `direct` route above — and not after the
+      internal one: the internal track is a tester channel, so posting earlier
+      either advertises an app a reader cannot install, or lets the item be
+      checked off having reached nobody. **Naming both routes matters on a
+      refusal**: tied to Play alone, this item would be unreachable in exactly
+      the case where `direct` is the whole product.
+
 ## Hardware verification
 
 `SPEC.md` is written from documentation and mechanism, not measurement. These are the items
@@ -3073,6 +3175,22 @@ that can only be settled on a real device, ordered by risk.
        ordinary use, Wi-Fi on and off, including a stationary-overnight case. Pixel first;
        repeat on Samsung at Phase 8. If the three-source layering closes the gap, the
        fallback end conditions stay off the roadmap.
+- [ ] **2b. The same, for `direct`'s `ForegroundPresenceMonitor`** — conditional on Phase 7
+       being built, and tracked there too. Item 2 measures the `play` geofence; the
+       foreground detector and its §6.7 duty cycle are a separate measurement, including
+       the battery cost over an armed snooze **against §9's existing
+       `direct` estimates** — three duty-cycle scenarios, derived from the mechanism
+       for a four-hour snooze and never measured, so this run is what turns them into
+       figures rather than filling a gap. **Run the four-hour window, or normalize
+       before comparing** (Codex, 2026-09-03): the default snooze is eight hours and
+       drain accumulates with runtime, so a full-length run of a correct
+       implementation lands at roughly twice the §9 figure and reads as over budget
+       to anyone working from this list alone. The Phase 7 item carries the same
+       instruction and the reasoning behind it; this is the measurement, that is the
+       method. Charging for a departure detector that has never detected a
+       departure is what `MONETIZATION.md`'s first gate exists to prevent, and the
+       two flavors do not share one.
+
 3. [ ] `setAutomaticZenRuleState` genuinely silences the device. A formality on Pixel — do
        it at Phase 1 anyway, since every other line of the app assumes it.
 4. [ ] **`startService` from the cap alarm and the boot receiver actually starts it.** Both
@@ -3243,6 +3361,100 @@ question.
       Wired via the caller workflow in `.github/workflows/gradle-update.yml`.
 
 ## Deferred
+
+- [ ] **Decide whether a paid tier exists at all, and what is in it** — this half
+  does **not** wait for discovery, and asking it late is what creates the problem
+  it exists to avoid. Per-feature: before any `SPEC.md` §14 candidate ships free,
+  decide once whether that candidate is paid. Gates 1 and 2 below bear on it
+  (they decide whether there is a product and which flavor is being priced);
+  discovery does not — it is the recommendation, not a third gate, and it blocks
+  charging from being *measurable* rather than from being right (Codex,
+  2026-09-03). Detail in
+  [MONETIZATION.md](MONETIZATION.md); the split is spelled out under the next
+  item.
+
+- [ ] **Ship a price once the two prerequisite gates clear.** Written up in
+  [MONETIZATION.md](MONETIZATION.md) — what a paid tier would sell, what it must
+  not, the `direct` pricing question, and the fail-open entitlement policy that
+  page proposes but does not adopt. Grandfathering is deliberately *not* a policy
+  there: at this user count it is decided case by case on the evidence
+  (maintainer, 2026-09-03). There is no release deadline on that — see the note
+  below.
+  Deliberately not scheduled into a phase, because **two prerequisites** stand
+  ahead of it — plus a discovery recommendation that is not one (see the split
+  below; an earlier version of this line said "three things gate it", which read
+  the recommendation back as a requirement). Neither prerequisite is a pricing
+  question. First, **on-device verification that departure detection works** —
+  Phase 3 covers that for `play`, but **`direct` needs its own**, since Phase 3
+  and hardware item 2 exercise the `play` geofence path while Phase 7's
+  implementation work and a manifest inspection do not exercise the detector at
+  all. So if the declaration is refused and the question redirects to `direct`,
+  this gate is **not** cleared by Phase 3's results: it needs Phase 7's detector
+  and its duty cycle run on a handset. **Both checks now exist** (Codex,
+  2026-09-03) — the Phase 7 battery item and hardware item 2b — so this is a
+  pointer to them, not a note to add them later. Charging for a departure
+  detector that has never detected a departure is the thing this gate exists to
+  prevent, and the two flavors have different detectors. Then **the Play background-location declaration outcome** (a refusal
+  closes Play Billing and redirects the question to `direct` rather than ending
+  it), and
+  **discovery** — which that page calls the binding constraint of the three, and
+  **recommends** the ordering *ship it, prove it on hardware, get it found, then
+  price it* rather than settling it (Codex, 2026-09-03; an earlier version of
+  this line called that ordering "not negotiable", which read an exploratory
+  recommendation back as an adopted prerequisite). Only the first two are
+  prerequisites: an unverified detector has nothing to sell, and a refused
+  declaration decides which flavor is priced. Discovery blocks *charging* as a
+  judgment call — building the billing plumbing before anyone has found the app
+  is not wrong, just unmeasurable — so it does not gate this item unless the
+  maintainer records that it does. So the cheap work is the marketing items in that page's Marketing
+  section — the 30-character listing title spent on terms people actually search,
+  a screenshot of the Quick Settings tile, and answering "how do I make my phone
+  shut up in meetings" in the forums where it is asked, which that section argues
+  is better distribution than any listing edit. Not anything here.
+
+  **Two separable pieces, and they are two checklist items** (Codex, 2026-09-03):
+  the heading above used to cover both as "revisit monetization once the gates
+  clear", which told anyone scanning this list to postpone the per-feature
+  paid/free question until after discovery — exactly long enough for a candidate
+  to ship free and create the grandfathering problem the discipline below exists
+  to prevent.
+
+  1. **Decide whether the tier exists and what is in it** — the item above. Not
+     gated by discovery, which blocks charging rather than deciding. Gates 1 and 2
+     still bear on it, since they decide whether there is a product and which
+     flavor is being priced.
+  2. **Ship a price** — this item. Waits for gates 1 and 2, the two
+     prerequisites. **And it does not ship without the privacy work** (Codex,
+     2026-09-03), which this checklist described nowhere even though
+     `MONETIZATION.md` requires it: `docs/PRIVACY.md` is updated for **any**
+     purchase flow, `direct` included, since the policy currently describes only
+     the crash and analytics channels and would otherwise still say so with
+     Billing live. The Play **Data Safety** form is the narrower half and changes
+     only if the `play` flow actually sends something off the device — a
+     local-only entitlement flag is on-device processing under `SPEC.md` §12 and
+     is not a disclosure, and `direct` is not distributed through Play at all, so
+     scope the declaration to what is really transmitted rather than declaring by
+     default. Both are completion steps of this item, not follow-ups. **Discovery is not a gate on it unless the maintainer
+     adopts it as one** (Codex, 2026-09-03): `MONETIZATION.md` recommends the
+     ordering and says it does not settle it, so a checkbox demanding all three
+     turned a recommendation into a requirement — an earlier version of this
+     item, and of the heading above, did exactly that while the paragraph
+     beneath said the opposite. Shipping a price before anyone has found the app
+     is unmeasurable rather than wrong; the page's argument for waiting stands as
+     an argument.
+
+  **No release deadline on (1).** An earlier version of this item said the
+  decision was due before the first public release, as "the only grandfather-free
+  window". That was wrong: every tier candidate is deferred in `SPEC.md` §14 and
+  absent from the app, so releasing creates nobody who has them, and they can
+  debut as paid features later without taking anything away. What is true instead
+  is a discipline rather than a date — **don't ship a tier candidate free and then
+  gate it**, so the question "is this one paid?" gets asked once per feature,
+  before that feature ships.
+
+  If the tier is decided, its entitlement policy is an architecture decision and
+  goes into `SPEC.md` at that point — nothing from that page belongs in the spec
+  while the tier is exploration.
 
 - [ ] **The debug report has no preview, so the user cannot read it before choosing a
   share target.** `DebugReport.share()` copies the payload to the clipboard and launches
@@ -3789,8 +4001,57 @@ Nothing here is scheduled; each is a sequel that follows from something already 
         **The maintainer approved both `AGENTS.md` edits** (2026-08-13) — this one, and the
         `developer.android.com` note under *Remote build environments* recording that the
         reference pages are reachable and a fetch tool saying otherwise is the tool.
-- [ ] **Auto-arm on arrival** — the obvious sequel, and nearly free in the `play` flavor
-      where background location is already paid for.
+- [ ] **Auto-arm on arrival** — the obvious sequel, and cheap in the `play` flavor
+      where background location is already paid for. **"Nearly free" is not
+      established, and needs a hardware measurement before it is treated that
+      way** (Codex, 2026-09-03): every wakeup today happens *inside* an armed
+      snooze, where §6.7's duty cycle drives the work to zero when the phone is
+      still. Auto-arm is the first thing that would watch geofences while nothing
+      is snoozed, so it adds a **standing** background-location cost against
+      `SPEC.md` §9's budget, and that duty cycle is unmeasured. Measure it on a
+      handset — as its own case, not folded into the armed-snooze runs in the
+      hardware list — before pricing or shipping it.
+      **The measurement needs defining, or it cannot be compared to §9** (Codex,
+      2026-09-03): §9's figures cover four hours of an *armed* snooze, while this
+      cost runs continuously with nothing snoozed, so a raw overnight percentage
+      answers nothing. What is wanted is **%/hour, as an idle A/B on one handset**
+      — the same device, same period of day, nothing snoozed, with and without the
+      saved-place geofences registered — reporting the *difference*, not the
+      total, so unrelated baseline drain cancels. Two cases at minimum, since the
+      duty cycle is the whole question: **stationary** (phone on a desk, where the
+      cost should approach zero) and **moving** (a normal day out).
+      **A `%/hour` figure is only comparable if the run says how it was measured**
+      (Codex, 2026-09-03): read off the ordinary battery percentage, a short run
+      at the ≤0.1%/hour bar reports zero through rounding alone — the platform
+      exposes whole percent — and a single uncontrolled day out moves further on
+      baseline variation than on anything this feature does. So the run is
+      specified, not just the units: measure with the **charge counter**
+      (`BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER`, µAh, or a Battery
+      Historian `batterystats` delta over the same window), which has resolution
+      the percentage does not; **stationary is a single ≥8-hour window per arm**,
+      long enough that the bar is well above the counter's noise; and **moving is
+      three A/B day-pairs**, alternating which arm runs first, reported as the
+      median difference — one pair cannot separate the feature from the day.
+      Same device, same charge range, screen and sync behavior as alike as the
+      days allow. A run that cannot meet that is not a failed gate, it is an
+      unmeasured one, and it says so rather than reporting a number.
+      **The pass criterion is set before the run, not after it** (Codex,
+      2026-09-03): this item gates shipping auto-arm, and a threshold chosen once
+      the number is known clears the checkbox whatever the number turns out to
+      be. Derived from §9 rather than invented — `play`'s whole *armed* 4-hour
+      snooze is "well under 1%", i.e. under ~0.25%/hour, and an idle registered
+      geofence is network-location-only work the device is already doing — the
+      gate is **≤0.1%/hour stationary** and **≤0.25%/hour moving**: a standing
+      cost with nothing snoozed must not exceed what an active snooze costs, and
+      the stationary case must be near-free or the duty-cycle argument for
+      auto-arm fails on its own terms. Over either number, auto-arm does not
+      ship on that measurement — it goes back to the duty cycle, or the feature
+      is re-scoped. **Guessed under autopilot and listed under *Decisions needing
+      review*** — the maintainer can move either number before the run; what is
+      not allowed is moving it after. `MONETIZATION.md` carries the
+      same gate, plus the point that the cost lands on people who have *not*
+      bought it unless geofence registration is gated on the entitlement rather
+      than on a saved place existing.
 - [ ] **"Until I get home"** and other saved-place reverse geofences — needs saved places
       plus background location, so `play`-flavor only.
 - [ ] **`ZenDeviceEffects`** — grayscale, dim wallpaper, night mode while snoozed
@@ -3926,6 +4187,22 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     a snooze that ends on a duration cap needs the same controller.
 
 ## Decisions needing review
+
+- **Guessed under autopilot: set the auto-arm battery gate at ≤0.1%/hour
+  stationary and ≤0.25%/hour moving** (2026-09-03), before the A/B is run rather
+  than after it.
+  **Why:** the measurement is the gate on shipping auto-arm, and a criterion
+  chosen once the result is known cannot fail — any number clears it (Codex,
+  PR #179). The figures are read off `SPEC.md` §9 rather than picked: an armed
+  4-hour `play` snooze is "well under 1%" (~0.25%/hour) and an idle geofence is
+  network-location work the device already does, so a *standing* cost with
+  nothing snoozed should not exceed an active snooze's, and the stationary case
+  should approach zero or §6.7's duty-cycle argument has already failed.
+  **The alternative** was to leave the threshold to the maintainer at results
+  time, which is what this replaces.
+  **Why it is reversible:** two numbers in a `TODO.md` item, on a feature that
+  is deferred and has never run on a handset. Moving them *before* the run costs
+  nothing; the only thing this rules out is moving them afterward.
 
 - **Guessed under autopilot: reworded the debug log's cleanup-failure line to
   be state-neutral** (2026-08-31). It read *"Off, but some saved files couldn't
@@ -5221,6 +5498,16 @@ with real onboarding and settings, so they may be fixed by deletion.
     on a throw the platform does not usually make.
 
 ## Maintainer decisions
+- [ ] **Decide whether "we don't hold a user's data captive" belongs in this
+      file's quality bar, not only in `MONETIZATION.md`.** Recorded 2026-09-03
+      as the reason backup and restore of a user's own data is never paywalled —
+      the neighbor of "never lose the user's work": never withhold it either.
+      The 2027 platform mandate requiring backup and restore is the deadline,
+      not the justification, so the principle has to stand on its own. It
+      currently lives in the monetization page, which binds pricing decisions
+      only; if it is meant to bind design generally it wants promoting. Not
+      decided here.
+
 
 New questions that are not autopilot's to guess go here, unchecked, with the options and what each
 costs.
