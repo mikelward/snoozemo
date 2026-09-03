@@ -8,6 +8,7 @@ guess at, no remembering to turn DND back off.
 
 - **What it does and why**: [SPEC.md](SPEC.md)
 - **Plan**: [TODO.md](TODO.md)
+- **Money**: [MONETIZATION.md](MONETIZATION.md)
 - **Engineering conventions**: [AGENTS.md](AGENTS.md)
 
 **Status: scaffold.** The build, the module layout, and CI are in place; the product isn't

@@ -274,14 +274,18 @@ it two ways — as a workflow artifact, and attached to a **GitHub prerelease** 
 `versionCode` — while the internal-track upload step is wired but gates on
 `PLAY_SERVICE_ACCOUNT_JSON`, which stays unset until the Play Console declarations are filed
 (`docs/play-store-internal-track.md`), so a build currently reaches a tester through a hand seed
-upload. The prerelease is what makes that hand seed practical rather than a scramble: the artifact
-expires and is reachable only from its own run, so "which build is current, and where is it" had no
-durable answer. It is not a second distribution channel — nobody installs an AAB — but a permanent,
+upload. **Neither artifact is published on every push, and the prerelease answers "what is the
+latest release-worthy build" rather than "what is at the tip of `main`"** (Codex, 2026-09-03) — the
+two diverge exactly when the commits since the last release carry no user-visible change, which is
+what a reader doing the seed upload has to know. Which pushes produce which artifact is CI
+mechanics and lives in `docs/play-store-internal-track.md`, not here. The prerelease is what makes
+the hand seed practical rather than a scramble: the artifact expires and is reachable only from its own
+run, so "which build shipped, and where is it" had no durable answer. It is not a second distribution channel — nobody installs an AAB — but a permanent,
 linkable record of what shipped, carrying the same "What's new" text the Play card will. Its
 condition is the Play upload's without the service account, which is a strict subset, so the
 invariant runs one way: every Play upload will be preceded by a prerelease, never the reverse, and
 this repo's present keystore-only state is exactly the case that buys. For that record to answer
-"which build is current" it has to be read top-down, so a build whose deploy runs late — the shared
+"which build is the latest release-worthy one" it has to be read top-down, so a build whose deploy runs late — the shared
 queue is not ordered by push — publishes nothing rather than landing an older `versionCode` at the
 top of the list. **Nothing**, not just no prerelease: it stands its Play upload down too, since Play
 accepts an older bundle whenever the newer run's own upload skipped or failed, and a Play release
@@ -3416,7 +3420,10 @@ The force-stop and Samsung rows are the ones most likely to find something. Run 
 - **Saved places.** Name an anchor ("Cinema", "Work"), give it its own policy and duration cap.
   Turns the tile long-press into a picker. The `Anchor` type is already shaped for this.
 - **Auto-arm on arrival.** The obvious sequel, and the one that genuinely needs background location
-  and the Play declaration — already paid for in the `play` flavor, so this is nearly free there.
+  and the Play declaration — already paid for in the `play` flavor, so the *permission* is free
+  there. **The battery is not** (2026-09-03): auto-arm would be the first thing watching geofences
+  while nothing is snoozed, a standing cost §9's budget has never measured, so it is gated on a
+  hardware measurement rather than assumed cheap. `TODO.md` carries that gate.
 - **`ZenDeviceEffects`** — grayscale, dim wallpaper, night mode while snoozed (§5.5).
 - **"Until I get home"** and other saved-place reverse geofences (§4.4), which follow from saved
   places plus background location, so `play`-flavor only.
