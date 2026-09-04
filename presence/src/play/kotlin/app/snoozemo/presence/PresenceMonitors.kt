@@ -72,3 +72,21 @@ fun pokePresenceRepair() {
         ),
     )
 }
+
+/**
+ * The app layer reporting that a location grant just landed (SPEC.md §8.2)
+ * — the permission dialog's result, or a trip to system Settings and back.
+ * Android broadcasts no permission change, so this is the only prompt route
+ * to a monitor holding a grant-shaped degradation; without it the repair
+ * waited for the §6.10 backstop, up to half an hour with §6.6 grace shut.
+ * Dropped with no monitor attached, like the other pokes: the service start
+ * that carried it restores cold, and a restore re-registers the fence and
+ * re-asks the grant on its own way through.
+ */
+fun pokePresenceGrantRecheck() {
+    GeofenceSignalBridge.deliver(
+        app.snoozemo.presence.geofence.GeofenceObservation.GrantPoke(
+            android.os.SystemClock.elapsedRealtime(),
+        ),
+    )
+}

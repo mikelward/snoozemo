@@ -146,6 +146,7 @@ internal object GeofenceSignalBridge {
                 // (SPEC.md §6.10).
                 if (observation is GeofenceObservation.SanityPoke) return
                 if (observation is GeofenceObservation.RepairPoke) return
+                if (observation is GeofenceObservation.GrantPoke) return
                 // The one question that must still wake, because no monitor
                 // is the state it was armed against: a Wi-Fi-only snooze
                 // whose service Android stopped has nothing listening for

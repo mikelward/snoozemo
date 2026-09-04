@@ -152,9 +152,16 @@ internal class TestSnoozeService : SnoozeService() {
         repairPokes++
     }
 
+    override fun pokeGrantRecheck() {
+        grantPokes++
+    }
+
     companion object {
         /** Fence-repair pokes the service sent through the flavor seam. */
         var repairPokes: Int = 0
+
+        /** Grant-recheck pokes the service sent through the flavor seam. */
+        var grantPokes: Int = 0
 
         /** Arbitrary but plausible: the fixture device booted 30 h ago. */
         const val FIXTURE_UPTIME_MILLIS: Long = 30L * 60 * 60 * 1000
@@ -188,6 +195,7 @@ internal class TestSnoozeService : SnoozeService() {
             captureRequests = mutableListOf()
             captureClosed = 0
             repairPokes = 0
+            grantPokes = 0
             presence = FakePresenceMonitor()
             testReading = ClockReading(
                 wallMillis = now.toEpochMilli(),

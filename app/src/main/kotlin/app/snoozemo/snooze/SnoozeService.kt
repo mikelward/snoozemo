@@ -346,6 +346,9 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     /** The flavor seam's repair poke, overridable for the JVM harness. */
     protected open fun pokeWatchRepair() = app.snoozemo.presence.pokePresenceRepair()
 
+    /** The flavor seam's grant-recheck poke, overridable for the JVM harness. */
+    protected open fun pokeGrantRecheck() = app.snoozemo.presence.pokePresenceGrantRecheck()
+
     /**
      * Stops watching. Idempotent, so every exit path may call it — and
      * deliberately *not* keyed on whether this instance started a collection:
@@ -917,6 +920,20 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             ACTION_RESTORE -> controller.active?.let {
                 SnoozeBackstop.schedule(applicationContext)
                 repairDegradedWatch()
+            }
+            // The app saw a location grant land (SPEC.md §8.2). Cold, the
+            // restore on the way in already re-registered the fence and
+            // re-asked the grant, so the poke that follows finds nothing
+            // latched and is free; warm, it is the only thing that tells a
+            // running monitor — Android broadcasts no permission change, and
+            // until now the repair waited for the backstop's half hour with
+            // §6.6 grace shut (Codex, PR #150). Not gated on the recorded
+            // mode the way `repairDegradedWatch` is: the monitor's own slots
+            // decide what a grant can refute, and a Wi-Fi-only anchor's
+            // latch never shows in the mode as a fence repair does.
+            ACTION_LOCATION_GRANTED -> controller.active?.let {
+                SnoozeDebugLog.event("a location grant landed in the app; re-asking the monitor")
+                pokeGrantRecheck()
             }
             // Something that suppressed notifications has changed — today, a
             // late POST_NOTIFICATIONS grant on a tile-first install. Whatever
@@ -2461,6 +2478,14 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         const val ACTION_REFRESH = "app.snoozemo.action.REFRESH"
 
         /**
+         * A location grant landed in the app (SPEC.md §8.2) — the permission
+         * dialog's result, or a trip to Settings and back. The running
+         * monitor is asked to re-check its grants now rather than at the
+         * backstop's next wake.
+         */
+        const val ACTION_LOCATION_GRANTED = "app.snoozemo.action.LOCATION_GRANTED"
+
+        /**
          * The wall clock was set while a snooze is running (SPEC.md §7).
          *
          * Distinct from [ACTION_CHECK_CAP] because the cap being due is only one
@@ -2588,6 +2613,9 @@ open class SnoozeService : Service(), SnoozeController.Listener {
 
         /** Re-post the ongoing notification, after something unblocked it. */
         fun refresh(context: Context) = start(context, ACTION_REFRESH)
+
+        /** Ask the running monitor to re-check its location grants, after one landed. */
+        fun locationGranted(context: Context) = start(context, ACTION_LOCATION_GRANTED)
 
         /**
          * Bring the running snooze's cap in to [endsAt] — the end-condition

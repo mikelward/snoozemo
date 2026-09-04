@@ -50,6 +50,18 @@ internal sealed interface GeofenceObservation {
     data class RepairPoke(override val atElapsedRealtimeMs: Long) : GeofenceObservation
 
     /**
+     * The app saw a location grant land (SPEC.md §8.2): the one detector of
+     * a *permission* change Android leaves in-process, since it broadcasts
+     * none and a revocation kills the process. Asks the running monitor to
+     * re-ask the grants now — repair a fence its loss refused, re-read a
+     * Wi-Fi-only anchor's grant — rather than wait for the backstop or the
+     * 15-minute recheck, inside whose window grace stays shut. A question
+     * like the other pokes, so never held: a cold restore re-registers and
+     * re-asks on its own way through.
+     */
+    data class GrantPoke(override val atElapsedRealtimeMs: Long) : GeofenceObservation
+
+    /**
      * [WifiRecheckAlarm] fired: the periodic re-read that stands in for a
      * geofence on an anchor that has none (SPEC.md §6.6).
      *

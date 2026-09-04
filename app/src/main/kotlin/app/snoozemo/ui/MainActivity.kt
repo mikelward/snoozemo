@@ -317,6 +317,15 @@ class MainActivity : ComponentActivity() {
     private var location by mutableStateOf<LocationPermission?>(null)
 
     /**
+     * The two raw location grants as [refreshLocation] last read them, so a
+     * grant *rising* — either half — can be told apart from a reading that
+     * changed nothing. Not state the screen draws: [location] is that, and
+     * it folds the pair into one reading that cannot see a fine-only grant
+     * arrive under a background half still denied.
+     */
+    private var locationGrantsRead: LocationGrants? = null
+
+    /**
      * Null until read, for the same reason [location] is — and the least
      * consequential of the three: missing this costs the ongoing
      * notification's `Until <time>` action and nothing else (`SPEC.md` §4.3),
@@ -1704,6 +1713,43 @@ class MainActivity : ComponentActivity() {
         backgroundLocationMissing =
             locationTrackingNeedsBackgroundPermission && !backgroundGranted
         if (current == LocationPermission.GRANTED) clearFailure(SetupRowId.LOCATION)
+        // A grant landing is the presence monitor's business as much as this
+        // row's (SPEC.md §8.2). Android broadcasts no permission change, so
+        // a monitor that degraded on a lost grant learned it was back only
+        // from the §6.10 backstop's next wake — up to half an hour with §6.6
+        // grace shut, so a user who left inside that window stayed quiet to
+        // the cap (Codex, PR #150). This reading is the one place that sees
+        // the grant land, whichever route it took: the prompt's callback, a
+        // trip to Settings and back, or system App info before the app was
+        // first opened — which is why an **unread** previous counts too,
+        // exactly as [refreshCalendar]'s does, and once per activity
+        // instance for the same reason.
+        //
+        // **Either raw grant rising, not the combined reading reaching
+        // `GRANTED`** (Codex, PR #185). A fine grant with the background
+        // half still denied leaves `current` below `GRANTED`, but it is
+        // news the monitor acts on now: a latched `LOCATION_PERMISSION_GONE`
+        // reclassifies to `NO_LOCATION_IN_BACKGROUND`, so the card stops
+        // asking for the permission the user has just restored and names
+        // the half still missing. Read from the two grants this reading
+        // already took, since the enum cannot tell a fine-only `ASKABLE`
+        // from none.
+        //
+        // The grant direction only. A revocation kills the process, so the
+        // cold restore is what sees it, and the monitor reads the loss
+        // itself from the refusal it gets.
+        //
+        // Only while a snooze is running — read from the store, not
+        // `activeSnooze`, for the reason [refreshCalendar] gives — and only
+        // on a flavor whose monitor reads location at all: `direct` watches
+        // no grant, so the start would be a service woken for nothing.
+        val previousGrants = locationGrantsRead
+        val grants = LocationGrants(foregroundGranted, backgroundGranted)
+        locationGrantsRead = grants
+        val grantLanded = grants.risesFrom(previousGrants)
+        if (grantLanded && app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE && store.load() != null) {
+            SnoozeService.locationGranted(this)
+        }
         return current
     }
 
@@ -2973,4 +3019,18 @@ class MainActivity : ComponentActivity() {
                 settingsFailure = row
             }
     }
+}
+
+/**
+ * The two runtime location grants as read together (see
+ * `MainActivity.refreshLocation`).
+ */
+private data class LocationGrants(val foreground: Boolean, val background: Boolean) {
+    /**
+     * Whether either grant is held now and was not at [previous] — an unread
+     * [previous] counts as nothing held, so a first reading over a running
+     * snooze rises too, the way the calendar row's first reading reposts.
+     */
+    fun risesFrom(previous: LocationGrants?): Boolean =
+        (foreground && previous?.foreground != true) || (background && previous?.background != true)
 }
