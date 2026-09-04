@@ -1,5 +1,6 @@
 package app.snoozemo.snooze
 
+import android.app.Application
 import android.media.AudioManager
 import app.snoozemo.R
 import app.snoozemo.core.SnoozeRinger
@@ -13,6 +14,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import org.robolectric.Shadows.shadowOf
 
 /**
@@ -32,6 +34,15 @@ import org.robolectric.Shadows.shadowOf
  * test failure means anything.
  */
 @RunWith(RobolectricTestRunner::class)
+// A plain `Application`, not `SnoozemoApplication`: its `onCreate` starts
+// `reconcileRingerInBackground` on a daemon thread, and Robolectric builds the
+// application for every test — so that thread races the test body for the
+// process-wide ringer lock. Reaching it while no snooze record is on disk, it
+// does exactly its job: drops the ceiling as stale and hands the loan back,
+// under a fixture that put both there by hand. The tests below reach that path
+// deliberately where they mean to; a stray copy of it running under every
+// statement is what made them fail about one run in ten.
+@Config(application = Application::class)
 class SnoozeNotificationsDegradationTest {
 
     private val now = Instant.parse("2026-08-22T09:00:00Z")
