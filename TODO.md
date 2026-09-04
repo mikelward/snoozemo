@@ -5445,7 +5445,11 @@ footnote.
 
 ## Deferred review findings (Codex, PR #165)
 
-- [ ] **Two `deliver` calls can publish their updates out of order.** `feedLock` serializes the
+- [x] **Two `deliver` calls can publish their updates out of order.** *(Landed 2026-09-04, as
+  prescribed below: publication is ordered by the sequence `deliver` already takes under
+  `feedLock`, a superseded transition's event still goes out on the newer levels, and only
+  a superseded update with no event is dropped — `publication` in the monitor's companion,
+  pinned by test.)* `feedLock` serializes the
   feed transition, but the `trySend` that follows it is outside the lock, so two callbacks on
   different platform threads can transition in one order and publish in the other. The stale
   update lands last and the controller holds its levels until the next signal happens to correct

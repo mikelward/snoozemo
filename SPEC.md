@@ -2129,6 +2129,11 @@ standing or falling together rather than degrading the grace label to `DURATION_
 monitor that names it explicitly. The engine reports whether grace is running as a level
 (`PresenceUpdate.graceActive`), restated on every update exactly like `degradation` and for the same
 PR #33 reason: an announced-once event is a race waiting to lose to whichever ordering swallows it.
+Restated levels never go backwards either (2026-09-04): the monitor's platform callbacks arrive on
+more than one thread, so two transitions can be computed in one order and reach the controller in
+the other, and a superseded update publishes its **event** on the newer levels rather than its own
+— a departure decided a moment earlier is still a departure, while the grace and suppressor state
+the controller already holds is never rewound to what an older signal saw.
 
 **A run of readings that place nobody is reported, not absorbed.** One vague fix is ordinary —
 walking past a lift shaft produces one. Several in a row means location has stopped answering, and
