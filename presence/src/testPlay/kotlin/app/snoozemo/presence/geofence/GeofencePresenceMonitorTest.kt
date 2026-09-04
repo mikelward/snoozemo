@@ -766,6 +766,45 @@ class GeofencePresenceMonitorTest {
     }
 
     @Test
+    fun `a newer transition publishes whole`() {
+        assertEquals(
+            Publication.Publish,
+            GeofencePresenceMonitor.publication(sequence = 2, publishedSequence = 1, event = null),
+        )
+        assertEquals(
+            Publication.Publish,
+            GeofencePresenceMonitor.publication(sequence = 2, publishedSequence = 1, event = PresenceEvent.Departed),
+        )
+    }
+
+    @Test
+    fun `a superseded transition keeps its event and loses its levels`() {
+        // Two callbacks leave `feedLock` in one order and reach publication
+        // in the other (Codex, PR #165). The older one's levels would rewind
+        // what the collector already holds — a restored snooze reading
+        // `Timer only` until the next signal — but its departure is still a
+        // departure, and dropping it with the levels would end no snooze.
+        assertEquals(
+            Publication.EventOnly,
+            GeofencePresenceMonitor.publication(sequence = 1, publishedSequence = 2, event = PresenceEvent.Departed),
+        )
+    }
+
+    @Test
+    fun `a superseded transition with nothing to say is dropped`() {
+        assertEquals(
+            Publication.Drop,
+            GeofencePresenceMonitor.publication(sequence = 1, publishedSequence = 2, event = null),
+        )
+        // A repeat of the published sequence is stale too, so it can never
+        // rewind the levels by being handed in twice.
+        assertEquals(
+            Publication.Drop,
+            GeofencePresenceMonitor.publication(sequence = 2, publishedSequence = 2, event = null),
+        )
+    }
+
+    @Test
     fun `a fenced anchor with an SSID rebuilds its watch on restoration too`() {
         // The watch is D4's suppressor on this shape, and a revocation poisons
         // it exactly as it does a Wi-Fi-only anchor's: redacted callbacks

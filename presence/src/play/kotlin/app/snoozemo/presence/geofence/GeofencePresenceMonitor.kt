@@ -357,51 +357,48 @@ class GeofencePresenceMonitor(
         val locationMode = PlatformLocationModeWatch(appContext)
         val locationModeWatch = LocationModeWatch(locationMode) { onLocationRecovered() }
 
-        // A level like `registrationDegradation`/`servicesDegradation` above,
-        // for the same reason: `send` is called from restates that never
-        // touch the feed at all (a registration refusal, a recovery, a
-        // `GeofenceObservation.Unavailable`), and those always pass a bare
-        // `PresenceUpdate(event = null, degradation = ...)` with no opinion
-        // on grace — trusting that would report grace as over on the next
-        // unrelated restate while the deadline the feed still holds keeps
-        // counting down underneath it. Mirrored from `feed.graceDeadlineMs`
-        // inside `deliver`'s own `feedLock` section below, so a plain atomic
-        // read here needs no lock of its own; `false` until the first
-        // `deliver` call is always correct, since nothing before that can
-        // have started a grace period.
-        val graceActiveMirror = java.util.concurrent.atomic.AtomicBoolean(false)
+        // The levels the collector has most recently been told — the newest
+        // feed transition's engine level and its two flags — kept beside the
+        // sequence that produced them and only ever moved forward, under the
+        // one lock every publication takes (`publishLock`, below).
+        //
+        // Two things depend on this being one record rather than two atomics.
+        // First, `send` is called from restates that never touch the feed at
+        // all (a registration refusal, a recovery, a
+        // `GeofenceObservation.Unavailable`), and those pass a bare
+        // `PresenceUpdate(event = null, degradation = ...)` with no opinion on
+        // grace or the suppressor — trusting that would report grace as over
+        // on the next unrelated restate while the deadline the feed still
+        // holds keeps counting down underneath it. Second, publication order
+        // (Codex, PR #165; TODO.md): `feedLock` serializes the transitions,
+        // but two `deliver` calls on different platform threads leave it in
+        // one order and reach the flow in either, so without a guard the
+        // stale update lands last and the controller holds its levels until
+        // the next signal happens to correct them — a restored snooze that
+        // keeps reading `Timer only`. The guard is the sequence: a transition
+        // older than the one already published never overwrites these levels.
+        // Its *event* still goes out — dropping a superseded update outright
+        // would drop a departure with it — carried on the fresher levels, so
+        // the collector never hears an event beside state older than what it
+        // already holds. `false`/`null` until the first `deliver` is always
+        // correct, since nothing before that can have started a grace period.
+        val publishLock = Any()
+        var publishedSequence = 0L
+        var published = PublishedLevels(degradation = null, graceActive = false, locationAccessLost = false)
 
-        // The suppressor, mirrored the same way and for the same reason. The
-        // controller classifies the mode from whether grace is actually shut,
-        // not from which cause is in a slot: a stale `GEOFENCE_NOT_AVAILABLE`
-        // arriving after the switch is back on records `LOCATION_SERVICES_OFF`
-        // with Wi-Fi working and grace live, and reading the cause there
-        // reported `Timer only` over a snooze the grace alarm could still end
-        // (Codex, PR #165, sixth pass).
-        val locationAccessLostMirror = java.util.concurrent.atomic.AtomicBoolean(false)
-
-        fun send(
-            update: PresenceUpdate,
-            // Defaulted to the mirrors, which is right for every caller that
-            // is *not* a feed transition: a registration refusal, a services
-            // outage, a repair. Those carry no levels of their own and mean
-            // "restate whatever is current". A `deliver` passes its own
-            // snapshot instead, taken under `feedLock` with the transition
-            // that produced it.
-            graceActive: Boolean = graceActiveMirror.get(),
-            locationAccessLost: Boolean = locationAccessLostMirror.get(),
-        ) {
-            // Every path that sets or clears a platform level ends here — a
-            // refused registration, a services outage, a delivered fix, a
-            // successful repair — so this is the one place the recovery
-            // watch can be matched to the truth without a second call site
-            // to forget. Armed exactly while there is an outage to recover
-            // from, and restated on every send, so [LocationModeWatch
-            // .reconcile] is idempotent rather than this call conditional.
+        // The one place an update reaches the flow. Every path that sets or
+        // clears a platform level ends here — a refused registration, a
+        // services outage, a delivered fix, a successful repair — so this is
+        // also the one place the recovery watch can be matched to the truth
+        // without a second call site to forget. Armed exactly while there is
+        // an outage to recover from, and restated on every send, so
+        // [LocationModeWatch.reconcile] is idempotent rather than this call
+        // conditional. Called under `publishLock` only.
+        fun emit(event: PresenceEvent?, levels: PublishedLevels) {
             locationModeWatch.reconcile(platformLevel() != null)
             trySend(
                 PresenceUpdate(
-                    event = update.event,
+                    event = event,
                     // The platform's level outranks the engine's when both
                     // are set: the engine *infers* a generic NO_LOCATION_FIX
                     // by counting misses, while a set platform level names
@@ -410,11 +407,54 @@ class GeofencePresenceMonitor(
                     // truth and the one the debug log should carry (flagged
                     // by Codex on PR #72). Both lower the mode identically,
                     // so only the recorded cause differs.
-                    degradation = platformLevel() ?: update.degradation,
-                    graceActive = graceActive,
-                    locationAccessLost = locationAccessLost,
+                    degradation = platformLevel() ?: levels.degradation,
+                    graceActive = levels.graceActive,
+                    locationAccessLost = levels.locationAccessLost,
                 ),
             )
+        }
+
+        // A restate from outside the feed: a registration refusal, a services
+        // outage, a repair. It carries no levels of its own beyond the engine
+        // degradation its caller chose to name, and means "restate whatever
+        // is current" — so the flags are the published ones, and no sequence
+        // is involved: a restate is by definition the newest thing said.
+        fun send(update: PresenceUpdate) {
+            synchronized(publishLock) {
+                emit(
+                    update.event,
+                    published.copy(degradation = update.degradation),
+                )
+            }
+        }
+
+        // A feed transition, ordered by the sequence `deliver` took under
+        // `feedLock` with it. Driven from [publication] so the three outcomes
+        // are a value a test can pin.
+        fun publish(
+            sequence: Long,
+            update: PresenceUpdate,
+            graceActive: Boolean,
+            locationAccessLost: Boolean,
+        ) {
+            synchronized(publishLock) {
+                when (publication(sequence, publishedSequence, update.event)) {
+                    Publication.Publish -> {
+                        publishedSequence = sequence
+                        published = PublishedLevels(update.degradation, graceActive, locationAccessLost)
+                        emit(update.event, published)
+                    }
+                    Publication.EventOnly -> {
+                        SnoozeDebugLog.event(
+                            "a presence update was superseded before it published; its event goes out on the newer levels",
+                        )
+                        emit(update.event, published)
+                    }
+                    Publication.Drop -> SnoozeDebugLog.event(
+                        "a presence update was superseded before it published; dropped",
+                    )
+                }
+            }
         }
 
         // The confirming fixes of SPEC.md §6.10: one-shots while the engine is
@@ -510,15 +550,13 @@ class GeofencePresenceMonitor(
                 locationAccessLost = feed.locationAccessLost
                 sequence = deliverySequence.incrementAndGet()
             }
-            graceActiveMirror.set(graceDeadlineMs != null)
-            locationAccessLostMirror.set(locationAccessLost)
-            // Both read back below rather than re-read from the mirrors, so
-            // this update carries the levels its *own* transition produced
-            // (Codex, PR #165, eighth pass). Two `deliver` calls on different
-            // callback threads leave `feedLock` in one order and reach `send`
-            // in either, so reading a shared mirror at publication time could
-            // pair one transition's event with another's levels.
-            send(
+            // Carrying the levels its *own* transition produced (Codex, PR
+            // #165, eighth pass) and the sequence that orders it against the
+            // others: two `deliver` calls on different callback threads leave
+            // `feedLock` in one order and reach publication in either, and
+            // `publish` is what keeps the older one from landing last.
+            publish(
+                sequence,
                 update,
                 graceActive = graceDeadlineMs != null,
                 locationAccessLost = locationAccessLost,
@@ -2168,6 +2206,30 @@ class GeofencePresenceMonitor(
             if (latched != null && anchor.hasUsableFix) add(GrantPokeStep.RepairFence)
         }
 
+        /**
+         * What to do with a feed transition that has reached publication,
+         * given the newest sequence already published (TODO.md; Codex, PR
+         * #165). A value for the reason [grantRecheck] is one.
+         *
+         * A newer transition publishes whole. An older one is stale in its
+         * *levels* — the newer transition's grace and suppressor state, and
+         * its engine degradation, are the truth the collector already holds —
+         * but not in its **event**: a departure decided by an earlier signal
+         * is still a departure, and dropping it with the levels would end no
+         * snooze. So the event goes out on the newer levels, and only an older
+         * update with nothing to say is dropped. Equal sequences cannot occur;
+         * treated as stale so a repeat never rewinds.
+         */
+        internal fun publication(
+            sequence: Long,
+            publishedSequence: Long,
+            event: PresenceEvent?,
+        ): Publication = when {
+            sequence > publishedSequence -> Publication.Publish
+            event != null -> Publication.EventOnly
+            else -> Publication.Drop
+        }
+
         internal fun watchesGrants(anchor: Anchor): Boolean =
             anchor.hasUsableFix || needsWifiRecheck(anchor)
 
@@ -2259,6 +2321,25 @@ internal enum class RecoveryStep {
 
     /** Ask once for a resting snooze; a declared no-op mid-check. */
     SanityProbe,
+}
+
+/** The levels the collector was last told; see `publishLock` in `start`. */
+internal data class PublishedLevels(
+    val degradation: DegradationCause?,
+    val graceActive: Boolean,
+    val locationAccessLost: Boolean,
+)
+
+/** What a feed transition does when it reaches publication; see [GeofencePresenceMonitor.publication]. */
+internal enum class Publication {
+    /** Newer than anything published: its event and its levels go out, and become the published ones. */
+    Publish,
+
+    /** Superseded, but carrying an event: the event goes out on the newer levels. */
+    EventOnly,
+
+    /** Superseded with nothing to say. */
+    Drop,
 }
 
 internal enum class GrantPokeStep {
