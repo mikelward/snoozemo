@@ -312,6 +312,27 @@ class GeofenceSignalBridgeTest {
     }
 
     @Test
+    fun `a grant poke reaches a live monitor and is never held`() {
+        // A question like the sanity poke, and dropped for the same reason:
+        // the service start that carried it restores cold, and a restore
+        // re-registers the fence and re-asks the grant on its own way
+        // through (SPEC.md §8.2).
+        var woken = 0
+        GeofenceSignalBridge.installWakeup { woken++ }
+        GeofenceSignalBridge.deliver(GeofenceObservation.GrantPoke(atElapsedRealtimeMs = 13_000))
+        assertEquals(0, woken)
+        val restored = mutableListOf<GeofenceObservation>()
+        GeofenceSignalBridge.attach { restored += it }.close()
+        assertTrue(restored.isEmpty())
+
+        val live = mutableListOf<GeofenceObservation>()
+        val handle = GeofenceSignalBridge.attach { live += it }
+        GeofenceSignalBridge.deliver(GeofenceObservation.GrantPoke(atElapsedRealtimeMs = 14_000))
+        handle.close()
+        assertTrue(live.single() is GeofenceObservation.GrantPoke)
+    }
+
+    @Test
     fun `a newer exit replaces an older one`() {
         GeofenceSignalBridge.deliver(GeofenceObservation.Exit(atElapsedRealtimeMs = 5_000))
         GeofenceSignalBridge.deliver(GeofenceObservation.Exit(atElapsedRealtimeMs = 6_000))

@@ -266,6 +266,45 @@ class SnoozeServicePresenceTest {
     }
 
     @Test
+    fun `a grant landing in the app re-asks a running monitor`() {
+        // Android broadcasts no permission change, so a monitor that
+        // degraded on a lost grant learned it was back only from the
+        // backstop's next wake — up to half an hour with grace shut (Codex,
+        // PR #150). The app's own permission read is the prompt now, and it
+        // reaches the monitor as a poke: never a restart, for the reason the
+        // repair poke is not one.
+        val controller = startService(SnoozeService.ACTION_ARM)
+        TestSnoozeService.captureRequests.single().invoke(captured)
+        shadowOf(getMainLooper()).idle()
+
+        controller.get().onStartCommand(
+            Intent(appContext, TestSnoozeService::class.java)
+                .setAction(SnoozeService.ACTION_LOCATION_GRANTED),
+            0,
+            2,
+        )
+        shadowOf(getMainLooper()).idle()
+
+        assertEquals("the monitor must be asked, not restarted", 1, TestSnoozeService.grantPokes)
+        assertEquals(1, TestSnoozeService.presence.startedWith.size)
+        // Not gated on the recorded mode: a Wi-Fi-only anchor's latch never
+        // shows there the way a fence repair does, so the mode cannot say
+        // whether the poke is needed. The monitor's own slots decide.
+        assertEquals(TrackingMode.FULL, ActiveSnoozeStore(appContext).load()?.mode)
+    }
+
+    @Test
+    fun `a grant landing with no snooze running asks nothing`() {
+        // Nothing is watching, so there is nothing to re-ask — and a cold
+        // start with a record restores on the way in, which registers and
+        // re-asks by itself.
+        startService(SnoozeService.ACTION_LOCATION_GRANTED)
+        shadowOf(getMainLooper()).idle()
+
+        assertEquals(0, TestSnoozeService.grantPokes)
+    }
+
+    @Test
     fun `a warm restore wake re-enqueues a missing backstop`() {
         // The schedule-rejection retry alarm fires ACTION_RESTORE; warm, the
         // restore is a no-op, so the branch must carry the re-enqueue itself

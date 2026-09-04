@@ -51,3 +51,9 @@ fun pokePresenceSanity() = Unit
  * no fence, so there is nothing to re-attempt.
  */
 fun pokePresenceRepair() = Unit
+
+/**
+ * The `play` flavor's grant-recheck poke, as a no-op: this flavor reads no
+ * location, so a grant landing changes nothing it watches.
+ */
+fun pokePresenceGrantRecheck() = Unit

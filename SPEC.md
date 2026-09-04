@@ -2667,6 +2667,25 @@ its tracker holding *not associated*, and no callback is dispatched merely becau
 granted. A real departure would then read as a repeat of the loss already reported and say nothing.
 Re-registering is what fixes it — a fresh registration dispatches the current networks, unredacted,
 into a tracker whose first report is a transition by definition (D7).
+That holds for both anchor shapes (2026-09-04): a fenced anchor with an SSID carries the same watch
+as D4's suppressor, the revocation poisons it the same way, and the registration that proves its
+grant back dispatches no callback either — so the registration-success path runs the same
+restoration, rebuild included, as the recheck does.
+
+**A grant landing in the app is noticed by the app** (2026-09-04). Android broadcasts no
+permission change, and a revocation kills the process, so nothing in the monitor can watch a
+*permission* move; a restored grant was noticed only by the backstop's next wake or the 15-minute
+Wi-Fi recheck, and with §6.6 grace shut for that whole window a user who left inside it stayed
+quiet to the cap. Re-granting almost always happens in the app — the prompt, or Settings and back
+— so the main screen's own permission reading is the detector: when either grant rises while a
+snooze is running (an unread first reading counts, as the calendar's does — and a fine grant with
+the background half still denied counts, since it turns "permission off" into "background
+location off" on the card), it asks the service to re-check, and the running monitor re-asks each anchor shape the way it learned of
+the loss — a fence through a registration whose latched refusal it can refute, a Wi-Fi-only
+anchor through the permission read. It decides nothing new: the same refusals and reads that lift
+the latch on the periodic paths lift it here, only sooner, and a cold start restores on the way
+in instead. The limit is the location-mode watch's: a grant taken in system App info with the
+app never opened again reaches nothing until the backstop, which stays the bound.
 
 **There is no `Resume tracking` action, and the earlier design for one was wrong** (2026-08-30).
 It reasoned that a notification-action tap is a documented while-in-use exemption and so "fully

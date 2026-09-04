@@ -766,6 +766,82 @@ class GeofencePresenceMonitorTest {
     }
 
     @Test
+    fun `a fenced anchor with an SSID rebuilds its watch on restoration too`() {
+        // The watch is D4's suppressor on this shape, and a revocation poisons
+        // it exactly as it does a Wi-Fi-only anchor's: redacted callbacks
+        // leave the tracker at *not associated*, and the registration that
+        // proves the grant back dispatches no callback. Without the rebuild a
+        // real Wi-Fi departure after the re-grant read as a repeat and said
+        // nothing (Codex, PR #185). The registration-success path now drives
+        // this same list, so the shape has to be in it.
+        val steps = GeofencePresenceMonitor.restoreSteps(
+            Anchor(capturedAt = Instant.EPOCH, lat = 0.0, lon = 0.0, fixAccuracyM = 20f, ssid = "ExampleWifi"),
+        )
+
+        assertTrue(steps.contains(RestoreStep.RebuildWifiWatch))
+        assertTrue(
+            "and only after the restoration is declared",
+            steps.indexOf(RestoreStep.RebuildWifiWatch) > steps.indexOf(RestoreStep.DeclareRestored),
+        )
+    }
+
+    @Test
+    fun `a grant landing re-asks a Wi-Fi-only anchor's grant directly`() {
+        // No registration will ever answer for this shape, so the permission
+        // read is the whole of what a grant landing can prompt — and it runs
+        // whether or not anything is latched, since a grant loss on this
+        // shape may have been latched by a redacted read the slot already
+        // names, or not yet noticed at all.
+        val anchor = Anchor(capturedAt = Instant.EPOCH, ssid = "ExampleWifi")
+
+        assertEquals(
+            listOf(GrantPokeStep.ReconcileGrants),
+            GeofencePresenceMonitor.grantPokeSteps(anchor, latched = null),
+        )
+        assertEquals(
+            "the read comes first, as it does when location comes back on",
+            GrantPokeStep.ReconcileGrants,
+            GeofencePresenceMonitor.grantPokeSteps(
+                anchor,
+                latched = DegradationCause.NO_LOCATION_IN_BACKGROUND,
+            ).first(),
+        )
+    }
+
+    @Test
+    fun `a grant landing repairs a fenced anchor only through a latched refusal`() {
+        // The fence learns its grant is back the way it learned it was gone —
+        // from `addGeofences` — and keeps the repair poke's gate: a slot with
+        // nothing latched is a monitor that already holds the grant as
+        // present, and re-registering a healthy fence is IPC for nothing that
+        // risks a mis-mapped refusal (Codex, PR #75).
+        val anchor = Anchor(capturedAt = Instant.EPOCH, lat = 0.0, lon = 0.0, fixAccuracyM = 20f)
+
+        assertTrue(GeofencePresenceMonitor.grantPokeSteps(anchor, latched = null).isEmpty())
+        assertEquals(
+            listOf(GrantPokeStep.RepairFence),
+            GeofencePresenceMonitor.grantPokeSteps(
+                anchor,
+                latched = DegradationCause.LOCATION_PERMISSION_GONE,
+            ),
+        )
+    }
+
+    @Test
+    fun `a duration-only anchor has nothing for a grant landing to re-ask`() {
+        // No fence and no network name: nothing was ever read under the
+        // grant, so nothing is waiting on it.
+        val anchor = Anchor(capturedAt = Instant.EPOCH)
+
+        assertTrue(
+            GeofencePresenceMonitor.grantPokeSteps(
+                anchor,
+                latched = DegradationCause.LOCATION_PERMISSION_GONE,
+            ).isEmpty(),
+        )
+    }
+
+    @Test
     fun `an anchor with no SSID has no watch to rebuild`() {
         // `getAndSet` on an empty slot would install a watch for a snooze that
         // never had one — and there is nothing a revocation could have written

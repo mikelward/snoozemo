@@ -1732,8 +1732,12 @@ the point is that every other line of the app is worthless if it isn't true.
       re-asked, so the latch is bounded by 15 minutes rather than by the snooze. It clears a
       grant cause only — a permission read says nothing about location services, so an outage
       would otherwise read as repaired every recheck.
-- [ ] **A restored location grant is not noticed until the half-hour backstop** (Codex, PR #150,
-      sixth round on this seam; **stopped and handed to the maintainer rather than fixed there**).
+- [x] **A restored location grant is not noticed until the half-hour backstop** (Codex, PR #150,
+      sixth round on this seam; stopped and handed to the maintainer there — **landed 2026-09-04
+      under autopilot as the first option below**, see *Decisions needing review*). The main
+      screen's location reading asks the service to re-check on a transition into the full grant
+      while a snooze is running; the service pokes the running monitor, which re-asks each anchor
+      shape the way it learned of the loss (`SPEC.md` §8.2). The history stands below.
       Nothing in the monitor observes a *permission* change. `LocationModeWatch` watches location
       services going on and off; `MainActivity`'s permission callbacks only refresh UI state. So
       when a user re-grants location without touching the system location toggle, the fence is
@@ -4228,6 +4232,23 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     a snooze that ends on a duration cap needs the same controller.
 
 ## Decisions needing review
+
+- **Guessed under autopilot: a location grant landing in the app pokes the running
+  monitor from the main screen's permission reading** (2026-09-04), the first of the
+  three options the PR #150 entry left to the maintainer.
+  **Why:** the entry's own recommendation — re-granting almost always happens in the
+  app — and it is the only option that closes the window rather than shortening it:
+  the backstop period only bounds the wait, and an `onResume` re-check misses the
+  prompt's own result. The cost it names, presence knowledge in the UI layer, is one
+  service action behind the same transition read the calendar row already sends
+  `ACTION_REFRESH` on.
+  **The alternative** was a shorter backstop period while a grant cause stands (more
+  wake-ups against `SPEC.md` §9, still up to the shortened period), or the poke from
+  `onResume` only.
+  **Why it is reversible:** one call site in `refreshLocation`, one service action,
+  and one observation the monitor handles through a step list a test pins; the
+  monitor's own latches decide what a grant can refute, so the poke can be dropped
+  without leaving state behind.
 
 - **Guessed under autopilot: set the auto-arm battery gate at ≤0.1%/hour
   stationary and ≤0.25%/hour moving** (2026-09-03), before the A/B is run rather

@@ -332,6 +332,12 @@ class GeofencePresenceMonitor(
         // setup, so the placeholder is never the one invoked.
         var repairOnRecovery: () -> Unit = {}
 
+        // What a restored grant has to do, assigned once the Wi-Fi watch's
+        // rebuild exists below — the same placeholder shape, for the same
+        // reason: the registration-success listener that needs it is declared
+        // before the watch it rebuilds, and only ever runs after setup.
+        var restoreGrant: () -> Unit = {}
+
         // What a location-services outage ending should poke, assigned once
         // the repair and the probe below exist — the same placeholder shape
         // `repairOnRecovery` uses, and for the same reason: the watch has to
@@ -954,22 +960,19 @@ class GeofencePresenceMonitor(
                             // from, and sit snoozed to the cap (Codex, PR
                             // #149). Safe against a teardown racing it:
                             // `resume` refuses on a closed instance.
-                            deliver(
-                                PresenceSignal.LocationAccessRestored(readElapsedRealtimeMs()),
-                            )
-                            resumeChecking()
-                            // The restate carries the *feed's* level, not a
-                            // synthesized null: this update arrives outside
-                            // any signal, and a null here would promote a
-                            // snooze whose fixes are still failing (Codex,
-                            // PR #75) — the feed's degradation clears only
-                            // on a usable fix, as ever.
-                            send(
-                                PresenceUpdate(
-                                    event = null,
-                                    degradation = synchronized(feedLock) { feed.degradation },
-                                ),
-                            )
+                            //
+                            // The same steps the Wi-Fi-only recheck runs,
+                            // from the one list (Codex, PR #185): this path
+                            // used to declare, resume and restate inline
+                            // and never rebuilt the Wi-Fi watch, so a fenced
+                            // anchor that also carries an SSID kept a watch
+                            // the revocation had poisoned — the tracker at
+                            // *not associated* — and a real Wi-Fi departure
+                            // after the re-grant read as a repeat and said
+                            // nothing. The rebuild is what SPEC.md §8.2
+                            // promises of a restored grant, whichever path
+                            // proves it.
+                            restoreGrant()
                         }
                     }
                     .addOnFailureListener { e ->
@@ -1163,6 +1166,48 @@ class GeofencePresenceMonitor(
             }
         }
 
+        /**
+         * Runs [restoreSteps] for this anchor — the one restoration, whichever
+         * path proved the grant back: a registration the platform accepted
+         * (`registerFence`) or a permission read at the Wi-Fi recheck
+         * ([reconcileGrants]). Driven from the list rather than written out
+         * at either site, so which steps run and in what order is a value a
+         * test can assert. Deleting the rebuild or moving it ahead of the
+         * restoration are both real regressions that every other test on
+         * this path stays green through (Codex, PR #157), and the `when`
+         * below is exhaustive, so a step cannot be dropped silently.
+         */
+        fun runRestoreSteps() {
+            restoreSteps(anchor).forEach { step ->
+                when (step) {
+                    // The engine's own latch, which is what actually re-opens
+                    // grace — the slot alone only decides the mode line.
+                    RestoreStep.DeclareRestored -> deliver(
+                        PresenceSignal.LocationAccessRestored(readElapsedRealtimeMs()),
+                    )
+                    // Nothing here requests fixes, but the requester is
+                    // suspended process-wide and `resume` refuses on a closed
+                    // instance, so leaving it suspended is the only outcome
+                    // with a cost.
+                    RestoreStep.ResumeChecking -> resumeChecking()
+                    RestoreStep.RebuildWifiWatch ->
+                        anchor.ssid?.let { publishWifiWatch(it) }
+                    // The restate carries the *feed's* level, not a
+                    // synthesized null: this update arrives outside any
+                    // signal, and a null here would promote a snooze whose
+                    // fixes are still failing (Codex, PR #75) — the feed's
+                    // degradation clears only on a usable fix, as ever.
+                    RestoreStep.RestateLevel -> send(
+                        PresenceUpdate(
+                            event = null,
+                            degradation = synchronized(feedLock) { feed.degradation },
+                        ),
+                    )
+                }
+            }
+        }
+        restoreGrant = ::runRestoreSteps
+
         fun reconcileGrants() {
             if (!needsWifiRecheck(anchor)) return
             // Captured, not re-read. The decision below is made against this
@@ -1187,38 +1232,7 @@ class GeofencePresenceMonitor(
                         SnoozeDebugLog.event(
                             "the location grant is back; lifting the Wi-Fi-only latch",
                         )
-                        // Driven from [restoreSteps] rather than written out
-                        // here, so which steps run and in what order is a value
-                        // a test can assert. Deleting the rebuild or moving it
-                        // ahead of the restoration are both real regressions
-                        // that every other test on this path stays green
-                        // through (Codex, PR #157), and the `when` below is
-                        // exhaustive, so a step cannot be dropped silently.
-                        restoreSteps(anchor).forEach { step ->
-                            when (step) {
-                                // The engine's own latch, which is what
-                                // actually re-opens grace — the slot alone only
-                                // decides the mode line.
-                                RestoreStep.DeclareRestored -> deliver(
-                                    PresenceSignal.LocationAccessRestored(readElapsedRealtimeMs()),
-                                )
-                                // Symmetric with the registration-success path:
-                                // nothing here requests fixes, but the
-                                // requester is suspended process-wide and
-                                // `resume` refuses on a closed instance, so
-                                // leaving it suspended is the only outcome with
-                                // a cost.
-                                RestoreStep.ResumeChecking -> resumeChecking()
-                                RestoreStep.RebuildWifiWatch ->
-                                    anchor.ssid?.let { publishWifiWatch(it) }
-                                RestoreStep.RestateLevel -> send(
-                                    PresenceUpdate(
-                                        event = null,
-                                        degradation = synchronized(feedLock) { feed.degradation },
-                                    ),
-                                )
-                            }
-                        }
+                        runRestoreSteps()
                     }
                 // Named in a compare-and-set for the same reason the restore
                 // above is, and against the same captured value: a restore
@@ -1425,6 +1439,29 @@ class GeofencePresenceMonitor(
                         // gate.
                         is GeofenceObservation.RepairPoke ->
                             if (registrationDegradation.get() != null) repairFence()
+                        // The app saw a location grant land (SPEC.md §8.2):
+                        // the permission dialog's result, or Settings and
+                        // back. Android broadcasts no permission change, so
+                        // this is the only prompt that reaches a monitor
+                        // holding a grant-shaped latch — otherwise the
+                        // repair waited for the backstop or the 15-minute
+                        // recheck, with §6.6 grace shut the whole way, and a
+                        // user who left inside that window stayed quiet to
+                        // the cap (Codex, PR #150). Each anchor shape learns
+                        // its grant is back the way it learned it was gone:
+                        // a fence from a registration the platform accepts,
+                        // a Wi-Fi-only anchor from the permission read. The
+                        // fence half keeps `RepairPoke`'s gate and reason.
+                        // Driven from [grantPokeSteps] so which shape asks
+                        // what is a value a test can pin, as the other two
+                        // step lists are.
+                        is GeofenceObservation.GrantPoke ->
+                            grantPokeSteps(anchor, registrationDegradation.get()).forEach { step ->
+                                when (step) {
+                                    GrantPokeStep.ReconcileGrants -> reconcileGrants()
+                                    GrantPokeStep.RepairFence -> repairFence()
+                                }
+                            }
                         // The grace alarm's firing, as a signal like any
                         // other: the engine re-checks the deadline against
                         // its own state, so a stale firing is a no-op.
@@ -2065,7 +2102,11 @@ class GeofencePresenceMonitor(
          *
          * Only for an anchor with an SSID: there is no watch to rebuild
          * otherwise, and `getAndSet` on an empty slot would install one for a
-         * snooze that never had it.
+         * snooze that never had it. **An SSID beside a fix counts** (Codex,
+         * PR #185): a fenced anchor carries the same watch as D4's suppressor,
+         * a revocation poisons it the same way, and the registration that
+         * proves its grant back dispatches no callback either — so the
+         * registration-success path runs this list too, not only the recheck.
          */
         internal fun restoreSteps(anchor: Anchor): List<RestoreStep> = buildList {
             add(RestoreStep.DeclareRestored)
@@ -2097,6 +2138,34 @@ class GeofencePresenceMonitor(
             add(RecoveryStep.RepairFence)
             add(RecoveryStep.RetryFixes)
             add(RecoveryStep.SanityProbe)
+        }
+
+        /**
+         * What a location grant landing in the app should re-ask, in order
+         * (SPEC.md §8.2) — a value for the reason [recoverySteps] is one.
+         *
+         * **The grant read first**, as in [recoverySteps] and for its reason:
+         * it lifts the engine's `locationAccessLost` latch directly, where the
+         * fence repair only asks the platform for a registration whose answer
+         * arrives later. Only the shape a registration cannot answer for
+         * takes it — one predicate, [needsWifiRecheck], asked here and again
+         * inside [reconcileGrants]'s own guard.
+         *
+         * **The fence repair keeps `RepairPoke`'s gate.** A latched slot is
+         * the one set of failures a re-registration can refute; with nothing
+         * latched the monitor already holds the grant as present, and
+         * re-registering a healthy fence into a possible services outage is
+         * IPC for nothing that risks a mis-mapped refusal (Codex, PR #75).
+         * And only for an anchor with a fence to repair: `registerFence`
+         * declines on its own without a fix, but the list says so rather
+         * than relying on that.
+         */
+        internal fun grantPokeSteps(
+            anchor: Anchor,
+            latched: DegradationCause?,
+        ): List<GrantPokeStep> = buildList {
+            if (needsWifiRecheck(anchor)) add(GrantPokeStep.ReconcileGrants)
+            if (latched != null && anchor.hasUsableFix) add(GrantPokeStep.RepairFence)
         }
 
         internal fun watchesGrants(anchor: Anchor): Boolean =
@@ -2190,6 +2259,14 @@ internal enum class RecoveryStep {
 
     /** Ask once for a resting snooze; a declared no-op mid-check. */
     SanityProbe,
+}
+
+internal enum class GrantPokeStep {
+    /** Re-ask the location grant, for the anchor shape no registration answers. */
+    ReconcileGrants,
+
+    /** Re-register a fence whose registration slot holds a refusal. */
+    RepairFence,
 }
 
 internal enum class RestoreStep {
