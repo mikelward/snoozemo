@@ -359,24 +359,39 @@ class AudioRingerControllerTest {
 
     @Test
     fun `a later choice of ring cannot hide a ceiling the running snooze lost`() {
-        newController().quiet()
+        val first = newController().quiet()
+        val afterFirst = probe()
         // The user turns the ringer back up mid-snooze, then picks `Ring as
         // usual` for next time. The card must still say this snooze is ringing.
         audio.ringerMode = AudioManager.RINGER_MODE_NORMAL
         choose(SnoozeRinger.RING)
 
-        assertEquals(RingerShortfall.Louder(RingerMode.NORMAL), newController().shortfall())
+        assertEquals(
+            "first=$first afterFirst=$afterFirst now=${probe()}",
+            RingerShortfall.Louder(RingerMode.NORMAL),
+            newController().shortfall(),
+        )
+    }
+
+    private fun probe(): String {
+        val loans = PrefsRingerLoanStore(context)
+        return "choice=${loans.activeChoice()} loan=${loans.borrowed()} mode=${audio.ringerMode} setting=${SnoozeRingerStore(context).chosen()}"
     }
 
     @Test
     fun `a re-assertion keeps the ceiling the snooze started under`() {
-        newController().quiet()
+        val firstOutcome = newController().quiet()
+        val afterFirst = probe()
         // Changed mid-snooze, then the process dies and the restore re-asserts
         // — which must not adopt a choice made after the snooze began (Codex,
         // PR #176).
         choose(SnoozeRinger.SILENT)
 
-        assertEquals(RingerOutcome.Untouched, newController().quiet())
+        assertEquals(
+            "first=$firstOutcome afterFirst=$afterFirst now=${probe()}",
+            RingerOutcome.Untouched,
+            newController().quiet(),
+        )
 
         // Still vibrating, not silent, and nothing to report against `Vibrate`.
         assertEquals(AudioManager.RINGER_MODE_VIBRATE, audio.ringerMode)

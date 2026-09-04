@@ -536,10 +536,12 @@ class AudioRingerController(
      * where losing the loan costs the phone its ringer.
      */
     private fun rememberChoice(choice: SnoozeRinger?) {
+        println("PROBE rememberChoice($choice) at ${Thread.currentThread().name}")
         val wrote = runCatching { loans.recordChoice(choice) }.getOrElse {
             SnoozeDebugLog.failure(it, "ringer: recording the choice in force failed")
             false
         }
+        println("PROBE rememberChoice wrote=$wrote readBack=${runCatching { loans.activeChoice() }.getOrNull()}")
         if (wrote) return
         if (choice != null) {
             SnoozeDebugLog.warning("ringer: the choice in force was not recorded; the card cannot report a shortfall")
