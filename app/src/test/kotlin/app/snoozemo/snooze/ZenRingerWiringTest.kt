@@ -1,5 +1,6 @@
 package app.snoozemo.snooze
 
+import android.app.Application
 import android.content.ComponentName
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
@@ -34,7 +35,15 @@ import org.robolectric.annotation.Config
  * That is not a workaround — it is the pair of invariants that matter most.
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+// A plain `Application`, not `SnoozemoApplication`: its `onCreate` starts
+// `reconcileRingerInBackground` on a daemon thread, and Robolectric builds the
+// application for every test — so that thread races the test body for the
+// process-wide ringer lock. Reaching it while no snooze record is on disk, it
+// does exactly its job: drops the ceiling as stale and hands the loan back,
+// under a fixture that put both there by hand. The tests below reach that path
+// deliberately where they mean to; a stray copy of it running under every
+// statement is what made them fail about one run in ten.
+@Config(sdk = [36], application = Application::class)
 class ZenRingerWiringTest {
 
     private val context: Context get() = ApplicationProvider.getApplicationContext()
