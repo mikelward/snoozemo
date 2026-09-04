@@ -281,7 +281,24 @@ class SnoozeNotifications(private val context: Context) {
         null
     }
 
-    fun showOngoing(snooze: ActiveSnooze) = showOngoing(snooze, onlyIfGeneration = null)
+    /**
+     * Posts or re-posts the ongoing card.
+     *
+     * @param silent post without alerting even if this turns out to be the
+     *   platform's first sight of the card. `setOnlyAlertOnce` quiets an
+     *   *update*, and a card that is genuinely up is updated — but after a
+     *   refused post, or a reboot (which clears the shade), the next post is a
+     *   new notification, and on a channel that bypasses Snoozemo's own DND it
+     *   would sound or vibrate mid-snooze (Codex, PR #186, twice: the warm
+     *   backstop restate, and the cold restore's own transition that runs
+     *   ahead of it). So the default is silent, and **only the arm's own post
+     *   passes `false`**: that is the one moment the alert belongs to, the
+     *   user having just tapped, and every other caller — a state transition,
+     *   a restore, a clock change, a tracking change, the backstop, a late
+     *   notification grant — is restating a card the user was already shown.
+     */
+    fun showOngoing(snooze: ActiveSnooze, silent: Boolean = true) =
+        showOngoing(snooze, onlyIfGeneration = null, silent = silent)
 
     /**
      * @param onlyIfGeneration when set, the post is abandoned if the displayed
@@ -295,7 +312,7 @@ class SnoozeNotifications(private val context: Context) {
      *   moved, guards against the generation that first post wrote — which is
      *   the state it is actually correcting.
      */
-    private fun showOngoing(snooze: ActiveSnooze, onlyIfGeneration: Long?) {
+    private fun showOngoing(snooze: ActiveSnooze, onlyIfGeneration: Long?, silent: Boolean = true) {
         reapplyDndBypassOnce()
         // Read once and threaded through both halves below, so a grant landing
         // between them cannot build a card from one answer and cache the other.
@@ -309,7 +326,7 @@ class SnoozeNotifications(private val context: Context) {
         // cannot disagree about the same card.
         val ringerShortfall = ringerShortfall()
         betweenReadAndPost()
-        val posted = postOngoing(buildOngoing(snooze, builtWith, ringerShortfall), onlyIfGeneration)
+        val posted = postOngoing(buildOngoing(snooze, builtWith, ringerShortfall, silent), onlyIfGeneration)
         // The cache is read above but written under the lock this post takes,
         // so the worker can commit an answer in between and lose its own
         // repost to this one — the newer post wins the generation, and the
@@ -326,7 +343,7 @@ class SnoozeNotifications(private val context: Context) {
             val settled = cachedOfferFor(snooze, calendarReadable)
             if (settled != builtWith) {
                 betweenReadAndPost()
-                postOngoing(buildOngoing(snooze, settled, ringerShortfall), onlyIfGeneration = posted)
+                postOngoing(buildOngoing(snooze, settled, ringerShortfall, silent), onlyIfGeneration = posted)
             }
         }
         // After the card is up, never before it: this is a binder query into
@@ -350,6 +367,7 @@ class SnoozeNotifications(private val context: Context) {
         snooze: ActiveSnooze,
         until: Instant?,
         ringerShortfall: String? = null,
+        silent: Boolean = false,
     ): android.app.Notification {
         val body = when (snooze.mode) {
             TrackingMode.FULL -> context.getString(R.string.ongoing_ends_when_you_leave)
@@ -398,7 +416,9 @@ class SnoozeNotifications(private val context: Context) {
             // (§5.7): a snooze that used to be silent by accident (the platform's
             // own filter caught the repeat alert) would otherwise become audibly
             // noisy by design (Codex, PR #92). Only the first post of this id
-            // alerts; later ones update the countdown and text quietly.
+            // alerts; later ones update the countdown and text quietly — and
+            // `silent`, below, covers the case where a later post is the first
+            // the platform has seen.
             .setOnlyAlertOnce(true)
             // The countdown is the platform's to run, not ours. Formatting it
             // into the text bakes in the value at post time, and this
@@ -453,6 +473,23 @@ class SnoozeNotifications(private val context: Context) {
                             endAtPendingIntent(until, snooze),
                         ).build(),
                     )
+                }
+            }
+            // The platform builder has no silent switch — per-notification
+            // sound and vibration are the channel's since API 26 — so this is
+            // the same mechanism AndroidX's `setSilent` uses: a child of a
+            // group whose alerting belongs to the summary alerts for nothing,
+            // summary or no summary (`suppressAlertingDueToGrouping`). A group
+            // of one with no summary renders exactly as an ungrouped card, and
+            // the next ordinary repost replaces it ungrouped again, quietly,
+            // since by then it is an update.
+            .let { builder ->
+                if (silent) {
+                    builder
+                        .setGroup(GROUP_SILENT)
+                        .setGroupAlertBehavior(android.app.Notification.GROUP_ALERT_SUMMARY)
+                } else {
+                    builder
                 }
             }
             .build()
@@ -1283,6 +1320,9 @@ class SnoozeNotifications(private val context: Context) {
         const val CHANNEL_ENDED = "snooze_ended"
         const val CHANNEL_URGENT = "snooze_urgent"
         const val ID_ONGOING = 1
+
+        /** The group a silent post of the ongoing card is filed under; see [buildOngoing]. */
+        const val GROUP_SILENT = "snooze_silent"
         const val ID_ENDED = 2
         const val ID_FAILURE = 3
         const val ID_STUCK = 4

@@ -343,6 +343,46 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         pokeWatchRepair()
     }
 
+    /**
+     * Re-posts the ongoing card for a snooze that is still running, on a wake
+     * the snooze already pays for (SPEC.md §6.10).
+     *
+     * The card is posted on transitions, and a `notify` the platform refuses
+     * is logged and lost: on a duration-only snooze nothing else reposts it
+     * before the cap, so one refused post cost the countdown, the mode line,
+     * `End now` and `+30 min` for the whole snooze (Codex, PR #8; TODO.md).
+     * A card that is up is also read once, at its post — the ringer
+     * shortfall clause (SPEC.md §5.9) and the calendar's readability among
+     * them — and nothing listens for either moving, so a phone turned back
+     * up above its ceiling kept a healthy-looking card until the next
+     * unrelated repost (Codex, PR #176).
+     *
+     * Both wanted a wake nobody had to add. The backstop is that wake: every
+     * half hour while armed, deferrable, already budgeted (§9), and its cold
+     * half already reposts through the restore's own transition. This is the
+     * warm half catching up — a plain rebuild from the in-memory record, so
+     * a refused post is retried and a stale clause is re-read, at about four
+     * binder calls per wake. Invisible in the shade: the card is `setOngoing`
+     * with `setOnlyAlertOnce` and a stable `setWhen`, so it neither alerts
+     * nor re-sorts. The bound is the wake's own cadence, deliberately —
+     * retrying a refused post sooner would add a wake-up for a throw the
+     * platform does not usually make.
+     *
+     * After the cap check, never before it: a snooze the check just ended has
+     * no card to restate, and `active` is null by then.
+     *
+     * Silent, like every post but the arm's own: `setOnlyAlertOnce` quiets
+     * only an *update*, and the refused-post case this exists for is exactly
+     * the one where a restate is the platform's first sight of the card —
+     * which would otherwise sound through a DND-bypassing channel half an hour
+     * into the snooze (Codex, PR #186). The cold half is covered the same way:
+     * a restore's `ARMED` transition posts through `onStateChanged`, ahead of
+     * this, and that post is silent too.
+     */
+    private fun restateOngoingCard() {
+        controller.active?.let { notifications.showOngoing(it) }
+    }
+
     /** The flavor seam's repair poke, overridable for the JVM harness. */
     protected open fun pokeWatchRepair() = app.snoozemo.presence.pokePresenceRepair()
 
@@ -906,6 +946,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 // needs a new one or it will never be revisited.
                 rescheduleIfUnfinished()
                 repairDegradedWatch()
+                restateOngoingCard()
             }
             ACTION_EXTEND -> extend()
             ACTION_SET_CAP -> setCap(intent)
@@ -1357,7 +1398,9 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // up to 10 s (SPEC.md §4.1), and ARMED — which posts this — no longer
         // follows within milliseconds. Off the arm path: `STATE_TRUE` landed
         // above, so these binder calls delay nothing the user is waiting on.
-        notifications.showOngoing(snooze)
+        // The one post that alerts: the user just tapped, and every later
+        // post of this card is a restate (Codex, PR #186).
+        notifications.showOngoing(snooze, silent = false)
         SnoozeTileBridge.refresh()
 
         // The backstop, before capture rather than only with the watch it

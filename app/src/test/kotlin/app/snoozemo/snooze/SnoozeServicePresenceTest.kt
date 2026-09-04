@@ -11,6 +11,7 @@ import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenOutcome
 import java.time.Instant
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -302,6 +303,99 @@ class SnoozeServicePresenceTest {
         shadowOf(getMainLooper()).idle()
 
         assertEquals(0, TestSnoozeService.grantPokes)
+    }
+
+    @Test
+    fun `a warm wake puts a lost ongoing card back`() {
+        // The card is posted on transitions, and a refused `notify` is logged
+        // and lost: on a duration-only snooze nothing reposts it before the
+        // cap, so one refused post cost the countdown and both actions for
+        // the whole snooze (Codex, PR #8). The backstop wake is the one wake
+        // every snooze already pays for, and its warm half now restates the
+        // card from the in-memory record.
+        val controller = startService(SnoozeService.ACTION_ARM)
+        // The arm's own post is the one alert the card is meant to make, so
+        // it goes up ungrouped; the transition that follows capture below is
+        // already a restate, and silent like every other.
+        assertNull(ongoingCard().group)
+        TestSnoozeService.captureRequests.single().invoke(captured)
+        shadowOf(getMainLooper()).idle()
+        val manager = appContext.getSystemService(android.app.NotificationManager::class.java)
+        assertTrue(shadeShows(stringOf(app.snoozemo.R.string.ongoing_title)))
+        // The platform losing the card, as a refused post would have: taken
+        // out from under the app, which still believes it posted.
+        manager.cancelAll()
+        assertFalse(shadeShows(stringOf(app.snoozemo.R.string.ongoing_title)))
+
+        controller.get().onStartCommand(
+            Intent(appContext, TestSnoozeService::class.java)
+                .setAction(SnoozeService.ACTION_CHECK_CAP),
+            0,
+            2,
+        )
+        shadowOf(getMainLooper()).idle()
+
+        assertTrue(
+            "the wake must restate the card, or a refused post is lost until the cap",
+            shadeShows(stringOf(app.snoozemo.R.string.ongoing_title)),
+        )
+        assertEquals("a restate is a repost, never a restart", 1, TestSnoozeService.presence.startedWith.size)
+        // To the platform this restate is a new notification, which alert-once
+        // cannot quiet, on a channel that bypasses Snoozemo's own DND — so it
+        // is posted the way AndroidX's `setSilent` posts: a child of a group
+        // whose alerting belongs to a summary that never exists (Codex, PR
+        // #186).
+        val restated = ongoingCard()
+        assertEquals(SnoozeNotifications.GROUP_SILENT, restated.group)
+        assertEquals(android.app.Notification.GROUP_ALERT_SUMMARY, restated.groupAlertBehavior)
+    }
+
+    /** The ongoing card as the shade holds it now. */
+    private fun ongoingCard(): android.app.Notification =
+        shadowOf(appContext.getSystemService(android.app.NotificationManager::class.java))
+            .allNotifications
+            .last { shadowOf(it).contentTitle?.toString() == stringOf(app.snoozemo.R.string.ongoing_title) }
+
+    @Test
+    fun `a cold wake's own restore posts the card silently too`() {
+        // The refused post followed by a process death: the backstop's cold
+        // wake restores on the way in, and the restore's `ARMED` transition
+        // posts the card before the warm restate ever runs — so that post is
+        // the platform's first sight of it and has to be silent as well
+        // (Codex, PR #186). A reboot clears the shade the same way.
+        assertFalse(shadeShows(stringOf(app.snoozemo.R.string.ongoing_title)))
+
+        startService(SnoozeService.ACTION_CHECK_CAP, record = snoozeFixture(now))
+        shadowOf(getMainLooper()).idle()
+
+        val restored = ongoingCard()
+        assertEquals(SnoozeNotifications.GROUP_SILENT, restored.group)
+        assertEquals(android.app.Notification.GROUP_ALERT_SUMMARY, restored.groupAlertBehavior)
+    }
+
+    @Test
+    fun `a wake that ends the snooze at its cap restates no card`() {
+        // After the cap check, never before it: the snooze the check just
+        // ended has nothing to say `Snoozing` about.
+        val controller = startService(SnoozeService.ACTION_ARM)
+        TestSnoozeService.captureRequests.single().invoke(captured)
+        shadowOf(getMainLooper()).idle()
+        val past = now.plus(java.time.Duration.ofHours(9))
+        TestSnoozeService.testReading = app.snoozemo.core.ClockReading(
+            wallMillis = past.toEpochMilli(),
+            uptimeMillis = TestSnoozeService.FIXTURE_UPTIME_MILLIS + java.time.Duration.ofHours(9).toMillis(),
+        )
+
+        controller.get().onStartCommand(
+            Intent(appContext, TestSnoozeService::class.java)
+                .setAction(SnoozeService.ACTION_CHECK_CAP),
+            0,
+            2,
+        )
+        shadowOf(getMainLooper()).idle()
+
+        assertNull(ActiveSnoozeStore(appContext).load())
+        assertFalse(shadeShows(stringOf(app.snoozemo.R.string.ongoing_title)))
     }
 
     @Test
