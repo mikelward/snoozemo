@@ -458,6 +458,12 @@
          the same word is exactly the ambiguity to avoid. -->
     <!-- TODO: translate -->
     <string name="action_close" tools:ignore="MissingTranslation">Close</string>
+    <!-- Who wrote a component, in its details dialog under the version.
+         Apache-2.0 §4 asks that attribution travel with the code, so the page
+         names the authors rather than only the license they chose. Omitted
+         entirely when the component's POM declares neither. -->
+    <!-- TODO: translate -->
+    <string name="settings_licenses_authors" tools:ignore="MissingTranslation">By %1$s</string>
     <!-- Shown in the details dialog when a tap on a license link found nothing
          on the device able to open a web link. Says so rather than letting the
          tap look like it did nothing. -->

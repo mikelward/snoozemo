@@ -71,6 +71,9 @@ class LicensesScreenScreenshotTest {
 
         composeRule.onNodeWithText("Activity").performClick()
         composeRule.onNodeWithText("Version 1.13.0").assertExists()
+        // Apache-2.0 §4 asks for attribution, and the license name alone does
+        // not carry it — the dialog names who wrote the component too.
+        composeRule.onNodeWithText("By The Android Open Source Project").assertExists()
 
         // The bundled export carries no license text, so the license name is
         // a link to the full text rather than the text itself.
@@ -143,6 +146,42 @@ class LicensesScreenScreenshotTest {
     }
 
     /**
+     * The POM's declared developers are the usual source of an authors line,
+     * but plenty of components name only the organization that published
+     * them, and a few name nobody at all. The fallback and the omission are
+     * both driven from a fixture rather than the bundled export, which today
+     * happens to carry a developer for every component that names anyone.
+     */
+    @Test
+    fun `authors fall back to the publishing organization, and are omitted when nobody is named`() {
+        capture {
+            LicensesContent(libraries = Libs.Builder().withJson(ATTRIBUTION_FIXTURE).build())
+        }
+
+        composeRule.onNodeWithText("Organization only").performClick()
+        composeRule.onNodeWithText("By Example Organization").assertExists()
+        composeRule.onNodeWithText("Close").performClick()
+
+        composeRule.onNodeWithText("Nobody named").performClick()
+        composeRule.onNodeWithText("Version 3.0.0").assertExists()
+        composeRule.onNodeWithText("By ", substring = true).assertDoesNotExist()
+    }
+
+    /**
+     * Two developers on one component, so the line reads as a list rather
+     * than as whichever name happened to come first.
+     */
+    @Test
+    fun `several authors are listed together`() {
+        capture {
+            LicensesContent(libraries = Libs.Builder().withJson(ATTRIBUTION_FIXTURE).build())
+        }
+
+        composeRule.onNodeWithText("Two developers").performClick()
+        composeRule.onNodeWithText("By Ada Example, Grace Example").assertExists()
+    }
+
+    /**
      * Renders [content] the way `MainActivity` does and records it under
      * [name] when a name is given. See the sibling suites for why both the
      * theme and the `Surface` matter.
@@ -173,3 +212,46 @@ class LicensesScreenScreenshotTest {
         bitmap.captureRoboImage(filePath = "src/test/snapshots/images/$name")
     }
 }
+
+/**
+ * A hand-written export covering the attribution shapes the bundled one does
+ * not: an organization with no developer, no attribution at all, and more
+ * than one developer. Stock stand-in names throughout — nothing here is
+ * anybody's.
+ */
+private const val ATTRIBUTION_FIXTURE = """
+{
+  "libraries": [
+    {
+      "uniqueId": "com.example:organization-only",
+      "artifactVersion": "1.0.0",
+      "name": "Organization only",
+      "developers": [],
+      "organization": { "name": "Example Organization" },
+      "licenses": ["Apache-2.0"]
+    },
+    {
+      "uniqueId": "com.example:two-developers",
+      "artifactVersion": "2.0.0",
+      "name": "Two developers",
+      "developers": [{ "name": "Ada Example" }, { "name": "Grace Example" }],
+      "licenses": ["Apache-2.0"]
+    },
+    {
+      "uniqueId": "com.example:nobody-named",
+      "artifactVersion": "3.0.0",
+      "name": "Nobody named",
+      "developers": [],
+      "licenses": ["Apache-2.0"]
+    }
+  ],
+  "licenses": {
+    "Apache-2.0": {
+      "name": "Apache License 2.0",
+      "url": "https://spdx.org/licenses/Apache-2.0.html",
+      "hash": "Apache-2.0",
+      "spdxId": "Apache-2.0"
+    }
+  }
+}
+"""

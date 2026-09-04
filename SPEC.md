@@ -1139,8 +1139,17 @@ serialized underneath as a floor, so the guarantee does not depend on every call
 The Settings foot carries a **Licenses** row, beside the privacy policy, opening a page that lists
 every third-party component this build bundles and the license each ships under. Names only, one
 row each — the list runs to around ninety entries, and a version and license on every row turns a
-scannable index into a wall; tapping a name opens the version and a link out to the full license
-text.
+scannable index into a wall; tapping a name opens the version, who wrote it, and a link out to the
+full license text.
+
+**The authors are part of the attribution, not decoration.** Apache-2.0 §4 asks that attribution
+travel with the code, and almost everything bundled here ships under it; a page naming only the
+license has stated the terms without stating who they are for. So the details dialog names the
+component's declared developers, or the organization that published it where no developer is
+named, and omits the line entirely where the component's own metadata names nobody — an empty
+"By" would be a claim about authorship the export cannot support. Names only: the export also
+carries organization URLs, and a second link per component would bury the license link the dialog
+exists for.
 
 **One attribution list per flavor, not one shared list.** `play` bundles Play's in-app update
 library and the Play Services stack beneath it; `direct` bundles none of it (§3.4). A shared list
