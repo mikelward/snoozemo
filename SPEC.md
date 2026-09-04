@@ -2352,8 +2352,19 @@ absolute bound (D7).
 Each wake restores the service. A cold restore — the process died — runs every repair a wake
 performs: re-arm the cap, re-assert the rule, reconcile policy access, re-register the fence,
 collect any held exit. A warm one re-checks the cap against the clock, re-registers a fence whose
-registration failed, and re-enqueues the backstop itself; it deliberately does not touch the zen
-rule, which a running service already owns. Either way the wake asks
+registration failed, re-posts the ongoing card from the running record, and re-enqueues the
+backstop itself; it deliberately does not touch the zen rule, which a running service already
+owns. The re-post is what bounds two things the card otherwise had no wake for (2026-09-04): a
+`notify` the platform refused, which on a duration-only snooze nothing else would retry before
+the cap, and the ringer-shortfall clause (§5.9), which is read at the post and which nothing
+listens for — so a phone turned back up above its ceiling now reads correctly within a wake,
+warm or cold. It is a plain rebuild at about four binder calls, and the card is ongoing,
+alert-once and stably timed, so nothing in the shade moves — and it is posted silently outright,
+because after a refused post it is the platform's *first* sight of the card, which alert-once
+does not cover, on a channel that bypasses Snoozemo's own DND. The same holds for every post
+of the card but the arm's own: a restore's transition, a clock or tracking change, a late
+notification grant — each can be the first post after a refusal or a reboot, and none of them
+is the moment the user tapped. Either way the wake asks
 the presence monitor for **one resting fix**, so a departure the geofence never reported gets
 tested by §6.6 rather than waited out until the cap. The probe re-checks the location grants on
 the way, which is what makes a mid-snooze permission revocation detectable at the backstop's

@@ -4249,6 +4249,20 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   and one observation the monitor handles through a step list a test pins; the
   monitor's own latches decide what a grant can refute, so the poke can be dropped
   without leaving state behind.
+- **Guessed under autopilot: the backstop's warm wake re-posts the ongoing card
+  unconditionally** (2026-09-04), which is what closes the refused-`notify` gap (Codex,
+  PR #8) and bounds the ringer-shortfall lag (Codex, PR #176) at the wake's cadence.
+  **Why:** both entries name this as the honest cheap option — a wake the snooze
+  already pays for, so no battery line moves — and the cold half of the same wake
+  already reposts through the restore's transition, so this only makes the warm half
+  match. Unconditional rather than only-when-refused because the ringer clause is
+  re-read either way, and a second flag for "the last post failed" is state that can
+  itself be wrong across a process boundary.
+  **The alternative** was to accept the lag and say so in `SPEC.md`, or a retry alarm
+  for the refused post (a wake-up per snooze against `SPEC.md` §9).
+  **Why it is reversible:** one call in the warm `ACTION_CHECK_CAP` path; the card is
+  `setOngoing` + `setOnlyAlertOnce` with a stable `setWhen`, so the repost neither
+  alerts nor re-sorts, and dropping it restores exactly the previous behavior.
 
 - **Guessed under autopilot: set the auto-arm battery gate at ≤0.1%/hour
   stationary and ≤0.25%/hour moving** (2026-09-03), before the A/B is run rather
@@ -5349,7 +5363,11 @@ footnote.
 
 ## Deferred review findings (Codex, PR #176)
 
-- [ ] **The ongoing card can lag a ringer the user turns up mid-snooze.** The shortfall
+- [x] **The ongoing card can lag a ringer the user turns up mid-snooze.** *(Bounded 2026-09-04
+  under autopilot, the first of the two options below — read on a wake the snooze already
+  pays for: the backstop's warm wake restates the card, which re-reads the clause, so the
+  30-minute bound named here now holds for a live process as well as a dead one; see
+  *Decisions needing review*.)* The shortfall
   clause (`SPEC.md` §5.9) is read when the card is posted, and nothing listens for
   `AudioManager.RINGER_MODE_CHANGED_ACTION` — so on a duration-only snooze a phone
   turned back up above its ceiling may keep a healthy-looking card until the next
@@ -5549,7 +5567,10 @@ with real onboarding and settings, so they may be fixed by deletion.
     `PLATFORM_REFUSED` arm branch already hands the obligation to the ladder, and the failed-save
     unwind owns the rule it is releasing, so neither needed it.
 
-- [ ] **A refused `notify` leaves the ongoing notification missing for the whole snooze.**
+- [x] **A refused `notify` leaves the ongoing notification missing for the whole snooze.**
+  **Landed 2026-09-04, the cheap version the entry itself names**: the backstop's warm wake
+  now restates the ongoing card from the in-memory record, so a refused post is retried
+  at the wake's own cadence with no wake-up added (`SPEC.md` §6.10). The history stands.
   `showOngoing` discards `post`'s result, so a transient throw with `POST_NOTIFICATIONS` *granted*
   loses the countdown, the degraded-mode line, `End now` and `+30 min` until something else happens
   to re-post — and on a duration-only snooze nothing does, because there are no intermediate
