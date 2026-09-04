@@ -3498,14 +3498,14 @@ question.
   the task. On a single-threaded FIFO worker that means **something earlier in
   the queue is long-running or blocked**.
 
-  **The remaining hypothesis, untested**: it passes in isolation (9 s for the
-  whole class) and fails only in the full suite, so the blocking work is
-  probably left by a sibling class in the same JVM fork. `DebugLogging`'s
-  worker is never shut down between classes, `resetForTest()` clears `sink`
-  without draining what the old sink queued, and `DebugLogFiles` has at least
-  one deliberately blocking call on that thread ("Safe to block here: every
-  caller is already on the debug log's worker"). Look there before theorizing
-  again.
+  **Hypothesis still open: a sibling class's leftovers.** It passes in
+  isolation and fails only in the full suite, so the blocking work is probably
+  queued by an earlier class in the same JVM fork. `DebugLogging`'s worker is
+  never shut down between classes and `resetForTest()` clears `sink` without
+  draining what the old sink queued, so a preceding class's task can still be
+  in front of the failing class's sentinel. The 2026-09-04 stack below narrows
+  *what* that task is without saying *who* submitted it, so this stays a live
+  avenue.
 
   **The failure now names what wedged the worker** (2026-09-01). Both waits
   that were silently returning a bare boolean now fail loudly and print
@@ -3513,9 +3513,37 @@ question.
   queue depth and the completed-task count. That was added because *every*
   diagnosis so far has been guessed from the one fact the old message carried
   — that a trivial task did not reach the front of a queue — which never said
-  what was ahead of it. The stack names the class that queued the blocking
-  task directly, and since that class has usually finished by the time the
-  stall surfaces, nothing else could.
+  what was ahead of it. It was expected to name the class that queued the
+  blocking task; **it does not** — 2026-09-04 showed it names the task and not
+  its submitter, which is the gap the submitter-tracing step below exists to
+  close. What it does carry is worth having anyway: the task, the thread's
+  state, and where it is parked.
+
+  **The stack printed, and it names the blocking task — but not its
+  submitter** (2026-09-04, CI run 33877909265 on #182). `snoozemo-debug-log-init` is `WAITING` at
+  `queued=36, completed=417`, parked in
+  `SharedPreferencesImpl$EditorImpl.commit` -> `writtenToDiskLatch.await()`,
+  reached from `DebugLogStore.markLegacyLogsPurged` <- `purgeLegacyDirectory`
+  <- `DebugLogging.installNow` <- `DebugLogging.install`.
+
+  This **sharpens** "something earlier in the queue is long-running or
+  blocked" rather than refuting it: the blocking task is now identified as an
+  install's legacy purge, parked inside a `commit()`. What the stack does
+  **not** say is which class submitted that install — the worker is a
+  process-wide singleton, so it may be this class's own or a preceding one's,
+  and the earlier draft of this entry wrongly claimed the former (Codex,
+  PR #183). `commit()` waits on that latch only when the write was
+  **not** run inline — `SharedPreferencesImpl` runs it on the calling thread
+  when it is the only write in flight, and otherwise hands it to `QueuedWork`'s
+  handler thread, whose looper under Robolectric may never run it.
+
+  **Next steps**, both needed: trace which class submitted this install (the
+  stall record would have to carry the submitting class, since by then it has
+  usually finished), and trace the concurrent write that forced this `commit()`
+  down the queued branch — the branch itself is settled by the stack, so the
+  open question is what else was writing the same preferences file. Instrument CI
+  rather than hunting locally — it did not reproduce in 5x
+  `:app:testDirectDebugUnitTest --rerun-tasks` on `b70621f`.
 
   `MainActivityLifecycleTest` was the second half of the same fault and now
   says so. Its *a restart picks up a dismiss outcome missed while stopped*
@@ -3545,9 +3573,19 @@ question.
   wedge that either happens or does not rather than a timeout that is sometimes
   beaten.
 
-  **Third hypothesis, and the first with a proven mechanism** (2026-09-01).
-  Stated as a hypothesis on purpose — what follows is verified *code*, not a
-  verified *cause*, and the first two theories also read as obvious.
+  **Third hypothesis — SUPERSEDED, kept for the reasoning** (2026-09-01;
+  retired 2026-09-04). Two things retire it. The mechanism below is bounded in
+  code: `readPreviousOrCrash` goes through `readPreviousRunBounded`, which
+  hands the *read* to its own pool — but it is called from inside
+  `worker.execute`, so `awaitBounded`'s `get(timeout)` still parks the shared
+  worker, for up to five seconds (Codex, PR #183). The indefinite park is
+  gone; a park is not. And the 2026-09-04 stack parks in
+  `markLegacyLogsPurged`, not in `readPreviousRun`. Read the rest as the
+  argument that led there, not as a live lead.
+
+  Worth carrying forward: a bounded park is still five seconds of a worker
+  whose drain gives up at ten, so this path can contribute to a stall without
+  being its cause.
 
   The library's `DebugFileSink.readPreviousRun()` is **synchronous and
   unbounded**: `worker.submit { readPreviousRunOnWorker() }.get()`, a block on
@@ -3572,8 +3610,9 @@ question.
     nothing about the sick one. And a wedge needs exactly one stalled call,
     of which a run offers two chances; "rarely, one of these two does not come
     back" fits an intermittent flake better than a steadily-growing wait does.
-    So the load-driven variant of this hypothesis is dead and the *stall*
-    variant is untouched.
+    So the load-driven variant of this hypothesis is dead; the *stall* variant
+    was untouched until 2026-09-04, and is now superseded too — see the note
+    at the head of this hypothesis.
   - **The caller has a timeout; the worker does not.** The calling test gives
     up, reports its own failure and moves on — while the worker stays parked
     and everything queued behind it, including every later class's drain,
@@ -3625,16 +3664,18 @@ question.
   none, so reverting the early return leaves the test passing — verified, not
   assumed. Covering the real arm needs a library seam.
 
-  **Unproven:** how slow, or how stuck, the sink's read actually gets. The
-  `workerStall()` output settles it in one shot — a stack showing
-  `readPreviousRun` → `FutureTask.get` confirms it, anything else refutes it.
-  Six full-suite runs under a two-CPU squeeze did not reproduce the stall
-  locally, so the next CI occurrence is the likeliest place to read it.
+  **Settled, and refuted** (2026-09-04). This said the `workerStall()` output
+  would decide it in one shot — a stack showing `readPreviousRun` →
+  `FutureTask.get` confirms it, anything else refutes it. The stack came back
+  parked in `markLegacyLogsPurged`, so it is the refuting case: however slow
+  the sink's read may be, it is not what wedged this worker.
 
   **Fixed both ends** (maintainer, 2026-09-01 — "let's try a+c"). The library
   bounds its own wait (`androidlog`: `readPreviousRun` gives up after ten
   seconds and says it timed out rather than merely failed), and
-  `DebugLogging` bounds it again at five, on a thread that is not the worker.
+  `DebugLogging` bounds it again at five — on the worker, since
+  `readPreviousOrCrash` calls `awaitBounded` from inside `worker.execute`, so
+  what the local bound buys is a park that ends, not one avoided.
   Both, not either: the library fix is the correct layer and reaches every
   consumer, while the local one does not depend on which library version an
   install resolved, fails in a quarter of the time in front of a user waiting
@@ -5182,13 +5223,18 @@ one account there rather than two here.
 The short version: six `ProcessExitReasonsTest` cases and one `MainActivityLifecycleTest`
 case fail together at a flat ~10.03 s under full-suite load and pass in isolation. PR #166
 changed the drain from a skippable production API to the unconditional test seam — a real
-fix to a real defect, and **not** a fix to this. The task is queued and not executed, so the
-worker is occupied by something earlier in the queue.
+fix to a real defect, and **not** a fix to this. The task is queued and not executed, and
+the stack now shows what is ahead of it: an install's legacy purge, blocked in a commit.
 
 They fail **together because it is one fault, not two**: a single wedged worker, with
 `MainActivityLifecycleTest` the second victim rather than a separate flake. Both waits now
-print the worker's own stack when they time out, so the next occurrence names the class that
-queued the blocking task instead of leaving it to be guessed a fourth time.
+print the worker's own stack when they time out. That was expected to name the class that
+queued the blocking task; it names the task itself, not its submitter — see below.
+
+**2026-09-04: it occurred and the stack printed.** It names the blocking task — an install's
+legacy purge, parked in a `SharedPreferences` commit — but not which class submitted it, so
+the sibling-class hypothesis stays open. Recorded in the Phase 6 item with the rest, per the
+note above.
 
 ## Analytics turns on a Crashlytics breadcrumb channel — accepted (PR #166)
 
