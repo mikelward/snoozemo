@@ -86,10 +86,36 @@ concurrency:
   # publication itself is already serialized where it belongs — the `deploy`
   # job's own `deploy-main-release` group — so nothing here needs to queue
   # main runs to protect it.
-  group: ci-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || 'branch' }}
+  # Keyed on the EVENT, not the ref. Under `pull_request` the two agree —
+  # github.ref is refs/pull/<n>/merge, so every PR already lands in its own
+  # group — but the ref form inverts the moment this workflow moves to
+  # `pull_request_target`: github.ref becomes refs/heads/main for every PR
+  # run, so all open PRs collapse into ONE group keyed on the base commit,
+  # and cancel-in-progress goes false in the same breath, leaving them to
+  # queue behind each other with nothing evicting them. Both halves have to
+  # move together for that reason.
+  #
+  # The `main-<sha>` arm is restricted to `push`, which is NOT the shape
+  # typelauncher uses. It groups a main-aimed dispatch with the pushes,
+  # because there a dispatch without `inputs.pr` is a documented
+  # deploy-force that must serialize against them. This repo is the mirror
+  # image: `pr` is `required: true`, every dispatch checks out that PR's
+  # merge ref, and `deploy` gates on `github.event_name == 'push'`, so a
+  # dispatch here is never a release trigger — it is a rerun OF a pull
+  # request. Grouping it as a main run would put every PR rerun and the
+  # push for main's current tip in one `ci-main-<sha>` group, where a
+  # group holds one running plus one pending run and a third arrival
+  # evicts the pending one: a rerun could drop a queued release run, or
+  # another rerun could drop it. So a dispatch keys by `inputs.pr` and
+  # lands in its own PR's group, which is also what supersedes an
+  # in-flight run for that same PR. Raised by Codex on #184.
+  # `github.event.inputs.pr`, not `inputs.pr`: the payload field needs only
+  # the `github` context, which `concurrency` certainly has. Same value for
+  # a string input, no question about context availability at this scope.
+  group: ci-${{ github.event_name == 'push' && format('main-{0}', github.sha) || github.event.pull_request.number || github.event.inputs.pr || github.ref }}
   # Redundant given the per-commit group above (a group of one has nothing to
   # cancel), kept because it states the intent the group is enforcing.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 # Explicitly empty, not omitted: every job below declares its own downscoped
 # block, so this grants nothing itself — it exists so a future job that
