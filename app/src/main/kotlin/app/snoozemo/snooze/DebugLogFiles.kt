@@ -861,10 +861,11 @@ internal object DebugLogging {
             }
             // Returns without touching the sink, and that ordering is the
             // whole point (Codex, PR #168). `awaitIdle()` drains the *sink's*
-            // worker, and the leading explanation for a stalled worker here is
-            // that it is itself parked in `readPreviousRun()` waiting on
-            // exactly that worker. Draining would then queue behind the same
-            // task and block, so the caller would hang instead of failing with
+            // worker, and a stalled worker here may itself be parked on a task
+            // that waits on exactly that worker (`readPreviousRun()` was the
+            // leading candidate until the 2026-09-04 stack; see `TODO.md`).
+            // Draining would then queue behind the same task and block, so the
+            // caller would hang instead of failing with
             // [workerStall] — leaving the one path this seam most needs to
             // report as the one it could not.
             return false
@@ -890,9 +891,12 @@ internal object DebugLogging {
      * Test seam: occupies the worker until [release] is counted down, so a
      * test can see what callers do against a worker that is not coming back.
      *
-     * That state is otherwise unreachable from a test — it arises from a
-     * *stalled* sink read — while being the state the drain's reporting has
-     * to survive, so it is worth being able to stage deliberately.
+     * That state is otherwise unreachable from a test — it arises from any
+     * task that blocks on the worker and does not come back: a stalled sink
+     * read was the presumed one, and the 2026-09-04 occurrence was an install
+     * parked in `SharedPreferences.commit` (`TODO.md`) — while being the state
+     * the drain's reporting has to survive, so it is worth being able to
+     * stage deliberately.
      *
      * The wait is bounded even so. An unreleased latch here would wedge the
      * worker for the rest of the JVM and take every later test class in the
@@ -912,8 +916,10 @@ internal object DebugLogging {
      * `ProcessExitReasonsTest` stall already (`TODO.md`). The worker is a
      * process-wide singleton shared by every test class in a Robolectric
      * sandbox, so whatever wedges it was very likely queued by an *earlier*
-     * class and is invisible from the class that fails. Its stack names that
-     * caller directly.
+     * class and is invisible from the class that fails. Its stack names the
+     * blocking *task*, which is not the same as naming the class that
+     * submitted it -- the 2026-09-04 occurrence showed exactly that gap, and
+     * closing it is tracked in `TODO.md`.
      *
      * Reports the queue depth alongside, since "blocked in a task" and "never
      * started one" are different faults with the same symptom.
