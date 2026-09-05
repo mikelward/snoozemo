@@ -389,6 +389,11 @@ it in the same commit.
 
   Autopilot does not change this: guessing is allowed on reversible implementation calls,
   not on what a privacy rule means.
+- **A second verified finding in the same mechanism is evidence about the
+  design, not another bug.** Before fixing it, look for the same shape
+  elsewhere and ask whether a different design would delete the class rather
+  than the instance. Say what you chose on the thread; a design change is the
+  maintainer's call, autopilot included.
 - Never leave a review comment thread silently dismissed: answer on the thread — a
   disagreement is an answer, so say why — then resolve it. When a comment is a false
   positive, say why on the thread.
