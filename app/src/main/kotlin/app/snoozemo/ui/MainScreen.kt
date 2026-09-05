@@ -1,6 +1,7 @@
 package app.snoozemo.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,6 +20,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import app.snoozemo.PlayUpdateState
 import app.snoozemo.R
@@ -297,21 +301,87 @@ internal fun MainScreen(
 /**
  * The idle half of the status slot: no snooze is running, said plainly.
  *
- * Same `titleMedium` and the same position as [SnoozeStatus]'s mode line, so
- * the two read as one line changing rather than content appearing and
- * disappearing — and so a user who glances at the screen gets the answer from
- * the words rather than from which button is grayed.
+ * The same [StatusBlock] the running state uses, so the two read as one thing
+ * changing rather than content appearing and disappearing — and so a user who
+ * glances at the screen gets the answer from the words rather than from which
+ * button is grayed.
  *
- * No second line beneath it. The running state's second line carries the
- * remaining time; idle has no equivalent fact, and inventing one ("Tap Snooze
- * to start") would only restate the button directly below it.
+ * No second line beneath it. The running state's carries the remaining time;
+ * idle has no equivalent fact, and inventing one ("Tap Snooze to start") would
+ * only restate the button directly below it.
  */
 @Composable
 private fun NotSnoozingStatus() {
-    Text(
-        text = stringResource(R.string.main_not_snoozing),
-        style = MaterialTheme.typography.titleMedium,
-    )
+    StatusBlock(headline = stringResource(R.string.main_not_snoozing))
+}
+
+/**
+ * The status slot's shape: one headline, optionally over what qualifies it,
+ * optionally over a detail.
+ *
+ * **Centered and at `headlineSmall`** (maintainer, 2026-09-05). This one line
+ * is what the screen exists to say, and at body size across the full column it
+ * read as another paragraph rather than the answer — so it is the largest text
+ * on the screen and it sits in the middle, where a glance lands.
+ *
+ * **[oneRow] is preferred and measured, not assumed.** `Snoozing until you
+ * leave` says the whole thing in a sentence and is the better reading where it
+ * fits; where it does not, the split is a deliberate one — the title over its
+ * condition — rather than whatever a wrap happens to produce ("Snoozing until
+ * you" / "leave"). So the width is measured before composing rather than
+ * discovered by an overflow callback afterwards, which would draw the clipped
+ * one-line version for a frame first.
+ *
+ * Only the full tracking mode has a one-row form. "Snoozing, Wi-Fi only" does
+ * not compose, so a degraded snooze always takes the two-row shape and states
+ * its mode — and its reason — on the second line.
+ */
+@Composable
+private fun StatusBlock(
+    headline: String,
+    oneRow: String? = null,
+    condition: String? = null,
+    detail: String? = null,
+) {
+    val headlineStyle = MaterialTheme.typography.headlineSmall
+    val measurer = rememberTextMeasurer()
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val oneRowFits = oneRow != null && !measurer.measure(
+            text = oneRow,
+            style = headlineStyle,
+            softWrap = false,
+            constraints = Constraints(maxWidth = constraints.maxWidth),
+        ).hasVisualOverflow
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                // `oneRow` already contains the condition, so it replaces both
+                // rows rather than sitting above one that repeats it.
+                text = if (oneRowFits) oneRow else headline,
+                style = headlineStyle,
+                textAlign = TextAlign.Center,
+            )
+            if (!oneRowFits) {
+                condition?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.titleMedium,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+            detail?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+    }
 }
 
 /**
@@ -358,14 +428,16 @@ private fun SnoozeStatus(mode: TrackingMode, remaining: Duration, degradation: D
             degradationReasonRes(degradation)?.let { stringResource(it) }
         TrackingMode.FULL, TrackingMode.WIFI_GRACE -> null
     }
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-            text = reason?.let { stringResource(R.string.ongoing_degraded_reason, body, it) }
-                ?: body,
-            style = MaterialTheme.typography.titleMedium,
-        )
-        Text(text = remainingText(remaining), style = MaterialTheme.typography.bodyMedium)
-    }
+    StatusBlock(
+        headline = stringResource(R.string.ongoing_title),
+        // FULL carries no degraded reason by construction, so its one-row form
+        // can never be missing one.
+        oneRow = stringResource(R.string.main_snoozing_until_you_leave)
+            .takeIf { mode == TrackingMode.FULL },
+        condition = reason?.let { stringResource(R.string.ongoing_degraded_reason, body, it) }
+            ?: body,
+        detail = remainingText(remaining),
+    )
 }
 
 /** The same hours/minutes split and copy [app.snoozemo.tile.TileSnapshot] formats the tile's countdown from. */

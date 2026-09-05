@@ -564,6 +564,18 @@ purpose: it is always literally `"Here"` today (saved/named places are unbuilt �
 places"), and the notification doesn't show it either, so surfacing it here first would only read
 as filler.
 
+**The status block is the screen's headline, centered and larger** (maintainer, 2026-09-05).
+Whether a snooze is running is the one thing this screen exists to say, and at body size across
+the full column it read as another paragraph rather than as the answer — so it is the largest
+text on the screen and it sits in the middle, where a glance lands. Idle says `Not snoozing`;
+running prefers the whole thing as one sentence, `Snoozing until you leave`, and falls back to
+the title over its condition — `Snoozing` above `Ends when you leave` — only where that sentence
+will not fit. The fallback is a **deliberate** split rather than a wrap, so the width is measured
+before the text is composed; a wrap would break it wherever the words happened to land. Only the
+full tracking mode has a one-sentence form, since `Snoozing, Wi-Fi only` does not compose, so a
+degraded snooze always takes the two-row shape and states its mode — and its reason — on the
+second row.
+
 **Including the degraded reason, on the same line and in the same words** (landed 2026-08-30). The
 mode line joins its cause exactly as §4.3's card does — `Timer only — no location` — from the same
 mapping, so the two surfaces cannot drift into phrasing one snooze two ways. Reason enough on its

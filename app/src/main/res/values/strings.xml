@@ -285,6 +285,16 @@
       (AGENTS.md, *Concise copy*).
     -->
     <string name="main_not_snoozing">Not snoozing</string>
+    <!--
+      The running state's headline, when the whole thing fits on one line. The
+      status block is what the screen exists to say, so it is stated as one
+      sentence where the width allows and split into a title over its condition
+      where it does not (maintainer, 2026-09-05). Only the full tracking mode
+      has a one-line form: "Snoozing, Wi-Fi only" does not compose, so the
+      degraded modes always take the two-row shape.
+    -->
+    <!-- TODO: translate -->
+    <string name="main_snoozing_until_you_leave" tools:ignore="MissingTranslation">Snoozing until you leave</string>
     <string name="arm">Snooze</string>
     <string name="release">End snooze</string>
     <string name="rule_failed">Do Not Disturb access is on, but Snoozemo could not create its rule</string>
