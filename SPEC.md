@@ -451,9 +451,11 @@ yet built — `TODO.md` Phase 6, sketched with its copy in `TUTORIAL.md`). The r
 install lands on `PermissionsScreen` — put three permission rows in front of someone who had not
 yet been told what the app is for or how it is used, and the tile, which is the whole product, is
 invisible until someone adds it. So a short run of fixed cards comes first, each one idea: what the
-app is; how a snooze ends; the tile; the notification's actions; the one Do Not Disturb rule and
-the ringer choice (§5.9); and, last, the crash-report and analytics consent (§12) with a mention of
-the on-device debug log (§4.6). Each card offers the grant for the thing it just introduced, drawn
+app is; how a snooze ends, shown on a render of the ongoing notification (§4.3), the one surface
+that carries every way it can — departure, a chosen time, `End now` — so the end sheet (§4.4) needs
+neither a card nor a switch in the flow (maintainer, 2026-09-05); the tile; the one Do Not Disturb
+rule and the ringer choice (§5.9); and, last, the crash-report and analytics consent (§12) with a
+mention of the on-device debug log (§4.6). Each card offers the grant for the thing it just introduced, drawn
 as the same tri-state rows `PermissionsScreen` uses (§5.2), and `Next` never waits on one — the
 rows' own fail-open rule. `PermissionsScreen` then follows only when a permission is still missing,
 as the recap, and its once-only routing stays as the backstop for an install that skipped the
