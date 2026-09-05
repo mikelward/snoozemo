@@ -98,6 +98,11 @@ internal fun MainScreen(
     settingsFailure: SetupRowId? = null,
     onOpenPermissions: () -> Unit,
     onOpenSettings: () -> Unit,
+    /**
+     * Replays the welcome flow from its first card (`SPEC.md` §4.2). Defaulted
+     * so a screenshot test pinning something else need not state an opinion.
+     */
+    onOpenWelcome: () -> Unit = {},
     onAddTile: () -> Unit,
     onDismissTileBanner: () -> Unit,
     onArm: () -> Unit,
@@ -143,6 +148,14 @@ internal fun MainScreen(
             // large-font cases where `End snooze` is already tight, and the
             // exit outranks Settings (SPEC.md §4.2).
             actions = {
+                // Help before settings, in logical order rather than physical:
+                // the app supports RTL, where the row mirrors, so "left" would
+                // pin them against the direction the layout is meant to flip.
+                SnoozemoTitleAction(
+                    icon = R.drawable.ic_help,
+                    label = R.string.welcome_replay,
+                    onClick = onOpenWelcome,
+                )
                 SnoozemoTitleAction(
                     icon = R.drawable.ic_settings_gear,
                     label = R.string.settings_title,
@@ -406,9 +419,14 @@ private fun TelemetryInviteCard(onAnswer: (Boolean) -> Unit) {
                 text = stringResource(R.string.telemetry_invite_body),
                 style = MaterialTheme.typography.bodyMedium,
             )
+            // Pushed to opposite ends rather than clustered at the trailing
+            // edge (maintainer, 2026-09-05): a yes/no pair sitting side by side
+            // is two taps a thumb can confuse, and the separation is what makes
+            // the affirmative one deliberate. `Yes please` is the trailing,
+            // filled button — the affirmative answer is always the trailing one.
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 TextButton(onClick = { onAnswer(false) }) {
                     Text(stringResource(R.string.telemetry_invite_decline))

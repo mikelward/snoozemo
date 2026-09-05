@@ -469,4 +469,69 @@
          tap look like it did nothing. -->
     <!-- TODO: translate -->
     <string name="settings_licenses_link_failed" tools:ignore="MissingTranslation">Couldn\'t open the license</string>
+
+    <!--
+      The welcome flow (SPEC.md §4.2, wording and reasoning in TUTORIAL.md).
+      Five cards before the permissions screen on a fresh install, replayable
+      from the title row's help icon. Approved by the maintainer 2026-09-05;
+      untranslated until it has been seen on a device, per AGENTS.md.
+    -->
+    <!-- TODO: translate -->
+    <string name="welcome_next" tools:ignore="MissingTranslation">Next</string>
+    <!-- TODO: translate -->
+    <string name="welcome_skip" tools:ignore="MissingTranslation">Skip</string>
+    <!-- The last card advances to the same place Skip does, so it says what it
+         does rather than repeating Next. -->
+    <!-- TODO: translate -->
+    <string name="welcome_done" tools:ignore="MissingTranslation">Done</string>
+    <!-- The title row's replay control. Icon-only, so this is its accessible
+         name rather than visible text; chosen over `Intro` and `Replay intro`. -->
+    <!-- TODO: translate -->
+    <string name="welcome_replay" tools:ignore="MissingTranslation">Tutorial</string>
+    <!-- Card 1. The product in one line, then the promise the rest keeps: a
+         snooze always ends. -->
+    <!-- TODO: translate -->
+    <string name="welcome_what_title" tools:ignore="MissingTranslation">Snoozemo</string>
+    <!-- TODO: translate -->
+    <string name="welcome_what_body" tools:ignore="MissingTranslation">Silence your phone until you leave.</string>
+    <!-- The `direct` flavor is duration-only until Phase 7, so promising
+         departure there would set up the silence-until-the-cap this app exists
+         to prevent. -->
+    <!-- TODO: translate -->
+    <string name="welcome_what_body_timer_only" tools:ignore="MissingTranslation">Silence your phone.</string>
+    <!-- TODO: translate -->
+    <string name="welcome_what_promise" tools:ignore="MissingTranslation">One tap.</string>
+    <!-- Card 2. The first line is what happens with nobody touching the phone;
+         the second is the taps. Kept apart because the calendar is never a
+         trigger — it only seeds an action the user still has to press. -->
+    <!-- TODO: translate -->
+    <string name="welcome_ends_title" tools:ignore="MissingTranslation">It ends by itself</string>
+    <!-- TODO: translate -->
+    <string name="welcome_ends_body" tools:ignore="MissingTranslation">When you leave — and never more than 8 hours.</string>
+    <!-- TODO: translate -->
+    <string name="welcome_ends_body_timer_only" tools:ignore="MissingTranslation">Never more than 8 hours.</string>
+    <!-- TODO: translate -->
+    <string name="welcome_ends_taps" tools:ignore="MissingTranslation">Or tap to end it: End now, the tile, or Until your meeting\'s end.</string>
+    <!-- Card 3. The tile is the arm affordance and the one path that works with
+         the phone locked. -->
+    <!-- TODO: translate -->
+    <string name="welcome_tile_title" tools:ignore="MissingTranslation">Snooze from the shade</string>
+    <!-- TODO: translate -->
+    <string name="welcome_tile_body" tools:ignore="MissingTranslation">Swipe down and tap the Zzz tile.</string>
+    <!-- TODO: translate -->
+    <string name="welcome_tile_locked" tools:ignore="MissingTranslation">Works with the phone locked.</string>
+    <!-- Card 4. One rule, created once, and the app switches only that one. -->
+    <!-- TODO: translate -->
+    <string name="welcome_rule_title" tools:ignore="MissingTranslation">One editable rule</string>
+    <!-- TODO: translate -->
+    <string name="welcome_rule_body" tools:ignore="MissingTranslation">Snoozemo adds one Do Not Disturb rule and only ever switches that one on and off. Choose what still gets through in Settings › Filters.</string>
+    <!-- The render of the ongoing notification on card 2, which is a picture
+         rather than a live card. Named so a screen reader reaches it as one
+         thing instead of reading a fake notification's controls as tappable. -->
+    <!-- TODO: translate -->
+    <string name="welcome_notification_render" tools:ignore="MissingTranslation">Example of Snoozemo\'s notification while a snooze is running</string>
+    <!-- The progress dots. Five dots say enough on screen, but a screen reader
+         needs the position said out loud. -->
+    <!-- TODO: translate -->
+    <string name="welcome_progress" tools:ignore="MissingTranslation">Card %1$d of %2$d</string>
 </resources>

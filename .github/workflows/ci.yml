@@ -543,6 +543,9 @@ jobs:
       - name: Run main screen screenshot tests
         run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.MainScreenScreenshotTest" -Proborazzi.test.record=true
 
+      - name: Run welcome flow screenshot tests
+        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.WelcomeScreenScreenshotTest" -Proborazzi.test.record=true
+
       - name: Run permissions screen screenshot tests
         run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.PermissionsScreenScreenshotTest" -Proborazzi.test.record=true
 

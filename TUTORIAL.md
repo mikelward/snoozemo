@@ -74,13 +74,16 @@ screen already has a reason attached.
 >
 > Silence your phone until you leave.
 >
-> One tap. It turns itself back on.
+> One tap.
 
-Illustration: the `Zz` mark, large.
+Illustration: the `Zzz` mark, large.
 
 The first line is §1's one-sentence product with the meeting clause dropped — the
-next card carries that. The second line is the promise the rest of the app keeps:
-a snooze always ends (principle 1; the cap, §7).
+next card carries that. The second is `One tap.` alone: it used to read `One tap.
+It turns itself back on.`, and the second sentence went (maintainer,
+2026-09-05). Card 2 is *about* the snooze ending by itself and says so at length,
+so promising it here spent the first card's two lines saying what the next one
+exists for — and a first screen that front-loads is the one people skip.
 
 On the `direct` flavor, until Phase 7 lands, the first line is just `Silence your
 phone.`: that build is duration-only (§3), so a first card promising departure there
@@ -192,7 +195,7 @@ reads.
 
 > **Snooze from the shade**
 >
-> Swipe down and tap the **Zz** tile.
+> Swipe down and tap the **Zzz** tile.
 > Works with the phone locked.
 >
 > [ Add tile ]
@@ -245,12 +248,9 @@ ringer choice, which is the setting a user is most surprised by after the fact.
 > **Help fix bugs**
 >
 > Send crash reports and anonymous usage stats so bugs get found and fixed?
-> [ Yes please ]  [ No thanks ]
->
-> A debug log stays on your phone either way. Share it from Settings if a
-> snooze misbehaves.
+> [ No thanks ]                                            [ Yes please ]
 
-Illustration: none.
+Illustration: none. One question and nothing else.
 
 **Where the log and analytics settings live** (maintainer, 2026-09-05, "we need to
 think about"). Both already have a home in `SettingsScreen` — the *Help make Snoozemo
@@ -266,11 +266,18 @@ neither moves. What this card decides is whether the flow *asks*:
   never opens Settings. Nothing is collected until the answer is yes, on this card
   as on that one. `direct` ships neither SDK (§12), so on `direct` the question is
   absent and the card is the debug-log sentence alone.
-- **The debug log needs no consent and gets no control here**: it is on by default
-  because it never leaves the phone (§4.6), and its switch stays in Settings. The
-  sentence exists so the user has heard of it *before* a snooze misbehaves — the
-  moment a bug report is worth anything is the moment nobody can be told where the
-  log is.
+- **The debug log is not mentioned at all** (maintainer, 2026-09-05: "we don't want
+  to overwhelm"). This reverses the sketch's earlier reasoning, which was that the
+  user should have heard of the log *before* a snooze misbehaves, since the moment a
+  bug report is worth anything is the moment nobody can be told where the log is.
+  That is still true and is still not worth a line here: the card's whole job is one
+  question about data leaving the phone, and a second sentence about a log that
+  never leaves it is the one most likely to blur the first. The log stays on by
+  default (§4.6) with its switch and its share action in Settings, which is where a
+  user goes when something has actually gone wrong.
+- **So `direct` has no fifth card.** It ships neither SDK (§12), so the question is
+  absent — and with the debug-log sentence gone there is nothing left on the card.
+  The flow is four cards there, and the dots count four.
 
 The consent is asked here, and this is the **last card** (maintainer, 2026-09-05).
 Last on purpose: it is the one question on the cards about data leaving the phone,
@@ -333,8 +340,17 @@ flow.
   sure" over keeping a tile card in the slot).
 - Each card offers the grant for the thing it introduced.
 - The permissions screen at the end appears only when something is still missing.
-- The crash-report and analytics consent is asked in the flow, as the last card;
-  the debug log gets a sentence on it and no control.
+- The crash-report and analytics consent is asked in the flow, as the last card,
+  and it is the whole card: the debug log is not mentioned (maintainer,
+  2026-09-05). On `direct`, which ships no SDK, the card is absent entirely and the
+  flow is four cards.
+- **The affirmative answer is the trailing one, and the pair sits at opposite ends
+  of the row** (maintainer, 2026-09-05): `No thanks` leading and low-emphasis,
+  `Yes please` trailing and filled, with the width between them rather than an 8dp
+  gap. A yes/no pair side by side is two taps a thumb can confuse, and the
+  separation is what makes the affirmative one deliberate. `MainScreen`'s invite
+  card already had the order right and the spacing wrong; both are now this, since
+  it is the same question asked in two places.
 
 ## Open questions for the maintainer
 

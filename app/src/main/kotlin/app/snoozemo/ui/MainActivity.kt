@@ -76,6 +76,7 @@ import app.snoozemo.snooze.LocationPromptStore
 import app.snoozemo.snooze.NotificationPromptStore
 import app.snoozemo.snooze.RecreationMarker
 import app.snoozemo.snooze.PlayUpdateStore
+import app.snoozemo.snooze.WelcomeStore
 import app.snoozemo.snooze.SnoozeClock
 import app.snoozemo.snooze.SnoozeNotifications
 import app.snoozemo.snooze.SnoozeService
@@ -88,6 +89,7 @@ private const val TAG = "MainActivity"
 
 /** `onSaveInstanceState` keys for the navigation state a configuration change would otherwise lose. */
 private const val KEY_SCREEN = "screen"
+private const val KEY_WELCOME_CARD = "welcomeCard"
 private const val KEY_PERMISSIONS_ORIGIN = "permissionsOrigin"
 private const val KEY_ROUTED_TO_PERMISSIONS_ONCE = "routedToPermissionsOnce"
 private const val KEY_SHEET_COMMITTING = "sheetCommitting"
@@ -107,7 +109,7 @@ private const val TICK_INTERVAL_MS = 60_000L
  * can assert on [MainActivity.screen] directly; nothing outside this file
  * constructs one in production.
  */
-internal enum class Screen { MAIN, PERMISSIONS, SETTINGS, LICENSES }
+internal enum class Screen { WELCOME, MAIN, PERMISSIONS, SETTINGS, LICENSES }
 
 /**
  * Hosts the four screens the app is split into (`TODO.md` Phase 4): [MainScreen],
@@ -133,6 +135,17 @@ class MainActivity : ComponentActivity() {
      * Internal for the same test-only reason as [screen].
      */
     internal var permissionsOrigin by mutableStateOf(Screen.MAIN)
+
+    /**
+     * Which card of the welcome flow is showing, while [screen] is
+     * [Screen.WELCOME] (`SPEC.md` §4.2). Internal for the same test-only reason
+     * as [screen], and saved across a configuration change beside it — a
+     * rotation on card 3 must not restart the flow.
+     */
+    internal var welcomeCard by mutableStateOf(WelcomeCard.WHAT)
+
+    /** Records that the flow has been seen, so a fresh install gets it once. */
+    private lateinit var welcomeStore: WelcomeStore
 
     /**
      * Whether [applyAccess] has already made its one routing decision.
@@ -937,6 +950,8 @@ class MainActivity : ComponentActivity() {
             }
         savedInstanceState?.let {
             screen = Screen.entries.firstOrNull { s -> s.name == it.getString(KEY_SCREEN) } ?: screen
+            welcomeCard = WelcomeCard.entries
+                .firstOrNull { c -> c.name == it.getString(KEY_WELCOME_CARD) } ?: welcomeCard
             permissionsOrigin =
                 Screen.entries.firstOrNull { s -> s.name == it.getString(KEY_PERMISSIONS_ORIGIN) }
                     ?: permissionsOrigin
@@ -957,11 +972,74 @@ class MainActivity : ComponentActivity() {
         // that down.
         playUpdateChecker.setInstallStatusListener(::onPlayUpdateInstallStatus)
         playUpdateStore = PlayUpdateStore(applicationContext)
+        welcomeStore = WelcomeStore(applicationContext)
         zen = AndroidZenController.default(applicationContext)
+        // Before any access reading has landed, so the cards come first on a
+        // fresh install rather than the interstitial `applyAccess` would
+        // otherwise route to (SPEC.md §4.2). Only when nothing has been
+        // restored on top of it: a rotation mid-flow keeps its own card, and a
+        // process death on Settings comes back to Settings.
+        if (savedInstanceState == null &&
+            shouldOpenWelcome(seen = welcomeStore.seen(), freshInstall = welcomeStore::freshInstall)
+        ) {
+            screen = Screen.WELCOME
+        }
         setContent {
             SnoozemoTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     when (screen) {
+                        Screen.WELCOME -> {
+                            // The same seam the main screen's invite card
+                            // uses, so the question appears in the flow exactly
+                            // where it would appear later — a build with no SDK
+                            // asks it in neither place.
+                            val cards = welcomeCards(
+                                collectsTelemetry = CrashReporting.isAvailable(this@MainActivity),
+                            )
+                            // Back goes to the previous card, and on the first
+                            // one leaves the flow — the same exit `Skip` takes,
+                            // so no gesture can strand a user inside it (D7).
+                            BackHandler {
+                                val at = cards.indexOf(welcomeCard)
+                                if (at > 0) welcomeCard = cards[at - 1] else leaveWelcome()
+                            }
+                            WelcomeScreen(
+                                card = welcomeCard,
+                                cards = cards,
+                                access = access,
+                                notifications = notifications,
+                                notificationsReachTheUser = notificationsReachTheUser,
+                                location = location,
+                                calendar = calendar,
+                                // The flavor seam, read at the call site like
+                                // PermissionsScreen's (SPEC.md §3.4).
+                                tracksDeparture = app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE,
+                                tileAdded = tileAdded,
+                                snoozeRinger = snoozeRinger,
+                                snoozeRingerSaveFailed = snoozeRingerSaveFailed,
+                                ruleState = renderableRuleState,
+                                settingsFailure = settingsFailure,
+                                crashPending = crashPending,
+                                shareFailed = shareFailed,
+                                dismissFailed = dismissFailed,
+                                sharing = sharing,
+                                onAccessRow = ::openPolicyAccessSettings,
+                                onRuleRow = ::openFilters,
+                                onShareDebugLog = ::shareDebugLog,
+                                onDismissCrash = ::dismissCrash,
+                                onNotificationsRow = ::fixNotifications,
+                                onLocationRow = ::fixLocation,
+                                onCalendarRow = ::fixCalendar,
+                                onAddTile = ::addTile,
+                                onSnoozeRinger = ::chooseSnoozeRinger,
+                                onAnswerTelemetry = ::answerTelemetry,
+                                onNext = {
+                                    val at = cards.indexOf(welcomeCard)
+                                    if (at >= 0 && at < cards.lastIndex) welcomeCard = cards[at + 1]
+                                },
+                                onSkip = ::leaveWelcome,
+                            )
+                        }
                         Screen.MAIN -> MainScreen(
                             access = access,
                             tileAdded = tileAdded,
@@ -983,6 +1061,14 @@ class MainActivity : ComponentActivity() {
                             settingsFailure = settingsFailure,
                             onOpenPermissions = { openPermissions(Screen.MAIN) },
                             onOpenSettings = { screen = Screen.SETTINGS },
+                            // Replays the flow from its first card. The seen
+                            // flag is left alone — a replay is not a fresh
+                            // install, and clearing it would make the next
+                            // cold start show the cards again unasked.
+                            onOpenWelcome = {
+                                welcomeCard = WelcomeCard.WHAT
+                                screen = Screen.WELCOME
+                            },
                             onAddTile = ::addTile,
                             onDismissTileBanner = { tileStore.dismissBanner() },
                             // The location row's own routing, reused whole:
@@ -1148,6 +1234,7 @@ class MainActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putString(KEY_SCREEN, screen.name)
+        outState.putString(KEY_WELCOME_CARD, welcomeCard.name)
         outState.putString(KEY_PERMISSIONS_ORIGIN, permissionsOrigin.name)
         outState.putBoolean(KEY_ROUTED_TO_PERMISSIONS_ONCE, routedToPermissionsOnce)
         // The sheet survives a rotation, chosen time and all: stepping to a
@@ -2207,7 +2294,12 @@ class MainActivity : ComponentActivity() {
         // (SPEC.md §8.2: access lost mid-snooze must not yank the user off
         // whatever they were doing), and only if nothing has already
         // navigated away from Main on its own.
-        if (!routedToPermissionsOnce) {
+        // Held while the welcome flow is up, rather than spent: the cards are
+        // what a fresh install sees first, and this route is what runs when the
+        // user leaves them (SPEC.md §4.2). Spending it here would mean an
+        // access reading landing mid-flow silently used up the one routing
+        // decision, and the recap would never appear.
+        if (!routedToPermissionsOnce && screen != Screen.WELCOME) {
             routedToPermissionsOnce = true
             if (current != PolicyAccess.GRANTED && screen == Screen.MAIN) {
                 openPermissions(Screen.MAIN)
@@ -2929,6 +3021,61 @@ class MainActivity : ComponentActivity() {
             Log.e(TAG, "Requesting the tile be added was refused.", it)
             settingsFailure = SetupRowId.TILE
         }
+    }
+
+    /**
+     * Leaves the welcome flow, by `Skip` or from its last card.
+     *
+     * Both land in the same place, and which place that is depends on what is
+     * still missing: the recap when a permission this flavor offers is
+     * ungranted, `MainScreen` when nothing is (`SPEC.md` §4.2). So there is no
+     * route through the cards that misses a missing permission, and none that
+     * shows a recap with nothing to recap.
+     *
+     * Marks the flow seen on the way out rather than on the way in, so a
+     * process death mid-flow costs the user nothing — see [WelcomeStore].
+     */
+    /** Test seam for [leaveWelcome], which no test can reach through the UI. */
+    internal fun leaveWelcomeForTest() = leaveWelcome()
+
+    /**
+     * Test seam for `applyAccess`'s once-only route, which the flow's exit must
+     * leave alone — see [leaveWelcome].
+     */
+    internal fun routedToPermissionsOnceForTest() = routedToPermissionsOnce
+
+    private fun leaveWelcome() {
+        welcomeStore.markSeen()
+        screen = Screen.MAIN
+        // Always computed, never gated on `routedToPermissionsOnce`. That flag
+        // governs `applyAccess`'s *automatic* route — the one that must fire at
+        // most once so a revocation mid-snooze cannot yank the user off what
+        // they were doing (§8.2). Leaving the flow is not that: it is the user
+        // finishing a screen, and its destination is the flow's own contract —
+        // the recap whenever something this flavor offers is still missing.
+        //
+        // Conflating the two meant a replay from the help icon always returned
+        // to `MainScreen`, since the flag was long since spent, and the replay
+        // is exactly when a user is most likely to be looking for the thing
+        // they skipped (Codex, PR #204 — the third finding in this exit).
+        //
+        // The exit does not *spend* it either, which was the fourth. A tap that
+        // beats the access reading finds `access` still null, which is not a
+        // missing permission — so this exits to `MainScreen`, and burning the
+        // flag on the way would have killed the interstitial that the `DENIED`
+        // landing a moment later is supposed to route to. Leaving it alone
+        // costs nothing in the other direction: when this *does* open the
+        // recap, `applyAccess` cannot route on top of it, because its own guard
+        // already requires `screen == Screen.MAIN`.
+        val needsRecap = welcomeExitNeedsRecap(
+            access = access,
+            notifications = notifications,
+            notificationsReachTheUser = notificationsReachTheUser,
+            location = location,
+            calendar = calendar,
+            tracksDeparture = app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE,
+        )
+        if (needsRecap) openPermissions(Screen.MAIN)
     }
 
     /** Switches to the permissions interstitial, remembering where to return. */

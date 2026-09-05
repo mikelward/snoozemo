@@ -15,6 +15,7 @@ import app.snoozemo.snooze.ActiveSnoozeStore
 import app.snoozemo.snooze.CapAlarm
 import app.snoozemo.snooze.DebugLogging
 import app.snoozemo.snooze.EndSheetStore
+import app.snoozemo.snooze.WelcomeStore
 import app.snoozemo.snooze.logRecentProcessExitsInBackground
 import app.snoozemo.snooze.handBackRingerNow
 import app.snoozemo.snooze.reconcileRingerInBackground
@@ -59,6 +60,7 @@ class SnoozemoApplication : Application(), androidx.work.Configuration.Provider 
         // would land in front of the sheet's first frame over a transparent
         // window, and off by default means most installs never read it at all.
         EndSheetStore(this).warm()
+        WelcomeStore(this).warm()
         // How loud a snooze may be (SPEC.md §5.9). Warmed for the same reason
         // as the rule id: the arm path reads it — after the rule is on, never
         // before it — so a cold tap should find it in memory rather than
