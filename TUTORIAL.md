@@ -15,7 +15,7 @@ screen already has a reason attached.
 
 ## Shape
 
-- **Six cards, then the existing permissions screen when a permission is still
+- **Five cards, then the existing permissions screen when a permission is still
   missing.** Each card is one idea, one illustration, a title of at most four words
   and a body of at most two lines. At the default font and display size the layout
   is fixed and nothing scrolls; as the sizes grow the illustration gives way to the
@@ -44,11 +44,11 @@ screen already has a reason attached.
   low-emphasis text button at the foot of the screen below the controls, rather than
   a `SettingsScreen` row — the person who needs it is on the home screen wondering
   what to do, not in Settings.
-- **Progress dots, no numbers, no "1 of 6".** Six dots say enough.
+- **Progress dots, no numbers, no "1 of 5".** Five dots say enough.
 - **Each card offers the grant for the thing it just introduced** (maintainer,
-  2026-09-05). Card 2 carries `Allow` for location and for the calendar, card 3 the
-  `Add tile` action, card 4 `Allow` for notifications, card 5 `Allow` for Do Not
-  Disturb access and the live ringer choice. The button is the same tri-state row
+  2026-09-05). Card 2 carries `Allow` for location, for the calendar and for
+  notifications, card 3 the `Add tile` action, card 4 `Allow` for Do Not Disturb
+  access and the live ringer choice. The button is the same tri-state row
   `PermissionsScreen` already draws (§5.2: the action is a verb, it is offered only
   while the platform will still honor it, and it points at the app's settings once
   the prompts are spent) — the cards embed those rows, they do not re-implement
@@ -79,55 +79,109 @@ a snooze always ends (principle 1; the cap, §7).
 
 On the `direct` flavor, until Phase 7 lands, the first line is just `Silence your
 phone.`: that build is duration-only (§3), so a first card promising departure there
-would set up exactly the silence-until-the-cap the app exists to prevent — and
-promising a chosen time is no better while card 2's `Ask me each time` switch is off
-by default (Codex, PR #193, twice). The second line does the promising, and the cap
-is what makes it true. Card 2 drops its departure line the same way.
+would set up exactly the silence-until-the-cap the app exists to prevent (Codex,
+PR #193, twice). The second line does the promising, and the cap is what makes it
+true. Card 2 drops its departure line the same way.
 
 ### 2 · How it ends
 
 > **It ends by itself**
 >
-> 📍 When you leave                       [ Allow ]
-> ⏰ At a time you choose      Ask me each time [ ○ ]
+> ```
+> 🌙  Snoozing                          3:40:12
+>     Ends when you leave
+>     [ End now ]   [ +30 min ]   [ Until 17:00 ]
+> ```
 >
-> Whichever comes first — never more than 8 hours.
+> When you leave — and never more than 8 hours.
+> Or tap to end it: **End now**, the tile, or **Until** your meeting's end.
 >
-> 📅 In a meeting? One tap on the notification
-> ends it when the meeting does.            [ Allow ]
+> 📍 Location        [ Allow ]
+> 📅 Calendar        [ Allow ]
+> 🔔 Notifications   [ Allow ]
 
-Illustration: none; the lines *are* the picture. The two `Allow` buttons are the
-location and calendar rows from `PermissionsScreen`, so a granted row reads as those
-rows do — the action gone, and the row's capability sentence (`Snoozes can end when
-you leave`, §5.2) in its place; never a bare `Allowed`, which §5.2 retired because it
-answers "did the grant land?" rather than "what can the app do now?". Location's
-`Allow` runs the whole §3.2 sequence from here
-— foreground prompt, disclosure dialog, background prompt — and a user who stops
-partway gets the same `Snoozes can't end when you leave` state the row shows in
-Settings. The second line's control is not a grant but the `Ask when to unsnooze`
-switch — the same setting `SettingsScreen` edits, like card 5's ringer choice.
+Illustration: the ongoing notification as §4.3 draws it, in its fullest shape with
+the meeting action showing — a render, not a live card, drawn inert (no ripple, set
+in slightly like a picture) so nobody tries to tap `End now` on a snooze that is
+not running. It is the picture because it is the one surface that shows every way a
+snooze ends: `Ends when you leave` is the thesis (§4.4), `Until 17:00` is the
+meeting, `End now` is the user's exit, and the countdown is the cap running down
+(§7). The copy reads off it rather than describing it — and only the parts of it
+that are endings: `+30 min` is in the picture because it is on the card, but it
+extends a snooze rather than ending one, so no line promises it.
 
-The two exits the app takes on its own, then the one the user takes. "When you
-leave" is the thesis (§4.4). "At a time you choose" is the end sheet's time row
-(§4.4) — and the sheet is **off by default**, so a fresh install arms with no time
-picker at all and `+30 min` only ever extends. Promising a chosen time to a user who
-has no presented way to choose one would leave them silent to the cap expecting an
-earlier end, worst on `direct` where it is the only line left (Codex, PR #193). So
-the line carries the switch that makes it true; left off, the footer is the honest
-reading of the line — the cap. The footer states the cap (§7) and the rule that a
-chosen time never switches departure tracking off (§4.4, "the helper line is not
-decoration").
-The meeting sits *below* the footer and is worded as a tap because that is what it
-is: the calendar is read only to offer an `Until <time>` action on the ongoing
-notification, seeded from the next meeting's end, and the app never triggers itself
-from the calendar (§1, §4.3). Listing it beside the two automatic exits would tell
-a user who tapped `Allow` that the meeting competes with departure and the timer by
-itself, and leave them silenced after a meeting they never tapped for (Codex,
-PR #193).
+**The two body lines are the card's own division, and it is load-bearing** (Codex,
+PR #198, twice on the same sentence). The title says the snooze ends *by itself*,
+so the first line carries only what happens with nobody touching the phone —
+departure and the cap. Everything else is a tap, and the meeting is one of them:
+the calendar is never a trigger (§1, §4.3), it only seeds an `Until <time>` action
+the user still has to press. Written as one list of endings, the line either
+promised a time no fresh install can pick or an automatic ending the calendar
+never delivers — two rewordings, the same shape. Split, each line is true on its
+own terms and neither has to hedge. The verb governs all three items — a list
+reading `End now`, the tile, `or when your meeting ends` puts a button, an object
+and a time in one series, and the last of them stops looking like something you
+press (Codex, again); `tap to end it` fixes that for the whole line at once.
 
-On the `direct` flavor, until Phase 7 lands, the first line is not true: the build is
-duration-only (§3). Drop that line there rather than promise it, and shorten the
-footer to `Never more than 8 hours.`; the card still reads.
+**Merged from two cards** (maintainer, 2026-09-05: "i don't love the bottom sheet, i
+was thinking show a render of a system notification"; "1 for sure" to merging). The
+first sketch spent one card on the three exits, with an `Ask me each time` switch
+for the end sheet's time row (§4.4) to make "at a time you choose" true on a fresh
+install where the sheet is off by default, and a second card, *Adjust from the
+notification*, on the notification's actions with the same render as its picture.
+The two told one story with the same picture, and the switch put a setting most
+users never need on the second screen they see.
+
+**The chosen-time line went with the switch, and had to** (Codex, PR #198). The
+merged card first kept it, on the reasoning that the notification offers a time
+where the sheet does not — but it does not, in the case that matters: `+30 min`
+extends the cap rather than moving an ending earlier, and `Until <time>` is absent
+without calendar access and a meeting inside the cap (§4.3). A fresh install with
+no meeting would have read a promise of a time to pick and found nothing to pick
+it with, which is the failure the switch existed to prevent, moved rather than
+fixed. So the line names the meeting instead, beside its own `Allow` — the one
+chosen end time the product actually offers — and the sheet stays in Settings,
+off by default, mentioned nowhere in the flow.
+
+The three `Allow` buttons are the location, calendar and notification rows from
+`PermissionsScreen`, so a granted row reads as those rows do — the action gone, and
+the row's capability sentence (`Snoozes can end when you leave`, §5.2) in its place;
+never a bare `Allowed`, which §5.2 retired because it answers "did the grant land?"
+rather than "what can the app do now?". Location's `Allow` runs the whole §3.2
+sequence from here — foreground prompt, disclosure dialog, background prompt — and a
+user who stops partway gets the same `Snoozes can't end when you leave` state the
+row shows in Settings. Each row is about something visible in the render: location
+is `Ends when you leave`; the calendar is `Until 17:00`, which the row's own
+sentence says appears when a meeting is on the calendar — absent, never disabled,
+when there is no calendar access or no meeting worth offering (§4.3, "absent, never
+disabled, and never a promise"), which is why the meeting sits in the line of taps
+rather than among the endings the card claims outright; notifications are the
+card itself — without the grant there is no notification to adjust from, and no
+status bar icon either (§4.3), which is why that permission is requested rather
+than merely declared. Three rows is the densest a card gets; they are the same
+short tri-state rows, and this is the one card on which all three make sense
+together.
+
+The calendar is read only to offer that `Until <time>` action, seeded from the next
+meeting's end, and the app never triggers itself from the calendar (§1, §4.3); both
+the row's sentence and the card's second line are worded as a tap for that reason,
+so a user who tapped `Allow` is not told the meeting competes with departure and
+the timer by itself (Codex, PR #193, and again on PR #198). The footer's cap (§7) and the rule that a chosen time never switches
+departure tracking off (§4.4, "the helper line is not decoration") are what the
+first body line says. The tile tap is D6. The notification is the status surface and
+the only place the countdown, the reason, and the way to extend or end all live
+(§4.2, "nothing the user needs to know may live only on the tile"). The card does
+not say what happens when notifications are denied; the permissions recap does.
+
+On the `direct` flavor, until Phase 7 lands, departure is not true: the build is
+duration-only (§3). The render's body reads `Timer only` in place of `Ends when
+you leave` — the string that build actually posts (`ongoing_timer_only`, §4.3),
+with the countdown still in the chronometer beside the title, since a render that
+invents copy teaches a screen nobody will see (Codex, PR #198). The first body line
+drops to `Never more than 8 hours.`, and the location row is absent, as it is on
+that flavor's `PermissionsScreen`; the second line and the calendar row are
+unchanged, since `READ_CALENDAR` is declared for both flavors. The card still
+reads.
 
 ### 3 · How to start one
 
@@ -148,30 +202,7 @@ not mentioned — it stays where it is as the fallback. `Add tile` is the same a
 tile is there, replaced by `Added`. A user who says no here is not asked again by
 this card; the permanent row in Settings is the standing route (§4.2).
 
-### 4 · While it runs
-
-> **Adjust from the notification**
->
-> **End now** or **+30 min** — and in a meeting, **until it ends**.
-> Tap the tile again to end it.
->
-> [ Allow notifications ]
-
-Illustration: the ongoing card as §4.3 draws it with the meeting action showing —
-its fullest shape, which is why the copy calls that action conditional: it is absent,
-never disabled, when there is no calendar access or no meeting worth offering (§4.3,
-"absent, never disabled, and never a promise"), so the card must not teach a control
-the notification will often not have. The button
-is the `POST_NOTIFICATIONS` row; without the grant there is no card to change
-anything from, and no status bar icon either (§4.3), which is why this permission is
-requested rather than merely declared.
-
-The notification is the status surface and the only place the countdown, the
-reason, and the way to extend or end all live (§4.2, "nothing the user needs to
-know may live only on the tile"). The tile tap is D6. The card does not mention
-what happens when the notification is denied; the permissions recap says that.
-
-### 5 · Your Do Not Disturb rule
+### 4 · Your Do Not Disturb rule
 
 > **One editable rule**
 >
@@ -198,12 +229,13 @@ been granted yet, so the card names where it lives instead of offering a button
 that opens to nothing. The ringer choice is §5.9's ceiling, defaulting to `Vibrate`,
 written to the same setting `SettingsScreen`'s *Ring/vibrate* row edits.
 
-This card is the densest of the five and the one most likely to need cutting. If it
+This card and card 2 are the densest of the five and the ones most likely to need
+cutting. If it
 has to lose something, lose the Filters sentence — the row exists in Settings and
 the rule is discoverable in the system's Modes screen either way — and keep the
 ringer choice, which is the setting a user is most surprised by after the fact.
 
-### 6 · If something goes wrong
+### 5 · If something goes wrong
 
 > **Help fix bugs**
 >
@@ -241,7 +273,7 @@ and putting it after the run of `Allow` buttons rather than among them keeps it
 from reading as one more of the same; the user has also seen by then what the app
 does, which is what "help fix bugs" refers to.
 
-### 7 · Permissions
+### 6 · Permissions
 
 The existing `PermissionsScreen`, unchanged: Do Not Disturb access, notifications,
 location and the calendar row — permissions only. The tile is not on it and never
@@ -250,7 +282,7 @@ routes to it; a user who skipped card 3 has `MainScreen`'s banner and
 grant already offered on its own card this screen is a recap, and its job is what is
 *still* missing: each row
 carries the consequence of saying no (`Snoozes can't end when you leave`, and so on)
-beside the same `Allow`, and after cards 2–5 every one of those consequences refers
+beside the same `Allow`, and after cards 2–4 every one of those consequences refers
 to something the user has just been shown. `Done` lands on `MainScreen`.
 
 Shown **only when a permission is still missing** (maintainer, 2026-09-05, "only
@@ -267,8 +299,10 @@ flow.
 - **No "how it decides you left".** The departure test (§6.6) is the app's business;
   the user's mental model is "when I leave", and a card explaining Wi-Fi and
   accuracy gates would make the product sound less reliable than it is.
-- **No end sheet.** It is off by default (§4.4) and card 2 already covers what it
-  offers; a card for a sheet most users never see is a card too many.
+- **No end sheet.** It is off by default (§4.4), its switch stays in Settings, and
+  the chosen time card 2 promises is the notification's, which every install has; a
+  card or a control for a sheet most users never see is one too many (maintainer,
+  2026-09-05).
 
 ## Decided
 
@@ -281,7 +315,16 @@ flow.
   behind each card, and the wording stays proposed until it has been seen on a
   device.
 - The control that replays the flow is a `Tutorial` button on `MainScreen`.
-- Card 5's ringer choice is a live control.
+- Card 4's ringer choice is a live control.
+- Card 2's first body line is what happens by itself — departure and the cap — and
+  its second is the taps, the meeting among them and named as a button: `+30 min`
+  extends rather than ends, `Until <time>` needs a meeting, and the calendar is
+  never a trigger (Codex, PR #198, three rounds on this one sentence). Written under autopilot, and the copy is proposed like the rest
+  of this file.
+- Cards 2 and 4 of the first sketch — the three exits, and the notification's
+  actions — are one card, illustrated by a render of the ongoing notification, and
+  the `Ask me each time` switch is not in the flow (maintainer, 2026-09-05, "1 for
+  sure" over keeping a tile card in the slot).
 - Each card offers the grant for the thing it introduced.
 - The permissions screen at the end appears only when something is still missing.
 - The crash-report and analytics consent is asked in the flow, as the last card;
@@ -289,25 +332,17 @@ flow.
 
 ## Open questions for the maintainer
 
-- Cards 4 and 5 were retitled to fit the four-word limit (Codex, PR #193): `Change
-  it from the notification` became `Adjust from the notification`, and `One rule,
-  yours to edit` became `One editable rule`. Both lose a little — the first no
-  longer says *end*, the second no longer says *yours*. `Adjust or end it` and `One
-  rule, yours` are the runners-up.
+- Card 4 was retitled to fit the four-word limit (Codex, PR #193): `One rule,
+  yours to edit` became `One editable rule`, which no longer says *yours*. `One
+  rule, yours` is the runner-up.
 - Whether `Skip` should be visible on card 1, or only from card 2 on — a `Skip` on
   the very first screen invites skipping the whole thing before knowing what it is.
 - Whether the flow replays after an app update that adds a card (a version on the
   seen-flag), or only from the `Tutorial` button.
-- Card 2's `Ask me each time` switch is an autopilot guess (Codex, PR #193): the
-  sheet is off by default (§4.4), so the "at a time you choose" line needed either
-  the control or a retreat to describing the cap. The switch keeps the line you
-  asked for and follows card 5's pattern of a live setting on the card. The
-  alternatives are turning the sheet on by default, or wording the line as the cap
-  (`After 8 hours at most`) and leaving the setting to Settings.
 - The accessibility overflow under *Shape* — the body scrolls with the buttons
   pinned, only at sizes where it cannot fit — is a carve-out from "not vertically
   scrollable" taken because no-scroll and no-truncation cannot both hold there. The
-  alternative is splitting cards 5 and 6 into two at those sizes. Say if you would
+  alternative is splitting cards 2 and 4 into two at those sizes. Say if you would
   rather split.
 
 ## Simmo
