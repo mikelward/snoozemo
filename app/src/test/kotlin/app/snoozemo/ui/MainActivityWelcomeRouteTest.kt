@@ -140,6 +140,63 @@ class MainActivityWelcomeRouteTest {
     }
 
     @Test
+    fun `answering the consent leaves the flow, even when the answer repeats`() {
+        // The card's two buttons run this pair, and the exit must not depend on
+        // the stored value moving: an answer matching what was already saved
+        // leaves `answerTelemetry` nothing to reconcile, so a value-gated exit
+        // looked dead to exactly the user who had said yes in an earlier
+        // session (maintainer, 2026-09-05).
+        //
+        // Driven through the activity rather than the card, because a screen
+        // test supplying its own callback proves only that the card reports
+        // both answers — dropping the exit would leave that one green (Codex,
+        // PR #206).
+        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
+        assertEquals(Screen.WELCOME, activity.screen)
+
+        activity.answerTelemetryAndFinish(true)
+
+        assertNotEquals(Screen.WELCOME, activity.screen)
+        assertTrue("leaving is what marks the flow seen", WelcomeStore(context).seen())
+
+        // And again with the same answer, which is the reported case: the
+        // store already holds it, so nothing moves and the exit must still fire.
+        activity.screen = Screen.WELCOME
+        activity.answerTelemetryAndFinish(true)
+
+        assertNotEquals(Screen.WELCOME, activity.screen)
+    }
+
+    @Test
+    fun `the replay hint appears on leaving the flow and not before`() {
+        // The help icon is discoverable only if you already know it is there,
+        // so the hint is shown at the one moment the user has just seen the
+        // cards (maintainer, 2026-09-05).
+        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
+        assertEquals(Screen.WELCOME, activity.screen)
+        assertFalse("nothing to point back to yet", activity.showReplayHintForTest())
+
+        activity.leaveWelcomeForTest()
+
+        assertTrue(activity.showReplayHintForTest())
+    }
+
+    @Test
+    fun `a dismissed replay hint stays dismissed across launches`() {
+        WelcomeStore(context).markSeen()
+        WelcomeStore(context).dismissReplayHint()
+
+        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
+
+        assertFalse(activity.showReplayHintForTest())
+        // And a replay does not bring it back: dismissing it is an answer
+        // about the hint, not about the flow.
+        activity.screen = Screen.WELCOME
+        activity.leaveWelcomeForTest()
+        assertFalse(activity.showReplayHintForTest())
+    }
+
+    @Test
     fun `the flow is shown once per install`() {
         val first = Robolectric.buildActivity(MainActivity::class.java).setup()
         assertEquals(Screen.WELCOME, first.get().screen)

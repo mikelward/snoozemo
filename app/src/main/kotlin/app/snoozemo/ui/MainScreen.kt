@@ -51,6 +51,11 @@ internal fun MainScreen(
     access: PolicyAccess?,
     tileAdded: Boolean?,
     tileBannerDismissed: Boolean,
+    /**
+     * Whether to point at the help icon. True only just after the welcome flow
+     * has been left and until the user dismisses it (`SPEC.md` §4.2).
+     */
+    showReplayHint: Boolean = false,
     snoozing: Boolean?,
     // Both null unless a snooze is actually running and its record has been
     // read — the same "unread is not zero" discipline every other field on
@@ -109,6 +114,7 @@ internal fun MainScreen(
     onOpenWelcome: () -> Unit = {},
     onAddTile: () -> Unit,
     onDismissTileBanner: () -> Unit,
+    onDismissReplayHint: () -> Unit = {},
     onArm: () -> Unit,
     onRelease: () -> Unit,
     onShareDebugLog: () -> Unit,
@@ -227,11 +233,20 @@ internal fun MainScreen(
                 onDismiss = onDismissPlayUpdate,
             )
         }
-        // Last of the banners. Everything above either blocks the product
-        // (Do Not Disturb access, the tile) or offers to repair something the
-        // user is missing; this asks for a favor, so it yields to all of them.
+        // Everything above either blocks the product (Do Not Disturb access,
+        // the tile) or offers to repair something the user is missing; this
+        // asks for a favor, so it yields to all of them.
         if (telemetryUnanswered) {
             TelemetryInviteCard(onAnswer = onAnswerTelemetry)
+        }
+        // Last of the banners, below even the one that asks a favor. It blocks
+        // nothing, repairs nothing and asks nothing — it points at an icon
+        // already on this screen — so anything with something at stake outranks
+        // it. Written first and moved here (Codex, PR #206): above the tile it
+        // pushed the one action that makes the product work down the scroll,
+        // which is the opposite of `SPEC.md` §4.2's lead.
+        if (showReplayHint) {
+            ReplayHintBanner(onDismiss = onDismissReplayHint)
         }
         // One slot, always saying which of the two states the screen is in
         // once the record has been read — a running snooze reports what would

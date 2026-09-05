@@ -265,6 +265,48 @@ internal fun SetupRow(
 }
 
 /**
+ * Points at the help icon once the welcome flow has been left.
+ *
+ * The flow's replay lives behind an icon in the title row, which is discoverable
+ * only if you already know it is there — so the one moment the user has just
+ * seen the cards is the moment worth saying it (maintainer, 2026-09-05).
+ *
+ * Quieter than [TileBanner]: that one makes a case for an action, this only
+ * says where something is, so it takes the surface variant rather than the
+ * primary container and has no affirmative button — the only thing to do here
+ * is stop being told.
+ */
+@Composable
+internal fun ReplayHintBanner(onDismiss: () -> Unit) {
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            // Asymmetric on purpose, and only numerically: `TextButton` carries
+            // its own horizontal content padding, so a matching 16dp here would
+            // set its label further in than the text it sits beside. The
+            // vertical 8dp is likewise a floor rather than the height — the
+            // button's own minimum touch target is what the row measures to.
+            modifier = Modifier.padding(start = 16.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.replay_hint_body),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.replay_hint_dismiss))
+            }
+        }
+    }
+}
+
+/**
  * The screen's one piece of advocacy: add the tile.
  *
  * Deliberately not a [SetupRow]. The rows state a fact about a capability and

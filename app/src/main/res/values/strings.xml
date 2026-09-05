@@ -232,10 +232,21 @@
       capability. Shorter than the "Don't show again" it replaces, and the more
       common idiom for a dismissal that sticks.
     -->
-    <string name="tile_banner_title">Snooze from the shade</string>
+    <!-- German already reads "aus den Schnelleinstellungen" and needs no
+         retranslation: it never had a word for "shade" to lose. -->
+    <string name="tile_banner_title">Snooze from Quick Settings</string>
     <string name="tile_banner_body">One tap, without unlocking. It\'s how Snoozemo is meant to be used.</string>
     <string name="tile_banner_add">Add tile</string>
     <string name="tile_banner_dismiss">Don\'t ask again</string>
+
+    <!--
+      Shown once the welcome flow has been left, pointing at the help icon that
+      replays it. One action: there is nothing to do here but stop being told.
+    -->
+    <!-- TODO: translate -->
+    <string name="replay_hint_body" tools:ignore="MissingTranslation">Tap (?) to see the tutorial again</string>
+    <!-- TODO: translate -->
+    <string name="replay_hint_dismiss" tools:ignore="MissingTranslation">Dismiss</string>
 
     <!--
       The background-location banner (SPEC.md §8.1). Shown whenever the
@@ -489,6 +500,8 @@
     <!-- TODO: translate -->
     <string name="welcome_next" tools:ignore="MissingTranslation">Next</string>
     <!-- TODO: translate -->
+    <!-- TODO: translate -->
+    <string name="welcome_back" tools:ignore="MissingTranslation">Back</string>
     <string name="welcome_skip" tools:ignore="MissingTranslation">Skip</string>
     <!-- The last card advances to the same place Skip does, so it says what it
          does rather than repeating Next. -->
@@ -535,7 +548,7 @@
     <!-- Card 3. The tile is the arm affordance and the one path that works with
          the phone locked. -->
     <!-- TODO: translate -->
-    <string name="welcome_tile_title" tools:ignore="MissingTranslation">Snooze from the shade</string>
+    <string name="welcome_tile_title" tools:ignore="MissingTranslation">Snooze from Quick Settings</string>
     <!-- TODO: translate -->
     <string name="welcome_tile_body" tools:ignore="MissingTranslation">Swipe down and tap the Zzz tile.</string>
     <!-- TODO: translate -->

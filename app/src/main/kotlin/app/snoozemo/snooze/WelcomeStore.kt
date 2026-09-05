@@ -58,6 +58,20 @@ class WelcomeStore(context: Context) {
     /** Whether the flow has been seen through to its exit. */
     fun seen(): Boolean = prefs.getBoolean(KEY_SEEN, false)
 
+    /**
+     * Whether the hint pointing at the help icon has been dismissed.
+     *
+     * Its own flag rather than a second meaning for [seen]: the hint exists
+     * *because* the flow has been seen, so the two are never the same question,
+     * and a user who dismisses the hint has not un-seen the flow.
+     */
+    fun replayHintDismissed(): Boolean = prefs.getBoolean(KEY_HINT_DISMISSED, false)
+
+    /** Records that the user dismissed the hint. It does not come back. */
+    fun dismissReplayHint() {
+        prefs.edit().putBoolean(KEY_HINT_DISMISSED, true).apply()
+    }
+
     /** Records that the user left the flow, by `Skip` or from the last card. */
     fun markSeen() {
         // `apply`, not `commit`: this runs as the user leaves the last card,
@@ -106,5 +120,6 @@ class WelcomeStore(context: Context) {
         const val TAG = "WelcomeStore"
         const val FILE_NAME = "welcome"
         const val KEY_SEEN = "seen"
+        const val KEY_HINT_DISMISSED = "replayHintDismissed"
     }
 }

@@ -43,7 +43,20 @@ object PermissionRows {
         onAction: () -> Unit,
         ruleState: ZenRuleState? = null,
         onRuleRow: () -> Unit = onAction,
+        hideWhenSatisfied: Boolean = false,
+        filtersRowPresent: Boolean = false,
     ) {
+        // Granted, the rule healthy, and nothing to do: on the welcome cards
+        // that row is a line of text with no action, so it is dropped rather
+        // than left as something to read past (maintainer, 2026-09-05). The
+        // recap keeps it — saying what is already in place is that screen's
+        // job — so this is a caller's choice rather than the row's.
+        if (hideWhenSatisfied &&
+            access == PolicyAccess.GRANTED &&
+            ruleState == ZenRuleState.READY
+        ) {
+            return
+        }
         // A granted row waits for the rule check, which answers after the grant
         // reads: rendering on the grant alone would claim "Snoozes can silence
         // your phone" for that window and take it back if the rule turns out
@@ -75,10 +88,23 @@ object PermissionRows {
                             ruleState != ZenRuleState.MISSING_ACCESS
                     },
                 onAction = if (granted && ruleState == ZenRuleState.DISABLED) onRuleRow else onAction,
+                // A disabled rule sends this row's button to the filters
+                // screen, so it reports that launch failing — but only where
+                // it is the only row that can. Where [Filters] is drawn too
+                // (the welcome flow's card 4, the first screen to show both)
+                // one refused tap would otherwise print the same line twice
+                // and make the untouched row look like it failed as well
+                // (Codex, PR #206). One failure, on the row that carries the
+                // action's own name.
                 failure = stringResource(R.string.failure_could_not_open_settings)
                     .takeIf {
                         settingsFailure == SetupRowId.DND ||
-                            (granted && ruleState == ZenRuleState.DISABLED && settingsFailure == SetupRowId.FILTERS)
+                            (
+                                !filtersRowPresent &&
+                                    granted &&
+                                    ruleState == ZenRuleState.DISABLED &&
+                                    settingsFailure == SetupRowId.FILTERS
+                                )
                     },
             )
         }
@@ -99,9 +125,11 @@ object PermissionRows {
         reachTheUser: Boolean,
         settingsFailure: SetupRowId?,
         onAction: () -> Unit,
+        hideWhenSatisfied: Boolean = false,
     ) {
         notifications?.let {
             val working = it == NotificationPermission.GRANTED && reachTheUser
+            if (hideWhenSatisfied && working) return
             SetupRow(
                 title = stringResource(R.string.setup_notifications_title),
                 status = stringResource(
@@ -134,9 +162,11 @@ object PermissionRows {
         settingsFailure: SetupRowId?,
         onAction: () -> Unit,
         tracksDeparture: Boolean = true,
+        hideWhenSatisfied: Boolean = false,
     ) {
         location?.let { state ->
             val granted = state == LocationPermission.GRANTED
+            if (hideWhenSatisfied && granted && tracksDeparture) return
             SetupRow(
                 title = stringResource(R.string.setup_location_title),
                 status = stringResource(
@@ -164,9 +194,11 @@ object PermissionRows {
         calendar: CalendarPermission?,
         settingsFailure: SetupRowId?,
         onAction: () -> Unit,
+        hideWhenSatisfied: Boolean = false,
     ) {
         calendar?.let { state ->
             val granted = state == CalendarPermission.GRANTED
+            if (hideWhenSatisfied && granted) return
             SetupRow(
                 title = stringResource(R.string.setup_calendar_title),
                 status = stringResource(
@@ -176,6 +208,34 @@ object PermissionRows {
                 onAction = onAction,
                 failure = stringResource(R.string.failure_could_not_open_settings)
                     .takeIf { settingsFailure == SetupRowId.CALENDAR },
+            )
+        }
+    }
+
+    /**
+     * The rule's own interruption filters, deep-linked to the system editor.
+     *
+     * Gated on [filtersRuleId] rather than on access, and absent rather than
+     * disabled when it is null: there is nothing to edit until Do Not Disturb
+     * access is granted *and* the rule has been created, and a button with
+     * nothing behind it is the dead tap this app's error-handling rules exist
+     * to keep off a screen. `MainActivity` clears the id in both cases, so the
+     * one null check covers both.
+     */
+    @Composable
+    fun Filters(
+        filtersRuleId: String?,
+        settingsFailure: SetupRowId?,
+        onAction: () -> Unit,
+    ) {
+        filtersRuleId?.let {
+            SetupRow(
+                title = stringResource(R.string.setup_filters_title),
+                status = stringResource(R.string.setup_filters_status),
+                action = stringResource(R.string.setup_action_edit),
+                onAction = onAction,
+                failure = stringResource(R.string.failure_could_not_open_settings)
+                    .takeIf { settingsFailure == SetupRowId.FILTERS },
             )
         }
     }
@@ -194,8 +254,10 @@ object PermissionRows {
         tileAdded: Boolean?,
         settingsFailure: SetupRowId?,
         onAction: () -> Unit,
+        hideWhenSatisfied: Boolean = false,
     ) {
         tileAdded?.let { added ->
+            if (hideWhenSatisfied && added) return
             SetupRow(
                 title = stringResource(R.string.setup_tile_title),
                 status = stringResource(

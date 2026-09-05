@@ -188,16 +188,11 @@ internal fun SettingsScreen(
         // interruption-filter screen" — MainActivity clears `filtersRuleId`
         // in both cases). A button with nothing behind it is the dead tap
         // AGENTS.md's error-handling rules exist to keep off this screen.
-        filtersRuleId?.let {
-            SetupRow(
-                title = stringResource(R.string.setup_filters_title),
-                status = stringResource(R.string.setup_filters_status),
-                action = stringResource(R.string.setup_action_edit),
-                onAction = onFiltersRow,
-                failure = stringResource(R.string.failure_could_not_open_settings)
-                    .takeIf { settingsFailure == SetupRowId.FILTERS },
-            )
-        }
+        PermissionRows.Filters(
+            filtersRuleId = filtersRuleId,
+            settingsFailure = settingsFailure,
+            onAction = onFiltersRow,
+        )
         // Directly below the filters row, because the two are one question
         // asked in two halves: that row edits *who* gets through a snooze, and
         // this one how loudly they arrive. Unlike that row, this one is always

@@ -472,14 +472,22 @@ invisible until someone adds it. So a short run of fixed cards comes first, each
 app is; how a snooze ends, shown on a render of the ongoing notification (§4.3), the one surface
 that carries every way it can — departure, a chosen time, `End now` — so the end sheet (§4.4) needs
 neither a card nor a switch in the flow (maintainer, 2026-09-05); the tile; the one Do Not Disturb
-rule and the ringer choice (§5.9); and, last, the crash-report and analytics consent (§12) on its
+rule and the ringer choice (§5.9) — plus, since that card calls the rule the user's, the same
+Filters row `SettingsScreen` offers, absent until there is a rule to edit (maintainer,
+2026-09-05); and, last, the crash-report and analytics consent (§12) on its
 own — the debug log is not mentioned, since a card whose job is one question about data leaving the
 phone is the wrong place for a sentence about a log that never does (maintainer, 2026-09-05). That
 last card is absent on `direct`, which ships neither SDK, so the flow is four cards there. Each card offers the grant for the thing it just introduced, drawn
 as the same tri-state rows `PermissionsScreen` uses (§5.2), and `Next` never waits on one — the
 rows' own fail-open rule. `PermissionsScreen` then follows only when a permission is still missing,
 as the recap, and its once-only routing stays as the backstop for an install that skipped the
-flow; a user who allowed everything on the cards lands on `MainScreen`. The flow is shown once, on
+flow; a user who allowed everything on the cards lands on `MainScreen`. A row whose permission is
+already granted is dropped from its card rather than shown with no action (maintainer,
+2026-09-05) — the recap still shows it, since stating what is in place is that screen's job. Every
+card carries the same three controls, `Back` / `Skip` / `Next`, so none of them moves between
+cards; `Back` runs the same decision the system gesture does. Once the flow is left, `MainScreen`
+carries a dismissible hint pointing at the (?) icon, because a replay behind an icon is
+discoverable only by someone who already knows it is there. The flow is shown once, on
 a persisted flag, and replayable from a **(?) icon in `MainScreen`'s title row** — the person who
 needs it again is on the home screen wondering what to do, not in Settings. The shape is decided; the words
 are not: nothing is a string resource until the maintainer has seen the copy (`AGENTS.md`,
@@ -490,7 +498,11 @@ translated).
 entered.** A flag spent on arrival would be lost to a process death mid-flow, and the user would
 never see the cards they were part-way through — a flow that can be lost to a crash is worse than
 one shown twice. `Skip` and the last card both write it, since both are the user saying they are
-done; the help icon replays without clearing it, because a replay is not a fresh install. The one
+done — and answering the consent card counts as done, since it is the last card and asking the
+user to then find `Done` is asking them to confirm a choice they just made (maintainer,
+2026-09-05); that exit is unconditional, because an answer matching what was already stored
+changes nothing to reconcile and a value-gated exit would look dead to the user who had answered
+before. The help icon replays without clearing the flag, because a replay is not a fresh install. The one
 automatic route to `PermissionsScreen` (§8.2's once-only decision) is **held** while the flow is
 up rather than spent, so an access reading landing mid-flow cannot silently use it up and leave
 the recap unreachable.

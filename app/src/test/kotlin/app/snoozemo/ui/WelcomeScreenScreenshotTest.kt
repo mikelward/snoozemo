@@ -9,6 +9,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -52,11 +53,12 @@ class WelcomeScreenScreenshotTest {
 
         composeRule.onNodeWithText("Silence your phone until you leave.").assertExists()
         composeRule.onNodeWithText("One tap.").assertExists()
-        // No Skip here (maintainer, 2026-09-05): offering to leave beside the
-        // one line that says what the app is invites skipping before there is
-        // anything to skip. D7 is untouched — back still exits card 1, so the
-        // way out exists; it just is not advertised before that line is read.
-        composeRule.onNodeWithText("Skip").assertDoesNotExist()
+        // The bottom row is three fixed slots on every card, card 1 included
+        // (maintainer, 2026-09-05): Back, Skip, Next, so nothing arrives from
+        // nowhere on card 2.
+        composeRule.onNodeWithText("Back").assertExists()
+        composeRule.onNodeWithText("Skip").assertExists()
+        composeRule.onNodeWithText("Next").assertExists()
         composeRule.onNodeWithText("Next").assertExists()
     }
 
@@ -194,6 +196,49 @@ class WelcomeScreenScreenshotTest {
     }
 
     @Test
+    fun `card four offers Filters once there is a rule to edit`() {
+        // The card's title calls the rule the user's; this is the button that
+        // makes that true rather than a claim (maintainer, 2026-09-05).
+        capture("welcome-rule-filters.png") {
+            Flow(
+                WelcomeCard.RULE,
+                access = PolicyAccess.GRANTED,
+                ruleState = ZenRuleState.READY,
+                filtersRuleId = "rule-1",
+            )
+        }
+
+        composeRule.onNodeWithText("Filters").assertExists()
+        composeRule.onNodeWithText("Edit").assertExists()
+    }
+
+    @Test
+    fun `card four offers no Filters button before the rule exists`() {
+        // Absent rather than disabled: with no access, or access granted and
+        // the rule not yet created, there is nothing behind the button, and a
+        // dead tap is what the row's null check exists to prevent.
+        capture { Flow(WelcomeCard.RULE, filtersRuleId = null) }
+
+        composeRule.onNodeWithText("Filters").assertDoesNotExist()
+    }
+
+    @Test
+    fun `the consent card reports both answers`() {
+        // The card's half of the contract, and all of it: it reports which
+        // button was pressed and decides nothing else. That leaving the flow
+        // follows is the activity's, and `MainActivityWelcomeRouteTest` is
+        // where it is asserted — naming the exit here would let dropping it
+        // leave this green (Codex, PR #206).
+        var answers = mutableListOf<Boolean>()
+
+        capture { Flow(WelcomeCard.TELEMETRY, onAnswerTelemetry = { answers += it }) }
+
+        composeRule.onNodeWithText("Yes please").performClick()
+        composeRule.onNodeWithText("No thanks").performClick()
+        assertEquals(listOf(true, false), answers)
+    }
+
+    @Test
     fun `card four shows a disabled rule and its repair`() {
         // Access granted with the rule switched off in Settings. Without the
         // verified state threaded through, `PermissionRows.Access` reads
@@ -234,7 +279,14 @@ class WelcomeScreenScreenshotTest {
         tracksDeparture: Boolean = true,
         access: PolicyAccess? = PolicyAccess.DENIED,
         ruleState: ZenRuleState? = null,
+        filtersRuleId: String? = null,
         crashPending: Boolean = false,
+        notifications: NotificationPermission = NotificationPermission.ASKABLE,
+        notificationsReachTheUser: Boolean = false,
+        location: LocationPermission = LocationPermission.ASKABLE,
+        calendar: CalendarPermission = CalendarPermission.ASKABLE,
+        tileAdded: Boolean? = false,
+        settingsFailure: SetupRowId? = null,
         onAnswerTelemetry: (Boolean) -> Unit = {},
         onNext: () -> Unit = {},
         onSkip: () -> Unit = {},
@@ -244,17 +296,104 @@ class WelcomeScreenScreenshotTest {
             cards = allCards,
             access = access,
             ruleState = ruleState,
+            filtersRuleId = filtersRuleId,
             crashPending = crashPending,
-            notifications = NotificationPermission.ASKABLE,
-            notificationsReachTheUser = false,
-            location = LocationPermission.ASKABLE,
-            calendar = CalendarPermission.ASKABLE,
+            settingsFailure = settingsFailure,
+            notifications = notifications,
+            notificationsReachTheUser = notificationsReachTheUser,
+            location = location,
+            calendar = calendar,
             tracksDeparture = tracksDeparture,
-            tileAdded = false,
+            tileAdded = tileAdded,
             snoozeRinger = SnoozeRinger.VIBRATE,
             onAnswerTelemetry = onAnswerTelemetry,
             onNext = onNext,
             onSkip = onSkip,
+        )
+    }
+
+    @Test
+    fun `card two drops a permission row once it is satisfied`() {
+        // The cards ask for what is still missing; a row with no action left is
+        // a line the user reads past on a screen whose whole job is what still
+        // needs them (maintainer, 2026-09-05). `PermissionsScreen` keeps its
+        // granted rows — stating what is in place is that screen's job.
+        //
+        // Captured nowhere: this is the absence of three rows, which a snapshot
+        // of an otherwise-unchanged card cannot distinguish from a card that
+        // never drew them.
+        capture {
+            Flow(
+                WelcomeCard.ENDS,
+                notifications = NotificationPermission.GRANTED,
+                notificationsReachTheUser = true,
+                location = LocationPermission.GRANTED,
+                calendar = CalendarPermission.GRANTED,
+            )
+        }
+
+        composeRule.onNodeWithText("Location").assertDoesNotExist()
+        composeRule.onNodeWithText("Calendar").assertDoesNotExist()
+        composeRule.onNodeWithText("Notifications").assertDoesNotExist()
+        // The card itself still stands: hiding the rows must not hide the idea.
+        composeRule.onNodeWithText("Ends automatically").assertExists()
+    }
+
+    @Test
+    fun `card three drops the tile row once the tile is added`() {
+        // The one row whose satisfied state has its own copy — an inert
+        // "Added" line the user cannot act on (Codex, PR #206).
+        capture { Flow(WelcomeCard.TILE, tileAdded = true) }
+
+        composeRule.onNodeWithText("Quick Settings tile").assertDoesNotExist()
+        composeRule.onNodeWithText("Added").assertDoesNotExist()
+        // The card itself still stands, and `card three offers the tile` holds
+        // the other direction: with the tile missing, the row and its `Add` are
+        // both there. Without that pair either assertion here would pass on a
+        // string that had simply been renamed.
+        composeRule.onNodeWithText("Snooze from Quick Settings").assertExists()
+    }
+
+    @Test
+    fun `card four drops the access row once the rule is ready`() {
+        // Granted *and* the rule created: `PermissionRows.Access` treats
+        // granted-and-unread as not-yet-satisfied on purpose, so both halves
+        // have to land before the row goes (Codex, PR #204).
+        capture {
+            Flow(
+                WelcomeCard.RULE,
+                access = PolicyAccess.GRANTED,
+                ruleState = ZenRuleState.READY,
+                filtersRuleId = "rule-id",
+            )
+        }
+
+        composeRule.onNodeWithText("Do Not Disturb access").assertDoesNotExist()
+        // Filters is not a permission and never hides: it is the card's offer.
+        composeRule.onNodeWithText("Filters").assertExists()
+    }
+
+    @Test
+    fun `a refused filters launch is reported once`() {
+        // Card 4 is the only screen that draws the access row and the Filters
+        // row together, and with the rule disabled both buttons open the same
+        // settings screen. Reported on both, one refused tap printed the line
+        // twice and made the untouched row look like it had failed too (Codex,
+        // PR #206).
+        capture {
+            Flow(
+                WelcomeCard.RULE,
+                access = PolicyAccess.GRANTED,
+                ruleState = ZenRuleState.DISABLED,
+                filtersRuleId = "rule-id",
+                settingsFailure = SetupRowId.FILTERS,
+            )
+        }
+
+        assertEquals(
+            1,
+            composeRule.onAllNodesWithText("Couldn't open Settings")
+                .fetchSemanticsNodes().size,
         )
     }
 
