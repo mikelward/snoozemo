@@ -415,10 +415,37 @@ class ActiveSnoozeStore(context: Context) {
      *
      * Safe to be stale: it is read only in that specific recovery case, and it
      * is cleared by a new [arm] and by [clear] — never by an [update] of the
-     * live record, which is how it used to be lost.
+     * live record, which is how it used to be lost, and never by a refused
+     * release (SPEC.md §5.8; maintainer, 2026-09-05): the retry re-enters the
+     * same ending and rewrites it, so what survives a refusal is the reason
+     * still being pursued.
      */
     fun markReleasing(reason: EndReason): Boolean =
         prefs.edit().putString(KEY_RELEASING_REASON, reason.name).commit()
+
+    /**
+     * Retires a reason a *user's* ending has superseded (SPEC.md §5.8).
+     *
+     * A manual ending writes no marker of its own, because losing one to a
+     * crash falls back to "the user turned Do Not Disturb off" — equally
+     * silent, equally theirs. That holds only while there is nothing else on
+     * disk to fall back *to*: a contextual release that was refused leaves its
+     * reason standing, so a manual ending arriving before the retry would be
+     * read back as that departure or cap (Codex, PR #197). The user's own
+     * ending is the one thing that supersedes rather than continues it.
+     *
+     * **`apply`, not `commit`, and the one place that matters** (Codex,
+     * PR #197). This runs between the user's tap and their phone making noise
+     * again, where principle 5 forbids blocking on disk — and unlike
+     * [markReleasing], which has to be durable *before* the rule goes off,
+     * this only has to beat a process death inside the same window. `apply`
+     * corrects the in-memory map at once, so every later read in this process
+     * is right; the release's own [clear] then writes the file without it.
+     * What is left is a kill between the two, which loses the retirement and
+     * misattributes an ending — strictly rarer than the refusal that got us
+     * here, and cheaper than making the user wait for the disk.
+     */
+    fun retireReleasing() = prefs.edit().remove(KEY_RELEASING_REASON).apply()
 
     /**
      * Whether the rule actually went on for the stored record (SPEC.md §5.8).
@@ -442,16 +469,6 @@ class ActiveSnoozeStore(context: Context) {
      * *this* snooze's rule rather than whatever the app holds now.
      */
     fun enforcingRuleId(): String? = prefs.getString(KEY_RULE_ID, null)
-
-    /**
-     * Forgets a release reason whose release did not happen.
-     *
-     * Not merely tidy: a marker that outlives its failed attempt is read as the
-     * explanation for whatever ends the snooze *next*, which may be the user
-     * turning Do Not Disturb off — and they would be told they had left
-     * somewhere instead.
-     */
-    fun clearReleasing(): Boolean = prefs.edit().remove(KEY_RELEASING_REASON).commit()
 
     /** The reason recorded by [markReleasing], if one survived. */
     fun releasingReason(): EndReason? =

@@ -78,6 +78,13 @@ class SnoozeControllerTest {
             releasing += reason
         }
 
+        /** How many times a user's ending said it superseded a pending one. */
+        var superseded = 0
+
+        override fun onReleaseSuperseded() {
+            superseded++
+        }
+
         override fun onStateChanged(state: SnoozeState, snooze: ActiveSnooze?, reason: EndReason?) {
             states += state to reason
             announced += snooze?.mode
@@ -168,6 +175,30 @@ class SnoozeControllerTest {
         controller.restore(running)
 
         assertEquals("fake-rule-id", controller.active?.ruleId)
+    }
+
+    @Test
+    fun `a user's ending says it supersedes whatever release was pending`() {
+        // A refused departure or cap leaves its reason on disk (SPEC.md §5.8),
+        // and a tile tap arriving before the retry would be read back as that
+        // ending rather than the user's (Codex, PR #197). The controller says
+        // which of the two an ending is; the listener decides what to store.
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+
+        controller.end(EndReason.MANUAL)
+
+        assertEquals(1, listener.superseded)
+        assertEquals(emptyList<EndReason>(), listener.releasing)
+    }
+
+    @Test
+    fun `an ending the app decided on records its reason instead`() {
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+
+        controller.end(EndReason.DEPARTURE)
+
+        assertEquals(0, listener.superseded)
+        assertEquals(listOf(EndReason.DEPARTURE), listener.releasing)
     }
 
     @Test

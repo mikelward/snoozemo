@@ -610,6 +610,20 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         }
     }
 
+    override fun onReleaseSuperseded() {
+        // Read first, written only if there is something to retire: the
+        // ordinary tile tap finds nothing and pays a map lookup, not a write
+        // at all (SPEC.md §5.8) — and the write, when there is one, is
+        // `apply`, so nothing on this path blocks on disk in front of a user
+        // waiting for sound. Best-effort like the marker itself.
+        val pending = runCatching { store.releasingReason() }
+            .onFailure { Log.w(TAG, "Reading the release reason failed; leaving it.", it) }
+            .getOrNull() ?: return
+        runCatching { store.retireReleasing() }
+            .onFailure { Log.w(TAG, "Retiring the superseded release reason failed.", it) }
+        SnoozeDebugLog.event("user ending supersedes a pending release ($pending); reason retired")
+    }
+
     private fun reconcileRuleActive(observed: ZenRuleActivation) {
         if (controller.active == null) return
         // The reason comes from the activation, so "turned off" and "deleted"
@@ -849,9 +863,6 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         } else {
             null
         }
-        // A reason left behind by a refused release whose clean-up also failed
-        // would otherwise outlive the snooze it described (Codex, PR #194).
-        observedActivation?.let { retireStaleReleasing(store, it) }
 
         // An arm that never finished is not the user turning Do Not Disturb off
         // (Codex, PR #36). The record is written before the rule by design, so
@@ -2452,23 +2463,16 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     override fun onZenFailure(failure: ZenFailure, whileArming: Boolean) {
         SnoozeDebugLog.warning("zen write refused: %s (whileArming=%s)", failure, whileArming)
         notifications.showFailure(failure, whileArming)
-        // A release that didn't land leaves a marker describing something that
-        // never happened, and the next ending would be explained by it
-        // (Codex, PR #36). Cleared here rather than at the call site because
-        // this is the one place that knows the attempt failed.
-        if (!whileArming) {
-            // `commit` reports a refusal by returning false rather than
-            // throwing, so `runCatching` alone would call that success (Codex,
-            // PR #36). Said out loud, because what survives is a marker that
-            // will explain the *next* ending with a reason belonging to this
-            // failed one.
-            val cleared = runCatching { store.clearReleasing() }
-                .onFailure { Log.w(TAG, "Clearing the stale release reason failed.", it) }
-                .getOrDefault(false)
-            if (!cleared) {
-                Log.w(TAG, "The stale release reason is still on disk; a later ending may cite it.")
-            }
-        }
+        // A refused release keeps its marker (SPEC.md §5.8; maintainer,
+        // 2026-09-05). This used to clear it, on the reasoning that an attempt
+        // that never completed must not explain a later ending — but a
+        // retryable refusal is not an abandoned ending: the ladder re-arms the
+        // cap and the release retry with the same reason, and the retry
+        // rewrites this very marker, so it names the ending the app is still
+        // executing. The clear was also a commit that could fail, and the
+        // marker that survived a failed clear had no owner — two review rounds
+        // turned on exactly that. Every path that does give up clears the
+        // record, and the marker with it.
         // Kept in case the system dropped it: on a tile-first install
         // POST_NOTIFICATIONS is still denied at the first tap, so the message
         // explaining a failed arm goes nowhere and the user is left with a tap

@@ -4346,32 +4346,17 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
-- **Guessed under autopilot: a refused release's marker is left to the retry ladder, not
-  to a durable clear** (2026-09-05, Codex on PR #194, third finding in the marker
-  mechanism). The finding: a release is refused, the `clearReleasing()` that follows also
-  fails to commit, the process dies, and the user turns Do Not Disturb off before any
-  restoring wake-up sees the rule still on — so the next read-back finds `INACTIVE` with
-  the refused attempt's reason still on disk and reports that reason instead of
-  `DND_TURNED_OFF`.
-  **Why declined as a code change:** a retryable refusal is not an abandoned ending. It
-  re-arms the cap and the release retry with the same reason (`ensureCapAfterRefusedEnd`,
-  `armReleaseRetry`), and the retry re-enters `end(reason)` and rewrites the marker with
-  that reason — so a marker that outlives a failed clear names the ending the app is
-  still executing. If the user's toggle lands first, the snooze is reported as ending for
-  the reason the app had already decided on: the cap had fired, or the departure had
-  been detected. That is louder than the silent user ending, never quieter, which is the
-  direction principle 2 prefers. Every abandonment path clears the record, and the
-  marker with it.
-  **The design question this leaves for the maintainer:** §5.8's "a marker whose release
-  then fails is discarded" is the rule two review rounds have now been about, and the
-  argument above says it may be the wrong rule — under the retry ladder, a refused
-  release's marker *is* the standing decision, and discarding it only opens the
-  double-fault gap that the discard's own commit can fail. The alternative is to keep
-  the marker across a retryable refusal and clear it only when the ending completes or
-  is abandoned, which deletes the "stale marker" class rather than guarding it. Not
-  taken here: it reverses a spec sentence, and a design change is the maintainer's call.
-  **Reversible:** one rule in §5.8 and the two `clearReleasing()` calls on the refusal
-  paths.
+- **Decided: a refused release keeps its recorded reason until the ending completes or
+  is abandoned** (maintainer, 2026-09-05, "sounds fine i think"; raised under autopilot
+  from Codex's third finding in the marker mechanism on PR #194). §5.8's "a marker whose
+  release then fails is discarded" is reversed: a retryable refusal re-arms the cap and
+  the release retry with the same reason, and the retry rewrites the marker with it, so a
+  marker that outlives a refusal names the ending the app is still pursuing. Discarding it
+  was itself a write that could fail, which is the double-fault the finding was about;
+  keeping it deletes the "stale marker" class rather than guarding it. The two refusal-time
+  clears (the service's and the no-service fallback's) and the restore-time retirement are
+  gone with it; only a new arm, a completed release, or an abandoned one clears the marker.
+  Recorded in `SPEC.md` §5.8 with the reason.
 
 - **Guessed under autopilot: a location grant landing in the app pokes the running
   monitor from the main screen's permission reading** (2026-09-04), the first of the
