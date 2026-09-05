@@ -3088,7 +3088,7 @@ the point is that every other line of the app is worthless if it isn't true.
       that also follows it lives in its own section below, since it gates
       nothing here.
 
-- [ ] **Welcome flow before the permissions screen** (maintainer, 2026-09-05). A
+- [x] **Welcome flow before the permissions screen** (maintainer, 2026-09-05). A
       fresh install lands on `PermissionsScreen` with nothing that says what the app
       is or how it is used. Five fixed cards — what it is; how a snooze ends, on a
       render of the ongoing notification, which is the one surface carrying every
@@ -3105,6 +3105,10 @@ the point is that every other line of the app is worthless if it isn't true.
         PR — and so one CI run covers both. The gear was briefly its own PR (#202,
         closed unmerged) before that was settled; its commit is what this one starts
         from.
+      - Built and approved 2026-09-05. Still owed: the on-device pass the copy was
+        approved subject to, and the largest-font check the *Shape* rule in
+        `TUTORIAL.md` calls for — the body scrolls with the buttons pinned, and
+        whether cards 2 and 4 should split instead is the open question there.
 
 ## Release secrets and docs — needs a maintainer pass
 
@@ -5533,6 +5537,50 @@ and anonymous usage stats so bugs get fixed." and stops there; `docs/PRIVACY.md`
 difference between what the app sends and what the store row says is worked through. Simpler
 copy was the maintainer's reason, and it happens to remove the claim that would have needed a
 footnote.
+
+## Main screen: the status block reads too small (maintainer, 2026-09-05)
+
+Next PR. The status line on `MainScreen` — the `Not snoozing` / `Snoozing` text —
+is the one thing the screen exists to say, and it currently reads as ordinary
+body text across the full column width.
+
+- **Larger**, in both states.
+- **Centered, or in a slightly narrower column** — either is acceptable; pick one
+  and show it.
+- **Maintainer leans two rows**: `Not snoozing` alone when idle, and when a
+  snooze is running a title row plus a second line for the end condition —
+  `Snoozing` over `Ends when you leave`.
+- **Prefer one row if it fits**: `Snoozing until you leave` on a single line is
+  the better answer where the enlarged type still allows it (maintainer,
+  2026-09-05), with the two-row form as the fallback. So the two-row split is a
+  wrapping decision, not the target — measure at the intended size before
+  choosing, and check the longest degraded wording rather than the shortest.
+
+Open when building it: what the second row says in each of the degraded modes,
+where the countdown goes (§4.2 puts it on the tile subtitle, and the notification
+already carries `ends in 3h 40m`), and whether the two rows collapse at the
+largest font sizes. Screenshot coverage across idle, snoozing, Wi-Fi-only,
+timer-only and degraded already exists, so the diff will show every state.
+
+## Deferred review findings (Codex, PR #204)
+
+- **A capability other than Do Not Disturb access that is still unread when the
+  user leaves the welcome flow is not recapped.** `welcomeExitNeedsRecap` reads
+  an unread capability as not-missing — deliberately, the same "briefly absent
+  rather than briefly wrong" rule the rows themselves follow — so a `Skip` that
+  beats the notification, location or calendar reading exits to `MainScreen`,
+  and nothing re-asks the question afterwards. Access itself is covered: the
+  exit no longer spends `applyAccess`'s once-only route, so a `DENIED` landing
+  after the tap still shows the interstitial. The rest is not.
+
+  Narrow in practice — the readings land within the seconds it takes to read
+  card 1, and the help icon replays the flow at any time — and the fix costs
+  real mechanism: a pending marker set at the exit and consumed by whichever
+  reading lands last, with its own once-ness and its own save/restore. That is
+  more state in the one exit that has already produced four findings, so it is
+  recorded rather than built. Reconsider if the recap turns out to be missed in
+  practice on a real device, where the reading latencies are the ones that
+  matter rather than Robolectric's.
 
 ## Deferred review findings (Codex, PR #176)
 

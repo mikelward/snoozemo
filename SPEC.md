@@ -472,8 +472,10 @@ invisible until someone adds it. So a short run of fixed cards comes first, each
 app is; how a snooze ends, shown on a render of the ongoing notification (§4.3), the one surface
 that carries every way it can — departure, a chosen time, `End now` — so the end sheet (§4.4) needs
 neither a card nor a switch in the flow (maintainer, 2026-09-05); the tile; the one Do Not Disturb
-rule and the ringer choice (§5.9); and, last, the crash-report and analytics consent (§12) with a
-mention of the on-device debug log (§4.6). Each card offers the grant for the thing it just introduced, drawn
+rule and the ringer choice (§5.9); and, last, the crash-report and analytics consent (§12) on its
+own — the debug log is not mentioned, since a card whose job is one question about data leaving the
+phone is the wrong place for a sentence about a log that never does (maintainer, 2026-09-05). That
+last card is absent on `direct`, which ships neither SDK, so the flow is four cards there. Each card offers the grant for the thing it just introduced, drawn
 as the same tri-state rows `PermissionsScreen` uses (§5.2), and `Next` never waits on one — the
 rows' own fail-open rule. `PermissionsScreen` then follows only when a permission is still missing,
 as the recap, and its once-only routing stays as the backstop for an install that skipped the
@@ -481,7 +483,17 @@ flow; a user who allowed everything on the cards lands on `MainScreen`. The flow
 a persisted flag, and replayable from a **(?) icon in `MainScreen`'s title row** — the person who
 needs it again is on the home screen wondering what to do, not in Settings. The shape is decided; the words
 are not: nothing is a string resource until the maintainer has seen the copy (`AGENTS.md`,
-*Translations*), and until the flow lands the fresh-install route above is unchanged.
+*Translations*; approved 2026-09-05, and still to be seen on a device before any of it is
+translated).
+
+**The flow runs once per install, and the flag is written when it is left rather than when it is
+entered.** A flag spent on arrival would be lost to a process death mid-flow, and the user would
+never see the cards they were part-way through — a flow that can be lost to a crash is worse than
+one shown twice. `Skip` and the last card both write it, since both are the user saying they are
+done; the help icon replays without clearing it, because a replay is not a fresh install. The one
+automatic route to `PermissionsScreen` (§8.2's once-only decision) is **held** while the flow is
+up rather than spent, so an access reading landing mid-flow cannot silently use it up and leave
+the recap unreachable.
 
 **`MainScreen`'s title row carries the icons: help, then settings** (maintainer, 2026-09-05). Both
 were full-width controls at the foot of the column, *below* the arm/end button, which is the wrong
