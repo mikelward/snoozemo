@@ -1817,6 +1817,20 @@ the point is that every other line of the app is worthless if it isn't true.
         over an off rule" enumerated in one place), or drop the read-back and let the broadcast
         stand alone. Seven consecutive Codex findings landed in this mechanism; three of them were
         caused by the fix for the previous one.
+      - **The count above predates this week, and the sequence has continued** (2026-09-05).
+        PR #194 and PR #195 each added findings here before the three below, so the total is
+        "more than seven and still rising" rather than any particular number — what it is
+        evidence *of* does not turn on the arithmetic. PR #197 is the instructive one: it
+        reversed the discard rule, so a refused release keeps its reason, and that single change
+        reached three separate places in the same mechanism, each found in review rather than by
+        anyone reasoning about it beforehand — the no-service read-back inferred the user's
+        ending without consulting the marker; a user's own `End now` continued a pending
+        contextual release instead of superseding it; and the retirement that fixed the second
+        landed a blocking write between the tap and the phone making noise again. All three are
+        fixed, and none was a coding slip: each is a fact about "live record over an off rule"
+        that lives in a different file from the others, which is precisely what option two would
+        put in one place. PR #195's rule-identity work is the same shape — ownership had to be
+        re-answered separately for the broadcast and for both read-backs.
 
 - [ ] The §8.4 cases: `restricted` standby bucket, force-stop, OEM battery management.
 - [x] **The user turning Do Not Disturb off from the shade may silently end our snooze**
