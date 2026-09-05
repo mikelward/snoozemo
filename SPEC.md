@@ -446,6 +446,23 @@ without finishing it is a trap, not onboarding. `LicensesScreen` is a leaf off `
 foot (§4.7), and the only screen reached from exactly one place — which is why Back there returns
 to Settings rather than to `MainScreen`.
 
+**A welcome flow precedes the permissions screen on a fresh install** (maintainer, 2026-09-05; not
+yet built — `TODO.md` Phase 6, sketched with its copy in `TUTORIAL.md`). The route above — a fresh
+install lands on `PermissionsScreen` — put three permission rows in front of someone who had not
+yet been told what the app is for or how it is used, and the tile, which is the whole product, is
+invisible until someone adds it. So a short run of fixed cards comes first, each one idea: what the
+app is; how a snooze ends; the tile; the notification's actions; the one Do Not Disturb rule and
+the ringer choice (§5.9); and, last, the crash-report and analytics consent (§12) with a mention of
+the on-device debug log (§4.6). Each card offers the grant for the thing it just introduced, drawn
+as the same tri-state rows `PermissionsScreen` uses (§5.2), and `Next` never waits on one — the
+rows' own fail-open rule. `PermissionsScreen` then follows only when a permission is still missing,
+as the recap, and its once-only routing stays as the backstop for an install that skipped the
+flow; a user who allowed everything on the cards lands on `MainScreen`. The flow is shown once, on
+a persisted flag, and replayable from a `Tutorial` button on `MainScreen` — the person who needs it
+again is on the home screen wondering what to do, not in Settings. The shape is decided; the words
+are not: nothing is a string resource until the maintainer has seen the copy (`AGENTS.md`,
+*Translations*), and until the flow lands the fresh-install route above is unchanged.
+
 **Both `SettingsScreen` and `MainScreen` carry the update banner** (landed 2026-08-23, extended
 to the home screen 2026-08-30, `play` flavor only —
 §3.4's `direct` flavor is never distributed through Play, so it has nothing to check for): when
