@@ -207,9 +207,12 @@ it in the same commit.
     `docs/` — Play's "What's new" is a store-listing field a user installing an update
     never sees at update time, so a policy-wording change gains nothing from forcing its
     way into release notes (`TODO.md`).
-  - `internal:` — build config, dependency upgrades, other plumbing.
+  - `internal:` — build config and other plumbing; a shipped dependency is bare.
   - `refactor:` — behavior-preserving code changes.
   - `test:` / `tests:` — test-only changes.
+- **A dependency the app ships is bare** — the bump changes what the app runs, so it
+  gets its own release. A test- or build-only bump you write keeps its prefix;
+  the weekly batch can't tell the two apart, so it lands bare either way.
 - **Housekeeping paths are dropped whatever the subject says.** A commit whose every
   changed path is a `.md` file (at any depth) or a root dotfile / dotdir (`.github/`,
   `.claude/`, `.gitignore`, …) never reaches the notes, prefixed or not. Prefix those
