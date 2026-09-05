@@ -1812,12 +1812,14 @@
         },
         {
             "uniqueId": "com.mikelward.androidlog:logging-android",
-            "artifactVersion": "2.0.50",
+            "artifactVersion": "2.0.56",
             "name": "androidlog logging-android",
             "description": "The Android sinks and bug-report transport for androidlog.",
             "website": "https://github.com/mikelward/androidlog",
             "developers": [
-                
+                {
+                    "name": "Mikel Ward"
+                }
             ],
             "licenses": [
                 "Apache-2.0"
@@ -1828,12 +1830,14 @@
         },
         {
             "uniqueId": "com.mikelward.androidlog:logging-core",
-            "artifactVersion": "2.0.50",
+            "artifactVersion": "2.0.56",
             "name": "androidlog logging-core",
             "description": "The privacy floor and ring buffer, testable without Android.",
             "website": "https://github.com/mikelward/androidlog",
             "developers": [
-                
+                {
+                    "name": "Mikel Ward"
+                }
             ],
             "licenses": [
                 "Apache-2.0"

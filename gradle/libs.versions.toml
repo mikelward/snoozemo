@@ -1,5 +1,5 @@
 [versions]
-androidlog = "2.0.50"
+androidlog = "2.0.56"
 agp = "9.3.2"
 activity = "1.13.0"
 composeBom = "2026.08.00"
@@ -15,7 +15,7 @@ lifecycle = "2.11.0"
 playAppUpdate = "2.1.0"
 playServicesLocation = "21.4.0"
 robolectric = "4.16.1"
-roborazzi = "1.72.0"
+roborazzi = "1.73.0"
 # AboutLibraries — the open-source attribution list behind Settings → Licenses.
 # The Gradle plugin walks the dependency graph and exports it as JSON; the
 # `-compose-m3` artifact is only the runtime JSON reader (`rememberLibraries`),
