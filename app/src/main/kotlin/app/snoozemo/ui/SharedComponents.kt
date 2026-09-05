@@ -1,5 +1,6 @@
 package app.snoozemo.ui
 
+import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -7,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.heightIn
@@ -16,6 +18,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -95,16 +99,53 @@ internal fun SnoozemoMark(size: Dp, modifier: Modifier = Modifier) {
  * `PermissionsScreen`, `SettingsScreen`): [SnoozemoMark] beside the title, so
  * a user finds the same mark in the same place everywhere in the app — the
  * sibling Simmo repo's `SimmoTopBar`.
+ *
+ * [actions] are icon buttons pinned to the trailing edge. The title takes the
+ * space between, so a screen that passes none looks exactly as it did before
+ * this slot existed — which is what lets the row stay the single title
+ * treatment rather than forking into "with actions" and "without".
  */
 @Composable
-internal fun SnoozemoTitleRow(title: String, modifier: Modifier = Modifier) {
+internal fun SnoozemoTitleRow(
+    title: String,
+    modifier: Modifier = Modifier,
+    actions: @Composable RowScope.() -> Unit = {},
+) {
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         SnoozemoMark(size = 32.dp)
-        Text(text = title, style = MaterialTheme.typography.headlineMedium)
+        Text(
+            text = title,
+            style = MaterialTheme.typography.headlineMedium,
+            modifier = Modifier.weight(1f),
+        )
+        actions()
+    }
+}
+
+/**
+ * One icon button in a [SnoozemoTitleRow]'s trailing slot.
+ *
+ * The label is the accessible name rather than a tooltip: an icon-only control
+ * says nothing to a screen reader on its own, and the gear and the help mark
+ * are exactly the pair a user cannot tell apart by shape alone if they cannot
+ * see them.
+ */
+@Composable
+internal fun SnoozemoTitleAction(
+    @DrawableRes icon: Int,
+    @StringRes label: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    IconButton(onClick = onClick, modifier = modifier) {
+        Icon(
+            painter = painterResource(icon),
+            contentDescription = stringResource(label),
+        )
     }
 }
 
