@@ -224,7 +224,7 @@ class SnoozeServiceClockChangeTest {
             capExpiresAt = Instant.ofEpochMilli(wallNow + Duration.ofHours(2).toMillis()),
             bootReference = (wallNow - elapsedNow) - Duration.ofHours(2).toMillis(),
         )
-        ActiveSnoozeStore(appContext).save(record)
+        ActiveSnoozeStore(appContext).arm(record)
         val refusing = object : android.content.ContextWrapper(appContext) {
             override fun startService(service: Intent?): android.content.ComponentName? =
                 throw IllegalStateException("the platform refuses the start")
@@ -261,7 +261,7 @@ class SnoozeServiceClockChangeTest {
             capExpiresAt = Instant.ofEpochMilli(wallNow + Duration.ofHours(2).toMillis()),
             bootReference = (wallNow - elapsedNow) - Duration.ofHours(2).toMillis(),
         )
-        ActiveSnoozeStore(appContext).save(record)
+        ActiveSnoozeStore(appContext).arm(record)
         TogglableAlarmManager.refuse = true
         val refusing = object : android.content.ContextWrapper(appContext) {
             override fun startService(service: Intent?): android.content.ComponentName? =

@@ -502,7 +502,7 @@ class SnoozeServicePresenceTest {
         // A single spent firing must not burn the whole "durable" retry while
         // its caller's budget still stands (Codex, PR #75); the bound travels
         // on the alarm because the alarm outlives the process that armed it.
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
         val refusing = object : android.content.ContextWrapper(appContext) {
             override fun startService(service: Intent?): android.content.ComponentName? =
                 throw IllegalStateException("the platform refuses the start")
@@ -524,7 +524,7 @@ class SnoozeServicePresenceTest {
         // stranded the remaining attempts with no successor before the cap
         // (Codex, PR #75). The process running the receiver is alive, so its
         // handler is the same last rung the app's wake ladder uses.
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
         var alarmsRefused = true
         val refusing = object : android.content.ContextWrapper(appContext) {
             override fun startService(service: Intent?): android.content.ComponentName? =
@@ -567,7 +567,7 @@ class SnoozeServicePresenceTest {
         SnoozeBackstop.cancel(appContext)
         shadowOf(getMainLooper()).idle()
         assertEquals(SnoozeBackstop.SCHEDULE_RETRIES, SnoozeBackstop.retryBudget())
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
 
         CapAlarmReceiver().onReceive(
             appContext,
@@ -580,7 +580,7 @@ class SnoozeServicePresenceTest {
 
     @Test
     fun `an exhausted presence retry rests on the cap instead of looping`() {
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
         val refusing = object : android.content.ContextWrapper(appContext) {
             override fun startService(service: Intent?): android.content.ComponentName? =
                 throw IllegalStateException("the platform refuses the start")
@@ -603,7 +603,7 @@ class SnoozeServicePresenceTest {
         // DURATION_CAP for a retry armed a minute ago (Codex, PR #73). The
         // retry's own action must never reach that branch: its successor is
         // the cap alarm it left standing.
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
         val refusing = object : android.content.ContextWrapper(appContext) {
             override fun startService(service: Intent?): android.content.ComponentName? =
                 throw IllegalStateException("the platform refuses the start")

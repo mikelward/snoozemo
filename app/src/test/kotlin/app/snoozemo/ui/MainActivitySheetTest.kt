@@ -80,7 +80,7 @@ class MainActivitySheetTest {
         // One tap and nothing in the way is goal 1; a user who has not asked
         // to be asked should never be.
         EndSheetStore(context).setEnabled(false)
-        ActiveSnoozeStore(context).save(snoozeWithCapIn(ActiveSnooze.DEFAULT_CAP))
+        ActiveSnoozeStore(context).arm(snoozeWithCapIn(ActiveSnooze.DEFAULT_CAP))
         val activity = screen()
 
         activity.offerSheetForThisArm()
@@ -95,7 +95,7 @@ class MainActivitySheetTest {
         // past the cap by doing nothing, so the sheet would be a screen the
         // user cannot answer.
         EndSheetStore(context).setEnabled(true)
-        ActiveSnoozeStore(context).save(snoozeWithCapIn(ActiveSnooze.MIN_CAP.minusMinutes(5)))
+        ActiveSnoozeStore(context).arm(snoozeWithCapIn(ActiveSnooze.MIN_CAP.minusMinutes(5)))
         val activity = screen()
 
         activity.offerSheetForThisArm()
@@ -120,7 +120,7 @@ class MainActivitySheetTest {
         assertNull(activity.sheet.endCondition)
 
         // A snooze arrives later from somewhere else entirely — the tile.
-        ActiveSnoozeStore(context).save(snoozeWithCapIn(ActiveSnooze.DEFAULT_CAP))
+        ActiveSnoozeStore(context).arm(snoozeWithCapIn(ActiveSnooze.DEFAULT_CAP))
         activity.activeSnooze = ActiveSnoozeStore(context).load()
         settle()
 
@@ -134,7 +134,7 @@ class MainActivitySheetTest {
         // — and putting the sheet back unchecked offers times against nothing
         // (Codex, PR #152).
         EndSheetStore(context).setEnabled(true)
-        ActiveSnoozeStore(context).save(snoozeWithCapIn(ActiveSnooze.DEFAULT_CAP))
+        ActiveSnoozeStore(context).arm(snoozeWithCapIn(ActiveSnooze.DEFAULT_CAP))
         val activity = screen()
         activity.offerSheetForThisArm()
         settle()
@@ -150,7 +150,7 @@ class MainActivitySheetTest {
     fun `a snooze ending under an open sheet takes the sheet with it`() {
         // The live half of the same check: no tap needed to discover it.
         EndSheetStore(context).setEnabled(true)
-        ActiveSnoozeStore(context).save(snoozeWithCapIn(ActiveSnooze.DEFAULT_CAP))
+        ActiveSnoozeStore(context).arm(snoozeWithCapIn(ActiveSnooze.DEFAULT_CAP))
         val activity = screen()
         activity.offerSheetForThisArm()
         settle()
@@ -171,7 +171,7 @@ class MainActivitySheetTest {
         // Without the generation guard that stale `null` would tear down the
         // sheet the arm just put up.
         EndSheetStore(context).setEnabled(true)
-        ActiveSnoozeStore(context).save(snoozeWithCapIn(ActiveSnooze.DEFAULT_CAP))
+        ActiveSnoozeStore(context).arm(snoozeWithCapIn(ActiveSnooze.DEFAULT_CAP))
         val activity = screen()
         val beforeTheArm = activity.sheetGenerationForTest
 
@@ -190,7 +190,7 @@ class MainActivitySheetTest {
         // would lose the refusal message SPEC.md 4.2 requires reach a user who
         // denied notifications.
         EndSheetStore(context).setEnabled(true)
-        ActiveSnoozeStore(context).save(snoozeWithCapIn(ActiveSnooze.DEFAULT_CAP))
+        ActiveSnoozeStore(context).arm(snoozeWithCapIn(ActiveSnooze.DEFAULT_CAP))
         val activity = screen()
         activity.offerSheetForThisArm()
         settle()

@@ -488,6 +488,10 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 // it end" — and to "why did it" (SPEC.md §4.6).
                 SnoozeDebugLog.event("policy access revoked mid-snooze; ending")
                 controller.end(EndReason.LOST_CAPABILITY)
+                // A refused release here is not retried by anything else: the
+                // revocation does not repeat (Codex, PR #36 — the same gap as
+                // the two §5.8 endings below).
+                ensureCapAfterRefusedEnd(EndReason.LOST_CAPABILITY)
             }
             PolicyAccessAction.EnsureRule -> {
                 zen.ensureRule()
@@ -557,7 +561,15 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             stillActive = stillActive,
         )
         when (action) {
-            is ZenRuleStatusAction.EndSnooze -> controller.end(action.reason)
+            is ZenRuleStatusAction.EndSnooze -> {
+                controller.end(action.reason)
+                // The broadcast fires once. A refused release with nothing
+                // following it would leave the record, tile and card claiming
+                // a snooze over a deactivated rule until an unrelated wake or
+                // the cap (Codex, PR #36), so this ending owes the cap re-arm
+                // every other ending on the service already pays.
+                ensureCapAfterRefusedEnd(action.reason)
+            }
             ZenRuleStatusAction.RecreateRule -> zen.ensureRule()
             ZenRuleStatusAction.None -> Unit
         }
@@ -612,6 +624,9 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         }
         Log.i(TAG, "The zen rule is no longer enforcing; ending the snooze ($reason).")
         controller.end(reason)
+        // The read-back runs only on restoring wake-ups, which nothing
+        // guarantees will repeat before the cap (Codex, PR #36).
+        ensureCapAfterRefusedEnd(reason)
     }
 
     private val zen by lazy { createZenController() }
@@ -822,6 +837,9 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             else -> true
         }
         val observedActivation = if (restoring) zen.ruleActivation() else null
+        // A reason left behind by a refused release whose clean-up also failed
+        // would otherwise outlive the snooze it described (Codex, PR #194).
+        observedActivation?.let { retireStaleReleasing(store, it) }
 
         // An arm that never finished is not the user turning Do Not Disturb off
         // (Codex, PR #36). The record is written before the rule by design, so
@@ -1318,7 +1336,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // couldn't be written is one we can't promise to end — release it and
         // say so rather than leaving DND on with nothing to release it.
         val snooze = controller.active
-        if (snooze == null || !store.save(snooze)) {
+        if (snooze == null || !store.arm(snooze)) {
             notifications.showCouldNotArm()
             pendingFailure.remember(ArmFailure.BelowZen)
             // The user is being told it didn't start; following that with
@@ -1523,7 +1541,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * phone never restarting is not a bound (D7).
      */
     private fun restate(restated: ActiveSnooze) {
-        if (!store.save(restated)) {
+        if (!store.update(restated)) {
             Log.e(TAG, "The clock change could not be recorded; ending rather than trusting the old deadline.")
             controller.end(EndReason.LOST_CAPABILITY)
             ensureCapAfterRefusedEnd(EndReason.LOST_CAPABILITY)
@@ -1597,7 +1615,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // record that survives process death carries it: a countdown and an
         // alarm at the new time over a record at the old one would restore to a
         // snooze that ends earlier than the user was told.
-        if (!store.save(extended)) {
+        if (!store.update(extended)) {
             notifications.showCouldNotExtend()
 
             // The record first, then the alarm. A failed `commit` still leaves
@@ -1607,7 +1625,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // would find the extension we just told the user didn't happen and
             // re-arm the cap for the later deadline. Writing the original back
             // is what actually undoes it.
-            val recordRolledBack = store.save(snooze)
+            val recordRolledBack = store.update(snooze)
             if (recordRolledBack && CapAlarm.arm(applicationContext, snooze, readClock())) {
                 return
             }
@@ -1784,7 +1802,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             return EndChoiceResult.REFUSED
         }
 
-        if (!store.save(shortened)) {
+        if (!store.update(shortened)) {
             notifications.showCouldNotSetEnd()
 
             // The record, then the alarm — the order `+30 min` rolls back in,
@@ -1792,7 +1810,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // shortened cap in the preferences' in-memory map, so anything
             // reading the record in this process would find the choice we have
             // just told the user did not take.
-            val recordRolledBack = store.save(snooze)
+            val recordRolledBack = store.update(snooze)
             if (recordRolledBack && CapAlarm.arm(applicationContext, snooze, readClock())) {
                 // The rollback is the *success* of this branch and still a
                 // failure of the change the user asked for, so it answers like
@@ -1869,7 +1887,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 // This snooze owns the record from here on, so an erase queued
                 // for an earlier one can be told apart from a clean-up of this.
                 erasing = it.startedAt
-                store.saveAsync(it)
+                store.armAsync(it)
                 // Deliberately *not* the notification. This transition is
                 // delivered from inside `beginArming`, before
                 // `setAutomaticZenRuleState(STATE_TRUE)`, so a `notify` here is
@@ -1891,7 +1909,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 // cap time in it is unchanged, so the snooze still ends on time
                 // and still has something to release it with. Logged, not fatal
                 // — unlike the arm-path write, which arm() treats as a refusal.
-                if (!store.save(it)) {
+                if (!store.update(it)) {
                     Log.w(TAG, "Updating the snooze record failed; the stored cap still stands.")
                 }
                 notifications.showOngoing(it)
@@ -2407,7 +2425,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         SnoozeDebugLog.event(
             "tracking → ${snooze.mode}" + (degradation?.let { " ($it)" } ?: " (recovered)"),
         )
-        if (!store.save(snooze)) {
+        if (!store.update(snooze)) {
             Log.w(TAG, "Recording the tracking mode failed; a restart would misstate tracking.")
         }
         notifications.showOngoing(snooze)

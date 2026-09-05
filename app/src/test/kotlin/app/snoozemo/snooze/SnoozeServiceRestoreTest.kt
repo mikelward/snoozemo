@@ -8,6 +8,7 @@ import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -35,7 +36,7 @@ class SnoozeServiceRestoreTest {
 
     /** A record whose arm completed, which is what a running snooze looks like. */
     private fun armed(snooze: app.snoozemo.core.ActiveSnooze) {
-        ActiveSnoozeStore(appContext).save(snooze.copy(armed = true))
+        ActiveSnoozeStore(appContext).arm(snooze.copy(armed = true))
     }
 
     @Test
@@ -47,9 +48,9 @@ class SnoozeServiceRestoreTest {
         // survives an update because it is part of what is being updated.
         val store = ActiveSnoozeStore(appContext)
         val snooze = snoozeFixture(now).copy(armed = true)
-        store.save(snooze)
+        store.arm(snooze)
 
-        store.save(snooze.copy(placeName = "Work"))
+        store.update(snooze.copy(placeName = "Work"))
 
         assertEquals(true, store.load()?.armed)
     }
@@ -60,7 +61,7 @@ class SnoozeServiceRestoreTest {
         // window leaves a live record over an off rule — the same shape as the
         // user having switched Do Not Disturb off (Codex, PR #36). Reading it
         // that way would silently delete a snooze they asked for and never got.
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
         TestSnoozeService.zen.activation = ZenRuleActivation.INACTIVE
 
         startService(SnoozeService.ACTION_REFRESH)
@@ -112,6 +113,47 @@ class SnoozeServiceRestoreTest {
         // The trigger is the visible half of the attribution (SPEC.md §5.4):
         // the cap is the phone deciding, not the user.
         assertEquals(listOf(false to ZenTrigger.CONTEXT), TestSnoozeService.zen.calls)
+    }
+
+    @Test
+    fun `a refused ending on an off rule keeps trying rather than waiting for the cap`() {
+        // The read-back runs only on restoring wake-ups, which nothing
+        // guarantees will repeat before the cap — so a release refused here
+        // used to leave the record, tile and card claiming a snooze over a
+        // deactivated rule for the rest of it (Codex, PR #36). Every other
+        // ending on the service re-arms the cap and escalates; this one has to.
+        TestSnoozeService.zen.activation = ZenRuleActivation.INACTIVE
+        TestSnoozeService.zen.outcome = ZenOutcome.NotApplied(app.snoozemo.core.ZenFailure.PLATFORM_REFUSED)
+
+        armed(snoozeFixture(now, capIn = java.time.Duration.ofHours(7)))
+        startService(SnoozeService.ACTION_REFRESH)
+
+        assertEquals(
+            "the ending must be asked for",
+            listOf(false to ZenTrigger.USER_ACTION),
+            TestSnoozeService.zen.calls,
+        )
+        assertTrue(
+            "a refused ending must escalate past a cap that is hours away",
+            scheduledAlarmIntents().any { it.action == SnoozeService.ACTION_CAP_LOST },
+        )
+    }
+
+    @Test
+    fun `a stale reason is retired when the rule is found still on`() {
+        // The shape a refused release leaves when its clean-up also failed and
+        // the process died (Codex, PR #194): a live record, a rule still on,
+        // and a reason describing an ending that never happened. Left there,
+        // a Do Not Disturb the user switches off hours later would be read
+        // back as that cap.
+        armed(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).markReleasing(EndReason.DURATION_CAP)
+        TestSnoozeService.zen.activation = ZenRuleActivation.ACTIVE
+
+        startService(SnoozeService.ACTION_REFRESH)
+
+        assertNull(ActiveSnoozeStore(appContext).releasingReason())
+        assertNotNull("the snooze itself keeps running", ActiveSnoozeStore(appContext).load())
     }
 
     @Test

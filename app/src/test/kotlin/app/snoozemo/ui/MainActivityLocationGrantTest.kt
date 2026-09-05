@@ -90,7 +90,7 @@ class MainActivityLocationGrantTest {
 
     @Test
     fun `a grant taken in Settings re-asks the running monitor`() {
-        ActiveSnoozeStore(app).save(snoozeFixture(java.time.Instant.now()))
+        ActiveSnoozeStore(app).arm(snoozeFixture(java.time.Instant.now()))
         shadowOf(app).denyPermissions(*locationPermissions)
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         settle()
@@ -109,7 +109,7 @@ class MainActivityLocationGrantTest {
     @Test
     fun `a grant from the prompt re-asks the running monitor`() {
         // The runtime prompt's own result, delivered through the same read.
-        ActiveSnoozeStore(app).save(snoozeFixture(java.time.Instant.now()))
+        ActiveSnoozeStore(app).arm(snoozeFixture(java.time.Instant.now()))
         shadowOf(app).denyPermissions(*locationPermissions)
         val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
         settle()
@@ -129,7 +129,7 @@ class MainActivityLocationGrantTest {
         // off" reclassifies to "background location off", so the card names
         // the half still missing instead of the one just restored (Codex,
         // PR #185).
-        ActiveSnoozeStore(app).save(snoozeFixture(java.time.Instant.now()))
+        ActiveSnoozeStore(app).arm(snoozeFixture(java.time.Instant.now()))
         shadowOf(app).denyPermissions(*locationPermissions)
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         settle()
@@ -153,7 +153,7 @@ class MainActivityLocationGrantTest {
         // reaches this screen with no previous reading to compare against.
         // The poke is free when nothing is latched, and the only route to a
         // monitor that is.
-        ActiveSnoozeStore(app).save(snoozeFixture(java.time.Instant.now()))
+        ActiveSnoozeStore(app).arm(snoozeFixture(java.time.Instant.now()))
         shadowOf(app).grantPermissions(*locationPermissions)
 
         Robolectric.buildActivity(MainActivity::class.java).setup()
@@ -183,7 +183,7 @@ class MainActivityLocationGrantTest {
     fun `an ordinary resume with the grant long held starts nothing`() {
         // A poke on every resume would start the service each time the user
         // opens the app; the transition is what this is about.
-        ActiveSnoozeStore(app).save(snoozeFixture(java.time.Instant.now()))
+        ActiveSnoozeStore(app).arm(snoozeFixture(java.time.Instant.now()))
         shadowOf(app).grantPermissions(*locationPermissions)
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         settle()
@@ -200,7 +200,7 @@ class MainActivityLocationGrantTest {
         // The other direction is not this screen's: a revocation kills the
         // process, the cold restore is what sees it, and the monitor reads the
         // loss itself from the refusal it gets.
-        ActiveSnoozeStore(app).save(snoozeFixture(java.time.Instant.now()))
+        ActiveSnoozeStore(app).arm(snoozeFixture(java.time.Instant.now()))
         shadowOf(app).grantPermissions(*locationPermissions)
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         settle()

@@ -64,7 +64,7 @@ class SnoozeBackstopTest {
         // schedule (Codex, PR #75). The retire re-reads afterward, so the
         // record that appeared keeps a backstop whichever side lost the race.
         SnoozeBackstop.schedule(appContext)
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
 
         SnoozeBackstop.retireStale(appContext)
 
@@ -81,7 +81,7 @@ class SnoozeBackstopTest {
         // The restore is the repair: it re-arms the cap, reconciles policy
         // access, re-registers the fence, and collects any held exit — the
         // wake only has to start it.
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
 
         val result = runWorker()
 
@@ -118,7 +118,7 @@ class SnoozeBackstopTest {
         // A worker's process has no alarm receiver's start privileges, so the
         // refusal is handed to the same retry alarm the presence wake uses —
         // never dropped with the wake spent.
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
         val refusing = object : ContextWrapper(appContext) {
             override fun startService(service: Intent?): ComponentName? =
                 throw IllegalStateException("the platform refuses the start")

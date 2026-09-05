@@ -89,7 +89,7 @@ class RingerReconcileTest {
         // the post-arm blocking save stamps it (Codex, PR #176). A check that
         // asked `load()` would read "nothing running" here and hand the ringer
         // back over a snooze that had only just armed.
-        ActiveSnoozeStore(appContext).saveAsync(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).armAsync(snoozeFixture(now))
         shadowOf(appContext.mainLooper).idle()
 
         handBackRingerNow(appContext)

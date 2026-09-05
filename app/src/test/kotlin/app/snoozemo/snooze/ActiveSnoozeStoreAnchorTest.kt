@@ -43,7 +43,7 @@ class ActiveSnoozeStoreAnchorTest {
             bssid = "00:11:22:33:44:55",
         )
 
-        store.save(record(anchor))
+        store.arm(record(anchor))
         val loaded = store.load()?.anchor
 
         assertEquals(anchor, loaded)
@@ -51,7 +51,7 @@ class ActiveSnoozeStoreAnchorTest {
 
     @Test
     fun `an empty anchor round-trips as absent fields, not inventions`() {
-        store.save(record(Anchor(capturedAt = now)))
+        store.arm(record(Anchor(capturedAt = now)))
         val loaded = store.load()?.anchor
 
         assertNull(loaded?.ssid)
@@ -64,11 +64,11 @@ class ActiveSnoozeStoreAnchorTest {
     fun `a new record clears the previous anchor's bssid`() {
         // Written over rather than merged: a leftover AP identifier from an
         // earlier snooze must not attach itself to a place it was never at.
-        store.save(
+        store.arm(
             record(Anchor(capturedAt = now, ssid = "ExampleWifi", bssid = "00:11:22:33:44:55")),
         )
 
-        store.save(record(Anchor(capturedAt = now, ssid = "OtherWifi")))
+        store.arm(record(Anchor(capturedAt = now, ssid = "OtherWifi")))
 
         assertNull(store.load()?.anchor?.bssid)
     }

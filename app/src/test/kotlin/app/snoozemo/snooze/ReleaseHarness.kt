@@ -239,7 +239,7 @@ internal fun startService(
     record: ActiveSnooze? = null,
     extras: Intent.() -> Unit = {},
 ): ServiceController<TestSnoozeService> {
-    record?.let { ActiveSnoozeStore(appContext).save(it) }
+    record?.let { ActiveSnoozeStore(appContext).arm(it) }
     val intent = Intent(appContext, TestSnoozeService::class.java).setAction(action).apply(extras)
     return Robolectric.buildService(TestSnoozeService::class.java, intent).create().startCommand(0, 1)
 }

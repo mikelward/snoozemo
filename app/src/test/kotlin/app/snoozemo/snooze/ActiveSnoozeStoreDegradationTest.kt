@@ -43,7 +43,7 @@ class ActiveSnoozeStoreDegradationTest {
 
     @Test
     fun `the recorded reason survives a restore`() {
-        ActiveSnoozeStore(context).save(aSnooze(DegradationCause.FIXES_TOO_VAGUE))
+        ActiveSnoozeStore(context).arm(aSnooze(DegradationCause.FIXES_TOO_VAGUE))
 
         assertEquals(
             DegradationCause.FIXES_TOO_VAGUE,
@@ -56,9 +56,9 @@ class ActiveSnoozeStoreDegradationTest {
         // A snooze that recovered must not come back still explaining a
         // degradation it no longer has.
         val store = ActiveSnoozeStore(context)
-        store.save(aSnooze(DegradationCause.NO_LOCATION_FIX))
+        store.arm(aSnooze(DegradationCause.NO_LOCATION_FIX))
 
-        store.save(aSnooze(degradation = null))
+        store.arm(aSnooze(degradation = null))
 
         assertNull(ActiveSnoozeStore(context).load()?.degradation)
     }
@@ -67,7 +67,7 @@ class ActiveSnoozeStoreDegradationTest {
     fun `a record written without a reason reads as none`() {
         // What every record written before this field existed looks like: the
         // mode still restores, and the notification simply renders it alone.
-        ActiveSnoozeStore(context).save(aSnooze(degradation = null))
+        ActiveSnoozeStore(context).arm(aSnooze(degradation = null))
 
         val restored = ActiveSnoozeStore(context).load()
         assertEquals(TrackingMode.DURATION_ONLY, restored?.mode)
@@ -79,7 +79,7 @@ class ActiveSnoozeStoreDegradationTest {
         // A record written by a build that knew a cause this one does not.
         // Losing the reason costs the notification some detail; refusing to
         // load would cost the snooze its cap.
-        ActiveSnoozeStore(context).save(aSnooze(DegradationCause.NO_LOCATION_FIX))
+        ActiveSnoozeStore(context).arm(aSnooze(DegradationCause.NO_LOCATION_FIX))
         context.getSharedPreferences("active_snooze", Context.MODE_PRIVATE)
             .edit()
             .putString("degradation", "SOMETHING_A_LATER_BUILD_ADDED")

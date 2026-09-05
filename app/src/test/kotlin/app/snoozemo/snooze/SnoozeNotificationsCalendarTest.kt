@@ -153,7 +153,7 @@ class SnoozeNotificationsCalendarTest {
         // The ordinary path, asserted first: the guard below must not reject
         // it, or the feature would never appear at all.
         val record = snoozeFixture(now)
-        ActiveSnoozeStore(appContext).save(record)
+        ActiveSnoozeStore(appContext).arm(record)
         val notifications = SnoozeNotifications(appContext)
 
         notifications.showOngoing(record)
@@ -168,7 +168,7 @@ class SnoozeNotificationsCalendarTest {
     fun `an answer that lands after the snooze ended does not put the card back`() {
         val record = snoozeFixture(now)
         val store = ActiveSnoozeStore(appContext)
-        store.save(record)
+        store.arm(record)
         val notifications = SnoozeNotifications(appContext)
 
         notifications.showOngoing(record)
@@ -197,7 +197,7 @@ class SnoozeNotificationsCalendarTest {
         // PR #156, second round). The generation counter is what catches this.
         val record = snoozeFixture(now)
         val store = ActiveSnoozeStore(appContext)
-        store.save(record)
+        store.arm(record)
         val notifications = SnoozeNotifications(appContext)
 
         notifications.showOngoing(record)
@@ -225,7 +225,7 @@ class SnoozeNotificationsCalendarTest {
         // which is really a timer must never look tracked (Codex, PR #156).
         val store = ActiveSnoozeStore(appContext)
         val record = snoozeFixture(now)
-        store.save(record)
+        store.arm(record)
         val notifications = SnoozeNotifications(appContext)
 
         notifications.showOngoing(record)
@@ -235,7 +235,7 @@ class SnoozeNotificationsCalendarTest {
             mode = TrackingMode.DURATION_ONLY,
             degradation = DegradationCause.NO_LOCATION_FIX,
         )
-        store.save(degraded)
+        store.arm(degraded)
         notifications.showOngoing(degraded)
         val degradedText = shadowOf(currentOngoing()).contentText.toString()
 
@@ -260,7 +260,7 @@ class SnoozeNotificationsCalendarTest {
         // be the cap, hours away.
         val store = ActiveSnoozeStore(appContext)
         val record = snoozeFixture(now)
-        store.save(record)
+        store.arm(record)
         val notifications = SnoozeNotifications(appContext)
 
         notifications.showOngoing(record)
@@ -268,7 +268,7 @@ class SnoozeNotificationsCalendarTest {
             mode = TrackingMode.DURATION_ONLY,
             degradation = DegradationCause.NO_LOCATION_FIX,
         )
-        store.save(degraded)
+        store.arm(degraded)
         notifications.showOngoing(degraded)
         assertEquals("both posts queue, since neither has an answer yet", 2, held.size)
 
@@ -293,7 +293,7 @@ class SnoozeNotificationsCalendarTest {
         // of all outside the protocol (Codex, PR #156).
         val record = snoozeFixture(now)
         val store = ActiveSnoozeStore(appContext)
-        store.save(record)
+        store.arm(record)
         val notifications = SnoozeNotifications(appContext)
 
         notifications.showOngoing(record)
@@ -319,7 +319,7 @@ class SnoozeNotificationsCalendarTest {
         // query itself comes back empty, which is why this is driven from
         // inside the provider rather than around it.
         val record = snoozeFixture(now)
-        ActiveSnoozeStore(appContext).save(record)
+        ActiveSnoozeStore(appContext).arm(record)
         val notifications = SnoozeNotifications(appContext)
         provider.onQuery = { shadowOf(appContext).denyPermissions(Manifest.permission.READ_CALENDAR) }
 
@@ -344,7 +344,7 @@ class SnoozeNotificationsCalendarTest {
         // in one runnable and nothing else can get between them.
         val store = ActiveSnoozeStore(appContext)
         val record = snoozeFixture(now)
-        store.save(record)
+        store.arm(record)
         val notifications = SnoozeNotifications(appContext)
         val degraded = record.copy(
             mode = TrackingMode.DURATION_ONLY,
@@ -352,7 +352,7 @@ class SnoozeNotificationsCalendarTest {
         )
         var degradedText: String? = null
         SnoozeNotifications.betweenAnswerAndRepost = {
-            store.save(degraded)
+            store.arm(degraded)
             notifications.showOngoing(degraded)
             degradedText = shadowOf(currentOngoing()).contentText.toString()
         }
@@ -381,7 +381,7 @@ class SnoozeNotificationsCalendarTest {
         // a refused write produces.
         val store = ActiveSnoozeStore(appContext)
         val record = snoozeFixture(now)
-        store.save(record)
+        store.arm(record)
         provider.hasMeeting = false
         val notifications = SnoozeNotifications(appContext)
         notifications.showOngoing(record)
@@ -421,7 +421,7 @@ class SnoozeNotificationsCalendarTest {
         // and an empty queue is a no-op.
         val store = ActiveSnoozeStore(appContext)
         val record = snoozeFixture(now)
-        store.save(record)
+        store.arm(record)
         val notifications = SnoozeNotifications(appContext)
         notifications.showOngoing(record)
 
@@ -429,7 +429,7 @@ class SnoozeNotificationsCalendarTest {
             mode = TrackingMode.DURATION_ONLY,
             degradation = DegradationCause.LOCATION_SERVICES_OFF,
         )
-        store.save(degraded)
+        store.arm(degraded)
         atEachPost(listOf({ held.single().run() }))
 
         notifications.showOngoing(degraded)
@@ -453,7 +453,7 @@ class SnoozeNotificationsCalendarTest {
         // worker's repost, and again before the follow-up.
         val store = ActiveSnoozeStore(appContext)
         val record = snoozeFixture(now)
-        store.save(record)
+        store.arm(record)
         val notifications = SnoozeNotifications(appContext)
         notifications.showOngoing(record)
 
@@ -481,7 +481,7 @@ class SnoozeNotificationsCalendarTest {
         // record is deliberately left in place, since a teardown cancels the
         // card before erasing it.
         val record = snoozeFixture(now)
-        ActiveSnoozeStore(appContext).save(record)
+        ActiveSnoozeStore(appContext).arm(record)
         val notifications = SnoozeNotifications(appContext)
         SnoozeNotifications.betweenAnswerAndRepost = { notifications.cancelOngoing() }
 
@@ -499,7 +499,7 @@ class SnoozeNotificationsCalendarTest {
         // this asserts the deadline rather than a count.
         val store = ActiveSnoozeStore(appContext)
         val record = snoozeFixture(now)
-        store.save(record)
+        store.arm(record)
         val notifications = SnoozeNotifications(appContext)
 
         notifications.showOngoing(record)
@@ -508,7 +508,7 @@ class SnoozeNotificationsCalendarTest {
         // A different snooze, ending much sooner, is running by the time the
         // first answer lands.
         val replacement = snoozeFixture(now, startedAgo = Duration.ZERO, capIn = Duration.ofHours(2))
-        store.save(replacement)
+        store.arm(replacement)
         notifications.showOngoing(replacement)
         val deadlineOnScreen = currentOngoing().`when`
 
@@ -529,7 +529,7 @@ class SnoozeNotificationsCalendarTest {
         // never appears for the snooze the user granted access *for* (Codex,
         // PR #156).
         val record = snoozeFixture(now)
-        ActiveSnoozeStore(appContext).save(record)
+        ActiveSnoozeStore(appContext).arm(record)
         shadowOf(appContext).denyPermissions(Manifest.permission.READ_CALENDAR)
         val notifications = SnoozeNotifications(appContext)
 
@@ -547,7 +547,7 @@ class SnoozeNotificationsCalendarTest {
     @Test
     fun `a revoked permission does not leave the offered time on the card`() {
         val record = snoozeFixture(now)
-        ActiveSnoozeStore(appContext).save(record)
+        ActiveSnoozeStore(appContext).arm(record)
         val notifications = SnoozeNotifications(appContext)
 
         notifications.showOngoing(record)
@@ -572,7 +572,7 @@ class SnoozeNotificationsCalendarTest {
         // One thread runs them in order, and the second must find the first
         // answer already in hand rather than re-querying (Codex, PR #156).
         val record = snoozeFixture(now)
-        ActiveSnoozeStore(appContext).save(record)
+        ActiveSnoozeStore(appContext).arm(record)
         val notifications = SnoozeNotifications(appContext)
 
         notifications.showOngoing(record)
@@ -595,7 +595,7 @@ class SnoozeNotificationsCalendarTest {
         // said they do not want to see, so it must not supply the earliest end.
         // `Instances.query` adds the visibility predicate for you; a raw query
         // against `CONTENT_URI` does not (Codex, PR #156).
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
         val notifications = SnoozeNotifications(appContext)
 
         notifications.showOngoing(snoozeFixture(now))
@@ -622,7 +622,7 @@ class SnoozeNotificationsCalendarTest {
      * busy — so the only thing under test is the column the case varies.
      */
     private fun rowsKeptBySelection(rows: List<Triple<String, Int?, Instant>>): List<String> {
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
         SnoozeNotifications(appContext).showOngoing(snoozeFixture(now))
         held.single().run()
         val selection = requireNotNull(provider.lastSelection) { "the query carried no selection" }
@@ -712,7 +712,7 @@ class SnoozeNotificationsCalendarTest {
         // naming a wall-clock time the phone no longer agrees with, while the
         // end it sets is correct (Codex, PR #156). A repost is the whole fix,
         // so what this pins is that the broadcast asks for one.
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
         while (shadowOf(appContext).nextStartedService != null) Unit
 
         TimeChangedReceiver().onReceive(appContext, Intent(Intent.ACTION_TIMEZONE_CHANGED))
@@ -738,7 +738,7 @@ class SnoozeNotificationsCalendarTest {
     @Test
     fun `an answered snooze is not asked about twice`() {
         val record = snoozeFixture(now)
-        ActiveSnoozeStore(appContext).save(record)
+        ActiveSnoozeStore(appContext).arm(record)
         val notifications = SnoozeNotifications(appContext)
 
         notifications.showOngoing(record)
