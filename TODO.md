@@ -3099,6 +3099,12 @@ the point is that every other line of the app is worthless if it isn't true.
       and the open questions are in `TUTORIAL.md`. The copy there is proposed, not
       approved, and is built only once it is signed off. Simmo gets the same shape in
       its own repository after this one settles.
+      - **It builds as one PR, with both title-row icons in it** (maintainer,
+        2026-09-05). The settings gear and the (?) that replays the flow land
+        together, so the title row arrives complete rather than growing an icon per
+        PR — and so one CI run covers both. The gear was briefly its own PR (#202,
+        closed unmerged) before that was settled; its commit is what this one starts
+        from.
 
 ## Release secrets and docs — needs a maintainer pass
 

@@ -38,12 +38,17 @@ screen already has a reason attached.
   location permission counts for nothing, or every `direct` user would be routed to a
   recap they cannot satisfy.
 - **Shown once.** A persisted flag records that the flow has been seen; the
-  permissions screen's own once-only routing stays as it is (§4.2). Replayable from a
-  `Tutorial` button (maintainer, 2026-09-05 — over `Intro` and `Replay intro`), so the
-  cards are not lost once seen. It sits on `MainScreen` (maintainer, 2026-09-05), as a
-  low-emphasis text button at the foot of the screen below the controls, rather than
-  a `SettingsScreen` row — the person who needs it is on the home screen wondering
-  what to do, not in Settings.
+  permissions screen's own once-only routing stays as it is (§4.2). Replayable, so the
+  cards are not lost once seen, from a **(?) icon in `MainScreen`'s title row, before
+  the settings gear** (maintainer, 2026-09-05) — logical order, not physical: the app
+  supports RTL, where a `Row` mirrors, so "left" would pin the icons in a direction
+  the layout is meant to flip (Codex, PR #203). It is on `MainScreen` rather
+  than in Settings because the person who needs it is on the home screen wondering
+  what to do — and in the title row rather than at the foot below the controls,
+  where it would sit under the manual exit and take full width beside it. The
+  earlier plan was a low-emphasis `Tutorial` text button there (chosen over `Intro`
+  and `Replay intro`); the word survives as the icon's accessible name, since an
+  icon-only control is nameless to a screen reader otherwise.
 - **Progress dots, no numbers, no "1 of 5".** Five dots say enough.
 - **Each card offers the grant for the thing it just introduced** (maintainer,
   2026-09-05). Card 2 carries `Allow` for location, for the calendar and for
@@ -310,11 +315,12 @@ flow.
   what you said"). Still to be seen on a device before any of it is translated.
 - **The shape is a product decision and is recorded as one in `SPEC.md` §4.2** — the
   cards before the permissions screen, a grant on each card, the recap only when a
-  permission is missing, the replay button, shown once. The spec is what an
+  permission is missing, the replay icon, shown once. The spec is what an
   implementation is checked against; this file carries the wording and the reasoning
   behind each card, and the wording stays proposed until it has been seen on a
   device.
-- The control that replays the flow is a `Tutorial` button on `MainScreen`.
+- The control that replays the flow is a (?) icon in `MainScreen`'s title row, beside
+  the settings gear, with `Tutorial` as its accessible name.
 - Card 4's ringer choice is a live control.
 - Card 2's first body line is what happens by itself — departure and the cap — and
   its second is the taps, the meeting among them and named as a button: `+30 min`
@@ -338,7 +344,7 @@ flow.
 - Whether `Skip` should be visible on card 1, or only from card 2 on — a `Skip` on
   the very first screen invites skipping the whole thing before knowing what it is.
 - Whether the flow replays after an app update that adds a card (a version on the
-  seen-flag), or only from the `Tutorial` button.
+  seen-flag), or only from the (?) icon.
 - The accessibility overflow under *Shape* — the body scrolls with the buttons
   pinned, only at sizes where it cannot fit — is a carve-out from "not vertically
   scrollable" taken because no-scroll and no-truncation cannot both hold there. The

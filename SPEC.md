@@ -460,10 +460,21 @@ as the same tri-state rows `PermissionsScreen` uses (§5.2), and `Next` never wa
 rows' own fail-open rule. `PermissionsScreen` then follows only when a permission is still missing,
 as the recap, and its once-only routing stays as the backstop for an install that skipped the
 flow; a user who allowed everything on the cards lands on `MainScreen`. The flow is shown once, on
-a persisted flag, and replayable from a `Tutorial` button on `MainScreen` — the person who needs it
-again is on the home screen wondering what to do, not in Settings. The shape is decided; the words
+a persisted flag, and replayable from a **(?) icon in `MainScreen`'s title row** — the person who
+needs it again is on the home screen wondering what to do, not in Settings. The shape is decided; the words
 are not: nothing is a string resource until the maintainer has seen the copy (`AGENTS.md`,
 *Translations*), and until the flow lands the fresh-install route above is unchanged.
+
+**`MainScreen`'s title row carries the icons: help, then settings** (maintainer, 2026-09-05). Both
+were full-width controls at the foot of the column, *below* the arm/end button, which is the wrong
+place for two reasons: reaching either meant scrolling past everything including the exit they sat
+under, and each took the full width immediately beneath the one control that has to be unmissable
+(§7). In the title row they are where the screen opens and where a user already looks, and the
+arm/end button gets the width to itself. The row still scrolls with the column — pinning it would
+buy a guarantee for the two rarely-touched controls by spending viewport that `End snooze` may
+need in exactly the short-window and large-font cases, and this section ranks those the other way
+round. Each icon carries its label as its accessible name, since an icon-only control is nameless
+to a screen reader otherwise; the help icon lands with the flow it opens, not before it.
 
 **Both `SettingsScreen` and `MainScreen` carry the update banner** (landed 2026-08-23, extended
 to the home screen 2026-08-30, `play` flavor only —
