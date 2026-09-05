@@ -3051,6 +3051,17 @@ the point is that every other line of the app is worthless if it isn't true.
       that also follows it lives in its own section below, since it gates
       nothing here.
 
+- [ ] **Welcome flow before the permissions screen** (maintainer, 2026-09-05). A
+      fresh install lands on `PermissionsScreen` with nothing that says what the app
+      is or how it is used. Six fixed cards — what it is; how a snooze ends; the
+      tile; the notification's actions; the one Do Not Disturb rule and the ringer
+      choice; what to do when something goes wrong — each offering the grant it
+      introduced, then the existing permissions screen only when a permission is
+      still missing. The shape is recorded in `SPEC.md` §4.2; the order, the wording
+      and the open questions are in `TUTORIAL.md`. The copy there is proposed, not
+      approved, and is built only once it is signed off. Simmo gets the same shape in
+      its own repository after this one settles.
+
 ## Release secrets and docs — needs a maintainer pass
 
 - **Reconcile `docs/play-store-internal-track.md` with how the release secrets
