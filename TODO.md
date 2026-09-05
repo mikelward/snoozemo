@@ -2730,7 +2730,7 @@ the point is that every other line of the app is worthless if it isn't true.
       *(Landed: `checkReleaseVersionDerivation` fails every `pre*ReleaseBuild` when the
       count, hash, or clone depth kept the version from being derived; debug builds, tests,
       and lint on a shallow checkout are untouched.)*
-- [ ] **Gate a release build on the merged `playRelease` manifest**, the way
+- [x] **Gate a release build on the merged `playRelease` manifest**, the way
       `checkReleaseVersionDerivation` gates it on a derived version. `DeclaredPermissionsTest`
       asserts the permissions the Play declarations rest on, but unit tests run on the debug
       build type alone (`app/build.gradle.kts` — enabling release unit tests needs
@@ -2742,6 +2742,16 @@ the point is that every other line of the app is worthless if it isn't true.
       reading `SingleArtifact.MERGED_MANIFEST` for the `playRelease` variant and failing on
       `INTERNET`, `AD_ID`, a typed `FOREGROUND_SERVICE_*`, or any `foregroundServiceType` is
       the shape; hook it the way the version check hooks `pre*ReleaseBuild`.
+      *(Landed: `verifyPlayReleaseManifest` / `verifyDirectReleaseManifest` read each release
+      variant's `SingleArtifact.MERGED_MANIFEST` and fail its package, bundle, and assemble
+      tasks — `play` on `AD_ID`, a typed `FOREGROUND_SERVICE_*`, any `foregroundServiceType`,
+      or a missing `ACCESS_BACKGROUND_LOCATION` / `INTERNET` (required now, not refused, since
+      Crashlytics landed — §12); `direct` on `INTERNET`, `ACCESS_BACKGROUND_LOCATION`, or
+      `AD_ID`. Hooked on the package and bundle tasks rather than `pre*ReleaseBuild`, which
+      runs before the manifest is merged. CI's "Verify the release manifest guard" step
+      proves the wiring and, per flavor, the refusal of a fixture manifest carrying everything
+      that flavor's rules refuse — each rule's own diagnostic asserted, the proofs sharing the
+      variants' rule sets — the way the version guard is proved against a faked shallow clone.)*
 - [ ] **Maintainer decision: does WorkManager's merged `FOREGROUND_SERVICE` permission matter?**
       The `play` release manifest carries `android.permission.FOREGROUND_SERVICE` and `WAKE_LOCK`
       from WorkManager, though Snoozemo's own manifests request neither and no service declares a
@@ -3080,7 +3090,11 @@ whole project.
 - [ ] `LocationManager` fallback (`PROVIDER_FUSED`, or `NETWORK_PROVIDER` below API 31) for
       devices without Play Services.
 - [ ] No restricted permissions, no Play Services dependency — verify by inspecting the
-      merged manifest of the `direct` variant in CI.
+      merged manifest of the `direct` variant in CI. *(The permission half landed:
+      `verifyDirectReleaseManifest` fails a `direct` release whose merged manifest carries
+      `INTERNET`, `ACCESS_BACKGROUND_LOCATION`, or `AD_ID`, on every CI run and every
+      release build. The dependency half is still open — a Play Services artifact on the
+      `direct` classpath is not something the manifest shows.)*
 - [ ] **`direct`'s departure detection verified on a handset, with its duty cycle**
       (hardware item 2b). Phase 3 and hardware item 2 measure the **`play` geofence**;
       `ForegroundPresenceMonitor` is a different detector, so none of that carries over.

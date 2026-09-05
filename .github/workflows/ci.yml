@@ -411,6 +411,70 @@ jobs:
           fi
           echo "$out" | grep -q "Refusing to build a release"
 
+      - name: Verify the release manifest guard
+        # Same shape as the version guard above, for `verify*ReleaseManifest`
+        # (app/build.gradle.kts): the task is still in every release entry
+        # point's graph (an AGP rename of a package or bundle anchor would
+        # unwire it without failing anything), it passes on the real merged
+        # manifests,
+        # and each flavor's proof task refuses the fixture manifest that
+        # carries everything that flavor's rules refuse — naming every one of
+        # them, so a single rule that stops firing is caught even while the
+        # others still fail the task (Codex, PR #189). The proofs share the
+        # variants' rule sets, so a weakened rule fails its proof rather than
+        # leaving a copy green. The play fixture declares the ad identifier
+        # through `uses-permission-sdk-23` and the direct one through the
+        # `-sdk-m` alias, so each SDK-qualified form the guard reads has its
+        # own proof; the play fixture caps `INTERNET` with maxSdkVersion,
+        # which must read as a refused required grant, not a declared one;
+        # the direct fixture's typed service must NOT be reported, since that
+        # flavor keeps its foreground-service type.
+        run: |
+          # One dry run per release entry point, not one for all of them: a
+          # combined graph would still show a verifier that one entry point
+          # had lost, through another that kept it (Codex, PR #189).
+          for entry in assemblePlayRelease bundlePlayRelease assembleDirectRelease bundleDirectRelease; do
+            case "$entry" in *Play*) verifier=verifyPlayReleaseManifest ;; *) verifier=verifyDirectReleaseManifest ;; esac
+            ./gradlew -q ":app:$entry" --dry-run | tee /tmp/release-manifest-graph.txt
+            if ! grep -q ":app:$verifier" /tmp/release-manifest-graph.txt; then
+              echo "::error::$entry no longer depends on $verifier."
+              exit 1
+            fi
+          done
+          ./gradlew :app:verifyPlayReleaseManifest :app:verifyDirectReleaseManifest
+          prove() {
+            flavor=$1; shift
+            if out=$(./gradlew ":app:verify${flavor}ReleaseManifestProof" 2>&1); then
+              echo "$out"
+              echo "::error::The $flavor release manifest guard passed on a manifest it must refuse."
+              exit 1
+            fi
+            echo "$out" | grep -q "Refusing to build a release whose merged manifest"
+            for expected in "$@"; do
+              if ! echo "$out" | grep -qF -- "$expected"; then
+                echo "$out"
+                echo "::error::The $flavor release manifest guard no longer reports: $expected"
+                exit 1
+              fi
+            done
+            printf '%s\n' "$out"
+          }
+          prove Play \
+            "declares com.google.android.gms.permission.AD_ID" \
+            "declares android.permission.FOREGROUND_SERVICE_LOCATION" \
+            "does not declare android.permission.ACCESS_BACKGROUND_LOCATION" \
+            "declares android.permission.INTERNET only up to SDK 34" \
+            'service app.snoozemo.snooze.SnoozeService declares foregroundServiceType="location"' > /dev/null
+          direct=$(prove Direct \
+            "declares android.permission.INTERNET" \
+            "declares android.permission.ACCESS_BACKGROUND_LOCATION" \
+            "declares com.google.android.gms.permission.AD_ID")
+          if echo "$direct" | grep -q "foregroundServiceType"; then
+            echo "$direct"
+            echo "::error::The direct release manifest guard reports a foreground-service type it must allow."
+            exit 1
+          fi
+
   screenshot-tests:
     name: Screenshot tests
     runs-on: ubuntu-latest

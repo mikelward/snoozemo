@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A merged manifest the direct release rules must refuse, for
+  `verifyDirectReleaseManifestProof` (app/build.gradle.kts): network access,
+  background location, and the ad identifier — the three things the build
+  with no restricted permission and no Play Services dependency may never
+  carry (SPEC.md §3.4). CI asserts each rule's own diagnostic, so a rule that
+  stops firing is caught there rather than by a release that quietly gained
+  a permission the flavor exists to refuse. The ad identifier arrives through
+  the `-sdk-m` alias here and the `-sdk-23` form in the play fixture, so each
+  SDK-qualified element the guard reads has a proof of its own.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="app.snoozemo">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission-sdk-m android:name="com.google.android.gms.permission.AD_ID" />
+    <application android:label="Snoozemo">
+        <service
+            android:name="app.snoozemo.snooze.SnoozeService"
+            android:foregroundServiceType="location" />
+    </application>
+</manifest>

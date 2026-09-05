@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A merged manifest the play release rules must refuse, for
+  `verifyPlayReleaseManifestProof` (app/build.gradle.kts): the ad identifier, a
+  typed foreground-service permission, a service carrying a
+  foregroundServiceType, one of play's two required grants missing and the
+  other capped by maxSdkVersion, which on a device this app runs on is the
+  same as missing. Every
+  rule the guard has fires on it, and CI asserts each rule's own diagnostic,
+  so a guard that stops firing on any one of them is caught there rather than
+  by a Play rejection. The ad identifier arrives through the SDK-qualified
+  element on purpose: that is the form the guard could most easily overlook.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="app.snoozemo">
+    <uses-permission-sdk-23 android:name="com.google.android.gms.permission.AD_ID" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.INTERNET" android:maxSdkVersion="34" />
+    <application android:label="Snoozemo">
+        <service
+            android:name="app.snoozemo.snooze.SnoozeService"
+            android:foregroundServiceType="location" />
+    </application>
+</manifest>
