@@ -1438,22 +1438,36 @@ the rule off itself and clearing its record would come back, find exactly that, 
 for an ending it decided on. Because the user's own ending is the one deliberately kept silent
 (§4.5), the real reason would disappear along with the notification explaining it. Snoozemo
 therefore records **why** a release is being attempted before attempting it, and prefers that
-recorded reason over the inference — but only for the endings *it* decided on. A manual ending needs
+recorded reason over the inference — on both read-backs, the service's and the no-service
+fallback's — but only for the endings *it* decided on. A manual ending needs
 no marker: losing one to a crash falls back to "the user turned Do Not Disturb off", which is
-equally silent and equally the user's, so nothing observable changes. That is what keeps the tile-tap
-path free of disk work, and it is a consequence of the design rather than a concession to it. A
-marker whose release then fails is discarded, since an attempt that never completed must not go on
-to explain some later ending. Every release path Snoozemo decides on writes it, the no-service
-fallback included, and only a **new arm** or a completed release clears it: a rewrite of the live
-record — a clock rebase, an extension, a tracking change — leaves it alone, because the reason it
-would erase may belong to a release of that very snooze still in flight. A refused release on any
-of the app-decided endings re-arms the cap and escalates rather than waiting, since neither a status
-broadcast nor a restoring wake-up is guaranteed to repeat. A marker found at a restoring wake-up
-beside a rule the platform reports still **on** belongs to a release that never completed — a
-refusal whose own clean-up failed to commit — and is discarded there, so it cannot explain some
-later ending; an unreadable rule retires nothing. It is not the same as marking the record released: that marker
-suppresses the record, and writing it before a zen write that can still fail would strand a live
-snooze with Do Not Disturb on and nothing left to turn it back off.
+equally silent and equally the user's, so nothing observable changes. It does **retire** one it
+finds, though — the user's own ending is the one thing that supersedes a pending release rather
+than continuing it, and that fallback holds only while there is nothing else on disk to be read
+instead. Read before written, so the tap pays a lookup rather than a write unless a refused release
+really did leave a reason behind — and that write does not block, unlike the marker's own, which
+has to be durable before the rule goes off. This one only has to beat a process death inside that
+same window, and the ending's own record erase writes the file without it. That is what keeps the tile-tap
+path free of disk work, and it is a consequence of the design rather than a concession to it. Every
+release path Snoozemo decides on writes it, the no-service fallback included, and only a **new
+arm**, a completed release, or an abandoned one clears it: a rewrite of the live record — a clock
+rebase, an extension, a tracking change — leaves it alone, because the reason it would erase may
+belong to a release of that very snooze still in flight. A refused release on any of the app-decided
+endings re-arms the cap and escalates rather than waiting, since neither a status broadcast nor a
+restoring wake-up is guaranteed to repeat — and it **keeps its marker** while it does (maintainer,
+2026-09-05, reversing the earlier rule that a marker whose release failed was discarded). A
+retryable refusal is not an abandoned ending: the retry re-enters the same ending with the same
+reason and rewrites the marker with it, so a marker that outlives a refusal names the ending the app
+is still pursuing, not a stale one. If the user turns Do Not Disturb off before the retry lands, the
+snooze is reported as ending for the reason the app had already decided on — the cap had fired, the
+departure had been detected — which is louder than the silent user ending, never quieter
+(principle 2). Discarding it bought nothing that keeping it costs, and was itself a disk write that
+could fail, leaving a class of "stale marker" to guard at every later read-back; keeping it deletes
+the class. A restoring wake-up that finds a marker beside a rule still **on** therefore leaves it
+alone: the release it belongs to is still owed, and the cap it re-armed will complete it. It is not
+the same as marking the record released: that marker suppresses the record, and writing it before a
+zen write that can still fail would strand a live snooze with Do Not Disturb on and nothing left to
+turn it back off.
 
 **Only where it can act, and never over an unfinished arm.** The read-back runs on the wake-ups that
 restore, not on the explicit endings — those are already on their way to turning the rule off, so

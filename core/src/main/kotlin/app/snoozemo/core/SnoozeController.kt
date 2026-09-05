@@ -60,6 +60,23 @@ class SnoozeController(
         fun onReleasing(reason: EndReason)
 
         /**
+         * A release the *user* asked for is about to be attempted, so any
+         * reason recorded by [onReleasing] is superseded (Codex, PR #197).
+         *
+         * The mirror of the call above, and it exists because a marker now
+         * outlives a refused release (SPEC.md §5.8): a departure or a cap that
+         * was refused leaves its reason on disk, and a tile tap or `End now`
+         * arriving before the retry would otherwise be read back as that
+         * ending rather than the user's. Retiring it restores the fallback a
+         * manual ending relies on — "the user turned Do Not Disturb off",
+         * which is equally silent and equally theirs.
+         *
+         * Best-effort by contract, like [onReleasing], and an implementation
+         * must not pay for it where there is nothing to retire.
+         */
+        fun onReleaseSuperseded()
+
+        /**
          * How well tracking is working has changed, with no transition to carry
          * the news — [snooze] holds the new mode and [degradation] the reason,
          * or null now that there isn't one.
@@ -307,7 +324,9 @@ class SnoozeController(
         // *also* attributed to the user: same notification, same source, same
         // everything the user can see. So the one path where somebody is
         // waiting — a tile tap, phone in hand, asking for sound back — does no
-        // disk work at all.
+        // disk work at all. What it does do is retire a reason a *refused*
+        // contextual release left behind, since that fallback only holds while
+        // there is nothing else on disk to be read instead (Codex, PR #197).
         // Exhaustive on purpose (Codex, PR #36). §5.4's source argument is what
         // the Modes UI shows the user to tell "I did this" from "my phone did
         // this", so every reason has to state which it was — and a default
@@ -315,7 +334,9 @@ class SnoozeController(
         // how `DND_TURNED_OFF` was reported as automation on its first outing.
         val trigger = reason.zenTrigger()
 
-        if (ending != null && trigger == ZenTrigger.CONTEXT) listener.onReleasing(reason)
+        if (ending != null) {
+            if (trigger == ZenTrigger.CONTEXT) listener.onReleasing(reason) else listener.onReleaseSuperseded()
+        }
 
         val outcome = zen.setSnoozed(false, trigger, ending?.placeName ?: ActiveSnooze.DEFAULT_PLACE_NAME, ending?.identity)
         if (outcome is ZenOutcome.NotApplied) {

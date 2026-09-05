@@ -169,19 +169,19 @@ class SnoozeServiceRestoreTest {
     }
 
     @Test
-    fun `a stale reason is retired when the rule is found still on`() {
-        // The shape a refused release leaves when its clean-up also failed and
-        // the process died (Codex, PR #194): a live record, a rule still on,
-        // and a reason describing an ending that never happened. Left there,
-        // a Do Not Disturb the user switches off hours later would be read
-        // back as that cap.
+    fun `a pending reason survives a restore that finds the rule still on`() {
+        // The shape a refused release leaves after a process death: a live
+        // record, a rule still on, and the reason the retry ladder is still
+        // pursuing. The restore leaves it for that retry (SPEC.md §5.8;
+        // maintainer, 2026-09-05) — only a completed or abandoned ending
+        // clears it.
         armed(snoozeFixture(now))
         ActiveSnoozeStore(appContext).markReleasing(EndReason.DURATION_CAP)
         TestSnoozeService.zen.activation = ZenRuleActivation.ACTIVE
 
         startService(SnoozeService.ACTION_REFRESH)
 
-        assertNull(ActiveSnoozeStore(appContext).releasingReason())
+        assertEquals(EndReason.DURATION_CAP, ActiveSnoozeStore(appContext).releasingReason())
         assertNotNull("the snooze itself keeps running", ActiveSnoozeStore(appContext).load())
     }
 

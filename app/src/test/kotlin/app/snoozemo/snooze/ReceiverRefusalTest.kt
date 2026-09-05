@@ -180,11 +180,12 @@ class ReceiverRefusalTest {
         // their phone making noise again (Codex, PR #194). A manual ending
         // needs no marker: losing one to a crash falls back to "the user
         // turned Do Not Disturb off", equally silent and equally theirs.
-        // Observed through a reason seeded beforehand: the automatic path
-        // overwrites it at the write, the manual path must leave it alone.
+        // Observed at the moment of the zen write, which is where the
+        // automatic path has one recorded (the test above) and this one must
+        // not. What it does to a reason a *refused* release left behind is the
+        // test below: retired, not overwritten (Codex, PR #197).
         val store = ActiveSnoozeStore(context)
         store.arm(aSnooze())
-        store.markReleasing(EndReason.DEPARTURE)
         val delegate = RefusingZen().apply { outcome = ZenOutcome.Applied("refusing-zen-rule-id") }
         var reasonAtWrite: EndReason? = null
         val zen = object : app.snoozemo.core.ZenController by delegate {
@@ -201,20 +202,43 @@ class ReceiverRefusalTest {
 
         releaseDirectly(context, EndReason.MANUAL, zen)
 
-        assertEquals(EndReason.DEPARTURE, reasonAtWrite)
+        assertNull("a manual ending records nothing of its own", reasonAtWrite)
     }
 
     @Test
-    fun `a refused end without the service discards the reason it recorded`() {
-        // An attempt that never completed must not go on to explain some later
-        // ending (SPEC.md §5.8) — the user turning Do Not Disturb off next
-        // would be told they had hit the time limit.
+    fun `a refused end without the service keeps the reason it is still pursuing`() {
+        // Reversed (maintainer, 2026-09-05): a retryable refusal is not an
+        // abandoned ending. The escalation re-pursues this same reason, so the
+        // marker names the ending still being executed — and if the user's
+        // own toggle lands before the retry does, the snooze is reported as
+        // ending for the reason the app had already decided on, which is
+        // louder than the silent user ending, never quieter (SPEC.md §5.8).
         val store = ActiveSnoozeStore(context)
         store.arm(aSnooze())
 
         releaseDirectly(context, EndReason.DURATION_CAP, RefusingZen())
 
-        assertNull(store.releasingReason())
+        assertEquals(EndReason.DURATION_CAP, store.releasingReason())
+    }
+
+    @Test
+    fun `a user's end without the service retires a pending release's reason`() {
+        // A refused departure or cap leaves its reason on disk (SPEC.md §5.8).
+        // The user's own ending supersedes it rather than continuing it, so
+        // the reason has to go — otherwise a crash in this ending's own window
+        // has the next wake-up report the departure instead of them (Codex,
+        // PR #197).
+        val store = ActiveSnoozeStore(context)
+        store.arm(aSnooze())
+        store.markReleasing(EndReason.DEPARTURE)
+
+        releaseDirectly(
+            context,
+            EndReason.MANUAL,
+            RefusingZen().apply { outcome = ZenOutcome.Applied("refusing-zen-rule-id") },
+        )
+
+        assertNull("the user's ending is not the departure's", store.releasingReason())
     }
 
     @Test
@@ -240,11 +264,10 @@ class ReceiverRefusalTest {
     // --- restoreDirectly ------------------------------------------------
 
     @Test
-    fun `a restore that finds the rule still on retires a stale reason`() {
-        // A refused release whose clean-up also failed to commit, then a
-        // process death: the reason outlives the attempt, and no rewrite of
-        // the live record may erase it (Codex, PR #194). The rule reading as
-        // on is what proves no release completed, so the reason goes here.
+    fun `a restore over a rule still on leaves a pending reason alone`() {
+        // A refused release, then a process death: the reason names an ending
+        // the retry ladder is still pursuing, and the restore is not the thing
+        // that abandons it (SPEC.md §5.8; maintainer, 2026-09-05).
         val store = ActiveSnoozeStore(context)
         val snooze = aSnooze().copy(armed = true)
         store.arm(snooze)
@@ -252,7 +275,7 @@ class ReceiverRefusalTest {
 
         restoreDirectly(context, snooze, RefusingZen().apply { outcome = ZenOutcome.Applied("refusing-zen-rule-id") })
 
-        assertNull("a reason beside a rule still on describes nothing", store.releasingReason())
+        assertEquals(EndReason.DURATION_CAP, store.releasingReason())
         assertNotNull("and the snooze itself is untouched", storedSnooze())
     }
 
@@ -312,6 +335,32 @@ class ReceiverRefusalTest {
             "the rule must never be turned back on for a user who turned it off",
             zen.calls.any { it.first },
         )
+    }
+
+    @Test
+    fun `the fallback credits an off rule to a release it had already decided on`() {
+        // A cap or departure release turned the rule off and died before erasing
+        // the record: the marker it wrote is what tells this apart from the user
+        // switching Do Not Disturb off, and the service's read-back already
+        // prefers it. This fallback read the off rule as the user's doing
+        // regardless (Codex, PR #197) — observable as the release going out on
+        // the user's trigger, which is the ending kept silent.
+        val snooze = aSnooze().copy(armed = true)
+        val store = ActiveSnoozeStore(context)
+        store.arm(snooze)
+        store.markReleasing(EndReason.DURATION_CAP)
+        val zen = RefusingZen().apply {
+            outcome = ZenOutcome.Applied("refusing-zen-rule-id")
+            activation = ZenRuleActivation.INACTIVE
+        }
+
+        restoreDirectly(context, snooze, zen)
+
+        assertEquals(
+            listOf(false to app.snoozemo.core.ZenTrigger.CONTEXT),
+            zen.calls,
+        )
+        assertNull("the snooze is over; the record must not survive", storedSnooze())
     }
 
     @Test

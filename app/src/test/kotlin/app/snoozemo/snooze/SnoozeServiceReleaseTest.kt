@@ -216,6 +216,45 @@ class SnoozeServiceReleaseTest {
             releases.none { it.second == app.snoozemo.core.ZenTrigger.USER_ACTION },
         )
     }
+
+    @Test
+    fun `a user's end retires the reason of a release it supersedes`() {
+        // The refusal above keeps its marker, so the tap that arrives before
+        // the retry has to retire it: the user's ending is theirs, and a crash
+        // in its own window would otherwise be explained by the cap (Codex,
+        // PR #197).
+        val store = ActiveSnoozeStore(appContext)
+        // Armed first, then marked: `arm` clears the marker, so the order is
+        // what puts a live record and a pending reason on disk together.
+        store.arm(snoozeFixture(now))
+        store.markReleasing(EndReason.DURATION_CAP)
+        TestSnoozeService.zen.outcome = ZenOutcome.Applied("refusing-zen-rule-id")
+
+        startService(SnoozeService.ACTION_END)
+
+        assertEquals(null, store.releasingReason())
+    }
+
+    @Test
+    fun `a refused release keeps the reason it is still pursuing`() {
+        // The marker used to be cleared here on the reasoning that an attempt
+        // which never completed must not explain a later ending. Reversed
+        // (SPEC.md §5.8; maintainer, 2026-09-05): the refusal re-arms this
+        // same ending, so the marker names what the app is still executing,
+        // and a user toggle that lands first is reported as that — louder,
+        // not quieter, than the silent user ending.
+        val record = snoozeFixture(now)
+        startService(SnoozeService.ACTION_CAP_LOST, record) {
+            putExtra(SnoozeService.EXTRA_RECORD_STARTED_AT, record.startedAt.toEpochMilli())
+            putExtra(SnoozeService.EXTRA_END_REASON, EndReason.DURATION_CAP.name)
+        }
+
+        assertTrue(
+            "the release must have been refused",
+            TestSnoozeService.zen.calls.any { !it.first },
+        )
+        assertEquals(EndReason.DURATION_CAP, ActiveSnoozeStore(appContext).releasingReason())
+    }
 }
 
 /**
