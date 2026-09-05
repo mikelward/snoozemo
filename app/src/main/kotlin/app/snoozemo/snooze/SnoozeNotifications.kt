@@ -15,6 +15,7 @@ import app.snoozemo.dnd.AudioRingerController
 import app.snoozemo.dnd.RingerShortfall
 import app.snoozemo.tile.R as TileR
 import app.snoozemo.core.ActiveSnooze
+import app.snoozemo.core.identity
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.TrackingMode
@@ -255,8 +256,8 @@ class SnoozeNotifications(private val context: Context) {
      * One `AudioManager` read, contained, and only after the rule is on — the
      * card is posted from the arm path.
      */
-    private fun ringerShortfall(): String? = runCatching {
-        when (val shortfall = AudioRingerController.default(context).shortfall()) {
+    private fun ringerShortfall(snooze: ActiveSnooze): String? = runCatching {
+        when (val shortfall = AudioRingerController.default(context).shortfall(snooze.identity)) {
             null -> null
             // A ceiling in force over a mode nothing could read: it is not
             // holding, and which mode the phone is in is the unknown part — so
@@ -324,7 +325,7 @@ class SnoozeNotifications(private val context: Context) {
         // Read here rather than inside `buildOngoing`, which stays a pure
         // function of its arguments, and read *once* so the two posts below
         // cannot disagree about the same card.
-        val ringerShortfall = ringerShortfall()
+        val ringerShortfall = ringerShortfall(snooze)
         betweenReadAndPost()
         val posted = postOngoing(buildOngoing(snooze, builtWith, ringerShortfall, silent), onlyIfGeneration)
         // The cache is read above but written under the lock this post takes,

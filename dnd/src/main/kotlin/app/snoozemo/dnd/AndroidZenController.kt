@@ -20,6 +20,7 @@ import app.snoozemo.core.ZenOutcome
 import app.snoozemo.core.ringerFollowUp
 import app.snoozemo.core.confirmsNothingSilencing
 import app.snoozemo.core.ZenRuleState
+import app.snoozemo.core.SnoozeIdentity
 import app.snoozemo.core.ZenTrigger
 
 /**
@@ -261,6 +262,7 @@ class AndroidZenController(
         snoozed: Boolean,
         trigger: ZenTrigger,
         placeName: String,
+        snooze: SnoozeIdentity?,
     ): ZenOutcome {
         // Carried across the rule write, because a hand-back that recognized the
         // user's own mid-snooze change must not be undone by the re-quiet below
@@ -269,7 +271,7 @@ class AndroidZenController(
         val disowned = !snoozed && giveBackTheRinger() is RingerOutcome.Disowned
         val outcome = setRuleState(snoozed, trigger, placeName)
         when (ringerFollowUp(snoozed, outcome, ringerDisowned = disowned)) {
-            RingerFollowUp.QUIET -> quietTheRinger()
+            RingerFollowUp.QUIET -> quietTheRinger(snooze)
             RingerFollowUp.HAND_BACK_AND_FORGET -> {
                 // Already done above on the release path; an **arm** that ended
                 // the snooze has not done it at all (Codex, PR #176).
@@ -285,7 +287,7 @@ class AndroidZenController(
             // unchanged. A ringer the hand-back disowned never reaches here —
             // `ringerDisowned` sends it to `NOTHING`, since it is theirs for
             // the rest of the snooze.
-            RingerFollowUp.RE_QUIET -> quietTheRinger()
+            RingerFollowUp.RE_QUIET -> quietTheRinger(snooze)
             RingerFollowUp.NOTHING -> Unit
         }
         return outcome
@@ -298,8 +300,8 @@ class AndroidZenController(
      * that the wake-up existed to perform, over a phone that is merely a little
      * louder than asked.
      */
-    private fun quietTheRinger() {
-        runCatching { ringer.quiet() }.onFailure {
+    private fun quietTheRinger(snooze: SnoozeIdentity?) {
+        runCatching { ringer.quiet(snooze) }.onFailure {
             SnoozeDebugLog.failure(it, "ringer: applying the chosen ceiling threw; the snooze stands")
         }
     }

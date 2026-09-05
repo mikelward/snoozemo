@@ -422,3 +422,18 @@ data class ActiveSnooze(
             onDisk == null || queuedFor == null || onDisk.startedAt == queuedFor
     }
 }
+
+/**
+ * Which snooze a durable record belongs to (SPEC.md §5.9 rule 2).
+ *
+ * The start instant, because it is the one field a snooze carries from its
+ * first arm through every re-assertion and reboot unchanged — the cap is
+ * measured from it (§8.3) — while no two snoozes share one. The ringer's
+ * choice record carries it so that a record one snooze left behind is never
+ * read as the next snooze's own (`TODO.md`, the ceiling-identity entry).
+ */
+@JvmInline
+value class SnoozeIdentity(val startedAtEpochMs: Long)
+
+val ActiveSnooze.identity: SnoozeIdentity
+    get() = SnoozeIdentity(startedAt.toEpochMilli())

@@ -12,6 +12,7 @@ import app.snoozemo.core.ClockReading
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.PresenceMonitor
 import app.snoozemo.core.PresenceUpdate
+import app.snoozemo.core.SnoozeIdentity
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenRuleActivation
@@ -69,6 +70,7 @@ internal class RefusingZen : ZenController {
         snoozed: Boolean,
         trigger: ZenTrigger,
         placeName: String,
+        snooze: SnoozeIdentity?,
     ): ZenOutcome {
         calls += snoozed to trigger
         // The platform remembers, so the fake does too. Without this a test

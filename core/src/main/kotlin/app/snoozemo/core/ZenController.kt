@@ -35,8 +35,18 @@ interface ZenController {
      * [trigger] is surfaced by the platform's Modes UI on API 35+, so the user
      * can tell "I did this" from "my phone did this" — pass what actually caused
      * it, not what is convenient.
+     *
+     * [snooze] names the snooze this call is for, so that what the ringer
+     * records for it — the ceiling it started with — is never mistaken for a
+     * later snooze's (SPEC.md §5.9 rule 2). A release may pass null; an arm or
+     * a re-assertion passes the record's [identity].
      */
-    fun setSnoozed(snoozed: Boolean, trigger: ZenTrigger, placeName: String): ZenOutcome
+    fun setSnoozed(
+        snoozed: Boolean,
+        trigger: ZenTrigger,
+        placeName: String,
+        snooze: SnoozeIdentity? = null,
+    ): ZenOutcome
 
     /**
      * The id of the rule [ensureRule] has already prepared, if it has.

@@ -10,6 +10,7 @@ import android.util.Log
 import com.mikelward.androidlog.safe
 import app.snoozemo.core.endReason
 import app.snoozemo.core.ActiveSnooze
+import app.snoozemo.core.identity
 import app.snoozemo.core.Attempt
 import app.snoozemo.core.ClockChange
 import app.snoozemo.core.ClockChangeAction
@@ -647,6 +648,10 @@ internal fun releaseDirectly(
         // itself in the platform's Modes UI, contrary to SPEC.md §5.4.
         trigger = reason.zenTrigger(),
         placeName = snooze?.placeName ?: ActiveSnooze.DEFAULT_PLACE_NAME,
+        // A refused release re-quiets, and the re-quiet must reuse this
+        // snooze's own ceiling record rather than trust whatever is there
+        // (Codex, PR #192).
+        snooze = snooze?.identity,
     )
     val released = outcome is ZenOutcome.Applied ||
         (outcome is ZenOutcome.NotApplied && outcome.reason.nothingLeftToRelease)
@@ -956,7 +961,7 @@ internal fun restoreDirectly(
 
     val notifications = SnoozeNotifications(context.applicationContext)
 
-    val outcome = zen.setSnoozed(true, ZenTrigger.CONTEXT, snooze.placeName)
+    val outcome = zen.setSnoozed(true, ZenTrigger.CONTEXT, snooze.placeName, snooze.identity)
     if (outcome is ZenOutcome.NotApplied) {
         // Said either way — the user is not left guessing why their phone is
         // or isn't quiet after a restart.
@@ -1236,6 +1241,7 @@ internal fun discardForeignRecord(
         snoozed = false,
         trigger = ZenTrigger.CONTEXT,
         placeName = stranded?.placeName ?: ActiveSnooze.DEFAULT_PLACE_NAME,
+        snooze = stranded?.identity,
     )
     val released = outcome is ZenOutcome.Applied ||
         (outcome is ZenOutcome.NotApplied && outcome.reason.nothingLeftToRelease)
