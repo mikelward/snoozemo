@@ -5538,29 +5538,13 @@ difference between what the app sends and what the store row says is worked thro
 copy was the maintainer's reason, and it happens to remove the claim that would have needed a
 footnote.
 
-## Main screen: the status block reads too small (maintainer, 2026-09-05)
+## Main screen: the status block (maintainer, 2026-09-05) — built
 
-Next PR. The status line on `MainScreen` — the `Not snoozing` / `Snoozing` text —
-is the one thing the screen exists to say, and it currently reads as ordinary
-body text across the full column width.
-
-- **Larger**, in both states.
-- **Centered, or in a slightly narrower column** — either is acceptable; pick one
-  and show it.
-- **Maintainer leans two rows**: `Not snoozing` alone when idle, and when a
-  snooze is running a title row plus a second line for the end condition —
-  `Snoozing` over `Ends when you leave`.
-- **Prefer one row if it fits**: `Snoozing until you leave` on a single line is
-  the better answer where the enlarged type still allows it (maintainer,
-  2026-09-05), with the two-row form as the fallback. So the two-row split is a
-  wrapping decision, not the target — measure at the intended size before
-  choosing, and check the longest degraded wording rather than the shortest.
-
-Open when building it: what the second row says in each of the degraded modes,
-where the countdown goes (§4.2 puts it on the tile subtitle, and the notification
-already carries `ends in 3h 40m`), and whether the two rows collapse at the
-largest font sizes. Screenshot coverage across idle, snoozing, Wi-Fi-only,
-timer-only and degraded already exists, so the diff will show every state.
+Built: `headlineSmall`, centered, one row (`Snoozing until you leave`) wherever
+the measured width allows and the title-over-condition split where it does not.
+`SPEC.md` §4.2 carries the decision. Still owed a look on a real handset at the
+largest font and display size, which is where the split actually fires — the
+recorded screenshots only show the default size.
 
 ## Deferred review findings (Codex, PR #204)
 

@@ -319,7 +319,11 @@ class MainScreenScreenshotTest {
         // the state it would have communicated is already on the card above.
         composeRule.onNodeWithText("Snooze").assertDoesNotExist()
         composeRule.onNodeWithText("End snooze").assertIsEnabled()
-        composeRule.onNodeWithText("Ends when you leave").assertExists()
+        // One row at the default width, not the title-over-condition split:
+        // `Snoozing until you leave` says the whole thing in a sentence and is
+        // preferred wherever it fits (maintainer, 2026-09-05).
+        composeRule.onNodeWithText("Snoozing until you leave").assertExists()
+        composeRule.onNodeWithText("Ends when you leave").assertDoesNotExist()
         composeRule.onNodeWithText("3h 40m left").assertExists()
         // The same slot, not a second line — a screen showing both at once
         // would contradict itself.
@@ -352,6 +356,11 @@ class MainScreenScreenshotTest {
             )
         }
 
+        // The two-row shape: "Snoozing, Wi-Fi only" does not compose, so a
+        // degraded snooze states the title over its condition rather than
+        // trying for the one-row sentence. An exact match, so this cannot be
+        // satisfied by `Snoozing until you leave`.
+        composeRule.onNodeWithText("Snoozing").assertExists()
         composeRule.onNodeWithText("Wi-Fi only").assertExists()
         // Under an hour left, so the minutes-only form — no "0h" leaking in.
         composeRule.onNodeWithText("45m left").assertExists()
@@ -641,7 +650,7 @@ class MainScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("Ends when you leave").assertExists()
+        composeRule.onNodeWithText("Snoozing until you leave").assertExists()
     }
 
     @Test
