@@ -422,7 +422,7 @@ leads with — it is no longer true as a statement that the tile is the *only* w
 `LicensesScreen`, arrived later — §4.7). `MainScreen` is the
 tile-equivalent Arm/Release control: the app's title, a banner for the one required-and-missing
 capability (Do Not Disturb access — nothing on this screen can arm without it), the tile banner
-below, and the Snooze/End snooze/Settings controls — **exactly one of Snooze and End snooze at a
+below, and the Snooze/End snooze controls — **exactly one of Snooze and End snooze at a
 time**, split on a confident "nothing is running" rather than on a confident "something is". End
 snooze is the one guaranteed way back to a ringing phone (§7), so it disappears only where the
 screen has actually read the record and found nothing; while that reading is still unknown it
@@ -444,7 +444,25 @@ always one tap, on the same "fail open" principle the duration cap itself follow
 flow that cannot be left
 without finishing it is a trap, not onboarding. `LicensesScreen` is a leaf off `SettingsScreen`'s
 foot (§4.7), and the only screen reached from exactly one place — which is why Back there returns
-to Settings rather than to `MainScreen`.
+to Settings rather than to `MainScreen`.to Settings rather than to `MainScreen`.
+
+**Settings is a gear in the title row, not a control in the column** (maintainer, 2026-09-05).
+As a full-width button it sat at the foot, *below* the exit, so a screen made long by a banner, a
+large font or a short window put it behind a scroll past everything else — and it took the full
+width beside the one control that has to be unmissable. In the title row it is at the top, where
+the screen opens and where a user already looks for it, and the arm/end button gets the width to
+itself.
+
+The row still scrolls with the column, deliberately. Pinning it would guarantee the gear at the
+cost of the scroll viewport in exactly the constrained cases — short window, large font — where
+`End snooze` is already tight, and this section ranks those the other way round: the manual exit is
+"always available, always instant" (§7), Settings is touched rarely and usually never. So the
+guarantee stays with the exit, and Settings gets the better position rather than a reserved one
+(Codex, PR #202).
+
+The trade in the icon itself is that it says less than a word: it carries `Settings` as its
+accessible name rather than a tooltip, since an icon-only control is nameless to a screen reader
+otherwise.
 
 **A welcome flow precedes the permissions screen on a fresh install** (maintainer, 2026-09-05; not
 yet built — `TODO.md` Phase 6, sketched with its copy in `TUTORIAL.md`). The route above — a fresh
