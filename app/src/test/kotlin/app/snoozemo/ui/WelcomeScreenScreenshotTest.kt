@@ -52,9 +52,12 @@ class WelcomeScreenScreenshotTest {
 
         composeRule.onNodeWithText("Silence your phone until you leave.").assertExists()
         composeRule.onNodeWithText("One tap.").assertExists()
-        // Skip is on the first card too: a flow whose exit only appears once
-        // you are inside it is the trap D7 forbids.
-        composeRule.onNodeWithText("Skip").assertExists()
+        // No Skip here (maintainer, 2026-09-05): offering to leave beside the
+        // one line that says what the app is invites skipping before there is
+        // anything to skip. D7 is untouched — back still exits card 1, so the
+        // way out exists; it just is not advertised before that line is read.
+        composeRule.onNodeWithText("Skip").assertDoesNotExist()
+        composeRule.onNodeWithText("Next").assertExists()
     }
 
     @Test
@@ -74,11 +77,11 @@ class WelcomeScreenScreenshotTest {
     fun `card two reads the endings off the notification render`() {
         capture("welcome-ends.png") { Flow(WelcomeCard.ENDS) }
 
-        // The first line is what happens with nobody touching the phone; the
-        // second is the taps. Split because the calendar is never a trigger.
-        composeRule.onNodeWithText("When you leave — and never more than 8 hours.").assertExists()
+        // One line now (maintainer, 2026-09-05): the title says the endings are
+        // automatic, the body lists them.
+        composeRule.onNodeWithText("Ends automatically").assertExists()
         composeRule
-            .onNodeWithText("Or tap to end it: End now, the tile, or Until your meeting's end.")
+            .onNodeWithText("When you leave, when your meeting ends, or at the time you choose.")
             .assertExists()
         // The render is one node, not three tappable-looking buttons: it is a
         // picture of a snooze that is not running.
@@ -93,7 +96,15 @@ class WelcomeScreenScreenshotTest {
             Flow(WelcomeCard.ENDS, tracksDeparture = false)
         }
 
-        composeRule.onNodeWithText("Never more than 8 hours.").assertExists()
+        // The title is true on both builds, so it does not change; the body is
+        // where departure drops out of the list.
+        composeRule.onNodeWithText("Ends automatically").assertExists()
+        composeRule
+            .onNodeWithText("When your meeting ends, or at the time you choose.")
+            .assertExists()
+        composeRule
+            .onNodeWithText("When you leave, when your meeting ends, or at the time you choose.")
+            .assertDoesNotExist()
         // Nothing is asserted about the render's own body here, and that is not
         // an omission: it is one semantics node on purpose, so its inner text
         // is unreachable and an `assertDoesNotExist` on it would pass whatever
@@ -121,7 +132,7 @@ class WelcomeScreenScreenshotTest {
     fun `card four carries the rule and the ringer choice`() {
         capture("welcome-rule.png") { Flow(WelcomeCard.RULE) }
 
-        composeRule.onNodeWithText("One editable rule").assertExists()
+        composeRule.onNodeWithText("One rule, yours").assertExists()
         // The ringer ceiling is a live control here, not a description of one.
         composeRule.onNodeWithText("Vibrate").assertExists()
         // Do Not Disturb access comes last of the grants: it is the one without
