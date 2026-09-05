@@ -120,7 +120,7 @@ class MainActivityLifecycleTest {
         // the worker was doing (`TODO.md`).
         if (!DebugLogging.awaitIdleForTest()) {
             fail("the debug-log worker did not drain, so the dismissal never " +
-                "ran.\n${DebugLogging.workerStall()}")
+                "ran.\n${DebugLogging.workerStall(app)}")
         }
         shadowOf(Looper.getMainLooper()).idle()
 

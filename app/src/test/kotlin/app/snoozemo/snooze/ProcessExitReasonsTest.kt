@@ -70,7 +70,7 @@ class ProcessExitReasonsTest {
         if (!DebugLogging.awaitIdleForTest(timeoutSeconds = 10)) {
             fail(
                 "the debug-log worker did not drain; startup collection may still be " +
-                    "in flight.\n${DebugLogging.workerStall()}",
+                    "in flight.\n${DebugLogging.workerStall(ApplicationProvider.getApplicationContext())}",
             )
         }
     }
