@@ -26,8 +26,13 @@ screen already has a reason attached.
   scrolling" and "no truncation" held absolutely there is no valid overflow at those
   sizes (Codex, PR #193), and clipping a grant is the worse of the two. Verify at the
   largest display and font size Android offers before calling any card done.
-- **`Next` on every card, `Skip` on every card, back gesture goes to the previous
-  card.** `Skip` and the last card's `Next` both land in the same place:
+- **`Next` on every card, `Skip` from card 2 on, back gesture goes to the previous
+  card** — and off card 1, out of the flow. `Skip` is absent on the first card
+  (maintainer, 2026-09-05): offering to leave beside the one line that says what
+  the app is invites skipping before there is anything to skip. That does not
+  weaken the rule below, because back still exits card 1 — the way out exists
+  there, it is just not advertised until the user has read that line. `Skip` and
+  the last card's `Next` both land in the same place:
   `PermissionsScreen` while a permission is still missing, `MainScreen` once nothing
   is — so there is no way through that misses a missing permission, none that shows
   a recap with nothing to recap, and no way to get stuck, which is the same fail-open
@@ -89,11 +94,18 @@ On the `direct` flavor, until Phase 7 lands, the first line is just `Silence you
 phone.`: that build is duration-only (§3), so a first card promising departure there
 would set up exactly the silence-until-the-cap the app exists to prevent (Codex,
 PR #193, twice). The second line does the promising, and the cap is what makes it
-true. Card 2 drops its departure line the same way.
+true. Card 2 drops departure from its list the same way, keeping the title, which
+is true on both builds.
+
+The 8-hour cap is deliberately not stated on this card on either flavor
+(maintainer, 2026-09-05). It still fires, and `Ends automatically` covers it —
+but a backstop the user never has to think about does not earn words in
+onboarding, and naming it invited the reading that eight hours is the point
+rather than the floor.
 
 ### 2 · How it ends
 
-> **It ends by itself**
+> **Ends automatically**
 >
 > ```
 > 🌙  Snoozing                          3:40:12
@@ -101,8 +113,7 @@ true. Card 2 drops its departure line the same way.
 >     [ End now ]   [ +30 min ]   [ Until 17:00 ]
 > ```
 >
-> When you leave — and never more than 8 hours.
-> Or tap to end it: **End now**, the tile, or **Until** your meeting's end.
+> When you leave, when your meeting ends, or at the time you choose.
 >
 > 📍 Location        [ Allow ]
 > 📅 Calendar        [ Allow ]
@@ -212,7 +223,7 @@ this card; the permanent row in Settings is the standing route (§4.2).
 
 ### 4 · Your Do Not Disturb rule
 
-> **One editable rule**
+> **One rule, yours**
 >
 > Snoozemo adds one Do Not Disturb rule and only ever switches that one on and
 > off. Choose what still gets through in Settings › Filters.
@@ -354,13 +365,23 @@ flow.
 
 ## Open questions for the maintainer
 
-- Card 4 was retitled to fit the four-word limit (Codex, PR #193): `One rule,
-  yours to edit` became `One editable rule`, which no longer says *yours*. `One
-  rule, yours` is the runner-up.
-- Whether `Skip` should be visible on card 1, or only from card 2 on — a `Skip` on
-  the very first screen invites skipping the whole thing before knowing what it is.
-- Whether the flow replays after an app update that adds a card (a version on the
-  seen-flag), or only from the (?) icon.
+- ~~Card 4's title.~~ **Decided (maintainer, 2026-09-05): `One rule, yours`.**
+  The four-word cut from `One rule, yours to edit` had produced `One editable
+  rule`, which lost the word the card is actually about. `One rule you
+  configure` was considered and dropped as too long. *Yours* is also the half
+  the body does not already say — the body's second sentence covers editing, so
+  a title about editing only repeated it, where this one names what the first
+  sentence is really promising: Snoozemo touches nothing else of yours.
+- ~~Whether `Skip` is visible on card 1.~~ **Decided (maintainer, 2026-09-05): no
+  `Skip` on card 1**, only from card 2 on. Offering to leave beside the one line
+  that says what the app is invites skipping before there is anything to skip.
+  D7 is untouched — back still exits card 1, so the way out exists; it is just
+  not advertised before that line has been read.
+- ~~Whether the flow replays after an update that adds a card.~~ **Decided
+  (maintainer, 2026-09-05): never automatically.** Anyone who skipped or finished
+  it is done with it, and only the (?) icon replays it. So the seen-flag stays a
+  plain boolean with no version on it — what was already built, now settled
+  rather than assumed.
 - The accessibility overflow under *Shape* — the body scrolls with the buttons
   pinned, only at sizes where it cannot fit — is a carve-out from "not vertically
   scrollable" taken because no-scroll and no-truncation cannot both hold there. The
