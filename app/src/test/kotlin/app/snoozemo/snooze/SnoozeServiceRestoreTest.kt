@@ -1,5 +1,6 @@
 package app.snoozemo.snooze
 
+import app.snoozemo.core.SnoozeLifecycle
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.ZenOutcome
 import app.snoozemo.core.ZenRuleActivation
@@ -36,7 +37,7 @@ class SnoozeServiceRestoreTest {
 
     /** A record whose arm completed, which is what a running snooze looks like. */
     private fun armed(snooze: app.snoozemo.core.ActiveSnooze) {
-        ActiveSnoozeStore(appContext).arm(snooze.copy(armed = true))
+        ActiveSnoozeStore(appContext).arm(snooze.copy(lifecycle = SnoozeLifecycle.ARMED))
     }
 
     @Test
@@ -47,12 +48,12 @@ class SnoozeServiceRestoreTest {
         // Disturb the user had switched off (Codex, PR #36). On the record it
         // survives an update because it is part of what is being updated.
         val store = ActiveSnoozeStore(appContext)
-        val snooze = snoozeFixture(now).copy(armed = true)
+        val snooze = snoozeFixture(now).copy(lifecycle = SnoozeLifecycle.ARMED)
         store.arm(snooze)
 
         store.update(snooze.copy(placeName = "Work"))
 
-        assertEquals(true, store.load()?.armed)
+        assertEquals(SnoozeLifecycle.ARMED, store.load()?.lifecycle)
     }
 
     @Test

@@ -1434,6 +1434,23 @@ says why (§4.5) rather than ending in the silence appropriate to something the 
 turn the phone back on in the middle of a meeting, which is the failure the whole app is arranged
 against.
 
+**The record carries its own lifecycle, and that is what a read-back asks about** (maintainer,
+2026-09-05). A snooze record is in exactly one of four states — **arming** (written, rule not yet
+confirmed on), **armed**, **releasing** (an ending Snoozemo decided on is being attempted, and the
+reason is part of the state), **released** (over, and the record is refused). They used to be three
+independent flags, and every wake-up that read the rule back re-derived from them what a live record
+beside an off rule meant. Independent flags can disagree, and a derivation repeated at each call
+site drifts — both happened, repeatedly, and a fix would reach one caller and leave the rest saying
+something else. So the state is recorded, and **every read-back asks one shared function what the
+ending is** rather than each deriving its own answer.
+
+The states are **ordered, and a record only moves forward through them**: an ordinary rewrite of a
+live record — a clock rebase, an extension, a tracking change — promotes and never demotes, so it
+cannot erase a release another process recorded a moment earlier. Only a **new arm** starts over,
+and only the **user's own ending** steps back, superseding a release of ours that was refused. What
+had been a rule each caller was expected to remember is now a property of the one place records
+reach disk.
+
 **An off rule with a live record has two explanations, and the platform reports only one of them.**
 `STATE_FALSE` says the rule is off, not *who* turned it off — so a process that died between turning
 the rule off itself and clearing its record would come back, find exactly that, and blame the user

@@ -4,11 +4,14 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import app.snoozemo.core.ActiveSnooze
+import app.snoozemo.core.Anchor
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.EndReason
-import app.snoozemo.core.Anchor
 import app.snoozemo.core.RecordOrigin
+import app.snoozemo.core.SnoozeLifecycle
+import app.snoozemo.core.SnoozeRecordState
 import app.snoozemo.core.TrackingMode
+import app.snoozemo.core.endingFor
 import java.time.Instant
 
 /**
@@ -106,7 +109,7 @@ class ActiveSnoozeStore(context: Context) {
 
     /** The record as written, with no judgment about whether it may be used. */
     private fun read(): ActiveSnooze? {
-        if (prefs.getBoolean(KEY_RELEASED, false)) return null
+        if (state().lifecycle == SnoozeLifecycle.RELEASED) return null
         val startedAt = prefs.getLong(KEY_STARTED_AT, 0L)
         val capExpiresAt = prefs.getLong(KEY_CAP_EXPIRES_AT, 0L)
         if (startedAt == 0L || capExpiresAt == 0L) return null
@@ -125,7 +128,7 @@ class ActiveSnoozeStore(context: Context) {
             capExpiresAt = Instant.ofEpochMilli(capExpiresAt),
             mode = loadMode(),
             degradation = loadDegradation(),
-            armed = prefs.getBoolean(KEY_ARMED, false),
+            lifecycle = state().lifecycle,
             placeName = prefs.getString(KEY_PLACE, ActiveSnooze.DEFAULT_PLACE_NAME)
                 ?: ActiveSnooze.DEFAULT_PLACE_NAME,
             // Absent for a record written before this key existed. Null is the
@@ -306,12 +309,15 @@ class ActiveSnoozeStore(context: Context) {
         // update of a live record clears neither: the reason it would erase
         // may belong to a release of *this* snooze that is still in flight.
         .apply {
-            if (newArm) {
-                remove(KEY_RELEASED)
-                remove(KEY_RELEASING_REASON)
-            }
+            if (newArm) remove(KEY_RELEASING_REASON)
         }
-        .putBoolean(KEY_ARMED, snooze.armed)
+        // Promoted, never demoted, unless this is a new arm — the rule the
+        // lifecycle's ordering exists to enforce, applied at the one point
+        // records reach disk rather than in each caller's head.
+        .putString(
+            KEY_LIFECYCLE,
+            (if (newArm) snooze.lifecycle else maxOf(snooze.lifecycle, state().lifecycle)).name,
+        )
         .putLong(KEY_STARTED_AT, snooze.startedAt.toEpochMilli())
         .putLong(KEY_CAP_EXPIRES_AT, snooze.capExpiresAt.toEpochMilli())
         // Written with the deadline for the same reason the boot reference is:
@@ -400,7 +406,7 @@ class ActiveSnoozeStore(context: Context) {
      * notification grant — which re-asserts the zen rule and takes the phone
      * quiet again with nothing the user did behind it, until the old cap.
      */
-    fun markReleased(): Boolean = prefs.edit().putBoolean(KEY_RELEASED, true).commit()
+    fun markReleased(): Boolean = setState(SnoozeRecordState(SnoozeLifecycle.RELEASED))
 
     /**
      * Records *why* a release is being attempted, before it is attempted.
@@ -421,18 +427,19 @@ class ActiveSnoozeStore(context: Context) {
      * still being pursued.
      */
     fun markReleasing(reason: EndReason): Boolean =
-        prefs.edit().putString(KEY_RELEASING_REASON, reason.name).commit()
+        setState(SnoozeRecordState(SnoozeLifecycle.RELEASING, reason))
 
     /**
-     * Retires a reason a *user's* ending has superseded (SPEC.md §5.8).
+     * Steps a record the *user's* own ending has superseded back to [ARMED],
+     * dropping the reason a refused release of ours left behind (SPEC.md §5.8).
      *
-     * A manual ending writes no marker of its own, because losing one to a
-     * crash falls back to "the user turned Do Not Disturb off" — equally
-     * silent, equally theirs. That holds only while there is nothing else on
-     * disk to fall back *to*: a contextual release that was refused leaves its
-     * reason standing, so a manual ending arriving before the retry would be
-     * read back as that departure or cap (Codex, PR #197). The user's own
-     * ending is the one thing that supersedes rather than continues it.
+     * The one sanctioned move backwards through the states, and it is a move
+     * the user makes: a manual ending writes no reason of its own, because
+     * losing one to a crash falls back to "the user turned Do Not Disturb off"
+     * — equally silent, equally theirs. That holds only while there is nothing
+     * else on disk to fall back *to*: a contextual release that was refused
+     * leaves `RELEASING` standing, so a manual ending arriving before the retry
+     * would be read back as that departure or cap (Codex, PR #197).
      *
      * **`apply`, not `commit`, and the one place that matters** (Codex,
      * PR #197). This runs between the user's tap and their phone making noise
@@ -445,28 +452,68 @@ class ActiveSnoozeStore(context: Context) {
      * misattributes an ending — strictly rarer than the refusal that got us
      * here, and cheaper than making the user wait for the disk.
      */
-    fun retireReleasing() = prefs.edit().remove(KEY_RELEASING_REASON).apply()
+    fun supersedeRelease() = prefs.edit()
+        .putString(KEY_LIFECYCLE, SnoozeLifecycle.ARMED.name)
+        .remove(KEY_RELEASING_REASON)
+        .apply()
 
     /**
-     * Whether the rule actually went on for the stored record (SPEC.md §5.8).
+     * The stored record's lifecycle and, where it is releasing, its reason
+     * (SPEC.md §5.8) — read ahead of the record itself, because the rule-state
+     * read-back has to happen before the restore that would overwrite its
+     * evidence.
      *
-     * The record is deliberately written *before* the rule (§4.1, and so that a
-     * crash never leaves the rule on with nothing to turn it off), which means
-     * a record over an off rule is ambiguous: either the arm never completed,
-     * or it completed and the user has since turned Do Not Disturb off. Those
-     * want opposite answers — finish the arm, or end the snooze — so the
-     * difference has to be recorded rather than guessed.
-     *
-     * Written after `STATE_TRUE` lands, so it costs the arm path nothing.
+     * **Migration lives here and nowhere else.** A record written before this
+     * key existed is read from the three flags it used to carry, and one of
+     * them needs a decision the old shape could not express: an absent `armed`
+     * meant "not armed" to a build that had the key, but for a record predating
+     * the key it means "armed the old way" (Codex, PR #36, left open until the
+     * state could answer it once). Reading such a record as `ARMING` would
+     * re-assert the rule over a Do Not Disturb the user had switched off, so
+     * absent-and-old reads as [SnoozeLifecycle.ARMED].
      */
-    fun wasArmed(): Boolean = prefs.getBoolean(KEY_ARMED, false)
+    fun state(): SnoozeRecordState {
+        val stored = prefs.getString(KEY_LIFECYCLE, null)
+            ?.let { name -> SnoozeLifecycle.entries.firstOrNull { it.name == name } }
+        val lifecycle = stored ?: legacyLifecycle()
+        return SnoozeRecordState(
+            lifecycle = lifecycle,
+            releasingReason = if (lifecycle == SnoozeLifecycle.RELEASING) releasingReason() else null,
+        )
+    }
+
+    /**
+     * Writes [state], and **never moves a record backwards** through the
+     * lifecycle: an ordinary rewrite of a live record cannot erase a release
+     * another process recorded a moment earlier, which was a whole class of
+     * finding rather than one bug. [arm] is the one write that starts over,
+     * and [supersedeRelease] the one step back, both by going around this.
+     */
+    fun setState(state: SnoozeRecordState): Boolean {
+        if (state.lifecycle < state().lifecycle) return true
+        return prefs.edit().putState(state).commit()
+    }
+
+    private fun SharedPreferences.Editor.putState(state: SnoozeRecordState): SharedPreferences.Editor =
+        putString(KEY_LIFECYCLE, state.lifecycle.name).apply {
+            state.releasingReason?.let { putString(KEY_RELEASING_REASON, it.name) }
+        }
+
+    /** The lifecycle a record written before [KEY_LIFECYCLE] existed encoded across three flags. */
+    private fun legacyLifecycle(): SnoozeLifecycle = when {
+        prefs.getBoolean(KEY_RELEASED, false) -> SnoozeLifecycle.RELEASED
+        prefs.contains(KEY_RELEASING_REASON) -> SnoozeLifecycle.RELEASING
+        // Absent means "armed the old way" only for a record that predates the
+        // flag entirely; one written by a build that had it says so explicitly.
+        !prefs.contains(KEY_ARMED) -> SnoozeLifecycle.ARMED
+        prefs.getBoolean(KEY_ARMED, false) -> SnoozeLifecycle.ARMED
+        else -> SnoozeLifecycle.ARMING
+    }
 
     /**
      * The rule the stored snooze was armed with, or null when the record names
      * none (SPEC.md §5.8) — read ahead of the record itself, for the same
-     * reason [wasArmed] is: the rule-state read-back has to happen before the
-     * restore that would overwrite its evidence, and it has to ask about
-     * *this* snooze's rule rather than whatever the app holds now.
+     * reason [state] is.
      */
     fun enforcingRuleId(): String? = prefs.getString(KEY_RULE_ID, null)
 
@@ -518,6 +565,7 @@ class ActiveSnoozeStore(context: Context) {
         const val TAG = "ActiveSnoozeStore"
         const val FILE_NAME = "active_snooze"
         const val KEY_STARTED_AT = "started_at"
+        const val KEY_LIFECYCLE = "lifecycle"
         const val KEY_RELEASED = "released"
         const val KEY_RELEASING_REASON = "releasing_reason"
         const val KEY_ARMED = "armed"

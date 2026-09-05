@@ -219,7 +219,7 @@ class SnoozeController(
                 // snooze's rule and not whatever the app holds later (SPEC.md
                 // §5.8). Taken from the outcome, not read back: a second read
                 // could name a replacement minted in between (Codex, PR #195).
-                active = snooze.copy(armed = true, ruleId = outcome.ruleId)
+                active = snooze.copy(lifecycle = SnoozeLifecycle.ARMED, ruleId = outcome.ruleId)
                 true
             }
             is ZenOutcome.NotApplied -> {
@@ -625,7 +625,7 @@ class SnoozeController(
         // Not a smart cast: `NotApplied` returned above, and the remaining
         // case of a sealed type is not inferred.
         val applied = outcome as ZenOutcome.Applied
-        val confirmed = restored.copy(armed = true, ruleId = applied.ruleId)
+        val confirmed = restored.copy(lifecycle = SnoozeLifecycle.ARMED, ruleId = applied.ruleId)
         active = confirmed
         state = SnoozeState.ARMED
         listener.onStateChanged(state, confirmed, null)

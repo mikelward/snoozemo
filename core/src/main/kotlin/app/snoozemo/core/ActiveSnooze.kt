@@ -59,13 +59,15 @@ data class ActiveSnooze(
     val mode: TrackingMode,
 
     /**
-     * Whether the zen rule actually went on for this snooze (SPEC.md §5.8).
+     * Where this snooze is in its life (SPEC.md §5.8), which is what a wake-up
+     * reading the rule back asks about — see [endingFor].
      *
      * On the record rather than beside it, and that is the whole point: the
      * record is written *before* the rule, so a wake-up that finds it over an
      * off rule cannot otherwise tell an arm that never completed from a snooze
-     * whose Do Not Disturb the user has since switched off. Those want opposite
-     * answers — finish the arm, or end it.
+     * whose Do Not Disturb the user has since switched off, or from a release
+     * of ours that got the rule off and died before erasing the record. Those
+     * want different answers — finish the arm, say nothing, or name the cap.
      *
      * It lived in a separate preferences key for exactly one round, where every
      * later `save` — a clock change, a tracking update — wiped it and made a
@@ -74,7 +76,7 @@ data class ActiveSnooze(
      * here it survives every update by construction, because it is part of the
      * thing being updated.
      */
-    val armed: Boolean = false,
+    val lifecycle: SnoozeLifecycle = SnoozeLifecycle.ARMING,
     val placeName: String = DEFAULT_PLACE_NAME,
     /**
      * The [ClockReading.bootReference] in force when this record was written, or
