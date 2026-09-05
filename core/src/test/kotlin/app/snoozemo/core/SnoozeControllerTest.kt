@@ -1,5 +1,6 @@
 package app.snoozemo.core
 
+import app.snoozemo.core.SnoozeLifecycle
 import java.time.Duration
 import java.time.Instant
 import org.junit.Assert.assertEquals
@@ -420,7 +421,7 @@ class SnoozeControllerTest {
         // arm and silence the phone again (Codex, PR #36).
         controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
 
-        assertEquals(true, controller.active?.armed)
+        assertEquals(SnoozeLifecycle.ARMED, controller.active?.lifecycle)
     }
 
     @Test
@@ -928,7 +929,7 @@ class SnoozeControllerTest {
         assertEquals(SnoozeState.ARMED, controller.state)
         // Identical but for `armed` and the rule, which the re-assertion has
         // just confirmed (see the §5.8 restore tests below).
-        assertEquals(running.copy(armed = true, ruleId = "fake-rule-id"), controller.active)
+        assertEquals(running.copy(lifecycle = SnoozeLifecycle.ARMED, ruleId = "fake-rule-id"), controller.active)
     }
 
     @Test
@@ -1053,7 +1054,7 @@ class SnoozeControllerTest {
 
     @Test
     fun `a restore that re-asserts the rule records that the rule is on`() {
-        // An arm that died before the rule went on leaves `armed = false`, and
+        // An arm that died before the rule went on leaves `lifecycle = SnoozeLifecycle.ARMING`, and
         // the §5.8 read uses exactly that to tell an unfinished arm from a user
         // who turned Do Not Disturb off. Restoring re-asserts the rule, so the
         // record has to stop saying the arm never finished — otherwise the next
@@ -1064,14 +1065,14 @@ class SnoozeControllerTest {
             startedAt = start.minus(Duration.ofHours(1)),
             capExpiresAt = start.plus(Duration.ofHours(7)),
             mode = TrackingMode.FULL,
-            armed = false,
+            lifecycle = SnoozeLifecycle.ARMING,
         )
 
         controller.restore(running)
 
         // Same value the listener is handed, and so the same value the service
         // persists — `restore` sets both from one record.
-        assertEquals(true, controller.active?.armed)
+        assertEquals(SnoozeLifecycle.ARMED, controller.active?.lifecycle)
     }
 
     @Test
@@ -1085,12 +1086,12 @@ class SnoozeControllerTest {
             startedAt = start.minus(Duration.ofHours(1)),
             capExpiresAt = start.plus(Duration.ofHours(7)),
             mode = TrackingMode.FULL,
-            armed = false,
+            lifecycle = SnoozeLifecycle.ARMING,
         )
 
         controller.restore(running)
 
-        assertEquals(false, controller.active?.armed ?: false)
+        assertEquals(SnoozeLifecycle.ARMING, controller.active?.lifecycle)
     }
 
     @Test

@@ -7,10 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
 import android.util.Log
-import com.mikelward.androidlog.safe
-import app.snoozemo.core.endReason
 import app.snoozemo.core.ActiveSnooze
-import app.snoozemo.core.identity
 import app.snoozemo.core.Attempt
 import app.snoozemo.core.ClockChange
 import app.snoozemo.core.ClockChangeAction
@@ -18,15 +15,21 @@ import app.snoozemo.core.ClockReading
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.RecordOrigin
 import app.snoozemo.core.ReleaseEscalation
-import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.ReleaseProgress
 import app.snoozemo.core.ReleaseStep
+import app.snoozemo.core.SnoozeDebugLog
+import app.snoozemo.core.SnoozeLifecycle
+import app.snoozemo.core.SnoozeRecordState
 import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
 import app.snoozemo.core.ZenTrigger
+import app.snoozemo.core.endReason
+import app.snoozemo.core.endingFor
+import app.snoozemo.core.identity
 import app.snoozemo.core.zenTrigger
 import app.snoozemo.dnd.AndroidZenController
+import com.mikelward.androidlog.safe
 import java.time.Instant
 
 /**
@@ -662,11 +665,11 @@ internal fun releaseDirectly(
         // left standing, which would otherwise explain this ending instead of
         // them. Read first, so the tap pays a map lookup and not a write
         // unless there is really something to retire.
-        val pending = runCatching { store.releasingReason() }
+        val pending = runCatching { store.state().releasingReason }
             .onFailure { Log.w(RELEASE_TAG, "Reading the release reason failed; leaving it.", it) }
             .getOrNull()
         if (pending != null) {
-            runCatching { store.retireReleasing() }
+            runCatching { store.supersedeRelease() }
                 .onFailure { Log.w(RELEASE_TAG, "Retiring the superseded release reason failed.", it) }
             SnoozeDebugLog.event("user ending supersedes a pending release ($pending); reason retired")
         }
@@ -984,35 +987,25 @@ internal fun restoreDirectly(
     // one thing an explicit instruction from the user must never get.
     // The record's own rule, for the reason the service reads it (SPEC.md
     // §5.8): a replacement minted since the arm must not stand in for it.
-    val inferred = runCatching { zen.ruleActivation(snooze.ruleId).endReason() }.getOrElse {
+    // The same question the service's read-back asks, through the same
+    // answer (SPEC.md §5.8): what does this record's state mean beside this
+    // rule state? Sharing `endingFor` is what stops the two paths drifting —
+    // this one used to infer the user's doing without consulting the record at
+    // all, so a cap or a departure that had already ended the snooze was
+    // reported as the ending kept silent (Codex, PR #197).
+    val reason = runCatching {
+        endingFor(ActiveSnoozeStore(context).state(), zen.ruleActivation(snooze.ruleId))
+    }.getOrElse {
         // Unreadable ends nothing: a failed read must not be the reason a
         // snooze is dropped, and the cap still bounds it either way.
         Log.w(RELEASE_TAG, "Reading the rule state after a reboot failed; restoring anyway.")
         null
     }
-    // An off rule with a live record has two explanations, and the read-back
-    // cannot tell them apart: the user turned Do Not Disturb off, or an
-    // app-decided release turned it off and died before erasing the record.
-    // The marker that release wrote is the only thing that knows, and it
-    // overrides the *user* inference alone — a missing rule is a lost
-    // capability whoever was releasing it. The same preference the service's
-    // read-back gives it (SPEC.md §5.8); this fallback used to skip it, so a
-    // cap or a departure that had already ended the snooze was reported as
-    // the user's doing, the one ending kept silent (Codex, PR #197).
-    val reason = when (inferred) {
-        EndReason.DND_TURNED_OFF ->
-            runCatching { ActiveSnoozeStore(context).releasingReason() }
-                .onFailure { Log.w(RELEASE_TAG, "Reading the release reason failed; inferring the ending.", it) }
-                .getOrNull() ?: inferred
-        else -> inferred
-    }
-    // Gated on the arm having completed, the same way the service path gates its
-    // own version (Codex, PR #36). A record written *before* its rule ever went
-    // on is an interrupted arm, not a user switching Do Not Disturb off — and an
-    // off rule looks identical from here. Ending on that inference would erase a
-    // snooze that only needed finishing, so an unfinished arm falls through and
-    // is re-asserted below instead.
-    if (reason != null && snooze.armed) {
+    // No separate gate on the arm having completed: `endingFor` answers that
+    // too, since an interrupted arm is one of the four causes it enumerates —
+    // it returns null there, and the re-assertion below is what such a record
+    // needed all along.
+    if (reason != null) {
         Log.w(RELEASE_TAG, "The rule is no longer on; ending instead of re-asserting.")
         releaseDirectly(context, reason, zen)
         return

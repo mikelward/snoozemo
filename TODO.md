@@ -1802,35 +1802,32 @@ the point is that every other line of the app is worthless if it isn't true.
         directions — re-silencing a phone the user un-silenced, and ending a snooze the user still
         wants — which is the strongest argument that the mechanism is wrong rather than incomplete.
 
-- [ ] **A record written before `armed` existed reads as an unfinished arm** (Codex, PR #36).
-      `getBoolean(KEY_ARMED, false)` treats *absent* as *not armed*, but absent only happens for a
-      record from a build predating the field — which was, by definition, armed the old way. On an
-      update with a live snooze, the next restoring wake-up therefore re-asserts the rule over a Do
-      Not Disturb the user may have switched off. **Currently unreachable**: nothing has shipped, so
-      no such record exists outside a dev device that updated mid-snooze.
-      - The one-line fix is defaulting absent to `true`, which is safe because every record this
-        build writes carries the key explicitly. It is *deliberately not applied yet* — it is the
-        fourth instance of one bug class in this mechanism, and the pending decision below either
-        removes the flag or replaces it with a lifecycle state that answers migration once.
-      - **Blocked on the maintainer's call**: keep the zen-rule read-back as it stands, model the
-        record's lifecycle explicitly (one state on `ActiveSnooze`, the four causes of "live record
-        over an off rule" enumerated in one place), or drop the read-back and let the broadcast
-        stand alone. Seven consecutive Codex findings landed in this mechanism; three of them were
-        caused by the fix for the previous one.
-      - **The count above predates this week, and the sequence has continued** (2026-09-05).
-        PR #194 and PR #195 each added findings here before the three below, so the total is
-        "more than seven and still rising" rather than any particular number — what it is
-        evidence *of* does not turn on the arithmetic. PR #197 is the instructive one: it
-        reversed the discard rule, so a refused release keeps its reason, and that single change
-        reached three separate places in the same mechanism, each found in review rather than by
-        anyone reasoning about it beforehand — the no-service read-back inferred the user's
-        ending without consulting the marker; a user's own `End now` continued a pending
-        contextual release instead of superseding it; and the retirement that fixed the second
-        landed a blocking write between the tap and the phone making noise again. All three are
-        fixed, and none was a coding slip: each is a fact about "live record over an off rule"
-        that lives in a different file from the others, which is precisely what option two would
-        put in one place. PR #195's rule-identity work is the same shape — ownership had to be
-        re-answered separately for the broadcast and for both read-backs.
+- [x] **A record written before `armed` existed reads as an unfinished arm** (Codex, PR #36), and
+      **the decision it was blocked on** — keep the zen-rule read-back as it stands, model the
+      record's lifecycle explicitly, or drop the read-back and let the broadcast stand alone.
+      **Both closed 2026-09-05 (maintainer): model the lifecycle explicitly.** `ActiveSnooze` now
+      carries one ordered state — arming, armed, releasing with its reason, released — in place of
+      the three independent flags, and `endingFor` is the single place that reads it beside the
+      rule's state and names the ending, so the service's restore, its reconcile and the no-service
+      fallback ask one question instead of each deriving an answer. The states only move forward
+      unless a new arm starts over or the user's own ending supersedes a refused release, which
+      makes "an ordinary update must not erase a release in flight" a property of the store rather
+      than a rule every caller had to remember. Migration reads in one place too, which answers the
+      `armed` half: a record older than the state's key reads as armed rather than arming, since it
+      was armed the old way, and re-asserting the rule over a Do Not Disturb the user had switched
+      off was the cost of getting that wrong. `SPEC.md` §5.8 records the model.
+      - **What made the case.** Seven consecutive Codex findings had landed in this mechanism, three
+        of them caused by the fix for the previous one, and the sequence continued through PR #194,
+        PR #195 and PR #197 — so the total was "more than seven and still rising" rather than any
+        countable number. PR #197 was the instructive one: reversing the discard rule, so a refused
+        release keeps its reason, reached three separate places, each found in review rather than by
+        anyone reasoning about it beforehand — the no-service read-back inferred the user's ending
+        without consulting the marker; a user's own `End now` continued a pending contextual release
+        instead of superseding it; and the retirement that fixed the second landed a blocking write
+        between the tap and the phone making noise again. None was a coding slip: each was a fact
+        about "live record over an off rule" living in a different file from the others. PR #195's
+        rule-identity work was the same shape — ownership had to be re-answered separately for the
+        broadcast and for both read-backs.
 
 - [ ] The §8.4 cases: `restricted` standby bucket, force-stop, OEM battery management.
 - [x] **The user turning Do Not Disturb off from the shade may silently end our snooze**

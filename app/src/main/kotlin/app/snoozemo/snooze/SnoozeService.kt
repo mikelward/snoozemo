@@ -10,7 +10,6 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
-import com.mikelward.androidlog.safe
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.Anchor
 import app.snoozemo.core.Attempt
@@ -29,20 +28,24 @@ import app.snoozemo.core.ReleaseProgress
 import app.snoozemo.core.ReleaseStep
 import app.snoozemo.core.SnoozeController
 import app.snoozemo.core.SnoozeDebugLog
+import app.snoozemo.core.SnoozeLifecycle
+import app.snoozemo.core.SnoozeRecordState
 import app.snoozemo.core.SnoozeState
+import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
-import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenRuleActivation
 import app.snoozemo.core.ZenRuleStatus
 import app.snoozemo.core.ZenRuleStatusAction
 import app.snoozemo.core.ZenRuleStatusChange
 import app.snoozemo.core.ZenTrigger
 import app.snoozemo.core.endReason
+import app.snoozemo.core.endingFor
 import app.snoozemo.core.logSummary
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.presence.AnchorCaptureRunner
 import app.snoozemo.presence.defaultPresenceMonitor
+import com.mikelward.androidlog.safe
 import java.time.Duration
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
@@ -616,30 +619,37 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // at all (SPEC.md §5.8) — and the write, when there is one, is
         // `apply`, so nothing on this path blocks on disk in front of a user
         // waiting for sound. Best-effort like the marker itself.
-        val pending = runCatching { store.releasingReason() }
+        val pending = runCatching { store.state().releasingReason }
             .onFailure { Log.w(TAG, "Reading the release reason failed; leaving it.", it) }
             .getOrNull() ?: return
-        runCatching { store.retireReleasing() }
+        runCatching { store.supersedeRelease() }
             .onFailure { Log.w(TAG, "Retiring the superseded release reason failed.", it) }
         SnoozeDebugLog.event("user ending supersedes a pending release ($pending); reason retired")
     }
 
-    private fun reconcileRuleActive(observed: ZenRuleActivation) {
+    /**
+     * The stored record's state, or a best guess if the read throws.
+     *
+     * `ARMED` is that guess because it is the one that concludes nothing on its
+     * own: it lets a rule the platform reports off end the snooze as the user's
+     * doing, which is what this path did before the state existed, rather than
+     * inventing a cap or suppressing a real ending.
+     */
+    private fun recordState(): SnoozeRecordState =
+        runCatching { store.state() }
+            .onFailure { Log.w(TAG, "Reading the record's lifecycle failed; assuming armed.", it) }
+            .getOrDefault(SnoozeRecordState(SnoozeLifecycle.ARMED))
+
+    /**
+     * Ends the snooze because the read-back said the rule is not enforcing it.
+     *
+     * The *why* is settled before this is called, by `endingFor` — the one
+     * place that reads a record's state beside a rule state (SPEC.md §5.8), so
+     * this path and the no-service fallback cannot drift into answering it
+     * differently. What is left here is what to do about it.
+     */
+    private fun endBecauseTheRuleIsNotEnforcing(reason: EndReason) {
         if (controller.active == null) return
-        // The reason comes from the activation, so "turned off" and "deleted"
-        // stay apart — one is the user's doing and says nothing, the other is a
-        // lost capability and explains itself. "Cannot tell" ends nothing.
-        val inferred = observed.endReason() ?: return
-        // A rule already off with a live record has two explanations, and
-        // `STATE_FALSE` cannot tell them apart (Codex, PR #36): the user turned
-        // Do Not Disturb off, or we did and died before clearing up. Our own
-        // marker is the only thing that knows, and it only overrides the
-        // *user* inference — a missing rule is a lost capability whoever was
-        // releasing it.
-        val reason = when (inferred) {
-            EndReason.DND_TURNED_OFF -> runCatching { store.releasingReason() }.getOrNull() ?: inferred
-            else -> inferred
-        }
         Log.i(TAG, "The zen rule is no longer enforcing; ending the snooze ($reason).")
         controller.end(reason)
         // The read-back runs only on restoring wake-ups, which nothing
@@ -864,15 +874,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             null
         }
 
-        // An arm that never finished is not the user turning Do Not Disturb off
-        // (Codex, PR #36). The record is written before the rule by design, so
-        // a crash in that window leaves exactly the shape this inference reads
-        // as a deactivation — and acting on it would silently delete a snooze
-        // the user asked for and was never told they didn't get. Restoring
-        // finishes the arm instead, which is what the pre-read-back code did
-        // and what the user actually wanted.
-        val armUnfinished = observedActivation != null &&
-            runCatching { !store.wasArmed() }.getOrDefault(false)
+        // What that rule state means for this record, from the one place that
+        // says (SPEC.md §5.8) — including the arm that never finished, which
+        // is not the user turning Do Not Disturb off and must be completed
+        // rather than read as an ending.
+        val observedEnding = observedActivation?.let { endingFor(recordState(), it) }
 
         when (intent?.action) {
             ACTION_ARM, ACTION_ERASE_RETRY -> Unit
@@ -884,7 +890,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // spurious transitions in the Modes UI, in service of a snooze
             // that is about to end anyway.
             else ->
-                if (!armUnfinished && observedActivation?.endReason() != null) {
+                if (observedEnding != null) {
                     adoptIfNeeded()
                 } else {
                     restoreIfNeeded()
@@ -904,9 +910,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // snooze the platform has already dropped. Every later wake-up is a
         // chance to notice, and they are all off the arm path.
         if (intent?.action != ACTION_ARM) reconcilePolicyAccess()
-        if (observedActivation != null && !armUnfinished) {
-            reconcileRuleActive(observedActivation)
-        }
+        observedEnding?.let { endBecauseTheRuleIsNotEnforcing(it) }
 
         // An obligation that outlived its process gets discharged by whatever
         // starts us next, whatever that start was for. The flag is the only

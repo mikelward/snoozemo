@@ -1,5 +1,6 @@
 package app.snoozemo.snooze
 
+import app.snoozemo.core.SnoozeLifecycle
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import app.snoozemo.core.ActiveSnooze
@@ -269,7 +270,7 @@ class ReceiverRefusalTest {
         // the retry ladder is still pursuing, and the restore is not the thing
         // that abandons it (SPEC.md §5.8; maintainer, 2026-09-05).
         val store = ActiveSnoozeStore(context)
-        val snooze = aSnooze().copy(armed = true)
+        val snooze = aSnooze().copy(lifecycle = SnoozeLifecycle.ARMED)
         store.arm(snooze)
         store.markReleasing(EndReason.DURATION_CAP)
 
@@ -292,7 +293,7 @@ class ReceiverRefusalTest {
                 return delegate.ruleActivation(ruleId)
             }
         }
-        val snooze = aSnooze().copy(armed = true, ruleId = "the-rule-it-was-armed-with")
+        val snooze = aSnooze().copy(lifecycle = SnoozeLifecycle.ARMED, ruleId = "the-rule-it-was-armed-with")
         ActiveSnoozeStore(context).arm(snooze)
 
         restoreDirectly(context, snooze, zen)
@@ -319,9 +320,9 @@ class ReceiverRefusalTest {
         // broadcast, so it is the likeliest one to meet a user who turned Do Not
         // Disturb off while the app was gone. Re-asserting first would overrule
         // them (Codex, PR #36).
-        // `armed = true` is what makes an off rule mean the *user* turned it
+        // `lifecycle = SnoozeLifecycle.ARMED` is what makes an off rule mean the *user* turned it
         // off: the arm completed, so the rule was on and is not any more.
-        val snooze = aSnooze().copy(armed = true)
+        val snooze = aSnooze().copy(lifecycle = SnoozeLifecycle.ARMED)
         ActiveSnoozeStore(context).arm(snooze)
         val zen = RefusingZen().apply {
             outcome = ZenOutcome.Applied("refusing-zen-rule-id")
@@ -345,7 +346,7 @@ class ReceiverRefusalTest {
         // prefers it. This fallback read the off rule as the user's doing
         // regardless (Codex, PR #197) — observable as the release going out on
         // the user's trigger, which is the ending kept silent.
-        val snooze = aSnooze().copy(armed = true)
+        val snooze = aSnooze().copy(lifecycle = SnoozeLifecycle.ARMED)
         val store = ActiveSnoozeStore(context)
         store.arm(snooze)
         store.markReleasing(EndReason.DURATION_CAP)
@@ -369,7 +370,7 @@ class ReceiverRefusalTest {
         // never got it on, and `armed` is the only thing that tells them apart
         // (Codex, PR #36). Reading an unfinished arm as the user's doing would
         // throw away a snooze that only needed finishing.
-        val unfinished = aSnooze().copy(armed = false)
+        val unfinished = aSnooze().copy(lifecycle = SnoozeLifecycle.ARMING)
         ActiveSnoozeStore(context).arm(unfinished)
         val zen = RefusingZen().apply {
             outcome = ZenOutcome.Applied("refusing-zen-rule-id")

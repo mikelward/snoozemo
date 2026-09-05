@@ -1,5 +1,6 @@
 package app.snoozemo.snooze
 
+import app.snoozemo.core.SnoozeLifecycle
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import app.snoozemo.core.ActiveSnooze
@@ -39,7 +40,7 @@ class ActiveSnoozeStoreMarkerTest {
         startedAt = now,
         capExpiresAt = now.plus(Duration.ofHours(4)),
         mode = TrackingMode.DURATION_ONLY,
-        armed = true,
+        lifecycle = SnoozeLifecycle.ARMED,
     )
 
     @Before
@@ -108,5 +109,103 @@ class ActiveSnoozeStoreMarkerTest {
         store.update(snooze.copy(mode = TrackingMode.WIFI_ONLY))
 
         assertNull(store.load())
+    }
+
+    @Test
+    fun `an update promotes the lifecycle but never demotes it`() {
+        // The invariant that replaces "arm clears the markers, update doesn't"
+        // being remembered at each call site: an ordinary rewrite of a live
+        // record cannot walk a release another process just recorded back to
+        // ARMED, whatever the in-memory copy it is holding says.
+        val store = ActiveSnoozeStore(context)
+        val snooze = aSnooze()
+        store.arm(snooze)
+        store.markReleasing(EndReason.DURATION_CAP)
+
+        store.update(snooze.copy(placeName = "Work"))
+
+        assertEquals(SnoozeLifecycle.RELEASING, store.state().lifecycle)
+        assertEquals(EndReason.DURATION_CAP, store.state().releasingReason)
+    }
+
+    @Test
+    fun `a new arm starts the lifecycle over`() {
+        // The one write that goes backwards, because a new snooze must not be
+        // born carrying the last one's ending.
+        val store = ActiveSnoozeStore(context)
+        store.arm(aSnooze())
+        store.markReleasing(EndReason.DEPARTURE)
+
+        store.arm(aSnooze().copy(lifecycle = SnoozeLifecycle.ARMING))
+
+        assertEquals(SnoozeLifecycle.ARMING, store.state().lifecycle)
+        assertNull(store.state().releasingReason)
+    }
+
+    @Test
+    fun `a user's ending steps a refused release back to armed`() {
+        val store = ActiveSnoozeStore(context)
+        store.arm(aSnooze())
+        store.markReleasing(EndReason.DEPARTURE)
+
+        store.supersedeRelease()
+
+        assertEquals(SnoozeLifecycle.ARMED, store.state().lifecycle)
+        assertNull(store.state().releasingReason)
+    }
+
+    @Test
+    fun `a released record is refused by load and says so in its state`() {
+        val store = ActiveSnoozeStore(context)
+        store.arm(aSnooze())
+
+        store.markReleased()
+
+        assertNull(store.load())
+        assertEquals(SnoozeLifecycle.RELEASED, store.state().lifecycle)
+    }
+
+    @Test
+    fun `a record from before the lifecycle key reads its old flags`() {
+        // Migration lives in the store and nowhere else. The three flags that
+        // used to encode this are read back into the one state, so a record
+        // written by an older build keeps meaning what it meant.
+        val prefs = context.getSharedPreferences("active_snooze", Context.MODE_PRIVATE)
+        val store = ActiveSnoozeStore(context)
+        store.arm(aSnooze())
+
+        prefs.edit()
+            .remove("lifecycle")
+            .putBoolean("armed", false)
+            .commit()
+        assertEquals(SnoozeLifecycle.ARMING, store.state().lifecycle)
+
+        prefs.edit().putBoolean("armed", true).commit()
+        assertEquals(SnoozeLifecycle.ARMED, store.state().lifecycle)
+
+        prefs.edit().putString("releasing_reason", EndReason.DEPARTURE.name).commit()
+        assertEquals(SnoozeLifecycle.RELEASING, store.state().lifecycle)
+        assertEquals(EndReason.DEPARTURE, store.state().releasingReason)
+
+        prefs.edit().putBoolean("released", true).commit()
+        assertEquals(SnoozeLifecycle.RELEASED, store.state().lifecycle)
+    }
+
+    @Test
+    fun `a record predating the armed flag entirely reads as armed`() {
+        // The migration question left open on PR #36, answered once here: absent
+        // meant "not armed" to a build that had the key, but a record older than
+        // the key was armed the old way. Reading it as ARMING would re-assert
+        // the rule over a Do Not Disturb the user had switched off.
+        val prefs = context.getSharedPreferences("active_snooze", Context.MODE_PRIVATE)
+        val store = ActiveSnoozeStore(context)
+        store.arm(aSnooze())
+
+        prefs.edit()
+            .remove("lifecycle")
+            .remove("armed")
+            .commit()
+
+        assertEquals(SnoozeLifecycle.ARMED, store.state().lifecycle)
     }
 }
