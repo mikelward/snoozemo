@@ -24,6 +24,7 @@ import app.snoozemo.core.ReleaseStep
 import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
+import app.snoozemo.core.ZenRuleActivation
 import app.snoozemo.core.ZenTrigger
 import app.snoozemo.core.zenTrigger
 import app.snoozemo.dnd.AndroidZenController
@@ -635,6 +636,29 @@ internal fun releaseDirectly(
     val store = ActiveSnoozeStore(context)
     val snooze = store.load()
 
+    // Why this release is being attempted, recorded before attempting it — the
+    // same marker the service's own release path writes (SPEC.md §5.8). This
+    // path used to write none (Codex, PR #36): a cap or capability-driven
+    // release that turned the rule off here and died before the erase left a
+    // live record over an off rule with no durable cause, read back as the
+    // user's own doing, silently. Best-effort, like the service's: a missing
+    // marker costs attribution, never the release.
+    // Only for the endings the app decided on, as `SnoozeController.end`
+    // gates it (Codex, PR #194): a manual ending needs no marker — losing one
+    // to a crash falls back to "the user turned Do Not Disturb off", which is
+    // equally silent and equally the user's — and this path is where the
+    // trampoline sends the user's own `End now` when the service refuses to
+    // start, so a disk write here would sit between their tap and their
+    // phone making noise again.
+    if (snooze != null && reason.zenTrigger() == ZenTrigger.CONTEXT) {
+        val marked = runCatching { store.markReleasing(reason) }
+            .onFailure { Log.w(RELEASE_TAG, "Recording the release reason failed; continuing.", it) }
+            .getOrDefault(false)
+        if (!marked) {
+            SnoozeDebugLog.warning("release reason not recorded; a crash before cleanup would misread this ending")
+        }
+    }
+
     val outcome = zen.setSnoozed(
         snoozed = false,
         // The one mapping, shared with `SnoozeController.end` rather than
@@ -755,6 +779,16 @@ internal fun releaseDirectly(
     // refused, so an alarm that armed and was then canceled by an unrelated
     // `cancelAll` left nothing written down about a rule that may still be on.
     Log.e(RELEASE_TAG, "Releasing without the service was refused; escalating.")
+    // A marker whose release did not happen is discarded, as the service does:
+    // left behind, it would explain whatever ends the snooze *next* (SPEC.md
+    // §5.8). `commit` reports a refusal by returning false, so the result is
+    // read rather than assumed.
+    if (snooze != null) {
+        val cleared = runCatching { store.clearReleasing() }
+            .onFailure { Log.w(RELEASE_TAG, "Clearing the stale release reason failed.", it) }
+            .getOrDefault(false)
+        if (!cleared) Log.w(RELEASE_TAG, "The stale release reason is still on disk; a later ending may cite it.")
+    }
     escalateWithoutService(context, snooze, reason)
     return false
 }
@@ -941,12 +975,14 @@ internal fun restoreDirectly(
     // path to meet a user who turned Do Not Disturb off while the app was
     // gone. Re-asserting first would silence their phone again, which is the
     // one thing an explicit instruction from the user must never get.
-    val reason = runCatching { zen.ruleActivation().endReason() }.getOrElse {
+    val activation = runCatching { zen.ruleActivation() }.getOrElse {
         // Unreadable ends nothing: a failed read must not be the reason a
         // snooze is dropped, and the cap still bounds it either way.
         Log.w(RELEASE_TAG, "Reading the rule state after a reboot failed; restoring anyway.")
-        null
+        ZenRuleActivation.UNKNOWN
     }
+    retireStaleReleasing(ActiveSnoozeStore(context), activation)
+    val reason = activation.endReason()
     // Gated on the arm having completed, the same way the service path gates its
     // own version (Codex, PR #36). A record written *before* its rule ever went
     // on is an interrupted arm, not a user switching Do Not Disturb off — and an
@@ -1162,7 +1198,7 @@ private fun restateDirectly(
     store: ActiveSnoozeStore,
     restated: ActiveSnooze,
 ) {
-    if (!store.save(restated)) {
+    if (!store.update(restated)) {
         Log.e(RELEASE_TAG, "The clock change could not be recorded; ending rather than trusting the old deadline.")
         releaseDirectly(context, EndReason.LOST_CAPABILITY)
         return
@@ -1354,7 +1390,7 @@ class BootReceiver : BroadcastReceiver() {
         // the user cannot wind backwards (SPEC.md §7).
         val now = SnoozeClock.read()
         val snooze = stored.rebasedOnto(now)
-        if (!store.save(snooze)) {
+        if (!store.update(snooze)) {
             // The same answer as a cap that cannot be scheduled below, and for
             // the same reason: what is left is a record whose offset describes a
             // boot that no longer exists, and every later reader believes it.
@@ -1429,4 +1465,32 @@ class BootReceiver : BroadcastReceiver() {
             Intent.ACTION_MY_PACKAGE_REPLACED,
         )
     }
+}
+
+/**
+ * Discards a release reason found beside a rule that is still on (SPEC.md §5.8).
+ *
+ * A marker is written before the zen write that would end the snooze, and
+ * cleared after a completed release or a refused one. When the refusal's
+ * clean-up itself failed to commit and the process then died, the reason
+ * outlives the attempt: a later rewrite of the live record keeps it — an
+ * update must not erase a marker that may belong to a release still in flight
+ * — so nothing would retire it, and a Do Not Disturb the user switched off
+ * some hours later would be read back as that earlier cap or departure
+ * (Codex, PR #194). The read-back on a restoring wake-up is where that state
+ * is unambiguous: a release in flight would have turned the rule off, so a
+ * marker beside a rule the platform reports **on** belongs to an attempt that
+ * never completed. `UNKNOWN` retires nothing — an unreadable rule is no
+ * evidence either way.
+ */
+internal fun retireStaleReleasing(store: ActiveSnoozeStore, activation: ZenRuleActivation) {
+    if (activation != ZenRuleActivation.ACTIVE) return
+    val stale = runCatching { store.releasingReason() }.getOrNull() ?: return
+    val cleared = runCatching { store.clearReleasing() }
+        .onFailure { Log.w(RELEASE_TAG, "Retiring a stale release reason failed; it will be retried at the next wake-up.", it) }
+        .getOrDefault(false)
+    SnoozeDebugLog.event(
+        if (cleared) "stale release reason ($stale) found beside a rule still on; discarded"
+        else "stale release reason ($stale) found beside a rule still on; discard failed",
+    )
 }

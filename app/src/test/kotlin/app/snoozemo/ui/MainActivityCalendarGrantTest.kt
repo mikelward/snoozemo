@@ -59,7 +59,7 @@ class MainActivityCalendarGrantTest {
     fun `a grant taken in Settings reposts the running card`() {
         // A card only needs rebuilding when there is one, so the transition
         // this is about only arises over a running snooze.
-        ActiveSnoozeStore(app).save(snoozeFixture(java.time.Instant.now()))
+        ActiveSnoozeStore(app).arm(snoozeFixture(java.time.Instant.now()))
         shadowOf(app).denyPermissions(Manifest.permission.READ_CALENDAR)
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         settle()
@@ -81,7 +81,7 @@ class MainActivityCalendarGrantTest {
 
     @Test
     fun `a revocation taken in Settings reposts too`() {
-        ActiveSnoozeStore(app).save(snoozeFixture(java.time.Instant.now()))
+        ActiveSnoozeStore(app).arm(snoozeFixture(java.time.Instant.now()))
         // The other direction, and it has no in-app route at all — a revocation
         // only ever happens in Settings, so this reading is the only thing that
         // can see it. Left unreposted, `Until <time>` stands over a calendar
@@ -112,7 +112,7 @@ class MainActivityCalendarGrantTest {
         // is first opened reaches this screen with no previous reading to
         // compare against, and would otherwise never reach the card (Codex,
         // PR #156).
-        ActiveSnoozeStore(app).save(snoozeFixture(java.time.Instant.now()))
+        ActiveSnoozeStore(app).arm(snoozeFixture(java.time.Instant.now()))
         shadowOf(app).grantPermissions(Manifest.permission.READ_CALENDAR)
 
         Robolectric.buildActivity(MainActivity::class.java).setup()

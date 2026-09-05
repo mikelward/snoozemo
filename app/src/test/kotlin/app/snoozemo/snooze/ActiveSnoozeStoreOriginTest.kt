@@ -78,7 +78,7 @@ class ActiveSnoozeStoreOriginTest {
     @Test
     fun `a snooze armed on this phone is restored on this phone`() {
         becomeDevice("phone-one")
-        ActiveSnoozeStore(context).save(aSnooze())
+        ActiveSnoozeStore(context).arm(aSnooze())
 
         assertEquals(RecordOrigin.THIS_DEVICE, ActiveSnoozeStore(context).originOfStored())
         assertNotNull(ActiveSnoozeStore(context).load())
@@ -90,7 +90,7 @@ class ActiveSnoozeStoreOriginTest {
         // record as the new one. Before the stamp, this returned a live snooze
         // and `BootReceiver` turned Do Not Disturb on with it.
         becomeDevice("old-phone")
-        ActiveSnoozeStore(context).save(aSnooze())
+        ActiveSnoozeStore(context).arm(aSnooze())
 
         becomeDevice("new-phone")
         assertEquals(RecordOrigin.ANOTHER_DEVICE, ActiveSnoozeStore(context).originOfStored())
@@ -105,7 +105,7 @@ class ActiveSnoozeStoreOriginTest {
         // Simulated by writing the record and then removing the key, which is
         // exactly what such a record looks like on disk.
         becomeDevice("phone-one")
-        ActiveSnoozeStore(context).save(aSnooze())
+        ActiveSnoozeStore(context).arm(aSnooze())
         context.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE)
             .edit()
             .remove(KEY_STAMP)
@@ -122,7 +122,7 @@ class ActiveSnoozeStoreOriginTest {
         // now also folds in this install's `firstInstallTime`, which
         // `PackageManager` answers on any device — so the record is still
         // attributed and the snooze still runs (Codex, PR #26).
-        ActiveSnoozeStore(context).save(aSnooze())
+        ActiveSnoozeStore(context).arm(aSnooze())
 
         assertEquals(RecordOrigin.THIS_DEVICE, ActiveSnoozeStore(context).originOfStored())
         assertNotNull(
@@ -140,9 +140,9 @@ class ActiveSnoozeStoreOriginTest {
         becomeDevice("phone-one")
         val store = ActiveSnoozeStore(context)
         val snooze = aSnooze()
-        store.save(snooze)
+        store.arm(snooze)
 
-        store.save(snooze.copy(capExpiresAt = snooze.capExpiresAt.plus(Duration.ofMinutes(30))))
+        store.update(snooze.copy(capExpiresAt = snooze.capExpiresAt.plus(Duration.ofMinutes(30))))
 
         assertEquals(RecordOrigin.THIS_DEVICE, ActiveSnoozeStore(context).originOfStored())
         assertNotNull(ActiveSnoozeStore(context).load())
@@ -156,7 +156,7 @@ class ActiveSnoozeStoreOriginTest {
         // and no `End now` to stop it. `MY_PACKAGE_REPLACED` now runs the same
         // repair a reboot does.
         becomeDevice("phone-one")
-        ActiveSnoozeStore(context).save(aSnooze())
+        ActiveSnoozeStore(context).arm(aSnooze())
         context.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE)
             .edit()
             .remove(KEY_STAMP)
@@ -184,7 +184,7 @@ class ActiveSnoozeStoreOriginTest {
         // leave a phone silent with nothing left to un-silence it — principle
         // 1's worst case, produced by the cleanup meant to prevent it.
         becomeDevice("old-phone")
-        ActiveSnoozeStore(context).save(aSnooze())
+        ActiveSnoozeStore(context).arm(aSnooze())
         becomeDevice("new-phone")
         val store = ActiveSnoozeStore(context)
         val origin = store.originOfStored()
@@ -211,7 +211,7 @@ class ActiveSnoozeStoreOriginTest {
         // The other half of the branch above, so the test proves the condition
         // rather than just one side of it.
         becomeDevice("old-phone")
-        ActiveSnoozeStore(context).save(aSnooze())
+        ActiveSnoozeStore(context).arm(aSnooze())
         becomeDevice("new-phone")
         val store = ActiveSnoozeStore(context)
         val origin = store.originOfStored()!!
@@ -232,7 +232,7 @@ class ActiveSnoozeStoreOriginTest {
         // nothing is lost by storing a hash — and a prefs file lifted off a
         // device then correlates with nothing.
         becomeDevice("phone-one")
-        ActiveSnoozeStore(context).save(aSnooze())
+        ActiveSnoozeStore(context).arm(aSnooze())
 
         val stored = context
             .getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE)

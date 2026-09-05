@@ -90,8 +90,8 @@ class ActiveSnoozeStore(context: Context) {
      * The discard path needs to act *on* an unusable record rather than around
      * it — naming it in a retry, and knowing whether a notification was posted
      * for it. The ringer hand-back check (`RingerReconcile`) needs "is there a
-     * record at all", because the `ARMING` transition's [saveAsync] skips the
-     * device-stamp lookup: for the moment before the post-arm blocking [save]
+     * record at all", because the `ARMING` transition's [armAsync] skips the
+     * device-stamp lookup: for the moment before the post-arm blocking [arm]
      * stamps it, [load] rejects a live arming record as unattributed, and a
      * check that believed that would hand the ringer back over a snooze that
      * had just armed (Codex, PR #176).
@@ -249,33 +249,64 @@ class ActiveSnoozeStore(context: Context) {
      * disk write belongs on the arm path (`AGENTS.md`, "the arm path"). `apply`
      * updates the in-memory map synchronously and hands the file write to a
      * background thread, so a later read in this process already sees it, and
-     * [save] forces it down the moment the rule is on.
+     * [arm] forces it down the moment the rule is on.
      */
-    fun saveAsync(snooze: ActiveSnooze) {
+    fun armAsync(snooze: ActiveSnooze) {
         // `allowLookup = false`: this is the one write that happens between the
         // tile tap and the zen rule going on, and nothing on that path may do
         // IPC (`AGENTS.md`). See `DeviceStamp.cachedOrNull`.
-        prefs.edit().putAll(snooze, allowLookup = false).apply()
+        prefs.edit().putAll(snooze, allowLookup = false, newArm = true).apply()
     }
 
     /**
-     * Writes [snooze] through to disk, returning false if the write failed.
+     * Writes a **new** snooze through to disk, returning false if the write
+     * failed.
      *
      * `commit`, not `apply`: called once the rule is on and off the hot path,
      * because the caller has to know. This record is the only thing that can
      * turn the rule off after process death, so a snooze that isn't on disk is
      * one the app cannot promise to end.
+     *
+     * An arm and not an update, so it clears the markers an earlier snooze may
+     * have left behind — see [update] for why the two are different writes.
      */
-    fun save(snooze: ActiveSnooze): Boolean = prefs.edit().putAll(snooze, allowLookup = true).commit()
+    fun arm(snooze: ActiveSnooze): Boolean =
+        prefs.edit().putAll(snooze, allowLookup = true, newArm = true).commit()
+
+    /**
+     * Rewrites a **live** record — a clock-frame rebase, an extension, a
+     * tracking change, an `ARMED`/`CHECKING` transition — returning false if the
+     * write failed.
+     *
+     * Deliberately not [arm]: an update leaves the release markers alone. One
+     * `save` used to serve both, clearing [KEY_RELEASING_REASON] on every write
+     * because a *new* snooze must not be born carrying an old one's reason — and
+     * so every ordinary update of a live record erased the reason a release in
+     * flight had just recorded, and a process that died between turning the
+     * rule off and clearing up read its own ending back as the user's,
+     * silently (Codex, PR #36; SPEC.md §5.8). The distinction is in the type
+     * now rather than in each caller's head: a caller that could not say which
+     * write it was making is the bug this split removes.
+     */
+    fun update(snooze: ActiveSnooze): Boolean =
+        prefs.edit().putAll(snooze, allowLookup = true, newArm = false).commit()
 
     private fun SharedPreferences.Editor.putAll(
         snooze: ActiveSnooze,
         allowLookup: Boolean,
+        newArm: Boolean,
     ): SharedPreferences.Editor = this
         // A new snooze clears any marker left by one whose erase failed —
-        // otherwise this record would be born already invisible to [load].
-        .remove(KEY_RELEASED)
-        .remove(KEY_RELEASING_REASON)
+        // otherwise this record would be born already invisible to [load] —
+        // and any release reason left by one whose clean-up never ran. An
+        // update of a live record clears neither: the reason it would erase
+        // may belong to a release of *this* snooze that is still in flight.
+        .apply {
+            if (newArm) {
+                remove(KEY_RELEASED)
+                remove(KEY_RELEASING_REASON)
+            }
+        }
         .putBoolean(KEY_ARMED, snooze.armed)
         .putLong(KEY_STARTED_AT, snooze.startedAt.toEpochMilli())
         .putLong(KEY_CAP_EXPIRES_AT, snooze.capExpiresAt.toEpochMilli())
@@ -376,7 +407,8 @@ class ActiveSnoozeStore(context: Context) {
      * because that ending is the one deliberately kept silent.
      *
      * Safe to be stale: it is read only in that specific recovery case, and it
-     * is cleared by both [save] and [clear].
+     * is cleared by a new [arm] and by [clear] — never by an [update] of the
+     * live record, which is how it used to be lost.
      */
     fun markReleasing(reason: EndReason): Boolean =
         prefs.edit().putString(KEY_RELEASING_REASON, reason.name).commit()
@@ -417,7 +449,7 @@ class ActiveSnoozeStore(context: Context) {
     /**
      * Forgets the snooze, returning false if the erase didn't reach disk.
      *
-     * The result matters as much as [save]'s, in the opposite direction: a
+     * The result matters as much as [arm]'s, in the opposite direction: a
      * record that survives a release is one a later cold start will restore, and
      * restoring re-asserts the zen rule — so a failed clear is how a phone goes
      * quiet again on its own, with no user action behind it. The caller keeps

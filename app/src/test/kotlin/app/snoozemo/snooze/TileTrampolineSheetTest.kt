@@ -104,7 +104,7 @@ class TileTrampolineSheetTest {
 
     @Test
     fun `an arm that took gets the sheet`() {
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
 
         val activity = tapTile()
 
@@ -131,7 +131,7 @@ class TileTrampolineSheetTest {
     @Test
     fun `the sheet stays off when the setting is off`() {
         EndSheetStore(appContext).setEnabled(false)
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
 
         val activity = tapTile()
 
@@ -148,7 +148,7 @@ class TileTrampolineSheetTest {
         // (Codex, PR #118). Before the sheet existed this activity finished
         // within a frame and the window barely existed; the sheet is what makes
         // it long enough to rotate in.
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
         val controller = tapTileController()
 
         var startsFromTap = 0
@@ -177,7 +177,7 @@ class TileTrampolineSheetTest {
         // reproducing `ActivityThread`'s save-once rule, so the old signal
         // passes here too. The demonstration is the framework source, quoted
         // on the review thread and in `onCreate`.
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
         val controller = tapTileController()
 
         // Backgrounded: this is where the old signal was written, and where it
@@ -196,7 +196,7 @@ class TileTrampolineSheetTest {
 
     @Test
     fun `a configuration change keeps the time the user stepped to`() {
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
         val controller = tapTileController()
         val activity = controller.get()
 
@@ -222,7 +222,7 @@ class TileTrampolineSheetTest {
         //
         // The bundle here carries no configuration-change marker, which is what
         // a background kill leaves behind.
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
         val killedState = Bundle().apply {
             putBoolean("start_accepted", true)
             putBoolean("sheet_shown", true)
@@ -255,7 +255,7 @@ class TileTrampolineSheetTest {
         // recreation has nobody listening at the moment the service answers.
         // The replacement sheet has to pick that answer up or it waits forever
         // with every control inert (Codex, PR #118).
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
         val controller = tapTileController()
         controller.get().sheet.committing = true
         // The answer is addressed to a request, so the sheet has to be waiting
@@ -307,7 +307,7 @@ class TileTrampolineSheetTest {
         // a chosen time no earlier than the cap is honored by doing nothing.
         // The user was shown one time and got another (Codex, PR #118).
         val alreadyRunning = Duration.ofHours(2)
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now, capIn = alreadyRunning))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now, capIn = alreadyRunning))
 
         val activity = tapTile()
         val condition = requireNotNull(activity.sheet.endCondition)
@@ -331,7 +331,7 @@ class TileTrampolineSheetTest {
         // doing nothing and reports as applied — a row promising 12:30 over a
         // snooze ending at 12:10 (Codex, PR #118). A screen with no answer is
         // worse than no screen, so the tap arms and gets out of the way.
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now, capIn = Duration.ofMinutes(10)))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now, capIn = Duration.ofMinutes(10)))
 
         val activity = tapTile()
 
@@ -347,7 +347,7 @@ class TileTrampolineSheetTest {
         // a transparent window blank for as long as the user left it there
         // (Codex, PR #118). Built without draining the looper, so the posted
         // block genuinely has not run when the recreation happens.
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
         val controller = Robolectric.buildActivity(
             TileTrampolineActivity::class.java,
             Intent(appContext, TileTrampolineActivity::class.java)
@@ -373,7 +373,7 @@ class TileTrampolineSheetTest {
         // decision ran used to restore the *old* sheet and never ask again,
         // because the branch keyed off whether a sheet had been drawn rather
         // than whether a decision was owed (Codex, PR #118).
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
         val controller = tapTileController()
 
         // Two taps of `+`, so a restored sheet is distinguishable from a
@@ -405,7 +405,7 @@ class TileTrampolineSheetTest {
         // with a time chosen against a clock that has moved on (Codex, PR #118).
         // The notification-permission request on this same path already skips
         // for exactly this reason.
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
         shadowOf(appContext.getSystemService(android.app.KeyguardManager::class.java))
             .setKeyguardLocked(true)
 
@@ -421,7 +421,7 @@ class TileTrampolineSheetTest {
     fun `ending a snooze never gets the sheet, however the setting reads`() {
         // A user on their way out of the app's way is the last person to offer a
         // menu to (SPEC.md §7).
-        ActiveSnoozeStore(appContext).save(snoozeFixture(now, capIn = Duration.ofHours(3)))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now, capIn = Duration.ofHours(3)))
         val activity = tapTile(SnoozeService.ACTION_END)
 
         assertTrue(activity.isFinishing)

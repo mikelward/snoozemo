@@ -1852,8 +1852,15 @@ the point is that every other line of the app is worthless if it isn't true.
       the open thread was protecting — not losing the finding — is what the `TODO.md` entry is
       for; the thread is not the durable place.
 
-- [ ] **A record update erases the release marker** (Codex, PR #36, raised rather than
-      built). `ActiveSnoozeStore.save` clears `KEY_RELEASING_REASON` on every write, and its
+- [x] **A record update erases the release marker** (Codex, PR #36, raised rather than
+      built). **Landed 2026-09-05**, three of the four halves: `ActiveSnoozeStore.save` is
+      split into `arm` (a new snooze, clears both markers) and `update` (a live record's
+      rewrite, clears neither), so the distinction is in the type; the no-service
+      `releaseDirectly` records the reason before its zen write and discards it on a
+      refusal, as the service does; and the two §5.8 endings — the status broadcast and the
+      pre-restore read-back — plus the policy-access revocation ending, which had the same
+      shape, follow a refused release with `ensureCapAfterRefusedEnd`. The no-service
+      restore's `armed` write is the one part still open, split out below. Original entry: `ActiveSnoozeStore.save` clears `KEY_RELEASING_REASON` on every write, and its
       comment only justifies the case it was written for — a *new* snooze, which must not be
       born carrying an old one's marker. But `save` is also how a live record is **updated**:
       the boot receiver rebases the clock frame and saves, the controller saves on every
@@ -1873,7 +1880,8 @@ the point is that every other line of the app is worthless if it isn't true.
       state with no durable cause, read back as the user's doing. All three want fixing together
       — the marker is only worth having if every release path writes one and no record write
       erases one.
-      **The same shape, one field over** (Codex, PR #36): the no-service restore path does not
+- [ ] **The no-service restore does not record that it re-asserted the rule** (Codex, PR #36;
+      split out of the entry above when the rest of it landed). The no-service restore path does not
       record that it re-asserted the rule, so a record written before its rule ever went on
       stays marked unfinished even after that path successfully turns the rule on. Writing it
       there was attempted and withdrawn — three rounds found three ways for it to be wrong,
@@ -4319,6 +4327,33 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     a snooze that ends on a duration cap needs the same controller.
 
 ## Decisions needing review
+
+- **Guessed under autopilot: a refused release's marker is left to the retry ladder, not
+  to a durable clear** (2026-09-05, Codex on PR #194, third finding in the marker
+  mechanism). The finding: a release is refused, the `clearReleasing()` that follows also
+  fails to commit, the process dies, and the user turns Do Not Disturb off before any
+  restoring wake-up sees the rule still on — so the next read-back finds `INACTIVE` with
+  the refused attempt's reason still on disk and reports that reason instead of
+  `DND_TURNED_OFF`.
+  **Why declined as a code change:** a retryable refusal is not an abandoned ending. It
+  re-arms the cap and the release retry with the same reason (`ensureCapAfterRefusedEnd`,
+  `armReleaseRetry`), and the retry re-enters `end(reason)` and rewrites the marker with
+  that reason — so a marker that outlives a failed clear names the ending the app is
+  still executing. If the user's toggle lands first, the snooze is reported as ending for
+  the reason the app had already decided on: the cap had fired, or the departure had
+  been detected. That is louder than the silent user ending, never quieter, which is the
+  direction principle 2 prefers. Every abandonment path clears the record, and the
+  marker with it.
+  **The design question this leaves for the maintainer:** §5.8's "a marker whose release
+  then fails is discarded" is the rule two review rounds have now been about, and the
+  argument above says it may be the wrong rule — under the retry ladder, a refused
+  release's marker *is* the standing decision, and discarding it only opens the
+  double-fault gap that the discard's own commit can fail. The alternative is to keep
+  the marker across a retryable refusal and clear it only when the ending completes or
+  is abandoned, which deletes the "stale marker" class rather than guarding it. Not
+  taken here: it reverses a spec sentence, and a design change is the maintainer's call.
+  **Reversible:** one rule in §5.8 and the two `clearReleasing()` calls on the refusal
+  paths.
 
 - **Guessed under autopilot: a location grant landing in the app pokes the running
   monitor from the main screen's permission reading** (2026-09-04), the first of the

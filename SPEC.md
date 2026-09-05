@@ -1443,7 +1443,15 @@ no marker: losing one to a crash falls back to "the user turned Do Not Disturb o
 equally silent and equally the user's, so nothing observable changes. That is what keeps the tile-tap
 path free of disk work, and it is a consequence of the design rather than a concession to it. A
 marker whose release then fails is discarded, since an attempt that never completed must not go on
-to explain some later ending. It is not the same as marking the record released: that marker
+to explain some later ending. Every release path Snoozemo decides on writes it, the no-service
+fallback included, and only a **new arm** or a completed release clears it: a rewrite of the live
+record — a clock rebase, an extension, a tracking change — leaves it alone, because the reason it
+would erase may belong to a release of that very snooze still in flight. A refused release on any
+of the app-decided endings re-arms the cap and escalates rather than waiting, since neither a status
+broadcast nor a restoring wake-up is guaranteed to repeat. A marker found at a restoring wake-up
+beside a rule the platform reports still **on** belongs to a release that never completed — a
+refusal whose own clean-up failed to commit — and is discarded there, so it cannot explain some
+later ending; an unreadable rule retires nothing. It is not the same as marking the record released: that marker
 suppresses the record, and writing it before a zen write that can still fail would strand a live
 snooze with Do Not Disturb on and nothing left to turn it back off.
 
