@@ -11,9 +11,11 @@ import androidx.compose.ui.Modifier
 // `assertIsEnabled` / `assertIsNotEnabled` are extensions and need importing;
 // `assertExists` / `assertDoesNotExist` are members of the same type and must
 // not be, which is a compile error that reads like a missing dependency.
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -202,7 +204,7 @@ class MainScreenScreenshotTest {
         // idle is the one state where the way out is hidden, because there is
         // provably nothing to get out of.
         composeRule.onNodeWithText("End snooze").assertDoesNotExist()
-        composeRule.onNodeWithText("Settings").assertExists()
+        composeRule.onNodeWithContentDescription("Settings").assertExists()
     }
 
     @Test
@@ -1185,7 +1187,7 @@ class MainScreenScreenshotTest {
     }
 
     @Test
-    fun `the Settings button opens SettingsScreen`() {
+    fun `the settings gear opens SettingsScreen`() {
         var opened = 0
 
         capture {
@@ -1212,8 +1214,16 @@ class MainScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("Settings").performClick()
+        // Found by its label, which is the accessible name an icon-only
+        // control does not otherwise have — and clicked without a
+        // `performScrollTo`, which is half the point of the move: as a
+        // full-width button under the exit, a long screen could push it below
+        // the fold.
+        composeRule.onNodeWithContentDescription("Settings").performClick()
         assertEquals(1, opened)
+        // The word is gone from the body: the gear replaced the button rather
+        // than joining it, so there is one way there rather than two.
+        composeRule.onNodeWithText("Settings").assertDoesNotExist()
     }
 
     @Test
@@ -1253,6 +1263,12 @@ class MainScreenScreenshotTest {
         }
 
         composeRule.onNodeWithText("End snooze").performScrollTo().assertIsEnabled()
+        // And the gear is up here without scrolling back, which is the claim
+        // this move actually makes: it is where the screen opens, not pinned
+        // against the scroll (SPEC.md §4.2). Asserted in the constrained case
+        // because that is the one where its old position at the foot — below
+        // the exit — cost the most to reach.
+        composeRule.onNodeWithContentDescription("Settings").assertIsDisplayed()
     }
 
     /**

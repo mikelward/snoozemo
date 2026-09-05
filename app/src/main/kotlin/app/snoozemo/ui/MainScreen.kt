@@ -129,7 +129,27 @@ internal fun MainScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        SnoozemoTitleRow(title = stringResource(R.string.app_name))
+        SnoozemoTitleRow(
+            title = stringResource(R.string.app_name),
+            // Settings rides the title row rather than a button at the foot of
+            // the screen. Down there it sat *below* the exit, so a long screen
+            // put it behind a scroll past everything else — and it competed for
+            // width with the one control that has to be unmissable (SPEC.md
+            // §7's "always available, always instant"). Up here it is where the
+            // screen opens, and the arm/end button gets the width to itself.
+            //
+            // Still inside the scroll, deliberately: pinning the row would take
+            // its height off the viewport in exactly the short-window and
+            // large-font cases where `End snooze` is already tight, and the
+            // exit outranks Settings (SPEC.md §4.2).
+            actions = {
+                SnoozemoTitleAction(
+                    icon = R.drawable.ic_settings_gear,
+                    label = R.string.settings_title,
+                    onClick = onOpenSettings,
+                )
+            },
+        )
         // First, above even the access banner: this is the screen the user
         // actually lands on, so a crashed run is surfaced where it will be
         // seen rather than tucked away on SettingsScreen (SPEC.md §4.6,
@@ -254,12 +274,6 @@ internal fun MainScreen(
                     Text(stringResource(R.string.release))
                 }
             }
-        }
-        TextButton(
-            onClick = onOpenSettings,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(stringResource(R.string.settings_title))
         }
         lastOutcome?.let {
             Text(text = it, style = MaterialTheme.typography.bodySmall)
