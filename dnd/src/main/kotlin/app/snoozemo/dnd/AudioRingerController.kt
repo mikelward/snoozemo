@@ -7,6 +7,7 @@ import app.snoozemo.core.BorrowedRinger
 import app.snoozemo.core.RingerHandBack
 import app.snoozemo.core.RingerHandover
 import app.snoozemo.core.RingerMode
+import app.snoozemo.core.SnoozeIdentity
 import app.snoozemo.core.RingerStep
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.SnoozeRinger
@@ -57,7 +58,7 @@ class AudioRingerController(
      * it runs between the tap and the rule going on. Everything here happens
      * *after* the rule is confirmed on.
      */
-    override fun quiet(): RingerOutcome = synchronized(RINGER) { quietLocked() }
+    override fun quiet(snooze: SnoozeIdentity?): RingerOutcome = synchronized(RINGER) { quietLocked(snooze) }
 
     override fun giveBack(): RingerOutcome = synchronized(RINGER) { giveBackLocked() }
 
@@ -130,7 +131,15 @@ class AudioRingerController(
      * Null where no ceiling is in force, or where the record itself could not be
      * read — with nothing to judge against there is nothing to claim.
      */
-    fun shortfall(): RingerShortfall? {
+    fun shortfall(snooze: SnoozeIdentity? = null): RingerShortfall? {
+        // A record another snooze left behind says nothing about this one, so
+        // there is nothing to claim against it; a record with no owner is the
+        // pre-identity form and is read as before.
+        val owner = runCatching { loans.choiceOwner() }.getOrNull()
+        if (snooze != null && owner != null && owner != snooze) {
+            SnoozeDebugLog.event("ringer: the ceiling on record belongs to an earlier snooze; reporting nothing")
+            return null
+        }
         // The ceiling **in force for the running snooze**, which comes from its
         // own record and neither from the loan's `setTo` nor from what the
         // setting says now (Codex, PR #176). A choice changed mid-snooze governs
@@ -148,9 +157,42 @@ class AudioRingerController(
         return RingerShortfall.Louder(current).takeIf { current.isLouderThan(ceiling) }
     }
 
-    private fun quietLocked(): RingerOutcome {
-        val loan = readLoan() ?: return RingerOutcome.Refused(RingerFailure.PLATFORM_REFUSED)
-        val chosen = inForce() ?: return RingerOutcome.Refused(RingerFailure.PLATFORM_REFUSED)
+    private fun quietLocked(snooze: SnoozeIdentity?): RingerOutcome {
+        val loanBefore = readLoan() ?: return RingerOutcome.Refused(RingerFailure.PLATFORM_REFUSED)
+        val ceiling = inForce(snooze) ?: return RingerOutcome.Refused(RingerFailure.PLATFORM_REFUSED)
+        val chosen = ceiling.chosen
+        // A record being replaced may sit over a loan taken for the ceiling it
+        // carried (Codex, PR #192, twice): one another snooze left behind, or an
+        // owner-less one adopted at a *louder* ceiling. Left there, the loan
+        // stops a second borrow, the phone stays at the old ceiling, and the
+        // card reports no shortfall against the one now recorded — silent, and
+        // silently. So the loan is handed back first, whichever snooze took it
+        // — a stale one's was owed back anyway, and a live one's is owed back by
+        // the louder choice just made — and the arm goes on from the restored
+        // mode, borrowing afresh if the new ceiling still needs it. A refused
+        // hand-back declines the whole adoption: the record is left exactly as
+        // it was, so nothing claims a ceiling the phone is not at, and the
+        // hand-back's own retry ladder is what comes back for the loan.
+        val loan = if (ceiling.handBackFirst && loanBefore.borrowed != null) {
+            SnoozeDebugLog.event("ringer: replacing a ceiling whose loan is still out; handing the loan back first")
+            val handedBack = giveBackLocked()
+            if (handedBack is RingerOutcome.Refused) {
+                // Said now, not after the ladder's rounds (Codex, PR #192): the
+                // retry alarm re-runs the *idle* check, which leaves a loan
+                // alone while a snooze is live, so nothing else would tell the
+                // user before this snooze's own release hands it back. The
+                // notice comes down from whichever hand-back finally lands.
+                SnoozeDebugLog.warning("ringer: the earlier loan could not be handed back; keeping the ceiling on record and saying so")
+                reportRingerStuck(true)
+                return handedBack
+            }
+            readLoan() ?: return RingerOutcome.Refused(RingerFailure.PLATFORM_REFUSED)
+        } else {
+            loanBefore
+        }
+        // Written only now, after any hand-back is confirmed, and only where
+        // the record is new or replaced — a re-assertion's own record stands.
+        if (ceiling.fresh) rememberChoice(chosen, snooze)
 
         // Before any binder call, so choosing `Ring` costs the arm path nothing
         // at all — not a mode read, not a fixed-volume check.
@@ -505,11 +547,26 @@ class AudioRingerController(
      * Null only where the setting itself could not be read: there is then no
      * ceiling this arm can honestly claim, and the caller declines.
      */
-    private fun inForce(): SnoozeRinger? {
-        runCatching { loans.activeChoice() }
+    private fun inForce(snooze: SnoozeIdentity?): Ceiling? {
+        var replacing = false
+        val recorded = runCatching { loans.activeChoice() }
             .onFailure { SnoozeDebugLog.failure(it, "ringer: the choice in force is unreadable") }
             .getOrNull()
-            ?.let { return it }
+        if (recorded != null) {
+            // Honored only for the snooze that recorded it (`TODO.md`, the
+            // ceiling-identity entry). A record with another owner is one an
+            // earlier snooze left behind — a clear that never reached disk, or
+            // a retry that lost its race to this arm — so the stale `Silent`
+            // it might carry must not quiet a snooze configured as `Ring`:
+            // reading the setting afresh is the audible direction. With no
+            // identity at hand there is nothing to compare, and the record is
+            // read as it always was.
+            val owner = runCatching { loans.choiceOwner() }.getOrNull()
+            if (snooze == null || owner == snooze) return Ceiling(recorded)
+            if (owner == null) return adoptOwnerless(recorded, snooze)
+            SnoozeDebugLog.warning("ringer: the ceiling on record belongs to an earlier snooze; using the current setting")
+            replacing = true
+        }
         // The loan is deliberately **not** a fallback here, though it was for
         // one round (Codex, PR #176, twice — the second time against the fix
         // the first asked for). A loan does not say *whose* snooze it is: one
@@ -524,8 +581,46 @@ class AudioRingerController(
             SnoozeDebugLog.failure(it, "ringer: the chosen ceiling is unreadable; leaving the ringer alone")
             return null
         }
-        rememberChoice(chosen)
-        return chosen
+        // Another snooze's loan is that snooze's to have back, whatever this
+        // one's ceiling is; a fresh arm with no record has nothing to replace.
+        return Ceiling(chosen, fresh = true, handBackFirst = replacing)
+    }
+
+    /**
+     * The ceiling an arm runs under. [fresh] says the record is to be written
+     * for this snooze — a re-assertion keeps its own; [handBackFirst] says a
+     * loan taken under the record being replaced may be outstanding and is to
+     * be handed back before anything is written or borrowed.
+     */
+    private class Ceiling(
+        val chosen: SnoozeRinger,
+        val fresh: Boolean = false,
+        val handBackFirst: Boolean = false,
+    )
+
+    /**
+     * A record with no owner predates owners, and it cannot say whether it is
+     * this snooze's — a snooze restored across the upgrade that added them, or
+     * one an earlier snooze left behind. Neither reading is safe on its own
+     * (Codex, PR #192): trusting it re-opens the stale-`Silent` case, and
+     * re-reading the setting lowers a running `Vibrate` snooze to a `Silent`
+     * chosen for the next one. So the **more audible** of the two wins, which
+     * is right in both cases the record can be, and it is stamped as this
+     * snooze's so the question is asked once (by [quietLocked], once any loan
+     * is settled). An unreadable setting leaves the record as the only answer,
+     * read as it always was.
+     */
+    private fun adoptOwnerless(recorded: SnoozeRinger, snooze: SnoozeIdentity): Ceiling {
+        val chosen = runCatching { setting.chosen() }.getOrElse {
+            SnoozeDebugLog.failure(it, "ringer: the chosen ceiling is unreadable; keeping the owner-less record")
+            recorded
+        }
+        // `RING` < `VIBRATE` < `SILENT` in declaration order, so the smaller is the louder.
+        val audible = minOf(recorded, chosen)
+        SnoozeDebugLog.warning("ringer: the ceiling on record has no owner; taking the louder of it and the setting")
+        // A record kept as it was may be a live snooze's, and its loan with it;
+        // one made louder has a loan taken for the quieter ceiling to give back.
+        return Ceiling(audible, fresh = true, handBackFirst = audible < recorded)
     }
 
     /**
@@ -535,8 +630,8 @@ class AudioRingerController(
      * line of honesty on the card and a re-assertion that re-reads the setting,
      * where losing the loan costs the phone its ringer.
      */
-    private fun rememberChoice(choice: SnoozeRinger?) {
-        val wrote = runCatching { loans.recordChoice(choice) }.getOrElse {
+    private fun rememberChoice(choice: SnoozeRinger?, owner: SnoozeIdentity? = null) {
+        val wrote = runCatching { loans.recordChoice(choice, owner) }.getOrElse {
             SnoozeDebugLog.failure(it, "ringer: recording the choice in force failed")
             false
         }

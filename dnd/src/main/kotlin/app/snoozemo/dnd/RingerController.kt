@@ -1,6 +1,7 @@
 package app.snoozemo.dnd
 
 import app.snoozemo.core.RingerMode
+import app.snoozemo.core.SnoozeIdentity
 
 /**
  * Snoozemo's contact with the ringer (SPEC.md §5.9).
@@ -29,8 +30,13 @@ interface RingerController {
      *
      * Idempotent across re-asserted arms — a restore after process death, the
      * cap alarm's own re-arm — because an outstanding loan is never overwritten.
+     *
+     * [snooze] is whose ceiling this is: the choice recorded for it is reused
+     * by its own re-assertions and never by a later snooze's arm (SPEC.md §5.9
+     * rule 2). Null only where no record is at hand, which keeps the record's
+     * old, identity-less reading.
      */
-    fun quiet(): RingerOutcome
+    fun quiet(snooze: SnoozeIdentity? = null): RingerOutcome
 
     /**
      * Hands the ringer back, if Snoozemo took it and the user has not moved it

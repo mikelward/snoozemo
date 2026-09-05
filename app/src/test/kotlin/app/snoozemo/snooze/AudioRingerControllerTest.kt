@@ -6,6 +6,7 @@ import android.media.AudioManager
 import androidx.test.core.app.ApplicationProvider
 import app.snoozemo.core.BorrowedRinger
 import app.snoozemo.core.RingerMode
+import app.snoozemo.core.SnoozeIdentity
 import app.snoozemo.core.SnoozeRinger
 import app.snoozemo.dnd.AudioRingerController
 import app.snoozemo.dnd.PrefsRingerLoanStore
@@ -424,6 +425,216 @@ class AudioRingerControllerTest {
     }
 
     @Test
+    fun `a ceiling record another snooze left behind is not adopted`() {
+        // The first snooze quiets the phone to Silent and vanishes without a
+        // release — a clear that never reached disk, or a retry that lost its
+        // race to the next arm. Nothing has dropped its record.
+        val earlier = SnoozeIdentity(1_000L)
+        choose(SnoozeRinger.SILENT)
+        newController().quiet(earlier)
+        newController().giveBack()
+        // The user then configures the next snooze as Ring.
+        choose(SnoozeRinger.RING)
+
+        val later = SnoozeIdentity(2_000L)
+        val outcome = newController().quiet(later)
+
+        // Read afresh, not inherited: the phone stays audible, and the record
+        // is now this snooze's own.
+        assertEquals(RingerOutcome.Untouched, outcome)
+        assertEquals(AudioManager.RINGER_MODE_NORMAL, audio.ringerMode)
+        assertEquals(SnoozeRinger.RING, PrefsRingerLoanStore(context).activeChoice())
+        assertEquals(later, PrefsRingerLoanStore(context).choiceOwner())
+    }
+
+    @Test
+    fun `a re-assertion reuses its own record whatever the setting says now`() {
+        val snooze = SnoozeIdentity(1_000L)
+        newController().quiet(snooze)
+        // A refused rule write hands the ringer back and keeps the snooze
+        // running; the ceiling changed mid-snooze must still not apply to it.
+        newController().giveBack()
+        choose(SnoozeRinger.SILENT)
+
+        val outcome = newController().quiet(snooze)
+
+        assertEquals(RingerOutcome.Set(RingerMode.VIBRATE), outcome)
+        assertEquals(AudioManager.RINGER_MODE_VIBRATE, audio.ringerMode)
+        assertEquals(SnoozeRinger.VIBRATE, PrefsRingerLoanStore(context).activeChoice())
+    }
+
+    @Test
+    fun `an owner-less record does not quiet a snooze configured as ring`() {
+        // The pre-identity form: a build before owners existed wrote it, and
+        // whether it is this snooze's is exactly what cannot be told. Against
+        // a `Ring` setting the louder of the two is `Ring`.
+        PrefsRingerLoanStore(context).recordChoice(SnoozeRinger.SILENT)
+        choose(SnoozeRinger.RING)
+        val snooze = SnoozeIdentity(1_000L)
+
+        val outcome = newController().quiet(snooze)
+
+        assertEquals(RingerOutcome.Untouched, outcome)
+        assertEquals(AudioManager.RINGER_MODE_NORMAL, audio.ringerMode)
+        assertEquals(SnoozeRinger.RING, PrefsRingerLoanStore(context).activeChoice())
+        // Asked once: the record is this snooze's from here on.
+        assertEquals(snooze, PrefsRingerLoanStore(context).choiceOwner())
+    }
+
+    @Test
+    fun `an owner-less record does not lower a running snooze to a later choice`() {
+        // The other thing that record can be: a snooze running at `Vibrate`,
+        // restored across the upgrade that added owners, after the user chose
+        // `Silent` for the *next* snooze (Codex, PR #192). Re-reading the
+        // setting alone would quiet the phone mid-snooze.
+        PrefsRingerLoanStore(context).recordChoice(SnoozeRinger.VIBRATE)
+        choose(SnoozeRinger.SILENT)
+
+        val outcome = newController().quiet(SnoozeIdentity(1_000L))
+
+        assertEquals(RingerOutcome.Set(RingerMode.VIBRATE), outcome)
+        assertEquals(AudioManager.RINGER_MODE_VIBRATE, audio.ringerMode)
+        assertEquals(SnoozeRinger.VIBRATE, PrefsRingerLoanStore(context).activeChoice())
+    }
+
+    @Test
+    fun `adopting a louder owner-less ceiling hands the old loan back`() {
+        // The record and the loan both predate owners: a `Silent` snooze took
+        // the ringer down from Normal. Whether that snooze is live or stale,
+        // adopting `Ring` over it while the loan stands would leave the phone
+        // silent with nothing to report (Codex, PR #192).
+        PrefsRingerLoanStore(context).record(
+            BorrowedRinger(restoreTo = RingerMode.NORMAL, setTo = RingerMode.SILENT),
+        )
+        PrefsRingerLoanStore(context).recordChoice(SnoozeRinger.SILENT)
+        audio.ringerMode = AudioManager.RINGER_MODE_SILENT
+        choose(SnoozeRinger.RING)
+        val snooze = SnoozeIdentity(1_000L)
+
+        val outcome = newController().quiet(snooze)
+
+        assertEquals(RingerOutcome.Untouched, outcome)
+        assertEquals(AudioManager.RINGER_MODE_NORMAL, audio.ringerMode)
+        assertNull(PrefsRingerLoanStore(context).borrowed())
+        assertEquals(SnoozeRinger.RING, PrefsRingerLoanStore(context).activeChoice())
+        assertNull(newController().shortfall(snooze))
+    }
+
+    @Test
+    fun `adopting a louder owner-less ceiling re-borrows at the new one`() {
+        PrefsRingerLoanStore(context).record(
+            BorrowedRinger(restoreTo = RingerMode.NORMAL, setTo = RingerMode.SILENT),
+        )
+        PrefsRingerLoanStore(context).recordChoice(SnoozeRinger.SILENT)
+        audio.ringerMode = AudioManager.RINGER_MODE_SILENT
+        choose(SnoozeRinger.VIBRATE)
+
+        val outcome = newController().quiet(SnoozeIdentity(1_000L))
+
+        // Handed back to Normal, then taken down again — to Vibrate this time,
+        // with the way back still the mode the phone was in before any snooze.
+        assertEquals(RingerOutcome.Set(RingerMode.VIBRATE), outcome)
+        assertEquals(AudioManager.RINGER_MODE_VIBRATE, audio.ringerMode)
+        assertEquals(RingerMode.NORMAL, PrefsRingerLoanStore(context).borrowed()?.restoreTo)
+        assertEquals(RingerMode.VIBRATE, PrefsRingerLoanStore(context).borrowed()?.setTo)
+    }
+
+    @Test
+    fun `a record another snooze left behind hands its loan back too`() {
+        // The earlier snooze took the ringer down to Silent and vanished
+        // without a release; its record *and* its loan are still there. The
+        // next snooze, configured as Ring, must get an audible phone, not one
+        // held silent by a loan nothing else will return (Codex, PR #192).
+        choose(SnoozeRinger.SILENT)
+        newController().quiet(SnoozeIdentity(1_000L))
+        assertEquals(AudioManager.RINGER_MODE_SILENT, audio.ringerMode)
+        choose(SnoozeRinger.RING)
+        val later = SnoozeIdentity(2_000L)
+
+        val outcome = newController().quiet(later)
+
+        assertEquals(RingerOutcome.Untouched, outcome)
+        assertEquals(AudioManager.RINGER_MODE_NORMAL, audio.ringerMode)
+        assertNull(PrefsRingerLoanStore(context).borrowed())
+        assertEquals(SnoozeRinger.RING, PrefsRingerLoanStore(context).activeChoice())
+        assertEquals(later, PrefsRingerLoanStore(context).choiceOwner())
+    }
+
+    @Test
+    fun `a record another snooze left behind is replaced with a fresh borrow`() {
+        choose(SnoozeRinger.SILENT)
+        newController().quiet(SnoozeIdentity(1_000L))
+        choose(SnoozeRinger.VIBRATE)
+
+        val outcome = newController().quiet(SnoozeIdentity(2_000L))
+
+        // Back to Normal first, then down to this snooze's own ceiling, with
+        // the way back still the mode from before either snooze.
+        assertEquals(RingerOutcome.Set(RingerMode.VIBRATE), outcome)
+        assertEquals(AudioManager.RINGER_MODE_VIBRATE, audio.ringerMode)
+        assertEquals(RingerMode.NORMAL, PrefsRingerLoanStore(context).borrowed()?.restoreTo)
+    }
+
+    @Test
+    fun `a refused hand-back declines the adoption and keeps the old record`() {
+        // The hand-back cannot be confirmed, so nothing may claim the louder
+        // ceiling: the record stays as it was, the loan stays for its retry
+        // ladder, and the arm reports the refusal (Codex, PR #192).
+        PrefsRingerLoanStore(context).record(
+            BorrowedRinger(restoreTo = RingerMode.NORMAL, setTo = RingerMode.SILENT),
+        )
+        PrefsRingerLoanStore(context).recordChoice(SnoozeRinger.SILENT)
+        audio.ringerMode = AudioManager.RINGER_MODE_SILENT
+        choose(SnoozeRinger.RING)
+        val delays = mutableListOf<Long>()
+        installRingerHandBackRetry { delays += it }
+        val stuck = mutableListOf<Boolean>()
+        installRingerStuckNotice { stuck += it }
+        loseTheAudioManager()
+
+        val outcome = newController().quiet(SnoozeIdentity(1_000L))
+
+        assertEquals(RingerOutcome.Refused(RingerFailure.PLATFORM_REFUSED), outcome)
+        assertEquals(SnoozeRinger.SILENT, PrefsRingerLoanStore(context).activeChoice())
+        assertNull(PrefsRingerLoanStore(context).choiceOwner())
+        assertEquals(RingerMode.NORMAL, PrefsRingerLoanStore(context).borrowed()?.restoreTo)
+        assertEquals(listOf(RingerHandBack.FIRST_RETRY_MILLIS), delays)
+        // And the user is told at once: the retry ladder's idle check will not
+        // touch a loan while this snooze is live, so nothing else would say so
+        // before the snooze's own release hands it back (Codex, PR #192).
+        assertEquals(listOf(true), stuck)
+    }
+
+    @Test
+    fun `a caller with no identity reads the record as before`() {
+        val snooze = SnoozeIdentity(1_000L)
+        newController().quiet(snooze)
+        newController().giveBack()
+        choose(SnoozeRinger.SILENT)
+
+        // The backstop and the card have no snooze at hand on every path yet;
+        // with nothing to compare, the record stands.
+        assertEquals(RingerOutcome.Set(RingerMode.VIBRATE), newController().quiet())
+        audio.ringerMode = AudioManager.RINGER_MODE_NORMAL
+        assertEquals(RingerShortfall.Louder(RingerMode.NORMAL), newController().shortfall())
+    }
+
+    @Test
+    fun `another snooze's ceiling is nothing for this one to fall short of`() {
+        choose(SnoozeRinger.SILENT)
+        newController().quiet(SnoozeIdentity(1_000L))
+        audio.ringerMode = AudioManager.RINGER_MODE_NORMAL
+
+        // Louder than Silent, but the card is for a snooze that never set it.
+        assertNull(newController().shortfall(SnoozeIdentity(2_000L)))
+        // And its own snooze still sees it.
+        assertEquals(
+            RingerShortfall.Louder(RingerMode.NORMAL),
+            newController().shortfall(SnoozeIdentity(1_000L)),
+        )
+    }
+
+    @Test
     fun `the next snooze is not held to the last one's ceiling`() {
         audio.ringerMode = AudioManager.RINGER_MODE_VIBRATE
         newController().quiet()
@@ -764,7 +975,9 @@ class AudioRingerControllerTest {
         override fun markApplied(): Boolean = real.markApplied()
         override fun clear(): Boolean = real.clear()
         override fun activeChoice(): SnoozeRinger? = real.activeChoice()
-        override fun recordChoice(choice: SnoozeRinger?): Boolean = real.recordChoice(choice)
+        override fun choiceOwner(): SnoozeIdentity? = real.choiceOwner()
+        override fun recordChoice(choice: SnoozeRinger?, owner: SnoozeIdentity?): Boolean =
+            real.recordChoice(choice, owner)
         override fun handBackFailures(): Int = real.handBackFailures()
         override fun recordHandBackFailures(failures: Int): Boolean = false
     }
@@ -782,7 +995,9 @@ class AudioRingerControllerTest {
         override fun markApplied(): Boolean = real.markApplied()
         override fun clear(): Boolean = real.clear()
         override fun activeChoice(): SnoozeRinger? = real.activeChoice()
-        override fun recordChoice(choice: SnoozeRinger?): Boolean = real.recordChoice(choice)
+        override fun choiceOwner(): SnoozeIdentity? = real.choiceOwner()
+        override fun recordChoice(choice: SnoozeRinger?, owner: SnoozeIdentity?): Boolean =
+            real.recordChoice(choice, owner)
         override fun handBackFailures(): Int = real.handBackFailures()
         override fun recordHandBackFailures(failures: Int): Boolean = real.recordHandBackFailures(failures)
     }
@@ -794,7 +1009,9 @@ class AudioRingerControllerTest {
         override fun markApplied(): Boolean = real.markApplied()
         override fun clear(): Boolean = false
         override fun activeChoice(): SnoozeRinger? = real.activeChoice()
-        override fun recordChoice(choice: SnoozeRinger?): Boolean = real.recordChoice(choice)
+        override fun choiceOwner(): SnoozeIdentity? = real.choiceOwner()
+        override fun recordChoice(choice: SnoozeRinger?, owner: SnoozeIdentity?): Boolean =
+            real.recordChoice(choice, owner)
         override fun handBackFailures(): Int = real.handBackFailures()
         override fun recordHandBackFailures(failures: Int): Boolean = real.recordHandBackFailures(failures)
     }
@@ -806,8 +1023,9 @@ class AudioRingerControllerTest {
         override fun markApplied(): Boolean = real.markApplied()
         override fun clear(): Boolean = real.clear()
         override fun activeChoice(): SnoozeRinger? = real.activeChoice()
-        override fun recordChoice(choice: SnoozeRinger?): Boolean =
-            if (choice == null) false else real.recordChoice(choice)
+        override fun choiceOwner(): SnoozeIdentity? = real.choiceOwner()
+        override fun recordChoice(choice: SnoozeRinger?, owner: SnoozeIdentity?): Boolean =
+            if (choice == null) false else real.recordChoice(choice, owner)
         override fun handBackFailures(): Int = real.handBackFailures()
         override fun recordHandBackFailures(failures: Int): Boolean = real.recordHandBackFailures(failures)
     }
@@ -819,8 +1037,9 @@ class AudioRingerControllerTest {
         override fun markApplied(): Boolean = real.markApplied()
         override fun clear(): Boolean = real.clear()
         override fun activeChoice(): SnoozeRinger? = real.activeChoice()
-        override fun recordChoice(choice: SnoozeRinger?): Boolean =
-            if (choice == null) false else real.recordChoice(choice)
+        override fun choiceOwner(): SnoozeIdentity? = real.choiceOwner()
+        override fun recordChoice(choice: SnoozeRinger?, owner: SnoozeIdentity?): Boolean =
+            if (choice == null) false else real.recordChoice(choice, owner)
         override fun handBackFailures(): Int = real.handBackFailures()
         override fun recordHandBackFailures(failures: Int): Boolean = false
     }
@@ -832,7 +1051,9 @@ class AudioRingerControllerTest {
         override fun markApplied(): Boolean = real.markApplied()
         override fun clear(): Boolean = real.clear()
         override fun activeChoice(): SnoozeRinger? = real.activeChoice()
-        override fun recordChoice(choice: SnoozeRinger?): Boolean = real.recordChoice(choice)
+        override fun choiceOwner(): SnoozeIdentity? = real.choiceOwner()
+        override fun recordChoice(choice: SnoozeRinger?, owner: SnoozeIdentity?): Boolean =
+            real.recordChoice(choice, owner)
         override fun handBackFailures(): Int = real.handBackFailures()
         override fun recordHandBackFailures(failures: Int): Boolean = real.recordHandBackFailures(failures)
     }
@@ -844,7 +1065,8 @@ class AudioRingerControllerTest {
         override fun markApplied(): Boolean = false
         override fun clear(): Boolean = false
         override fun activeChoice(): SnoozeRinger? = null
-        override fun recordChoice(choice: SnoozeRinger?): Boolean = false
+        override fun choiceOwner(): SnoozeIdentity? = null
+        override fun recordChoice(choice: SnoozeRinger?, owner: SnoozeIdentity?): Boolean = false
         override fun handBackFailures(): Int = error("the tally is unreadable")
         override fun recordHandBackFailures(failures: Int): Boolean = false
     }
@@ -856,7 +1078,8 @@ class AudioRingerControllerTest {
         override fun markApplied(): Boolean = false
         override fun clear(): Boolean = false
         override fun activeChoice(): SnoozeRinger? = null
-        override fun recordChoice(choice: SnoozeRinger?): Boolean = false
+        override fun choiceOwner(): SnoozeIdentity? = null
+        override fun recordChoice(choice: SnoozeRinger?, owner: SnoozeIdentity?): Boolean = false
         override fun handBackFailures(): Int = 0
         override fun recordHandBackFailures(failures: Int): Boolean = false
     }
@@ -871,7 +1094,9 @@ class AudioRingerControllerTest {
         override fun markApplied(): Boolean = real.markApplied()
         override fun clear(): Boolean = real.clear()
         override fun activeChoice(): SnoozeRinger? = real.activeChoice()
-        override fun recordChoice(choice: SnoozeRinger?): Boolean = real.recordChoice(choice)
+        override fun choiceOwner(): SnoozeIdentity? = real.choiceOwner()
+        override fun recordChoice(choice: SnoozeRinger?, owner: SnoozeIdentity?): Boolean =
+            real.recordChoice(choice, owner)
         override fun handBackFailures(): Int = real.handBackFailures()
         override fun recordHandBackFailures(failures: Int): Boolean = real.recordHandBackFailures(failures)
     }

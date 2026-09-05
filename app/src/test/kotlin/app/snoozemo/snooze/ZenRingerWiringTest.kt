@@ -1,9 +1,12 @@
 package app.snoozemo.snooze
 
 import android.app.Application
+import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import app.snoozemo.core.SnoozeIdentity
+import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
 import app.snoozemo.core.ZenTrigger
 import app.snoozemo.dnd.AndroidZenController
@@ -16,6 +19,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /**
@@ -96,6 +100,27 @@ class ZenRingerWiringTest {
     }
 
     @Test
+    fun `a refused release re-quiets under the snooze's own identity`() {
+        val ringer = RecordingRinger()
+        val snooze = SnoozeIdentity(1_000L)
+        // Access granted, unlike the cases above: with no rule id the release
+        // goes to diagnosis, which creates a rule whose id the store then
+        // refuses — `PLATFORM_REFUSED`, the one refusal that keeps the snooze
+        // running, so the ringer handed back before the write goes down again.
+        shadowOf(context.getSystemService(NotificationManager::class.java))
+            .setNotificationPolicyAccessGranted(true)
+
+        val outcome = controller(ringer).setSnoozed(false, ZenTrigger.CONTEXT, "Home", snooze)
+
+        assertEquals(ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED), outcome)
+        assertTrue(ringer.handedBack)
+        // Under the same identity the arm used, so the re-quiet reuses this
+        // snooze's own ceiling record rather than treating it as another
+        // snooze's and reading the setting afresh (SPEC.md §5.9 rule 2).
+        assertEquals(listOf<SnoozeIdentity?>(snooze), ringer.quietedFor)
+    }
+
+    @Test
     fun `a ringer that throws does not take the snooze with it`() {
         val outcome = controller(ThrowingRinger).setSnoozed(false, ZenTrigger.CONTEXT, "Home")
 
@@ -115,13 +140,15 @@ class ZenRingerWiringTest {
             private set
         var forgotten = false
             private set
+        val quietedFor = mutableListOf<SnoozeIdentity?>()
 
         override fun forgetCeiling() {
             forgotten = true
         }
 
-        override fun quiet(): RingerOutcome {
+        override fun quiet(snooze: SnoozeIdentity?): RingerOutcome {
             quieted = true
+            quietedFor += snooze
             return RingerOutcome.Untouched
         }
 
@@ -132,7 +159,7 @@ class ZenRingerWiringTest {
     }
 
     private object ThrowingRinger : RingerController {
-        override fun quiet(): RingerOutcome = error("the ringer is unreachable")
+        override fun quiet(snooze: SnoozeIdentity?): RingerOutcome = error("the ringer is unreachable")
         override fun giveBack(): RingerOutcome = error("the ringer is unreachable")
         override fun forgetCeiling(): Unit = error("the ringer is unreachable")
     }

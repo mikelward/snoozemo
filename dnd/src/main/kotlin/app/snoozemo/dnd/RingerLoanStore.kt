@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import app.snoozemo.core.BorrowedRinger
 import app.snoozemo.core.RingerMode
+import app.snoozemo.core.SnoozeIdentity
 import app.snoozemo.core.SnoozeRinger
 
 /**
@@ -58,10 +59,22 @@ interface RingerLoanStore {
     fun activeChoice(): SnoozeRinger?
 
     /**
-     * Records the choice now in force, or forgets it when [choice] is null.
-     * False if the write did not reach disk.
+     * Whose snooze [activeChoice] belongs to, or null when the record carries
+     * no owner — a record written before owners existed, or none at all.
+     *
+     * The identity is what stops a record one snooze left behind — a clear
+     * that never reached disk, a retry that lost its race to a cold arm — from
+     * being read as the next snooze's own ceiling: a stale `Silent` quieting a
+     * snooze the user configured as `Ring` (`TODO.md`). A retry only shortens
+     * that window; the owner closes it.
      */
-    fun recordChoice(choice: SnoozeRinger?): Boolean
+    fun choiceOwner(): SnoozeIdentity?
+
+    /**
+     * Records the choice now in force and the snooze it belongs to, or forgets
+     * both when [choice] is null. False if the write did not reach disk.
+     */
+    fun recordChoice(choice: SnoozeRinger?, owner: SnoozeIdentity? = null): Boolean
 
     /**
      * How many hand-backs of the outstanding loan have failed.
@@ -164,9 +177,24 @@ class PrefsRingerLoanStore(context: Context) : RingerLoanStore {
     override fun activeChoice(): SnoozeRinger? = prefs.getString(KEY_CHOICE, null)
         ?.let { name -> SnoozeRinger.entries.firstOrNull { it.name == name } }
 
-    /** `commit` like the pair above, so a card built moments later sees it. */
-    override fun recordChoice(choice: SnoozeRinger?): Boolean = prefs.edit()
-        .apply { if (choice == null) remove(KEY_CHOICE) else putString(KEY_CHOICE, choice.name) }
+    override fun choiceOwner(): SnoozeIdentity? =
+        if (prefs.contains(KEY_CHOICE_OWNER)) SnoozeIdentity(prefs.getLong(KEY_CHOICE_OWNER, 0L)) else null
+
+    /**
+     * `commit` like the pair above, so a card built moments later sees it. Both
+     * keys in one edit, so a reader never sees a choice under another snooze's
+     * owner.
+     */
+    override fun recordChoice(choice: SnoozeRinger?, owner: SnoozeIdentity?): Boolean = prefs.edit()
+        .apply {
+            if (choice == null) {
+                remove(KEY_CHOICE)
+                remove(KEY_CHOICE_OWNER)
+            } else {
+                putString(KEY_CHOICE, choice.name)
+                if (owner == null) remove(KEY_CHOICE_OWNER) else putLong(KEY_CHOICE_OWNER, owner.startedAtEpochMs)
+            }
+        }
         .commit()
 
     /** `commit` like the record itself: the marker is only useful if it survives. */
@@ -186,6 +214,7 @@ class PrefsRingerLoanStore(context: Context) : RingerLoanStore {
         const val KEY_RESTORE_TO = "restore_to"
         const val KEY_SET_TO = "set_to"
         const val KEY_CHOICE = "active_choice"
+        const val KEY_CHOICE_OWNER = "active_choice_owner"
         const val KEY_APPLIED = "applied"
         const val KEY_FAILURES = "hand_back_failures"
         const val TAG = "RingerLoan"

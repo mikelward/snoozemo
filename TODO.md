@@ -5475,7 +5475,7 @@ footnote.
   accept the lag and say so in the spec; that is a product call, and it comes with a
   battery line either way (`SPEC.md` §9).
 
-- [ ] **The ceiling in force is not tied to the snooze that set it.** `activeChoice`
+- [x] **The ceiling in force is not tied to the snooze that set it.** `activeChoice`
   is a single record, cleared on the release, on a disowned loan, and by the idle
   check. A failed clear is now retried on the hand-back ladder, but the retry can
   still lose a race to a cold tile arm, and the next arm then reuses the previous
@@ -5487,9 +5487,15 @@ footnote.
   passed in for that reason — so this needs the snooze identity threaded through
   `setSnoozed` into the ringer, which is a wider change than this PR should carry.
 
+  Landed: `SnoozeIdentity` (the start instant) travels `setSnoozed` → `RingerController.quiet`,
+  the record stores its owner, and `inForce` honors a record only for its owner — one naming
+  another snooze is re-read from the setting, and one naming none (the pre-owner form) takes
+  the more audible of itself and the setting. The shortfall is judged the same way.
+
 - [ ] **The loan cannot tell Snoozemo's own write from the user's across a process
-  boundary.** Two review findings reduce to this, and neither is fixable without the
-  identity work above:
+  boundary.** Two review findings reduce to this. The identity above now exists, but it
+  names the snooze, not the write; neither is fixable without the loan carrying *when* and
+  *by whom* as well:
 
   - A hand-back whose writes are all *accepted but unverifiable* reports `Refused` and
     keeps its applied loan, so a zen release refused in the same call re-applies nothing:
@@ -5503,8 +5509,8 @@ footnote.
     the process dies, the re-assertion's evidence test (`current == restoreTo`) reads their
     change as proof the borrow never landed and quiets the phone again.
 
-  Both need the record to say *when* and *by whom*, which is the same identity the entry
-  above wants — a marker retry closes neither, because what is ambiguous is the state, not
+  Both need the record to say *when* and *by whom*, building on the identity the entry
+  above landed — a marker retry closes neither, because what is ambiguous is the state, not
   its durability. Both are compound storage failures (a `commit` returning false, or three
   writes accepted with every read-back throwing) and in both the card still reports the
   shortfall honestly, so nothing is silently wrong; what is missing is the correction.

@@ -187,7 +187,7 @@ class SnoozeController(
         state = SnoozeState.ARMING
         listener.onStateChanged(state, snooze, null)
 
-        return when (val outcome = zen.setSnoozed(true, ZenTrigger.USER_ACTION, placeName)) {
+        return when (val outcome = zen.setSnoozed(true, ZenTrigger.USER_ACTION, placeName, snooze.identity)) {
             is ZenOutcome.Applied -> {
                 // The moment the rule is on, not when the anchor arrives
                 // (Codex, PR #36). Anchor capture can be up to the 10 s ceiling
@@ -312,7 +312,7 @@ class SnoozeController(
 
         if (ending != null && trigger == ZenTrigger.CONTEXT) listener.onReleasing(reason)
 
-        val outcome = zen.setSnoozed(false, trigger, ending?.placeName ?: ActiveSnooze.DEFAULT_PLACE_NAME)
+        val outcome = zen.setSnoozed(false, trigger, ending?.placeName ?: ActiveSnooze.DEFAULT_PLACE_NAME, ending?.identity)
         if (outcome is ZenOutcome.NotApplied) {
             // Reports the failure *and* retires the marker above: the release
             // did not happen, so the reason it recorded is now a lie waiting
@@ -557,7 +557,7 @@ class SnoozeController(
         // record surviving does not mean the rule's condition did — a reboot, an
         // app update, or the platform dropping it would otherwise leave the app
         // showing a snooze over a phone that rings.
-        val outcome = zen.setSnoozed(true, ZenTrigger.CONTEXT, restored.placeName)
+        val outcome = zen.setSnoozed(true, ZenTrigger.CONTEXT, restored.placeName, restored.identity)
         if (outcome is ZenOutcome.NotApplied) {
             listener.onZenFailure(outcome.reason, whileArming = true)
 

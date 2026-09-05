@@ -1534,6 +1534,22 @@ literal form. Six rules keep that from happening, and each one prefers the audib
    audible again. The *choice* the snooze is running under is captured once, at its first arm, and a
    re-assertion reuses it rather than reading the setting again: otherwise a ceiling changed
    mid-snooze would be applied by the next restore, which is precisely what this design defers.
+   The record names the snooze it belongs to — its start instant, the one field a snooze carries
+   unchanged from first arm to last re-assertion — and is honored only for that snooze. Without
+   that, a record one snooze left behind (a clear that never reached disk, a retry that lost its
+   race to the next arm) was read as the next snooze's own, and a stale `Silent` could quiet a
+   snooze the user had configured as `Ring`. A record naming another snooze is read the audible
+   way: the setting is read afresh and the record becomes this snooze's. A record naming no
+   snooze predates owners and may be either a snooze restored across that upgrade or a stale
+   one, so the **more audible** of it and the setting is taken — right in both cases — and it
+   becomes this snooze's from then on. A loan still outstanding under a record being replaced —
+   another snooze's, or an owner-less one adopted at a louder ceiling — is handed back first:
+   left standing it would block a second borrow and keep the phone at the old ceiling with
+   nothing to report. A hand-back that is refused declines the replacement altogether, leaving
+   the old record in place for its retry ladder, so nothing ever claims a ceiling the phone is
+   not at — and says so at once through the stuck-ringer notice (rule 5), because that ladder's
+   retries leave a loan alone while a snooze is live and this snooze's own release is the next
+   thing that hands it back.
 3. **The ceiling is forgotten only once the release is confirmed.** The ringer is handed back
    *before* the zen rule goes off, so that a refused rule write cannot leave a quiet phone with no
    loan — and a refused rule write **keeps the snooze running**. Clearing the record with the

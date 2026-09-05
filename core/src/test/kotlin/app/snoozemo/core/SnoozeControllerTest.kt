@@ -47,12 +47,19 @@ class SnoozeControllerTest {
         var outcome: ZenOutcome = ZenOutcome.Applied,
     ) : ZenController {
         val calls = mutableListOf<Pair<Boolean, ZenTrigger>>()
+        val identities = mutableListOf<SnoozeIdentity?>()
         override fun policyAccess() = access
         override fun ruleActivation() = ZenRuleActivation.ACTIVE
         override fun ownsRule(ruleId: String?) = true
         override fun ensureRule() = ZenRuleState.READY
-        override fun setSnoozed(snoozed: Boolean, trigger: ZenTrigger, placeName: String): ZenOutcome {
+        override fun setSnoozed(
+            snoozed: Boolean,
+            trigger: ZenTrigger,
+            placeName: String,
+            snooze: SnoozeIdentity?,
+        ): ZenOutcome {
             calls += snoozed to trigger
+            identities += snooze
             return outcome
         }
         override fun ruleId() = "fake-rule-id"
@@ -105,6 +112,34 @@ class SnoozeControllerTest {
 
         assertEquals(SnoozeState.ARMING, controller.state)
         assertEquals(listOf(true to ZenTrigger.USER_ACTION), zen.calls)
+    }
+
+    @Test
+    fun `every zen call names the snooze it is for`() {
+        // The ringer's choice record carries this so a ceiling one snooze left
+        // behind is never read as the next one's (SPEC.md §5.9 rule 2).
+        armFully()
+        val expected = SnoozeIdentity(start.toEpochMilli())
+        assertEquals(listOf(expected), zen.identities)
+
+        controller.end(EndReason.MANUAL)
+
+        assertEquals(listOf(expected, expected), zen.identities)
+    }
+
+    @Test
+    fun `a restore re-asserts under the record's own identity`() {
+        val startedEarlier = start.minus(Duration.ofHours(1))
+        val running = ActiveSnooze(
+            anchor = anchor,
+            startedAt = startedEarlier,
+            capExpiresAt = start.plus(Duration.ofHours(7)),
+            mode = TrackingMode.FULL,
+        )
+
+        controller.restore(running)
+
+        assertEquals(listOf(SnoozeIdentity(startedEarlier.toEpochMilli())), zen.identities)
     }
 
     @Test
