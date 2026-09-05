@@ -143,9 +143,13 @@ fun welcomeExitNeedsRecap(
  *
  * **Every card's button is optional.** `Next` never waits on a grant — the same
  * fail-open rule the permission rows follow (D7): a setup flow that cannot be
- * left without finishing it is a trap, not onboarding. `Skip` and the last
- * card's `Done` land in the same place, so no route through this misses a
- * missing permission and none gets stuck.
+ * left without finishing it is a trap, not onboarding. `Skip`, the last card's
+ * `Done` and back off card 1 all land in the same place, so no route through
+ * this misses a missing permission and none gets stuck. `Skip` itself appears
+ * from card 2 on (maintainer, 2026-09-05) — card 1 is one line saying what the
+ * app is, and offering to leave beside it invites skipping before there is
+ * anything to skip; back still exits, so the way out is there, just not
+ * advertised before the user has read that line.
  *
  * **The grants are the real rows, not a copy of them.** Each card embeds the
  * same [SetupRow] `PermissionsScreen` draws, so the observed-denial handling,
@@ -209,6 +213,7 @@ fun WelcomeScreen(
 ) {
     val position = cards.indexOf(card).takeIf { it >= 0 } ?: 0
     val last = position == cards.lastIndex
+    val first = position == 0
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -287,11 +292,22 @@ fun WelcomeScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // `Skip` stays on every card including the first. It is the fail-open
-            // rule again: a flow whose exit appears only once you are inside it
-            // is the trap D7 forbids.
-            TextButton(onClick = onSkip) {
-                Text(stringResource(R.string.welcome_skip))
+            // No `Skip` on the first card (maintainer, 2026-09-05): offering to
+            // leave beside the one line that says what the app is invites
+            // skipping before there is anything to skip. From card 2 on the
+            // user has read that line, and the exit is theirs.
+            //
+            // This does not reopen D7. The flow is still leavable from card 1 —
+            // back exits it — so what changed is that the exit stops being
+            // advertised there, not that it stops existing. A `Spacer` holds
+            // the slot so `Next` keeps its place at the trailing edge rather
+            // than sliding across between card 1 and card 2.
+            if (first) {
+                Spacer(Modifier)
+            } else {
+                TextButton(onClick = onSkip) {
+                    Text(stringResource(R.string.welcome_skip))
+                }
             }
             Button(onClick = if (last) onSkip else onNext) {
                 Text(
@@ -351,7 +367,6 @@ private fun EndsCard(
             if (tracksDeparture) R.string.welcome_ends_body else R.string.welcome_ends_body_timer_only,
         ),
     )
-    CardBody(stringResource(R.string.welcome_ends_taps))
     // The location row is absent on a build that cannot track departure, as it
     // is on that flavor's PermissionsScreen: a grant that buys the user nothing
     // must not be invited.

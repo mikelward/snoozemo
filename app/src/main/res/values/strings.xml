@@ -285,6 +285,16 @@
       (AGENTS.md, *Concise copy*).
     -->
     <string name="main_not_snoozing">Not snoozing</string>
+    <!--
+      The running state's headline, when the whole thing fits on one line. The
+      status block is what the screen exists to say, so it is stated as one
+      sentence where the width allows and split into a title over its condition
+      where it does not (maintainer, 2026-09-05). Only the full tracking mode
+      has a one-line form: "Snoozing, Wi-Fi only" does not compose, so the
+      degraded modes always take the two-row shape.
+    -->
+    <!-- TODO: translate -->
+    <string name="main_snoozing_until_you_leave" tools:ignore="MissingTranslation">Snoozing until you leave</string>
     <string name="arm">Snooze</string>
     <string name="release">End snooze</string>
     <string name="rule_failed">Do Not Disturb access is on, but Snoozemo could not create its rule</string>
@@ -505,13 +515,23 @@
          the second is the taps. Kept apart because the calendar is never a
          trigger — it only seeds an action the user still has to press. -->
     <!-- TODO: translate -->
-    <string name="welcome_ends_title" tools:ignore="MissingTranslation">It ends by itself</string>
+    <!--
+      The title is flavor-neutral on purpose: `direct` cannot track departure,
+      so a title naming departure would be a promise that build can never keep
+      (SPEC.md §3), but "automatically" is true of both — the body is where the
+      endings differ.
+    -->
+    <string name="welcome_ends_title" tools:ignore="MissingTranslation">Ends automatically</string>
     <!-- TODO: translate -->
-    <string name="welcome_ends_body" tools:ignore="MissingTranslation">When you leave — and never more than 8 hours.</string>
+    <string name="welcome_ends_body" tools:ignore="MissingTranslation">When you leave, when your meeting ends, or at the time you choose.</string>
+    <!--
+      No departure on this build, so that ending drops out of the list. The
+      duration cap is deliberately not named on either flavor (maintainer,
+      2026-09-05): it still fires, and the title still covers it, but onboarding
+      is not where a backstop the user never has to think about earns its words.
+    -->
     <!-- TODO: translate -->
-    <string name="welcome_ends_body_timer_only" tools:ignore="MissingTranslation">Never more than 8 hours.</string>
-    <!-- TODO: translate -->
-    <string name="welcome_ends_taps" tools:ignore="MissingTranslation">Or tap to end it: End now, the tile, or Until your meeting\'s end.</string>
+    <string name="welcome_ends_body_timer_only" tools:ignore="MissingTranslation">When your meeting ends, or at the time you choose.</string>
     <!-- Card 3. The tile is the arm affordance and the one path that works with
          the phone locked. -->
     <!-- TODO: translate -->
@@ -522,7 +542,7 @@
     <string name="welcome_tile_locked" tools:ignore="MissingTranslation">Works with the phone locked.</string>
     <!-- Card 4. One rule, created once, and the app switches only that one. -->
     <!-- TODO: translate -->
-    <string name="welcome_rule_title" tools:ignore="MissingTranslation">One editable rule</string>
+    <string name="welcome_rule_title" tools:ignore="MissingTranslation">One rule, yours</string>
     <!-- TODO: translate -->
     <string name="welcome_rule_body" tools:ignore="MissingTranslation">Snoozemo adds one Do Not Disturb rule and only ever switches that one on and off. Choose what still gets through in Settings › Filters.</string>
     <!-- The render of the ongoing notification on card 2, which is a picture
