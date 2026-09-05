@@ -4303,6 +4303,23 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   and one observation the monitor handles through a step list a test pins; the
   monitor's own latches decide what a grant can refute, so the poke can be dropped
   without leaving state behind.
+  **Under review (maintainer, 2026-09-05):** asked whether a broadcast would fit
+  better. Android sends a third-party app no broadcast on a grant of its own
+  permission, so an in-app broadcast would be the same hop as the service intent
+  with one more indirection; the only signals are the prompt's result and a
+  re-read, both of which the screen's reading already feeds. What a different
+  mechanism *could* add is a grant made from system Settings while the app is
+  closed: the service watching its own location app-op (`AppOpsManager
+  .startWatchingMode` on `OPSTR_FINE_LOCATION`, whose mode flips on a grant) for
+  as long as a snooze is armed. Platform behavior that needs a device check, and
+  a registration per snooze against `SPEC.md` §9 — a follow-up if Settings-side
+  grants turn out to matter, not a replacement.
+  **Maintainer's answer (2026-09-05):** a hook off the permission result reads
+  as the more logical home for the poke than the main screen's grant reading;
+  the guess stays as built since it has already merged (PR #185). Direction
+  for the next change to that code: move the trigger to the permission
+  request's own result callback, and keep the resume-time re-read only as the
+  path for grants made outside the app.
 - **Guessed under autopilot: the backstop's warm wake re-posts the ongoing card
   unconditionally** (2026-09-04), which is what closes the refused-`notify` gap (Codex,
   PR #8) and bounds the ringer-shortfall lag (Codex, PR #176) at the wake's cadence.
