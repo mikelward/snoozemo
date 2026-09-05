@@ -3429,6 +3429,19 @@ question.
 
 - [x] **Adopt `mikelward/gradle-update`** — the weekly Gradle catalog updater.
       Wired via the caller workflow in `.github/workflows/gradle-update.yml`.
+- [ ] **A test-only batch still lands bare, so it can ship a needless release.**
+      *(Codex, PR #200.)* The commit-message rule now says a bump the app ships is
+      bare and a test- or build-only bump keeps its prefix — a distinction a human
+      writing one commit can make. The weekly batch cannot: it is a single commit
+      across the whole catalog, and the shared workflow writes its subject before
+      anything asks which entries moved, so a week that touched only JUnit or
+      Robolectric still reaches the release-note filter as release-worthy.
+      Closing it means teaching `mikelward/gradle-update` to classify a batch —
+      which needs it to know each coordinate's Gradle configuration, not just its
+      catalog entry — and then set `commit-prefix` itself. That is a change to the
+      shared engine used by four Android repos, so it belongs there, with its own
+      pilot, rather than in a consumer's guide. Until then a test-only week costs
+      one unnecessary internal-track build.
 
 ## Deferred
 
