@@ -511,6 +511,109 @@ class DebugLoggingTest {
      * the library exposes none, so this stages the wedge on our side instead.
      * The ordering it pins is what makes the report reachable either way.
      */
+    /**
+     * A stall record has to say who queued the install, not only what it was
+     * doing: the 2026-09-04 stack named a legacy purge parked in `commit()`
+     * and nothing about which class's install that was, since the worker is
+     * shared by every class in the sandbox and the submitter had long
+     * returned (`TODO.md`). Staged as a real timeout after this test's own
+     * install, since the record is the snapshot a timeout takes and an
+     * earlier class's timeout may still be the one on file. Pinned against
+     * the three facts the next occurrence needs: the submitting frames, the
+     * application the install was for, and whether that is the caller's own.
+     */
+    @Test
+    fun `the stall record names who submitted the last install`() {
+        DebugLogging.install(context)
+        val release = java.util.concurrent.CountDownLatch(1)
+        try {
+            DebugLogging.blockWorkerForTest(release)
+            assertFalse("precondition: the drain has to time out", DebugLogging.awaitIdleForTest(timeoutSeconds = 1))
+        } finally {
+            release.countDown()
+        }
+        assertTrue("the worker must be usable again", DebugLogging.awaitIdleForTest())
+
+        val stall = DebugLogging.workerStall(context)
+
+        assertTrue("the submission must be recorded: $stall", stall.contains("last install submitted"))
+        assertTrue(
+            "with its wall-clock instant, which is what maps it to a class in the JUnit report: $stall",
+            Regex("submitted at \\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}").containsMatchIn(stall),
+        )
+        assertTrue(
+            "the submitting frames must reach the class that called install: $stall",
+            stall.contains("DebugLoggingTest"),
+        )
+        assertTrue(
+            "the record must name the application the install was for: $stall",
+            stall.contains(DebugLogging.describeApp(context)),
+        )
+        assertTrue(
+            "and say whether it is the caller's own: $stall",
+            stall.contains("this application's own"),
+        )
+        assertTrue(
+            "an install that ran is reported as finished, not as the stall: $stall",
+            stall.contains("finished") && !stall.contains("still queued"),
+        )
+        assertFalse("a plain install is not described as a retry: $stall", stall.contains("inline retry"))
+    }
+
+    @Test
+    fun `a wedged inline retry is reported as the running install`() {
+        // The retry path: an install has run but left no sink — what a
+        // failed install looks like — and a crash read re-runs it inline on
+        // the worker. Held open there, a drain timeout must catch it as the
+        // install the worker is inside, flagged as the retry it is, rather
+        // than reporting no running install over a stack plainly inside one
+        // (Codex, PR #188).
+        DebugLogging.install(context)
+        DebugLogging.forgetSinkForTest()
+        val release = java.util.concurrent.CountDownLatch(1)
+        try {
+            DebugLogging.holdInstallForTest(release)
+            DebugLogging.hasPinnedCrash { _, _ -> }
+            assertFalse("precondition: the drain has to time out", DebugLogging.awaitIdleForTest(timeoutSeconds = 1))
+        } finally {
+            release.countDown()
+        }
+        assertTrue("the worker must be usable again", DebugLogging.awaitIdleForTest())
+
+        val stall = DebugLogging.workerStall(context)
+
+        assertTrue("the retry is the running install: $stall", stall.contains("the install the worker was running"))
+        assertTrue("and is this test's own: $stall", stall.contains("this application's own"))
+        assertTrue("flagged as the retry it is: $stall", stall.contains("(an inline retry)"))
+        assertTrue("caught while running: $stall", stall.contains("running for"))
+    }
+
+    @Test
+    fun `an install queued behind a wedged worker is reported as queued, not wedged`() {
+        // The cross-class shape (Codex, PR #188): the worker is stuck in an
+        // earlier task when a later class's `onCreate` submits its install.
+        // The record must say that install is waiting, not that it stalled.
+        val release = java.util.concurrent.CountDownLatch(1)
+        try {
+            DebugLogging.blockWorkerForTest(release)
+            DebugLogging.install(context)
+            assertFalse("precondition: the drain has to time out", DebugLogging.awaitIdleForTest(timeoutSeconds = 1))
+        } finally {
+            release.countDown()
+        }
+        assertTrue("the worker must be usable again", DebugLogging.awaitIdleForTest())
+
+        // Read only now, after the queued install has run to completion: the
+        // verdict has to come from the timeout's snapshot, not a live read
+        // that would find the install finished (Codex, PR #188).
+        val stall = DebugLogging.workerStall(context)
+
+        assertTrue("the queued install is reported as queued: $stall", stall.contains("still queued"))
+        assertTrue("and not as the running one: $stall", stall.contains("no install was running"))
+        assertTrue("while still naming whose it is: $stall", stall.contains("this application's own"))
+        assertFalse("the live state must not leak into the verdict: $stall", stall.contains("finished"))
+    }
+
     @Test
     fun `a wedged worker fails the drain instead of hanging`() {
         val release = java.util.concurrent.CountDownLatch(1)

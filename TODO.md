@@ -3541,12 +3541,52 @@ question.
   when it is the only write in flight, and otherwise hands it to `QueuedWork`'s
   handler thread, whose looper under Robolectric may never run it.
 
-  **Next steps**, both needed: trace which class submitted this install (the
-  stall record would have to carry the submitting class, since by then it has
-  usually finished), and trace the concurrent write that forced this `commit()`
-  down the queued branch — the branch itself is settled by the stack, so the
-  open question is what else was writing the same preferences file. Instrument CI
-  rather than hunting locally — it did not reproduce in 5x
+  **The first of the two next steps is instrumented** (2026-09-05): every
+  `DebugLogging.install` now records when it was submitted, on which thread,
+  for which `Application` instance, and the submitting frames, and the stall
+  record prints that beside the failing test's own application with a verdict
+  — *this application's own* or *a DIFFERENT application's — an earlier test's*
+  (`workerStall(context)`; `DebugLoggingTest` pins it). The record travels
+  with its own task and the worker marks it queued, running, or finished, so a
+  later class's install waiting behind a wedged earlier one reads as *still
+  queued* while the record names the earlier install the worker is still
+  inside; the verdict is drawn from the timeout's own snapshot, never a live
+  read taken after the worker moved on (Codex, PR #188). Read that line first
+  on the next CI occurrence. **What it can and cannot say:** it settles
+  whether the wedged install was the failing test's own or an earlier test's
+  (Robolectric builds a fresh `Application` per test *method*, so "earlier"
+  may be the same class), and where each install had got to — but not *which*
+  earlier test by name. An install submitted from `SnoozemoApplication
+  .onCreate`, the automatic path every Robolectric test takes, has `onCreate`
+  and JUnit's runner frames above it and no test class in any of them (Codex,
+  PR #188). So the record carries the submission's wall-clock instant, and the
+  test is read off the `*-test-reports` artifact: each `TEST-*.xml` suite has
+  a `timestamp` and per-case durations, and the case running at that instant
+  is the submitter.
+
+  **Reproduced locally with the record in place** (2026-09-05, `./gradlew
+  test` on the PR #188 branch, one occurrence in eight full runs): the same
+  six `ProcessExitReasonsTest` cases plus `MainActivityLifecycleTest`'s
+  restart case, the worker parked in `markLegacyLogsPurged`'s `commit()`
+  exactly as on 2026-09-04. The record adds: the wedged install was **an
+  earlier test's, submitted 415 ms before the failing test's own**, both from
+  `onCreate`; the failing test's install was still queued behind it; the
+  earlier one had been "running" for 10.4 s by the timeout, with 36 tasks
+  queued behind and 463 completed before it. So the hang is not the failing
+  test's doing, and it begins in the previous test's startup — the window in
+  which Robolectric tears the previous test's environment down (loopers
+  included) while this worker, a plain thread the sandbox does not own, is
+  still inside that test's install. That is what the step below has to
+  chase: which write to the same preferences file was in flight so that
+  `commit()` took the queued branch, and whether the `QueuedWork` looper it
+  was handed to had already been quit by the teardown. The step below is
+  still open.
+
+  **Next step:** trace the concurrent write that forced this `commit()` down
+  the queued branch — the branch itself is settled by the stack, so the open
+  question is what else was writing the same preferences file. (Tracing which
+  class submitted the install was the other half, and landed above.) Instrument
+  CI rather than hunting locally — it did not reproduce in 5x
   `:app:testDirectDebugUnitTest --rerun-tasks` on `b70621f`.
 
   `MainActivityLifecycleTest` was the second half of the same fault and now

@@ -266,9 +266,130 @@ internal object DebugLogging {
     fun install(context: Context) {
         val app = context.applicationContext
         appContext = app
+        // Who asked, recorded before the work is queued so a stalled drain
+        // can say so (`TODO.md`, the `ProcessExitReasonsTest` stall). The
+        // 2026-09-04 stack named the wedged task — an install's legacy purge
+        // parked in `commit()` — but not which class's install it was: the
+        // worker is a process-wide singleton, so the submitter has usually
+        // finished by the time anything asks. One stack walk per process
+        // start, microseconds, off every path a user waits on.
+        val submission = recordSubmission(app, retry = false)
         runCatching {
-            worker.execute { installNow(app) }
+            // The record travels with its own task, and the worker marks it as
+            // it goes: a later class's install queued behind an earlier one
+            // that is wedged must not read as the wedged one (Codex, PR #188).
+            worker.execute { runTrackedInstall(app, submission) }
         }
+    }
+
+    /**
+     * Records who asked for an install — from the caller's own stack, minus
+     * this object's frames — and makes it the last submission. A [retry] is
+     * the inline re-run a crash read makes when it finds no sink; it is
+     * recorded too, so a stall inside it never reads as "no install running"
+     * over a stack that is plainly inside one (Codex, PR #188).
+     */
+    private fun recordSubmission(app: Context, retry: Boolean): InstallSubmission {
+        val self = DebugLogging::class.java.name
+        val submission = InstallSubmission(
+            atEpochMs = System.currentTimeMillis(),
+            threadName = Thread.currentThread().name,
+            app = describeApp(app),
+            retry = retry,
+            frames = Thread.currentThread().stackTrace
+                .dropWhile { it.className != self }
+                .dropWhile { it.className == self }
+                .take(SUBMITTER_FRAMES)
+                .map(StackTraceElement::toString),
+        )
+        synchronized(installLock) { lastInstallSubmission = submission }
+        return submission
+    }
+
+    /** [installNow] on the worker, with [submission] marked started and finished around it. */
+    private fun runTrackedInstall(app: Context, submission: InstallSubmission) {
+        synchronized(installLock) {
+            submission.startedAtEpochMs = System.currentTimeMillis()
+            lastStartedInstall = submission
+        }
+        try {
+            installNow(app)
+        } finally {
+            synchronized(installLock) { submission.finishedAtEpochMs = System.currentTimeMillis() }
+        }
+    }
+
+    /**
+     * Guards the install records — both pointers below and every mark on an
+     * [InstallSubmission] — so a snapshot reads all of them as of one instant
+     * and the worker cannot move between installs while one is being taken
+     * (Codex, PR #188). Held for microseconds by the worker; the snapshot
+     * holds it across a stack walk, on a test-only path.
+     */
+    private val installLock = Any()
+
+    /** The most recent [install]'s submission, for [workerStall] alone. Guarded by [installLock]. */
+    private var lastInstallSubmission: InstallSubmission? = null
+
+    /**
+     * The install the worker most recently began, which is not always
+     * [lastInstallSubmission]: while one install is wedged, every later one
+     * is still queued behind it. Guarded by [installLock].
+     */
+    private var lastStartedInstall: InstallSubmission? = null
+
+    /** How much of the submitting stack a stall record keeps; the test class is well inside it. */
+    private const val SUBMITTER_FRAMES = 16
+
+    /**
+     * One [install] call: when, from which thread and application, and the
+     * frames that made it — plus where its task got to, marked by the worker.
+     * The marks are guarded by [installLock].
+     */
+    private class InstallSubmission(
+        val atEpochMs: Long,
+        val threadName: String,
+        val app: String,
+        val retry: Boolean,
+        val frames: List<String>,
+    ) {
+        var startedAtEpochMs: Long? = null
+
+        var finishedAtEpochMs: Long? = null
+
+        /** Where the task had got to at one read: queued, running, or finished, with how long ago. */
+        class Progress(val running: Boolean, val text: String)
+
+        /** One read of the marks, so a caller's "is it running" and its text cannot disagree. */
+        fun progress(now: Long): Progress {
+            val started = startedAtEpochMs ?: return Progress(running = false, text = "still queued")
+            val finished = finishedAtEpochMs
+                ?: return Progress(running = true, text = "running for ${now - started} ms")
+            return Progress(running = false, text = "finished ${now - finished} ms ago")
+        }
+
+        fun describe(now: Long, progress: String): String = buildString {
+            // The absolute instant as well as the age: an install submitted
+            // from `Application.onCreate` carries no test class in its frames
+            // (JUnit's runner frames name none), so under Robolectric the
+            // class is read off the JUnit XML report's per-suite timestamps
+            // instead, and that needs wall-clock time (Codex, PR #188).
+            if (retry) append("(an inline retry) ")
+            append("submitted at ${java.time.Instant.ofEpochMilli(atEpochMs)} (${now - atEpochMs} ms ago)")
+            append(" on \"$threadName\" for $app, $progress, from:")
+            frames.forEach { append("\n    at ").append(it) }
+        }
+    }
+
+    /**
+     * An application instance by class and identity, so two records can be
+     * compared without either being the other's object. Robolectric builds a
+     * fresh `Application` per test method, so this is what tells "this test's
+     * own install" from "an earlier test's" (`TODO.md`).
+     */
+    internal fun describeApp(context: Context?): String {
+        val app = context?.applicationContext ?: return "no application"
+        return "${app.javaClass.simpleName}@${Integer.toHexString(System.identityHashCode(app))}"
     }
 
     /**
@@ -336,6 +457,11 @@ internal object DebugLogging {
      */
     private fun installNow(app: Context) {
         if (sink != null) return
+        // Bounded like [blockWorkerForTest], and for the same reason.
+        installHold?.let { hold ->
+            installHold = null
+            runCatching { hold.await(30, TimeUnit.SECONDS) }
+        }
         runCatching {
             val store = DebugLogStore(app)
             val enabled = store.isEnabled()
@@ -455,7 +581,7 @@ internal object DebugLogging {
      */
     private fun reinstallIfNeeded() {
         if (sink != null) return
-        appContext?.let { installNow(it) }
+        appContext?.let { runTrackedInstall(it, recordSubmission(it, retry = true)) }
     }
 
     /**
@@ -851,13 +977,15 @@ internal object DebugLogging {
             // behind. A count of zero means it got there somewhere around the
             // bound, which no stack read can place either side of, so that is
             // reported as what it is rather than dressed up as a stall.
-            val snapshot = describeWorker()
+            val snapshot = snapshotWorker()
             lastStall = if (done.count > 0L) {
                 snapshot
             } else {
-                "the drain finished around the moment its bound expired, so this " +
-                    "reading cannot be placed either side of it — treat it as a slow " +
-                    "worker rather than a wedged one: $snapshot"
+                snapshot.prefixed(
+                    "the drain finished around the moment its bound expired, so this " +
+                        "reading cannot be placed either side of it — treat it as a slow " +
+                        "worker rather than a wedged one: ",
+                )
             }
             // Returns without touching the sink, and that ordering is the
             // whole point (Codex, PR #168). `awaitIdle()` drains the *sink's*
@@ -885,7 +1013,24 @@ internal object DebugLogging {
      * whole property worth pinning.
      */
     @Volatile
-    private var lastStall: String? = null
+    private var lastStall: WorkerSnapshot? = null
+
+    /**
+     * The worker at one instant: its rendered state, and the install records
+     * that rendering was built from, so a verdict drawn later compares the
+     * caller against what the timeout saw rather than against whatever the
+     * worker has moved on to since (Codex, PR #188).
+     */
+    private class WorkerSnapshot(
+        val description: String,
+        /** The install the worker was inside, if any. */
+        val running: InstallSubmission?,
+        /** The most recent [install] then, and where its task had got to. */
+        val submitted: InstallSubmission?,
+        val submittedProgress: String?,
+    ) {
+        fun prefixed(prefix: String) = WorkerSnapshot(prefix + description, running, submitted, submittedProgress)
+    }
 
     /**
      * Test seam: occupies the worker until [release] is counted down, so a
@@ -908,6 +1053,29 @@ internal object DebugLogging {
     }
 
     /**
+     * Test seam: the next [installNow] waits on [release] before touching
+     * anything, so an install — the inline retry a crash read makes in
+     * particular — can be caught by a drain timeout while it is the task the
+     * worker is inside. One-shot; [resetForTest] clears an unused one.
+     */
+    internal fun holdInstallForTest(release: java.util.concurrent.CountDownLatch) {
+        installHold = release
+    }
+
+    @Volatile
+    private var installHold: java.util.concurrent.CountDownLatch? = null
+
+    /**
+     * Test seam: forgets the sink and nothing else — the state a failed
+     * [install] leaves behind — so the next crash read takes the inline retry
+     * path. [resetForTest] also forgets the application, which disables it.
+     */
+    internal fun forgetSinkForTest() {
+        awaitIdleForTest()
+        sink = null
+    }
+
+    /**
      * Test seam: what the worker was doing when a drain did not finish.
      *
      * A failed [awaitIdleForTest] says only that a trivial task did not reach
@@ -924,25 +1092,89 @@ internal object DebugLogging {
      * Reports the queue depth alongside, since "blocked in a task" and "never
      * started one" are different faults with the same symptom.
      */
-    internal fun workerStall(): String = lastStall?.let { "at the drain timeout: $it" }
-        ?: "no drain has timed out; worker as of now: ${describeWorker()}"
+    internal fun workerStall(): String = lastStall?.let { "at the drain timeout: ${it.description}" }
+        ?: "no drain has timed out; worker as of now: ${snapshotWorker().description}"
 
-    /** The worker's thread state and stack, as of this call. */
-    private fun describeWorker(): String {
+    /**
+     * [workerStall] plus whose application the caller is, so the record says
+     * whether the last install was this test's own or an earlier test's —
+     * the question the 2026-09-04 stack left open (`TODO.md`).
+     *
+     * The verdict is drawn from the timeout's own snapshot, never from a live
+     * read: an earlier install can finish and the current one start between
+     * the timeout and this call, and a live verdict would then blame the
+     * install the snapshot shows waiting (Codex, PR #188).
+     */
+    internal fun workerStall(current: Context): String {
+        val mine = describeApp(current)
+        val snapshot = lastStall ?: snapshotWorker()
+        fun whose(submission: InstallSubmission) =
+            if (submission.app == mine) "this application's own" else "a DIFFERENT application's — an earlier test's"
+        // The running install is the one that matters: whatever is queued
+        // behind it is waiting, not wedged.
+        val verdict = when {
+            snapshot.running != null -> "the install the worker was running is ${whose(snapshot.running)}"
+            snapshot.submitted != null ->
+                "no install was running; the last submitted, ${snapshot.submittedProgress}, " +
+                    "is ${whose(snapshot.submitted)}"
+            else -> "no install had been submitted in this process"
+        }
+        return "${workerStall()}\n  this caller's application: $mine; $verdict"
+    }
+
+    /**
+     * The worker's thread state and stack, and the install records behind
+     * them, as of this call. The records are read first and the text is built
+     * from those same reads, so the two never disagree.
+     */
+    private fun snapshotWorker(): WorkerSnapshot = synchronized(installLock) {
+        val now = System.currentTimeMillis()
+        // Everything below happens under the one lock the worker takes to
+        // mark an install started or finished, so the pointers, the marks,
+        // and the stack walk describe one instant: the worker cannot leave
+        // one install for the next while this reads (Codex, PR #188). The
+        // two records are usually the same object, read once.
+        val submitted = lastInstallSubmission
+        val started = lastStartedInstall
+        val submittedProgressRead = submitted?.progress(now)
+        val submittedProgress = submittedProgressRead?.text
+        val startedProgress = if (started === submitted) submittedProgressRead else started?.progress(now)
+        val running = started?.takeIf { startedProgress?.running == true }
         val thread = workerThread
-            ?: return "the debug-log worker thread was never created; queued=${worker.queue.size}"
+            ?: return WorkerSnapshot(
+                "the debug-log worker thread was never created; queued=${worker.queue.size}",
+                running,
+                submitted,
+                submittedProgress,
+            )
         val frames = thread.stackTrace.joinToString("\n") { "    at $it" }
-        return buildString {
+        val description = buildString {
             append("debug-log worker \"${thread.name}\" is ${thread.state}")
             append(", queued=${worker.queue.size}")
             append(", completed=${worker.completedTaskCount}")
             if (frames.isNotEmpty()) append("\n").append(frames)
+            // The submitter, which the worker's own stack can never name
+            // (`TODO.md`): by the time a drain stalls, whoever queued the
+            // install has usually returned.
+            if (submitted == null) {
+                append("\n  no install has been submitted in this process")
+            } else {
+                append("\n  last install ").append(submitted.describe(now, submittedProgress!!))
+            }
+            // An earlier install still running is the wedged one, and the
+            // last submitted only sits behind it.
+            if (running != null && running !== submitted) {
+                append("\n  the worker is still inside an EARLIER install ")
+                    .append(running.describe(now, startedProgress!!.text))
+            }
         }
+        return WorkerSnapshot(description, running, submitted, submittedProgress)
     }
 
     /** Test seam: forgets the installed sink so the next [install] rebuilds it. */
     internal fun resetForTest() {
         awaitIdleForTest()
+        installHold = null
         sink = null
         appContext = null
         gateApplied = false
