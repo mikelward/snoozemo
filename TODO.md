@@ -3493,8 +3493,8 @@ question.
   is in there and what it says. Cheapest shape is probably the existing share row opening
   a read-only screen with a Share button on it, rather than a new entry point.
 
-- [ ] **`ProcessExitReasonsTest`'s drain times out under full-suite load — still
-  unfixed, and two diagnoses have now been wrong.** All six cases, plus
+- [x] **`ProcessExitReasonsTest`'s drain times out under full-suite load — fixed
+  (2026-09-05), root cause below; two diagnoses had been wrong.** All six cases, plus
   `MainActivityLifecycleTest`'s *a restart picks up a dismiss outcome missed
   while stopped*, fail together on the `direct` flavor at
   `ProcessExitReasonsTest.kt` with *"the debug-log worker did not drain; startup
@@ -3593,15 +3593,37 @@ question.
   still inside that test's install. That is what the step below has to
   chase: which write to the same preferences file was in flight so that
   `commit()` took the queued branch, and whether the `QueuedWork` looper it
-  was handed to had already been quit by the teardown. The step below is
-  still open.
+  was handed to had already been quit by the teardown. That was the last
+  open step, and it is settled below.
 
-  **Next step:** trace the concurrent write that forced this `commit()` down
-  the queued branch — the branch itself is settled by the stack, so the open
-  question is what else was writing the same preferences file. (Tracing which
-  class submitted the install was the other half, and landed above.) Instrument
-  CI rather than hunting locally — it did not reproduce in 5x
-  `:app:testDirectDebugUnitTest --rerun-tasks` on `b70621f`.
+  **Root cause (2026-09-05), from the platform and Robolectric sources rather
+  than from a guess.** `SharedPreferencesImpl.EditorImpl.commit()` writes to
+  disk inline only when it is the file's sole write in flight; a second
+  commit overlapping it on another thread is handed to `QueuedWork`, and the
+  caller parks on `writtenToDiskLatch` until that write runs. On a device it
+  always does. Under Robolectric it does not survive the end of the test:
+  `ShadowQueuedWork.reset()` (a per-test `@Resetter`) calls
+  `removeCallbacksAndMessages(null)` on `QueuedWork`'s handler and clears its
+  work list, so a write queued there is dropped and the latch never opens.
+  The concurrent write was **a test's own `DebugLogStore(...).setEnabled` on
+  the test thread** — `DebugLoggingTest`, `DebugReportShareTest`,
+  `EndSheetStoreTest`, and `MainActivityLifecycleTest` all do it in setup —
+  overlapping the previous test's startup install on the worker, whose
+  `markLegacyLogsPurged` commit (every fresh Robolectric data directory has
+  the flag clear, so every test's first install purges and commits) then took
+  the queued branch. The test ended, Robolectric dropped the write, and the
+  process-wide worker was parked in `commit()` for the rest of the JVM. That
+  is why it was always the *previous* test's install, why the wedged one was
+  submitted a few hundred milliseconds before the failing test's own, and why
+  no local `--rerun-tasks` loop of one class reproduced it: the race needs a
+  class that writes the store from the test thread to run just before.
+  **Fix:** `DebugLogStore` serializes its writes on one process-wide lock,
+  so every commit stays on the inline path and never reaches `QueuedWork`.
+  Production's two writers were already serialized on the worker, so nothing
+  changes there; the lock is what makes a write from any other thread safe to
+  overlap with them. `DebugLogStoreTest` pins that a write from a second
+  thread waits for the one in flight. The stall record from PR #188 stays —
+  it is what named the shape.
 
   `MainActivityLifecycleTest` was the second half of the same fault and now
   says so. Its *a restart picks up a dismiss outcome missed while stopped*

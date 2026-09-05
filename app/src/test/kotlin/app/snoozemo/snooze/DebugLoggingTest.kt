@@ -380,12 +380,17 @@ class DebugLoggingTest {
         dir.mkdirs()
         File(dir, "current.log").writeText("a line from the previous release")
         val prefs = context.getSharedPreferences("debug_log", Context.MODE_PRIVATE)
-        prefs.edit()
-            // Exactly the state an upgrade lands in: the older migration's
-            // marker set, this one's absent.
-            .putBoolean("legacy_logs_purged", true)
-            .remove("shared_logger_directory_purged")
-            .commit()
+        // Under the store's own write lock: a commit overlapping the previous
+        // test's startup marker write would be handed to `QueuedWork`, which
+        // Robolectric drops at teardown — the wedge this class's stall was.
+        DebugLogStore.holdWritesForTest {
+            prefs.edit()
+                // Exactly the state an upgrade lands in: the older migration's
+                // marker set, this one's absent.
+                .putBoolean("legacy_logs_purged", true)
+                .remove("shared_logger_directory_purged")
+                .commit()
+        }
         assertFalse(
             "precondition: this migration reads as not yet done",
             DebugLogStore(context).hasPurgedLegacyLogs(),
@@ -418,8 +423,10 @@ class DebugLoggingTest {
         // than through a test-only setter on production code: an earlier test
         // in this class may already have recorded the migration against the
         // shared app context.
-        context.getSharedPreferences("debug_log", Context.MODE_PRIVATE)
-            .edit().putBoolean("shared_logger_directory_purged", false).commit()
+        DebugLogStore.holdWritesForTest {
+            context.getSharedPreferences("debug_log", Context.MODE_PRIVATE)
+                .edit().putBoolean("shared_logger_directory_purged", false).commit()
+        }
         assertFalse(
             "precondition: the migration reads as not yet done",
             DebugLogStore(context).hasPurgedLegacyLogs(),
