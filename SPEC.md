@@ -3178,7 +3178,10 @@ doesn't mention shows up as a row with no rationale behind it.
     restricted permission and no Play Services dependency (§3.4), so it gains neither the
     reporter nor `INTERNET` — "this build cannot open a network connection" stays literally
     true of one of the two flavors, auditable from its manifest, and an F-Droid build could
-    not carry a proprietary reporter anyway. `DeclaredPermissionsTest` pins both directions.
+    not carry a proprietary reporter anyway. `DeclaredPermissionsTest` pins both directions,
+    and a release build refuses to package a merged manifest that breaks them: `play` must
+    carry `INTERNET` and `ACCESS_BACKGROUND_LOCATION` and nothing Play would review (§3.3);
+    `direct` must carry neither.
   - **Analytics joins it, and the two share one consent** (maintainer, 2026-08-31; all four
     sibling apps are going the same way). Firebase Analytics ships on `play` alongside
     Crashlytics, collecting only what the SDK collects automatically — app opens, session

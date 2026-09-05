@@ -203,6 +203,176 @@ tasks.configureEach {
     }
 }
 
+// The other Phase 6 guard: a release build refuses on a merged manifest the
+// Play declarations do not rest on (TODO.md, Phase 6; Codex, PR #102).
+// `DeclaredPermissionsTest` pins the same facts, but unit tests run on the
+// debug build type alone, so what it reads is `playDebug` — and a release
+// source set, a `releaseImplementation`, or a library's manifest merged only
+// into release would differ from it without any test noticing. This reads the
+// artifact the release actually ships, `SingleArtifact.MERGED_MANIFEST`, and is
+// wired ahead of the tasks that package it: the APK's `package<Variant>`, the
+// AAB's `package<Variant>Bundle`, and both lifecycle names, so `assembleRelease`
+// on a pull request and `bundlePlayRelease` on `main` are covered alike.
+//
+// What it refuses is what the tests assert, per flavor. `play` may carry no
+// ad identifier, no typed foreground-service permission and no
+// `foregroundServiceType` (SPEC.md §3.3 — the type is what Play reviews), and
+// must carry the background-location grant Geofencing needs and the `INTERNET`
+// Crashlytics needs (SPEC.md §12). `direct` may carry none of `INTERNET`,
+// background location or the ad identifier (SPEC.md §3.4); its foreground
+// service arrives at Phase 7 and is not gated. The INTERNET refusal the
+// original entry listed for `play` predates Crashlytics landing there.
+abstract class CheckReleaseManifest : DefaultTask() {
+    @get:InputFile
+    abstract val manifest: RegularFileProperty
+
+    @get:Input
+    abstract val forbiddenPermissions: ListProperty<String>
+
+    @get:Input
+    abstract val forbiddenPermissionPrefixes: ListProperty<String>
+
+    @get:Input
+    abstract val requiredPermissions: ListProperty<String>
+
+    @get:Input
+    abstract val allowForegroundServiceType: Property<Boolean>
+
+    @TaskAction
+    fun check() {
+        val file = manifest.get().asFile
+        val document = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+            .apply { isNamespaceAware = true }
+            .newDocumentBuilder()
+            .parse(file)
+        val android = "http://schemas.android.com/apk/res/android"
+        fun elements(tag: String): List<org.w3c.dom.Element> {
+            val nodes = document.getElementsByTagName(tag)
+            return (0 until nodes.length).map { nodes.item(it) as org.w3c.dom.Element }
+        }
+        // The SDK-qualified forms count too: with minSdk 35 a
+        // `uses-permission-sdk-23` (or its `-sdk-m` alias) is in force on
+        // every supported device, so a release-only source set or dependency
+        // could carry a refused permission through one (Codex, PR #189).
+        val permissions = listOf("uses-permission", "uses-permission-sdk-23", "uses-permission-sdk-m")
+            .flatMap { elements(it) }
+            .filter { it.getAttributeNS(android, "name").isNotEmpty() }
+        val declared = permissions.map { it.getAttributeNS(android, "name") }.toSet()
+        // A required grant has to be in force on every device, so a cap
+        // (`maxSdkVersion`) on it is a refusal, not a declaration: capped at
+        // 34, `INTERNET` would leave a release whose crash reporting never
+        // sends, and the guard would have passed it (Codex, PR #189). A cap
+        // on a *forbidden* one changes nothing — any declaration refuses.
+        val cappedTo = permissions
+            .groupBy { it.getAttributeNS(android, "name") }
+            .mapValues { (_, elements) ->
+                elements.map { it.getAttributeNS(android, "maxSdkVersion") }.takeIf { caps -> caps.none { it.isEmpty() } }?.maxOrNull()
+            }
+        val problems = mutableListOf<String>()
+        forbiddenPermissions.get().filter { it in declared }.forEach { problems += "declares $it" }
+        forbiddenPermissionPrefixes.get().forEach { prefix ->
+            declared.filter { it.startsWith(prefix) }.forEach { problems += "declares $it" }
+        }
+        requiredPermissions.get().forEach { required ->
+            when {
+                required !in declared -> problems += "does not declare $required"
+                cappedTo[required] != null -> problems += "declares $required only up to SDK ${cappedTo[required]}"
+            }
+        }
+        if (!allowForegroundServiceType.get()) {
+            val typed = document.getElementsByTagName("service").let { nodes ->
+                (0 until nodes.length).map { nodes.item(it) as org.w3c.dom.Element }
+            }.filter { it.getAttributeNS(android, "foregroundServiceType").isNotEmpty() }
+            typed.forEach {
+                problems += "service ${it.getAttributeNS(android, "name")} declares " +
+                    "foregroundServiceType=\"${it.getAttributeNS(android, "foregroundServiceType")}\""
+            }
+        }
+        if (problems.isNotEmpty()) {
+            throw GradleException(
+                "Refusing to build a release whose merged manifest (${file.name}) " +
+                    problems.joinToString("; ") +
+                    ". The Play declarations rest on the manifest the release ships, and " +
+                    "DeclaredPermissionsTest only ever reads the debug one (SPEC.md §3.3, §12).",
+            )
+        }
+        logger.lifecycle("Release manifest check passed: ${declared.size} permissions, none refused.")
+    }
+}
+
+val adIdPermission = "com.google.android.gms.permission.AD_ID"
+val backgroundLocation = "android.permission.ACCESS_BACKGROUND_LOCATION"
+val internetPermission = "android.permission.INTERNET"
+val typedForegroundServicePrefix = "android.permission.FOREGROUND_SERVICE_"
+
+/**
+ * One flavor's manifest policy, declared once and applied to both the real
+ * release check and its proof: a proof that carried its own copy of the rules
+ * would stay green while the variant's copy was weakened (Codex, PR #189).
+ */
+class ReleaseManifestRules(
+    val forbidden: List<String>,
+    val forbiddenPrefixes: List<String>,
+    val required: List<String>,
+    val allowForegroundServiceType: Boolean,
+)
+
+// `play`: nothing Play would review, plus the two grants its declarations
+// rest on (SPEC.md §3.3, §12). `direct`: no network, no background location,
+// no ad identifier (SPEC.md §3.4); its foreground-service type is by design.
+val playManifestRules = ReleaseManifestRules(
+    forbidden = listOf(adIdPermission),
+    forbiddenPrefixes = listOf(typedForegroundServicePrefix),
+    required = listOf(backgroundLocation, internetPermission),
+    allowForegroundServiceType = false,
+)
+val directManifestRules = ReleaseManifestRules(
+    forbidden = listOf(internetPermission, backgroundLocation, adIdPermission),
+    forbiddenPrefixes = emptyList(),
+    required = emptyList(),
+    allowForegroundServiceType = true,
+)
+
+fun CheckReleaseManifest.applyRules(rules: ReleaseManifestRules) {
+    forbiddenPermissions.set(rules.forbidden)
+    forbiddenPermissionPrefixes.set(rules.forbiddenPrefixes)
+    requiredPermissions.set(rules.required)
+    allowForegroundServiceType.set(rules.allowForegroundServiceType)
+}
+
+fun manifestRulesFor(flavorName: String?) = if (flavorName == "play") playManifestRules else directManifestRules
+
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        val variantName = variant.name.replaceFirstChar { it.uppercase() }
+        val check = tasks.register<CheckReleaseManifest>("verify${variantName}Manifest") {
+            description = "Fails a $variantName build whose merged manifest carries what the Play declarations refuse."
+            manifest.set(variant.artifacts.get(com.android.build.api.artifact.SingleArtifact.MERGED_MANIFEST))
+            applyRules(manifestRulesFor(variant.flavorName))
+        }
+        tasks.configureEach {
+            if (name == "package$variantName" || name == "package${variantName}Bundle" ||
+                name == "assemble$variantName" || name == "bundle$variantName"
+            ) {
+                dependsOn(check)
+            }
+        }
+    }
+}
+
+// The negative half CI proves (`Verify the release manifest guard` in
+// ci.yml), the way the version guard is proved against a faked shallow clone:
+// the same task class under each flavor's own rules, pointed at a fixture
+// manifest that carries everything those rules refuse. A guard nothing has
+// ever seen fail is a guard nobody can tell from a no-op.
+for (flavor in listOf("play", "direct")) {
+    tasks.register<CheckReleaseManifest>("verify${flavor.replaceFirstChar { it.uppercase() }}ReleaseManifestProof") {
+        description = "Runs the $flavor release manifest rules against a fixture that must fail them."
+        manifest.set(layout.projectDirectory.file("src/test/fixtures/release-manifest-refused-$flavor.xml"))
+        applyRules(manifestRulesFor(flavor))
+    }
+}
+
 android {
     namespace = "app.snoozemo"
     // The platform the remote-session provisioning hook seeds

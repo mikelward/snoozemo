@@ -21,9 +21,14 @@ a release-only overlay or a `releaseImplementation` dependency would not fail it
 Neither exists today — there is no `src/release` or `src/playRelease` source set and
 no release-only dependency, and the two merged manifests carry identical permissions
 apart from the applicationId suffix on the auto-generated
-`DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` — so the test is faithful to what ships.
-It is faithful by circumstance rather than by construction, which is why gating a
-release build on the merged `playRelease` manifest is an open `TODO.md` item.
+`DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`. What makes that true by construction
+rather than by circumstance is the release build itself: every `play` and `direct`
+release refuses to package a merged manifest that breaks the four lines above (the
+`verify*ReleaseManifest` tasks in `app/build.gradle.kts`, which read the merged
+manifest the artifact ships with, SDK-qualified and `maxSdkVersion`-capped
+declarations included), and CI proves the refusal against fixture manifests on every
+pull request. So the declarations below can be filed from the manifest the release
+carries, not the one the tests happened to read.
 
 And **re-read the
 Console's current wording when you submit**: Google revises these forms, and the
