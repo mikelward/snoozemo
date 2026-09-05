@@ -102,7 +102,7 @@ class ReceiverRefusalTest {
         val released = releaseDirectly(
             context,
             EndReason.DURATION_CAP,
-            RefusingZen().apply { outcome = ZenOutcome.Applied },
+            RefusingZen().apply { outcome = ZenOutcome.Applied("refusing-zen-rule-id") },
         )
 
         assertTrue(released)
@@ -120,7 +120,7 @@ class ReceiverRefusalTest {
         // refuses to start, and a hard-coded CONTEXT credited that tap to the
         // app deciding by itself.
         ActiveSnoozeStore(context).arm(aSnooze())
-        val zen = RefusingZen().apply { outcome = ZenOutcome.Applied }
+        val zen = RefusingZen().apply { outcome = ZenOutcome.Applied("refusing-zen-rule-id") }
 
         releaseDirectly(context, EndReason.MANUAL, zen)
 
@@ -135,7 +135,7 @@ class ReceiverRefusalTest {
         // The other direction of the same distinction: a cap expiry reported
         // as USER_ACTION would tell the user they ended a snooze they didn't.
         ActiveSnoozeStore(context).arm(aSnooze())
-        val zen = RefusingZen().apply { outcome = ZenOutcome.Applied }
+        val zen = RefusingZen().apply { outcome = ZenOutcome.Applied("refusing-zen-rule-id") }
 
         releaseDirectly(context, EndReason.DURATION_CAP, zen)
 
@@ -154,7 +154,7 @@ class ReceiverRefusalTest {
         // which is the moment a crash would leave it behind.
         val store = ActiveSnoozeStore(context)
         store.arm(aSnooze())
-        val delegate = RefusingZen().apply { outcome = ZenOutcome.Applied }
+        val delegate = RefusingZen().apply { outcome = ZenOutcome.Applied("refusing-zen-rule-id") }
         var reasonAtWrite: EndReason? = null
         val zen = object : app.snoozemo.core.ZenController by delegate {
             override fun setSnoozed(
@@ -185,7 +185,7 @@ class ReceiverRefusalTest {
         val store = ActiveSnoozeStore(context)
         store.arm(aSnooze())
         store.markReleasing(EndReason.DEPARTURE)
-        val delegate = RefusingZen().apply { outcome = ZenOutcome.Applied }
+        val delegate = RefusingZen().apply { outcome = ZenOutcome.Applied("refusing-zen-rule-id") }
         var reasonAtWrite: EndReason? = null
         val zen = object : app.snoozemo.core.ZenController by delegate {
             override fun setSnoozed(
@@ -250,10 +250,31 @@ class ReceiverRefusalTest {
         store.arm(snooze)
         store.markReleasing(EndReason.DURATION_CAP)
 
-        restoreDirectly(context, snooze, RefusingZen().apply { outcome = ZenOutcome.Applied })
+        restoreDirectly(context, snooze, RefusingZen().apply { outcome = ZenOutcome.Applied("refusing-zen-rule-id") })
 
         assertNull("a reason beside a rule still on describes nothing", store.releasingReason())
         assertNotNull("and the snooze itself is untouched", storedSnooze())
+    }
+
+    @Test
+    fun `the no-service restore reads back the rule the record was armed with`() {
+        // The same question the service asks, on the path likeliest to meet a
+        // replaced rule: no process was alive, so nothing heard the REMOVED
+        // broadcast, and the tile has since minted a new rule (SPEC.md §5.8).
+        val delegate = RefusingZen().apply { outcome = ZenOutcome.Applied("refusing-zen-rule-id") }
+        val askedFor = mutableListOf<String?>()
+        val zen = object : app.snoozemo.core.ZenController by delegate {
+            override fun ruleActivation(ruleId: String?): ZenRuleActivation {
+                askedFor += ruleId
+                return delegate.ruleActivation(ruleId)
+            }
+        }
+        val snooze = aSnooze().copy(armed = true, ruleId = "the-rule-it-was-armed-with")
+        ActiveSnoozeStore(context).arm(snooze)
+
+        restoreDirectly(context, snooze, zen)
+
+        assertEquals(listOf<String?>("the-rule-it-was-armed-with"), askedFor)
     }
 
     @Test
@@ -280,7 +301,7 @@ class ReceiverRefusalTest {
         val snooze = aSnooze().copy(armed = true)
         ActiveSnoozeStore(context).arm(snooze)
         val zen = RefusingZen().apply {
-            outcome = ZenOutcome.Applied
+            outcome = ZenOutcome.Applied("refusing-zen-rule-id")
             activation = ZenRuleActivation.INACTIVE
         }
 
@@ -302,7 +323,7 @@ class ReceiverRefusalTest {
         val unfinished = aSnooze().copy(armed = false)
         ActiveSnoozeStore(context).arm(unfinished)
         val zen = RefusingZen().apply {
-            outcome = ZenOutcome.Applied
+            outcome = ZenOutcome.Applied("refusing-zen-rule-id")
             activation = ZenRuleActivation.INACTIVE
         }
 
@@ -341,7 +362,7 @@ class ReceiverRefusalTest {
         // alarm to undo it.
         val expired = aSnooze(startedAt = Instant.now().minus(Duration.ofHours(9)))
         ActiveSnoozeStore(context).arm(expired)
-        val zen = RefusingZen().apply { outcome = ZenOutcome.Applied }
+        val zen = RefusingZen().apply { outcome = ZenOutcome.Applied("refusing-zen-rule-id") }
 
         restoreDirectly(context, expired, zen)
 

@@ -220,7 +220,7 @@ class ActiveSnoozeStoreOriginTest {
             context,
             store,
             origin,
-            RefusingZen().apply { outcome = ZenOutcome.Applied },
+            RefusingZen().apply { outcome = ZenOutcome.Applied("refusing-zen-rule-id") },
         )
 
         assertNull("a released rule means the record has no further job", store.readUnverified())

@@ -73,6 +73,29 @@ class ActiveSnoozeStoreMarkerTest {
     }
 
     @Test
+    fun `the rule a snooze was armed with survives the write`() {
+        // What the broadcast gate and the read-back compare against (SPEC.md
+        // §5.8); an in-memory double would pass while nothing reached disk.
+        val store = ActiveSnoozeStore(context)
+        store.arm(aSnooze().copy(ruleId = "the-enforcing-rule"))
+
+        assertEquals("the-enforcing-rule", store.load()?.ruleId)
+        assertEquals("the-enforcing-rule", store.enforcingRuleId())
+    }
+
+    @Test
+    fun `a record that named no rule reads as naming none`() {
+        // A record from before the field existed, or one not yet confirmed on
+        // a rule: null, so the reads fall back to the current id rather than
+        // inventing one.
+        val store = ActiveSnoozeStore(context)
+        store.arm(aSnooze())
+
+        assertNull(store.load()?.ruleId)
+        assertNull(store.enforcingRuleId())
+    }
+
+    @Test
     fun `a record update does not resurrect a released snooze`() {
         // The other marker on the same file, for the same reason: a released
         // record rewritten by some straggling update must stay released, or a

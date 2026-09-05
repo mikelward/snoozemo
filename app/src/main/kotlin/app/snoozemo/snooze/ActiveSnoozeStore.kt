@@ -153,6 +153,10 @@ class ActiveSnoozeStore(context: Context) {
             // see `RecordOrigin.mayRestore` for why that asymmetry is the right
             // one.
             deviceStamp = prefs.getString(KEY_DEVICE_STAMP, null),
+            // Absent for a record written before the snooze named its rule.
+            // Null falls back to the id the app holds now — the inference this
+            // field replaces — so such a record keeps the behavior it had.
+            ruleId = prefs.getString(KEY_RULE_ID, null),
         )
     }
 
@@ -362,6 +366,9 @@ class ActiveSnoozeStore(context: Context) {
         // a snooze that recovered must not keep explaining a degradation it no
         // longer has.
         .putString(KEY_DEGRADATION, snooze.degradation?.name)
+        // Null clears the key for the same reason: a record that has not yet
+        // been confirmed on a rule must not keep naming the previous one's.
+        .putString(KEY_RULE_ID, snooze.ruleId)
         .putString(KEY_PLACE, snooze.placeName)
         .putString(KEY_SSID, snooze.anchor.ssid)
         // Recorded alongside the SSID and acted on by nothing (SPEC.md §6.2);
@@ -428,6 +435,15 @@ class ActiveSnoozeStore(context: Context) {
     fun wasArmed(): Boolean = prefs.getBoolean(KEY_ARMED, false)
 
     /**
+     * The rule the stored snooze was armed with, or null when the record names
+     * none (SPEC.md §5.8) — read ahead of the record itself, for the same
+     * reason [wasArmed] is: the rule-state read-back has to happen before the
+     * restore that would overwrite its evidence, and it has to ask about
+     * *this* snooze's rule rather than whatever the app holds now.
+     */
+    fun enforcingRuleId(): String? = prefs.getString(KEY_RULE_ID, null)
+
+    /**
      * Forgets a release reason whose release did not happen.
      *
      * Not merely tidy: a marker that outlives its failed attempt is read as the
@@ -488,6 +504,7 @@ class ActiveSnoozeStore(context: Context) {
         const val KEY_RELEASED = "released"
         const val KEY_RELEASING_REASON = "releasing_reason"
         const val KEY_ARMED = "armed"
+        const val KEY_RULE_ID = "rule_id"
         const val KEY_CAP_EXPIRES_AT = "cap_expires_at"
         const val KEY_BOOT_REFERENCE = "boot_reference"
         const val KEY_CAP_CEILING_AT = "cap_ceiling_at"

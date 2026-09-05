@@ -44,13 +44,13 @@ class SnoozeControllerTest {
 
     private class FakeZen(
         var access: PolicyAccess = PolicyAccess.GRANTED,
-        var outcome: ZenOutcome = ZenOutcome.Applied,
+        var outcome: ZenOutcome = ZenOutcome.Applied("fake-rule-id"),
     ) : ZenController {
         val calls = mutableListOf<Pair<Boolean, ZenTrigger>>()
         val identities = mutableListOf<SnoozeIdentity?>()
         override fun policyAccess() = access
-        override fun ruleActivation() = ZenRuleActivation.ACTIVE
-        override fun ownsRule(ruleId: String?) = true
+        override fun ruleActivation(ruleId: String?) = ZenRuleActivation.ACTIVE
+        override fun ownsRule(ruleId: String?, enforcing: String?) = true
         override fun ensureRule() = ZenRuleState.READY
         override fun setSnoozed(
             snoozed: Boolean,
@@ -140,6 +140,50 @@ class SnoozeControllerTest {
         controller.restore(running)
 
         assertEquals(listOf(SnoozeIdentity(startedEarlier.toEpochMilli())), zen.identities)
+    }
+
+    @Test
+    fun `an arm records the rule that is enforcing it`() {
+        // So the status broadcast and the read-back are answered against this
+        // snooze's rule rather than whatever the app holds later (SPEC.md
+        // §5.8) — recorded the moment the rule goes on, with `armed`.
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+
+        assertEquals("fake-rule-id", controller.active?.ruleId)
+    }
+
+    @Test
+    fun `a restore records the rule it re-asserted on`() {
+        // A record written before it named its rule picks the name up here,
+        // and one that named a since-replaced rule is corrected to the rule
+        // that is actually enforcing it from now on.
+        val running = ActiveSnooze(
+            anchor = anchor,
+            startedAt = start.minus(Duration.ofHours(1)),
+            capExpiresAt = start.plus(Duration.ofHours(7)),
+            mode = TrackingMode.FULL,
+            ruleId = "an-earlier-rule",
+        )
+
+        controller.restore(running)
+
+        assertEquals("fake-rule-id", controller.active?.ruleId)
+    }
+
+    @Test
+    fun `the rule recorded is the one the write went to, not a later read`() {
+        // The user deletes the rule and the tile mints a replacement between
+        // the state write returning and a read of the current id: a snooze
+        // that recorded the replacement would disown the rule enforcing it
+        // (Codex, PR #195). The write reports its own rule, so the arm and the
+        // restore take that rather than asking again.
+        zen.outcome = ZenOutcome.Applied("the-rule-that-went-on")
+
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        assertEquals("the-rule-that-went-on", controller.active?.ruleId)
+
+        controller.restore(controller.active!!.copy(ruleId = "an-earlier-rule"))
+        assertEquals("the-rule-that-went-on", controller.active?.ruleId)
     }
 
     @Test
@@ -851,9 +895,9 @@ class SnoozeControllerTest {
         controller.restore(running)
 
         assertEquals(SnoozeState.ARMED, controller.state)
-        // Identical but for `armed`, which the re-assertion has just made true
-        // (see the §5.8 restore tests below).
-        assertEquals(running.copy(armed = true), controller.active)
+        // Identical but for `armed` and the rule, which the re-assertion has
+        // just confirmed (see the §5.8 restore tests below).
+        assertEquals(running.copy(armed = true, ruleId = "fake-rule-id"), controller.active)
     }
 
     @Test
@@ -917,7 +961,7 @@ class SnoozeControllerTest {
         zen.outcome = ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED)
         controller.end(EndReason.DURATION_CAP)
 
-        zen.outcome = ZenOutcome.Applied
+        zen.outcome = ZenOutcome.Applied("fake-rule-id")
         controller.end(EndReason.DURATION_CAP)
 
         assertEquals(SnoozeState.IDLE, controller.state)

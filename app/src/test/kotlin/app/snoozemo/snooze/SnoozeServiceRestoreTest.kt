@@ -31,7 +31,7 @@ class SnoozeServiceRestoreTest {
     @Before
     fun setUp() {
         TestSnoozeService.reset(now)
-        TestSnoozeService.zen.outcome = ZenOutcome.Applied
+        TestSnoozeService.zen.outcome = ZenOutcome.Applied("refusing-zen-rule-id")
     }
 
     /** A record whose arm completed, which is what a running snooze looks like. */
@@ -91,6 +91,35 @@ class SnoozeServiceRestoreTest {
         // And the snooze is over rather than left running to its cap: the
         // record is gone, so nothing adopts it at the next wake-up.
         assertNull(ActiveSnoozeStore(appContext).load())
+    }
+
+    @Test
+    fun `a snooze whose rule was replaced ends as a lost capability, not as the user's doing`() {
+        // The sequence the current-id inference got wrong (Codex, PR #36): the
+        // user deletes the rule, the tile's next shade-open mints a
+        // replacement, and the next wake-up's read-back — asked about the rule
+        // the app holds *now* — sees a rule that is enabled and off and calls
+        // it the user turning Do Not Disturb off. That ending is the silent
+        // one, so a lost capability disappeared behind it.
+        TestSnoozeService.zen.activationById["the-deleted-rule"] = ZenRuleActivation.MISSING
+        // The replacement looks fine: enabled, and never turned on for this snooze.
+        TestSnoozeService.zen.activation = ZenRuleActivation.INACTIVE
+
+        armed(snoozeFixture(now).copy(ruleId = "the-deleted-rule"))
+        startService(SnoozeService.ACTION_REFRESH)
+
+        // Asked about the record's rule, not the current one.
+        assertEquals(listOf<String?>("the-deleted-rule"), TestSnoozeService.zen.activationAskedFor)
+        // Ended, never re-asserted, and told as what it is.
+        assertNull(ActiveSnoozeStore(appContext).load())
+        assertEquals(
+            emptyList<Pair<Boolean, ZenTrigger>>(),
+            TestSnoozeService.zen.calls.filter { it.first },
+        )
+        assertTrue(
+            "a rule that is gone is a lost capability, which explains itself",
+            shadeShows(stringOf(app.snoozemo.R.string.ended_lost_capability)),
+        )
     }
 
     @Test

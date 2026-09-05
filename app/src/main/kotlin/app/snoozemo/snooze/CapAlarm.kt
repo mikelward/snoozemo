@@ -975,7 +975,9 @@ internal fun restoreDirectly(
     // path to meet a user who turned Do Not Disturb off while the app was
     // gone. Re-asserting first would silence their phone again, which is the
     // one thing an explicit instruction from the user must never get.
-    val activation = runCatching { zen.ruleActivation() }.getOrElse {
+    // The record's own rule, for the reason the service reads it (SPEC.md
+    // §5.8): a replacement minted since the arm must not stand in for it.
+    val activation = runCatching { zen.ruleActivation(snooze.ruleId) }.getOrElse {
         // Unreadable ends nothing: a failed read must not be the reason a
         // snooze is dropped, and the cap still bounds it either way.
         Log.w(RELEASE_TAG, "Reading the rule state after a reboot failed; restoring anyway.")

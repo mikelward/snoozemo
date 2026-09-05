@@ -537,7 +537,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * would take the service down with the snooze's other business unfinished.
      */
     private fun reconcileRuleStatus(ruleId: String?, status: Int) {
-        val ours = runCatching { zen.ownsRule(ruleId) }.getOrElse {
+        // Against the running snooze's own rule (SPEC.md §5.8): a `REMOVED`
+        // for the rule it was armed with is ours even after the tile has
+        // minted a replacement, and that is the case this gate used to miss.
+        val enforcing = controller.active?.ruleId
+        val ours = runCatching { zen.ownsRule(ruleId, enforcing = enforcing) }.getOrElse {
             Log.e(TAG, "Checking rule ownership failed; leaving the snooze as it is.", it)
             return
         }
@@ -549,7 +553,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             if (controller.active == null) {
                 null
             } else {
-                runCatching { zen.ruleActivation() == ZenRuleActivation.ACTIVE }.getOrElse {
+                runCatching { zen.ruleActivation(enforcing) == ZenRuleActivation.ACTIVE }.getOrElse {
                     Log.w(TAG, "Re-reading the rule state failed; acting on the broadcast alone.", it)
                     null
                 }
@@ -836,7 +840,15 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             ACTION_END, ACTION_CAP_LOST, ACTION_RELEASE_STUCK -> false
             else -> true
         }
-        val observedActivation = if (restoring) zen.ruleActivation() else null
+        // Read against the rule the record names, not the one the app holds
+        // now (SPEC.md §5.8): after the user deletes the rule and the tile
+        // mints a replacement, the current id reads as enabled and off — the
+        // user's doing — when the truth is that the enforcing rule is gone.
+        val observedActivation = if (restoring) {
+            zen.ruleActivation(runCatching { store.enforcingRuleId() }.getOrNull())
+        } else {
+            null
+        }
         // A reason left behind by a refused release whose clean-up also failed
         // would otherwise outlive the snooze it described (Codex, PR #194).
         observedActivation?.let { retireStaleReleasing(store, it) }

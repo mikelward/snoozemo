@@ -38,7 +38,7 @@ class SnoozeServiceClockChangeTest {
         // The rule goes on and comes off as asked; the refusing default is for
         // the escalation's tests, and here it would end every snooze before the
         // clock could be changed under it.
-        TestSnoozeService.zen.outcome = ZenOutcome.Applied
+        TestSnoozeService.zen.outcome = ZenOutcome.Applied("refusing-zen-rule-id")
         // Static, so a refusing test must not leak its refusal forward.
         TogglableAlarmManager.refuse = false
     }

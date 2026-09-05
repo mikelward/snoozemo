@@ -46,7 +46,7 @@ class SnoozeServicePresenceTest {
     @Before
     fun reset() {
         TestSnoozeService.reset(now)
-        TestSnoozeService.zen.outcome = ZenOutcome.Applied
+        TestSnoozeService.zen.outcome = ZenOutcome.Applied("refusing-zen-rule-id")
         ActiveSnoozeStore(appContext).clear()
     }
 
@@ -169,7 +169,7 @@ class SnoozeServicePresenceTest {
         // A later restore — fresh instance, same record — seeds identically,
         // not from its own later clock.
         TestSnoozeService.reset(now.plusSeconds(600))
-        TestSnoozeService.zen.outcome = ZenOutcome.Applied
+        TestSnoozeService.zen.outcome = ZenOutcome.Applied("refusing-zen-rule-id")
         startService(SnoozeService.ACTION_CHECK_CAP, record = armed)
         shadowOf(getMainLooper()).idle()
 
@@ -195,7 +195,7 @@ class SnoozeServicePresenceTest {
             degradation = DegradationCause.FIXES_TOO_VAGUE,
         )
         TestSnoozeService.reset(now.plusSeconds(600))
-        TestSnoozeService.zen.outcome = ZenOutcome.Applied
+        TestSnoozeService.zen.outcome = ZenOutcome.Applied("refusing-zen-rule-id")
         startService(SnoozeService.ACTION_CHECK_CAP, record = degraded)
         shadowOf(getMainLooper()).idle()
 
@@ -477,7 +477,7 @@ class SnoozeServicePresenceTest {
         // is where the cleared mailbox cost the departure.
         val armed = ActiveSnoozeStore(appContext).load()!!
         TestSnoozeService.reset(now.plusSeconds(60))
-        TestSnoozeService.zen.outcome = ZenOutcome.Applied
+        TestSnoozeService.zen.outcome = ZenOutcome.Applied("refusing-zen-rule-id")
         startService(SnoozeService.ACTION_CHECK_CAP, record = armed)
         shadowOf(getMainLooper()).idle()
 

@@ -1491,8 +1491,20 @@ worse than silence. Two related statuses fail open (D7) instead, because a rule 
 rule is recreated only when nothing is running. A **disabled** one is never re-enabled behind the
 user — they did that deliberately.
 
-Every one of these is gated on the rule being *ours*. §5.6's "only its own rule" governs reading as
-well as writing: another app's mode ending, or a user schedule's, must never end a Snoozemo snooze.
+Every one of these is gated on the rule being *ours*, and **ours means the rule this snooze was
+armed with** — recorded on the snooze the moment the rule goes on, and again on every re-assertion
+(2026-09-05), as the rule the state write itself reports rather than one read back after it, since
+a replacement can be minted between the two. §5.6's "only its own rule" governs reading as well as writing: another app's mode
+ending, or a user schedule's, must never end a Snoozemo snooze. The comparison is against the
+recorded rule rather than the id the app holds *now*, because the two part company in one ordinary
+sequence — the user deletes the rule, and the tile's next shade-open mints a replacement. Judged
+against the current id, that sequence went silent twice over: the original's `REMOVED` broadcast
+named an id the app no longer held and read as somebody else's, and the next wake-up's read-back
+inspected the replacement — enabled, and off — and reported the user turning Do Not Disturb off. A
+lost capability, which explains itself, hidden behind the one ending kept quiet. Remembering the
+displaced id instead of recording the rule was rejected: ownership inferred from a value that moves
+needs a new guard for every way it can move. A record written before it named its rule falls back
+to the current id, which is the behavior this replaces.
 
 Two neighboring cases are deliberately out of scope: the user turning DND *on* while we are idle
 (at worst the tile reads `not snoozing` beside a quiet phone), and another app's rule ending while
