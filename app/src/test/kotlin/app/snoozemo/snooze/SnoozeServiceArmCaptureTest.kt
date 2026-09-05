@@ -46,7 +46,7 @@ class SnoozeServiceArmCaptureTest {
     @Before
     fun reset() {
         TestSnoozeService.reset(now)
-        TestSnoozeService.zen.outcome = ZenOutcome.Applied
+        TestSnoozeService.zen.outcome = ZenOutcome.Applied("refusing-zen-rule-id")
         ActiveSnoozeStore(appContext).clear()
     }
 

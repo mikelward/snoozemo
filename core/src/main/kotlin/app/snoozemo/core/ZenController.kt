@@ -71,8 +71,15 @@ interface ZenController {
      * The four-value answer matters: [ZenRuleActivation.UNKNOWN] must never end
      * a snooze, and [ZenRuleActivation.MISSING] is a lost capability rather than
      * the user's choice.
+     *
+     * [ruleId] is the rule to read — the one the running snooze was armed with
+     * ([ActiveSnooze.ruleId]), so that a replacement minted since then is not
+     * mistaken for it: the replacement reads as enabled and off, which is
+     * "the user turned Do Not Disturb off", when the truth is that the
+     * enforcing rule is gone. Null reads the rule the app holds now, for a
+     * caller with no record or a record written before it named its rule.
      */
-    fun ruleActivation(): ZenRuleActivation
+    fun ruleActivation(ruleId: String? = null): ZenRuleActivation
 
     /**
      * Whether [ruleId] is Snoozemo's own rule (SPEC.md §5.8).
@@ -84,8 +91,12 @@ interface ZenController {
      * Answers **false when it cannot tell** — an unreadable id means we have no
      * evidence this rule is ours, and the safe reading of that is to leave a
      * running snooze alone rather than end it on a guess.
+     *
+     * [enforcing] is the rule the running snooze was armed with, when there is
+     * one and its record names it; it is what the changed rule is compared
+     * against, ahead of the id the app holds now (see [RuleOwnership]).
      */
-    fun ownsRule(ruleId: String?): Boolean
+    fun ownsRule(ruleId: String?, enforcing: String? = null): Boolean
 }
 
 /** Whether the app may change zen state at all. */
@@ -133,8 +144,15 @@ enum class ZenRuleState {
 /** The result of a zen state change. Never silently discarded. */
 sealed interface ZenOutcome {
 
-    /** The rule's state was set. */
-    data object Applied : ZenOutcome
+    /**
+     * The rule's state was set — on [ruleId], the rule the write actually went
+     * to. Reported by the write rather than read back afterwards, because a
+     * second read is a second moment: the user can delete the rule and the
+     * tile's shade-open mint a replacement between the two, and a snooze that
+     * then records the replacement disowns the rule that is enforcing it
+     * (Codex, PR #195).
+     */
+    data class Applied(val ruleId: String) : ZenOutcome
 
     /**
      * It was not. [reason] is what the user is told and what the debug log

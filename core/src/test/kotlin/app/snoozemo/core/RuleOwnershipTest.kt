@@ -20,13 +20,27 @@ class RuleOwnershipTest {
     }
 
     @Test
-    fun `a rule we have already replaced is not ours`() {
-        // Deliberate, and the reason is recorded in TODO.md: ownership is not
-        // inferred from what the app held a moment ago. A REMOVED broadcast
-        // racing a replacement is therefore missed, which is a known gap whose
-        // fix is to record the enforcing rule on the snooze — not to guess
-        // backwards from a value that moves.
+    fun `a rule we have already replaced is not ours when no snooze names it`() {
+        // Nothing running, so there is no snooze whose rule it could be, and
+        // ownership is not guessed backwards from a value that moves.
         assertFalse(RuleOwnership.isOurs("rule-1", current = "rule-2"))
+    }
+
+    @Test
+    fun `the rule a running snooze was armed with is ours after a replacement`() {
+        // The gap this closes (Codex, PR #36): the user deletes the rule, the
+        // tile mints a replacement, and the original's REMOVED broadcast then
+        // names an id the app no longer holds. The snooze it was enforcing
+        // recorded it, so it is still ours — and the snooze ends as a lost
+        // capability instead of running on, unenforced, to its cap.
+        assertTrue(RuleOwnership.isOurs("rule-1", current = "rule-2", enforcing = "rule-1"))
+    }
+
+    @Test
+    fun `the replacement is not the running snooze's rule`() {
+        // The other direction: a change to the rule the app holds now is not
+        // about a snooze armed on a different one.
+        assertFalse(RuleOwnership.isOurs("rule-2", current = "rule-2", enforcing = "rule-1"))
     }
 
     @Test

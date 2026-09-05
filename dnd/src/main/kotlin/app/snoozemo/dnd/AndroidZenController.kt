@@ -86,7 +86,7 @@ class AndroidZenController(
      * didn't complete, so the rule's state is unknown rather than absent.
      * `setSnoozed` maps it to `PLATFORM_REFUSED`, the retryable outcome.
      */
-    override fun ruleActivation(): ZenRuleActivation {
+    override fun ruleActivation(ruleId: String?): ZenRuleActivation {
         // API 35, and honestly unanswerable below it. That is not a gap this
         // read introduces: AUTOMATIC_RULE_STATUS_DEACTIVATED is API 35 too, so
         // on 34 neither mechanism exists and the drift of SPEC.md §5.8 is
@@ -94,10 +94,11 @@ class AndroidZenController(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) {
             return ZenRuleActivation.UNKNOWN
         }
-        // No id is "cannot tell", never "gone": a failed store read would
-        // otherwise end a snooze as a lost capability on the strength of a disk
-        // error.
-        val ruleId = runCatching { store.ruleId() }.getOrNull()
+        // The snooze's own rule when the caller names one; otherwise the id
+        // the app holds now. No id at all is "cannot tell", never "gone": a
+        // failed store read would otherwise end a snooze as a lost capability
+        // on the strength of a disk error.
+        val ruleId = ruleId ?: runCatching { store.ruleId() }.getOrNull()
             ?: return ZenRuleActivation.UNKNOWN
 
         val state = runCatching { notificationManager.getAutomaticZenRuleState(ruleId) }
@@ -131,23 +132,22 @@ class AndroidZenController(
         }
     }
 
-    override fun ownsRule(ruleId: String?): Boolean {
+    override fun ownsRule(ruleId: String?, enforcing: String?): Boolean {
         // Read, never created: this runs on a broadcast, and a status change for
         // somebody else's rule must not be the thing that mints ours.
         //
-        // The id we hold *now*, and nothing more. A short-lived memory of the
-        // id a replacement had just displaced lived here briefly and was taken
-        // out again (Codex, PR #36): it closed a narrow race and opened three
-        // wider ones over as many review rounds, because ownership inferred
-        // from whatever the app happens to hold needs a new guard for every
-        // way that value can move. The recorded fix is to stop inferring —
-        // record the enforcing rule on the snooze itself (TODO.md) — and this
-        // stays deliberately simple until then.
+        // The running snooze's own rule first, then the id we hold *now*, and
+        // nothing more. A short-lived memory of the id a replacement had just
+        // displaced lived here briefly and was taken out again (Codex, PR #36):
+        // it closed a narrow race and opened three wider ones over as many
+        // review rounds, because ownership inferred from whatever the app
+        // happens to hold needs a new guard for every way that value can move.
+        // The snooze naming its rule is what replaced the inference.
         val ours = runCatching { store.ruleId() }.getOrElse {
             Log.w(TAG, "Reading the rule id failed; treating the changed rule as not ours.", it)
             return false
         }
-        return RuleOwnership.isOurs(ruleId, current = ours)
+        return RuleOwnership.isOurs(ruleId, current = ours, enforcing = enforcing)
     }
 
     override fun ensureRule(): ZenRuleState =
@@ -429,7 +429,7 @@ class AndroidZenController(
      * concluding there is nothing to come back for.
      */
     private fun confirmSilenced(ruleId: String, snoozed: Boolean, placeName: String): ZenOutcome {
-        if (!snoozed) return ZenOutcome.Applied
+        if (!snoozed) return ZenOutcome.Applied(ruleId)
 
         val lookup = runCatching { notificationManager.getAutomaticZenRule(ruleId) }
         val rule = lookup.getOrElse {
@@ -471,7 +471,7 @@ class AndroidZenController(
                     ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED)
                 }
             }
-            else -> ZenOutcome.Applied
+            else -> ZenOutcome.Applied(ruleId)
         }
     }
 
@@ -507,7 +507,7 @@ class AndroidZenController(
 
         return runCatching { notificationManager.setAutomaticZenRuleState(ruleId, condition) }
             .fold(
-                onSuccess = { ZenOutcome.Applied },
+                onSuccess = { ZenOutcome.Applied(ruleId) },
                 onFailure = { error ->
                     // The release path's worst case: if this throws while ending a
                     // snooze, the phone stays silent. Report it so the caller can

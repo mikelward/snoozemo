@@ -304,7 +304,7 @@ class RingerHandoverTest {
     fun `a confirmed arm applies the ceiling`() {
         assertEquals(
             RingerFollowUp.QUIET,
-            ringerFollowUp(snoozed = true, ZenOutcome.Applied),
+            ringerFollowUp(snoozed = true, ZenOutcome.Applied("rule")),
         )
     }
 
@@ -363,7 +363,7 @@ class RingerHandoverTest {
         // Their mode either way, but the record is still Snoozemo's to clear.
         assertEquals(
             RingerFollowUp.HAND_BACK_AND_FORGET,
-            ringerFollowUp(snoozed = false, ZenOutcome.Applied, ringerDisowned = true),
+            ringerFollowUp(snoozed = false, ZenOutcome.Applied("rule"), ringerDisowned = true),
         )
     }
 
@@ -371,7 +371,7 @@ class RingerHandoverTest {
     fun `a confirmed release forgets the ceiling`() {
         assertEquals(
             RingerFollowUp.HAND_BACK_AND_FORGET,
-            ringerFollowUp(snoozed = false, ZenOutcome.Applied),
+            ringerFollowUp(snoozed = false, ZenOutcome.Applied("rule")),
         )
     }
 
@@ -381,7 +381,7 @@ class RingerHandoverTest {
         // because two readings of it drifted apart once: the ringer held its
         // ceiling past a revoked-access release the rest of the app had already
         // finalized (Codex, PR #176).
-        assertEquals(true, ZenOutcome.Applied.confirmsNothingSilencing)
+        assertEquals(true, ZenOutcome.Applied("rule").confirmsNothingSilencing)
         assertEquals(true, ZenOutcome.NotApplied(ZenFailure.NO_POLICY_ACCESS).confirmsNothingSilencing)
         assertEquals(true, ZenOutcome.NotApplied(ZenFailure.NO_RULE).confirmsNothingSilencing)
         assertEquals(true, ZenOutcome.NotApplied(ZenFailure.RULE_DISABLED).confirmsNothingSilencing)

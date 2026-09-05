@@ -163,6 +163,30 @@ data class ActiveSnooze(
      * "no reason recorded" and simply renders the mode alone.
      */
     val degradation: DegradationCause? = null,
+    /**
+     * The id of the zen rule enforcing this snooze — the one the last
+     * successful arm or re-assertion turned on — or null for a record that
+     * carries none (SPEC.md §5.8).
+     *
+     * Ownership of a rule-status broadcast, and the read-back of the rule's
+     * state on a restoring wake-up, are both answered against this rather
+     * than against whatever id the app happens to hold *now*. The two differ
+     * exactly when it matters: the user deletes the rule, the tile's next
+     * shade-open mints a replacement, and from then on the app's current id
+     * names a rule that never enforced this snooze. Inferring ownership from
+     * the current id then reads the original's `REMOVED` broadcast as somebody
+     * else's, and reads the replacement — enabled, off — as the user having
+     * turned Do Not Disturb off: a lost capability, which explains itself,
+     * hidden behind the one ending kept silent. A short-lived memory of the
+     * displaced id was tried instead and produced a fresh defect on each of
+     * three review rounds (Codex, PR #36); recording the rule here removes the
+     * inference rather than guarding it.
+     *
+     * Nullable because a record written before this field existed carries
+     * none. Null falls back to the current id, which is the behavior this
+     * improves on rather than replaces.
+     */
+    val ruleId: String? = null,
 ) {
     /**
      * How long is left before the cap fires, floored at zero. Never negative: an

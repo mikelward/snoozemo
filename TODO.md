@@ -1891,6 +1891,15 @@ the point is that every other line of the app is worthless if it isn't true.
       of the activation it just performed, which is more machinery than a fallback should carry
       — and it is the same question as the rest of this item, namely which writes state what
       about a record and what happens when one of them does not land.
+      **The enforcing rule id has the same gap** (Codex, PR #195): a record written before the
+      snooze named its rule keeps `ruleId == null` across a no-service re-assertion, because
+      that path writes nothing after its zen write for exactly the reason above. Such a record
+      keeps falling back to the current rule at every read-back, so a later deletion plus a
+      shade-open replacement still reads as the user turning Do Not Disturb off rather than a
+      lost capability. Only records from before the field existed are affected — nothing has
+      shipped, so none exist outside a dev device that updated mid-snooze — and the service's
+      own restore names the rule on its first success. Whatever durable write closes the
+      `armed` half closes this one; they are one write.
       **And two more on the same subsystem** (Codex, PR #36): *both* of §5.8's endings — the
       status broadcast's and the pre-restore read-back's — call `controller.end` without
       following a refused release with `ensureCapAfterRefusedEnd`. Every other ending on the
@@ -1903,7 +1912,7 @@ the point is that every other line of the app is worthless if it isn't true.
       the broadcast was the *only* such path, which was wrong in exactly the way that lets the
       second one survive a fix.
 
-- [ ] **Tie a snooze to the rule that was enforcing it** (Codex, PR #36, raised rather than
+- [x] **Tie a snooze to the rule that was enforcing it** (Codex, PR #36, raised rather than
       built). Ownership is answered against whatever rule id the app holds *now*, and nothing
       else. Two cases slip through it, both starting the same way — the user deletes the rule
       and the tile's shade-open `ensureRule()` mints a replacement:
@@ -1930,6 +1939,15 @@ the point is that every other line of the app is worthless if it isn't true.
       Deliberately not folded into PR #36: it changes the persisted record's shape, and it
       arrived late on a PR whose ownership fixes were themselves generating findings. Worth
       doing on its own, with its own migration story and a clear head.
+      **Landed 2026-09-05.** The record carries the enforcing rule's id, written with
+      `armed` at the arm and again on every successful re-assertion the service makes —
+      the no-service restore writes nothing after its zen write, so a pre-field record it
+      re-asserts stays unnamed until the service next restores it (the entry above, still
+      open); the broadcast gate
+      compares against it first, and both read-backs — the service's and the no-service
+      restore's — ask about it rather than the current id. A record with no rule named
+      (written before the field existed) falls back to the current id, so nothing older
+      changes behavior. `SPEC.md` §5.8 records the decision.
 
 - [ ] **A reboot that stays locked outlasts the cap** (flagged by Codex on PR #8).
       `BOOT_COMPLETED` reaches credential-unaware components only after the *first unlock*,

@@ -58,7 +58,7 @@ class SnoozeServiceReleaseTest {
         // With a refusing platform this assertion would pass for the wrong
         // reason: the ladder reaches `HandOff`, whose message shares
         // `ID_FAILURE` with this one and overwrites it within the same call.
-        TestSnoozeService.zen.outcome = ZenOutcome.Applied
+        TestSnoozeService.zen.outcome = ZenOutcome.Applied("refusing-zen-rule-id")
         val record = snoozeFixture(now)
         startService(SnoozeService.ACTION_CAP_LOST, record) {
             putExtra(SnoozeService.EXTRA_RECORD_STARTED_AT, record.startedAt.toEpochMilli())
@@ -75,7 +75,7 @@ class SnoozeServiceReleaseTest {
     fun `a reboot that could not resume still says so`() {
         // The other half of the gate: the message is right for the situation it
         // was written for, and removing it there would be the opposite failure.
-        TestSnoozeService.zen.outcome = ZenOutcome.Applied
+        TestSnoozeService.zen.outcome = ZenOutcome.Applied("refusing-zen-rule-id")
         val record = snoozeFixture(now)
         startService(SnoozeService.ACTION_CAP_LOST, record) {
             putExtra(SnoozeService.EXTRA_RECORD_STARTED_AT, record.startedAt.toEpochMilli())
@@ -130,7 +130,7 @@ class SnoozeServiceReleaseTest {
             shadeShows(stringOf(R.string.failure_could_not_end)),
         )
 
-        TestSnoozeService.zen.outcome = ZenOutcome.Applied
+        TestSnoozeService.zen.outcome = ZenOutcome.Applied("refusing-zen-rule-id")
         startService(SnoozeService.ACTION_END, record)
 
         assertFalse(
@@ -184,7 +184,7 @@ class SnoozeServiceReleaseTest {
         // every alarm. This shadow refuses them, which is the only way to make
         // `CapAlarm.armCheckIn` fail on a JVM (flagged by Codex on PR #61).
         PendingFailureStore(appContext).rememberRuleMayBeStuck()
-        TestSnoozeService.zen.outcome = ZenOutcome.Applied
+        TestSnoozeService.zen.outcome = ZenOutcome.Applied("refusing-zen-rule-id")
 
         startService(SnoozeService.ACTION_ARM)
 

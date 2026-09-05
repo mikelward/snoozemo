@@ -40,7 +40,7 @@ class SnoozeServiceSetCapTest {
         TestSnoozeService.reset(now)
         // The rule goes on and comes off as asked; a refusing default would end
         // every snooze before a time could be chosen for it.
-        TestSnoozeService.zen.outcome = ZenOutcome.Applied
+        TestSnoozeService.zen.outcome = ZenOutcome.Applied("refusing-zen-rule-id")
         // Static, so a refusing test must not leak its refusal forward.
         TogglableAlarmManager.refuse = false
         // The sheet's own channel. Every exit from `setCap` has to report

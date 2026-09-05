@@ -62,8 +62,22 @@ internal class RefusingZen : ZenController {
     /** What the platform will say the rule is doing. */
     var activation: ZenRuleActivation = ZenRuleActivation.ACTIVE
 
-    override fun ruleActivation() = activation
-    override fun ownsRule(ruleId: String?): Boolean = true
+    /**
+     * What the platform will say about a rule *by id*, ahead of [activation] —
+     * so a test can give the rule a record was armed with a different answer
+     * from the one the app holds now (SPEC.md §5.8).
+     */
+    val activationById = mutableMapOf<String, ZenRuleActivation>()
+
+    /** Every rule the state read-back was asked about, in order. */
+    val activationAskedFor = mutableListOf<String?>()
+
+    override fun ruleActivation(ruleId: String?): ZenRuleActivation {
+        activationAskedFor += ruleId
+        return ruleId?.let(activationById::get) ?: activation
+    }
+
+    override fun ownsRule(ruleId: String?, enforcing: String?): Boolean = true
     override fun ensureRule(): ZenRuleState = ZenRuleState.READY
 
     override fun setSnoozed(

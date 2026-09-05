@@ -197,7 +197,12 @@ class SnoozeController(
                 // "finish" an arm that was already finished and silence the
                 // phone again. No write of its own: the caller saves the record
                 // as soon as the rule is on, and now carries this with it.
-                active = snooze.copy(armed = true)
+                // The rule that went on is recorded with it, so the status
+                // broadcast and the read-back are answered against *this*
+                // snooze's rule and not whatever the app holds later (SPEC.md
+                // §5.8). Taken from the outcome, not read back: a second read
+                // could name a replacement minted in between (Codex, PR #195).
+                active = snooze.copy(armed = true, ruleId = outcome.ruleId)
                 true
             }
             is ZenOutcome.NotApplied -> {
@@ -593,7 +598,13 @@ class SnoozeController(
         // branch and silently re-silence a phone they had just un-silenced.
         // Only on the success path: the refusal above deliberately stays armed
         // without the rule being confirmed, and must not claim otherwise.
-        val confirmed = restored.copy(armed = true)
+        // The enforcing rule is whichever one this re-assertion went to — as
+        // the write reports it, the same way the arm takes it — so a record
+        // written before it named its rule picks the name up here.
+        // Not a smart cast: `NotApplied` returned above, and the remaining
+        // case of a sealed type is not inferred.
+        val applied = outcome as ZenOutcome.Applied
+        val confirmed = restored.copy(armed = true, ruleId = applied.ruleId)
         active = confirmed
         state = SnoozeState.ARMED
         listener.onStateChanged(state, confirmed, null)
