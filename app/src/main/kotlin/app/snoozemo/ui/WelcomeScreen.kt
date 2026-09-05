@@ -145,11 +145,13 @@ fun welcomeExitNeedsRecap(
  * fail-open rule the permission rows follow (D7): a setup flow that cannot be
  * left without finishing it is a trap, not onboarding. `Skip`, the last card's
  * `Done` and back off card 1 all land in the same place, so no route through
- * this misses a missing permission and none gets stuck. `Skip` itself appears
- * from card 2 on (maintainer, 2026-09-05) — card 1 is one line saying what the
- * app is, and offering to leave beside it invites skipping before there is
- * anything to skip; back still exits, so the way out is there, just not
- * advertised before the user has read that line.
+ * this misses a missing permission and none gets stuck.
+ *
+ * **Three fixed controls on every card**: `Back`, `Skip`, `Next` (maintainer,
+ * 2026-09-05), so none of them moves between cards. `Skip` is on card 1 too —
+ * the same morning's decision to withhold it there was reversed, because a
+ * control that appears from nowhere on card 2 costs more than advertising the
+ * exit one screen earlier.
  *
  * **The grants are the real rows, not a copy of them.** Each card embeds the
  * same [SetupRow] `PermissionsScreen` draws, so the observed-denial handling,
@@ -185,6 +187,12 @@ fun WelcomeScreen(
      * repair (Codex, PR #204).
      */
     ruleState: ZenRuleState? = null,
+    /**
+     * The rule's id, or null while there is nothing to edit — no access, or
+     * access granted and the rule not created yet. Card 4 offers Filters only
+     * when it is non-null, exactly as `SettingsScreen` does.
+     */
+    filtersRuleId: String? = null,
     settingsFailure: SetupRowId? = null,
     /**
      * Whether a crashed run is pinned (`SPEC.md` §4.6). The flow is a cold-start
@@ -209,11 +217,12 @@ fun WelcomeScreen(
     onAnswerTelemetry: (Boolean) -> Unit = {},
     onNext: () -> Unit,
     onSkip: () -> Unit,
+    /** Previous card, or out of the flow from the first — the back gesture's twin. */
+    onBack: () -> Unit = onSkip,
     modifier: Modifier = Modifier,
 ) {
     val position = cards.indexOf(card).takeIf { it >= 0 } ?: 0
     val last = position == cards.lastIndex
-    val first = position == 0
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -271,6 +280,7 @@ fun WelcomeScreen(
                 WelcomeCard.RULE -> RuleCard(
                     access = access,
                     ruleState = ruleState,
+                    filtersRuleId = filtersRuleId,
                     snoozeRinger = snoozeRinger,
                     snoozeRingerSaveFailed = snoozeRingerSaveFailed,
                     settingsFailure = settingsFailure,
@@ -292,22 +302,25 @@ fun WelcomeScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // No `Skip` on the first card (maintainer, 2026-09-05): offering to
-            // leave beside the one line that says what the app is invites
-            // skipping before there is anything to skip. From card 2 on the
-            // user has read that line, and the exit is theirs.
+            // Three fixed slots on every card — `Back` leading, `Skip`
+            // centered, `Next` trailing (maintainer, 2026-09-05) — so no
+            // control moves between cards and the thumb learns one place for
+            // each.
             //
-            // This does not reopen D7. The flow is still leavable from card 1 —
-            // back exits it — so what changed is that the exit stops being
-            // advertised there, not that it stops existing. A `Spacer` holds
-            // the slot so `Next` keeps its place at the trailing edge rather
-            // than sliding across between card 1 and card 2.
-            if (first) {
-                Spacer(Modifier)
-            } else {
-                TextButton(onClick = onSkip) {
-                    Text(stringResource(R.string.welcome_skip))
-                }
+            // `Back` on card 1 leaves the flow, exactly as the system gesture
+            // does, so the two never disagree.
+            TextButton(onClick = onBack) {
+                Text(stringResource(R.string.welcome_back))
+            }
+            // `Skip` is on card 1 too (maintainer, 2026-09-05, reversing the
+            // same morning's decision to withhold it). Withholding it kept the
+            // exit from being advertised beside the one line that says what
+            // the app is — but with a fixed three-slot row that costs a
+            // control appearing from nowhere on card 2, and the row's own
+            // stability is worth more. D7 was never at stake either way: the
+            // flow has always been leavable from card 1, by back.
+            TextButton(onClick = onSkip) {
+                Text(stringResource(R.string.welcome_skip))
             }
             Button(onClick = if (last) onSkip else onNext) {
                 Text(
@@ -375,18 +388,21 @@ private fun EndsCard(
             location = location,
             settingsFailure = settingsFailure,
             onAction = onLocationRow,
+            hideWhenSatisfied = true,
         )
     }
     PermissionRows.Calendar(
         calendar = calendar,
         settingsFailure = settingsFailure,
         onAction = onCalendarRow,
+        hideWhenSatisfied = true,
     )
     PermissionRows.Notifications(
         notifications = notifications,
         reachTheUser = notificationsReachTheUser,
         settingsFailure = settingsFailure,
         onAction = onNotificationsRow,
+        hideWhenSatisfied = true,
     )
 }
 
@@ -404,6 +420,7 @@ private fun TileCard(
         tileAdded = tileAdded,
         settingsFailure = settingsFailure,
         onAction = onAddTile,
+        hideWhenSatisfied = true,
     )
 }
 
@@ -412,14 +429,22 @@ private fun TileCard(
  *
  * Do Not Disturb access comes last of the grants because it is the one without
  * which nothing here can snooze at all — asked after the user has seen what it
- * is for. Filters is named rather than offered: it deep-links to the system's
- * editor for the rule's policy, and the rule does not exist until access is
- * granted, so a button here would open to nothing.
+ * is for.
+ *
+ * Filters is offered rather than only named (maintainer, 2026-09-05), through
+ * the same row `SettingsScreen` draws. The objection to a button here was that
+ * the rule does not exist until access is granted, so it would open to
+ * nothing — but that is what [PermissionRows.Filters]'s null check already
+ * answers: the row is absent until there is a rule to edit, and appears in
+ * place the moment there is. So the card names the rule as the user's and
+ * hands them the way to edit it in the same breath, which is what its title
+ * promises.
  */
 @Composable
 private fun RuleCard(
     access: PolicyAccess?,
     ruleState: ZenRuleState?,
+    filtersRuleId: String?,
     snoozeRinger: SnoozeRinger?,
     snoozeRingerSaveFailed: Boolean,
     settingsFailure: SetupRowId?,
@@ -438,6 +463,17 @@ private fun RuleCard(
         settingsFailure = settingsFailure,
         onAction = onAccessRow,
         onRuleRow = onRuleRow,
+        hideWhenSatisfied = true,
+        // This card is the only place both rows appear, so it is the only one
+        // that has to say which of them reports a refused filters launch.
+        filtersRowPresent = filtersRuleId != null,
+    )
+    // Below the access row, because it only exists once that grant has landed
+    // and the rule has been created — the order the user meets them in.
+    PermissionRows.Filters(
+        filtersRuleId = filtersRuleId,
+        settingsFailure = settingsFailure,
+        onAction = onRuleRow,
     )
 }
 

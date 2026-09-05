@@ -463,6 +463,17 @@ class MainActivity : ComponentActivity() {
     private var tileBannerDismissed by mutableStateOf(true)
 
     /**
+     * Whether `MainScreen` points at the help icon (`SPEC.md` §4.2).
+     *
+     * Derived rather than saved: it is `seen && !dismissed`, both of which
+     * outlive the process, so a rotation or a process death recomputes the
+     * same answer instead of restoring a stale one. Defaults to false so a
+     * first frame drawn before the read cannot flash a hint at someone who has
+     * never seen the flow.
+     */
+    private var showReplayHint by mutableStateOf(false)
+
+    /**
      * Whether `ACCESS_BACKGROUND_LOCATION` is missing on a flavor whose
      * tracking needs it — what `MainScreen`'s banner reads.
      *
@@ -979,11 +990,15 @@ class MainActivity : ComponentActivity() {
         // otherwise route to (SPEC.md §4.2). Only when nothing has been
         // restored on top of it: a rotation mid-flow keeps its own card, and a
         // process death on Settings comes back to Settings.
+        val welcomeSeen = welcomeStore.seen()
         if (savedInstanceState == null &&
-            shouldOpenWelcome(seen = welcomeStore.seen(), freshInstall = welcomeStore::freshInstall)
+            shouldOpenWelcome(seen = welcomeSeen, freshInstall = welcomeStore::freshInstall)
         ) {
             screen = Screen.WELCOME
         }
+        // The same read, reused: the hint exists only for someone who has been
+        // through the flow and not yet dismissed it.
+        showReplayHint = welcomeSeen && !welcomeStore.replayHintDismissed()
         setContent {
             SnoozemoTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -999,10 +1014,14 @@ class MainActivity : ComponentActivity() {
                             // Back goes to the previous card, and on the first
                             // one leaves the flow — the same exit `Skip` takes,
                             // so no gesture can strand a user inside it (D7).
-                            BackHandler {
+                            // The card's own `Back` button runs this same
+                            // lambda, so the gesture and the control can never
+                            // disagree about where back goes.
+                            val goBack = {
                                 val at = cards.indexOf(welcomeCard)
                                 if (at > 0) welcomeCard = cards[at - 1] else leaveWelcome()
                             }
+                            BackHandler(onBack = goBack)
                             WelcomeScreen(
                                 card = welcomeCard,
                                 cards = cards,
@@ -1018,6 +1037,7 @@ class MainActivity : ComponentActivity() {
                                 snoozeRinger = snoozeRinger,
                                 snoozeRingerSaveFailed = snoozeRingerSaveFailed,
                                 ruleState = renderableRuleState,
+                                filtersRuleId = filtersRuleId,
                                 settingsFailure = settingsFailure,
                                 crashPending = crashPending,
                                 shareFailed = shareFailed,
@@ -1032,18 +1052,20 @@ class MainActivity : ComponentActivity() {
                                 onCalendarRow = ::fixCalendar,
                                 onAddTile = ::addTile,
                                 onSnoozeRinger = ::chooseSnoozeRinger,
-                                onAnswerTelemetry = ::answerTelemetry,
+                                onAnswerTelemetry = ::answerTelemetryAndFinish,
                                 onNext = {
                                     val at = cards.indexOf(welcomeCard)
                                     if (at >= 0 && at < cards.lastIndex) welcomeCard = cards[at + 1]
                                 },
                                 onSkip = ::leaveWelcome,
+                                onBack = goBack,
                             )
                         }
                         Screen.MAIN -> MainScreen(
                             access = access,
                             tileAdded = tileAdded,
                             tileBannerDismissed = tileBannerDismissed,
+                            showReplayHint = showReplayHint,
                             snoozing = snoozing,
                             trackingMode = activeSnooze?.mode,
                             remaining = activeSnooze?.remaining(now),
@@ -1071,6 +1093,10 @@ class MainActivity : ComponentActivity() {
                             },
                             onAddTile = ::addTile,
                             onDismissTileBanner = { tileStore.dismissBanner() },
+                            onDismissReplayHint = {
+                                welcomeStore.dismissReplayHint()
+                                showReplayHint = false
+                            },
                             // The location row's own routing, reused whole:
                             // an askable state launches the foreground
                             // request (already-granted returns immediately
@@ -1861,6 +1887,28 @@ class MainActivity : ComponentActivity() {
      * nothing about analytics, with the card still standing unanswered
      * (Codex, PR #166).
      */
+    /**
+     * The consent card's answer, which also finishes the flow.
+     *
+     * Answering IS finishing the last card, so making the user then find `Done`
+     * asks them to confirm a choice they just made (maintainer, 2026-09-05).
+     *
+     * **The exit is unconditional on purpose.** [answerTelemetry] reconciles
+     * from the store, so an answer matching what was already saved leaves
+     * nothing to reconcile — gating the exit on the value moving made the tap
+     * look dead for exactly the user who had said yes in an earlier session.
+     *
+     * A method rather than a lambda at the call site so a test can drive the
+     * real pair: a lambda there is only reachable through the composition, and
+     * a screen-level test that supplies its own proves the card reports both
+     * answers while saying nothing about the exit (Codex, PR #206).
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun answerTelemetryAndFinish(enabled: Boolean) {
+        answerTelemetry(enabled)
+        leaveWelcome()
+    }
+
     private fun answerTelemetry(enabled: Boolean) {
         telemetryUnanswered = false
         crashReportingEnabled = enabled
@@ -3035,6 +3083,9 @@ class MainActivity : ComponentActivity() {
      * Marks the flow seen on the way out rather than on the way in, so a
      * process death mid-flow costs the user nothing — see [WelcomeStore].
      */
+    /** Test seam for the replay hint's visibility. */
+    internal fun showReplayHintForTest() = showReplayHint
+
     /** Test seam for [leaveWelcome], which no test can reach through the UI. */
     internal fun leaveWelcomeForTest() = leaveWelcome()
 
@@ -3046,6 +3097,11 @@ class MainActivity : ComponentActivity() {
 
     private fun leaveWelcome() {
         welcomeStore.markSeen()
+        // Shown from here on: the user has just seen the cards, which is the
+        // one moment "you can get these back" means anything (maintainer,
+        // 2026-09-05). A replay from the icon re-enters this path and leaves
+        // it alone — already dismissed stays dismissed.
+        showReplayHint = !welcomeStore.replayHintDismissed()
         screen = Screen.MAIN
         // Always computed, never gated on `routedToPermissionsOnce`. That flag
         // governs `applyAccess`'s *automatic* route — the one that must fire at

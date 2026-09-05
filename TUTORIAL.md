@@ -26,13 +26,20 @@ screen already has a reason attached.
   scrolling" and "no truncation" held absolutely there is no valid overflow at those
   sizes (Codex, PR #193), and clipping a grant is the worse of the two. Verify at the
   largest display and font size Android offers before calling any card done.
-- **`Next` on every card, `Skip` from card 2 on, back gesture goes to the previous
-  card** — and off card 1, out of the flow. `Skip` is absent on the first card
-  (maintainer, 2026-09-05): offering to leave beside the one line that says what
-  the app is invites skipping before there is anything to skip. That does not
-  weaken the rule below, because back still exits card 1 — the way out exists
-  there, it is just not advertised until the user has read that line. `Skip` and
-  the last card's `Next` both land in the same place:
+- **Three fixed slots on every card: `Back` leading, `Skip` centered, `Next`
+  trailing** (maintainer, 2026-09-05). Nothing moves between cards, so the thumb
+  learns one place for each. `Back` goes to the previous card and, off card 1,
+  out of the flow — the same lambda the system back gesture runs, so the control
+  and the gesture can never disagree.
+
+  This reverses the same morning's decision to withhold `Skip` on card 1, which
+  was that offering to leave beside the one line saying what the app is invites
+  skipping before there is anything to skip. Both readings are reasonable; a row
+  whose middle control appears from nowhere on card 2 was judged the worse of
+  the two. D7 was never at stake either way — the flow has always been leavable
+  from card 1, by back.
+
+  `Skip` and the last card's `Next` both land in the same place:
   `PermissionsScreen` while a permission is still missing, `MainScreen` once nothing
   is — so there is no way through that misses a missing permission, none that shows
   a recap with nothing to recap, and no way to get stuck, which is the same fail-open
@@ -42,6 +49,18 @@ screen already has a reason attached.
   location row is suppressed because nothing tracks departure (§3), an ungranted
   location permission counts for nothing, or every `direct` user would be routed to a
   recap they cannot satisfy.
+- **A dismissible hint points at the (?) icon once the flow is left**
+  (maintainer, 2026-09-05): `Tap (?) to see the tutorial again`, with a
+  `Dismiss`. The replay lives behind an icon, which is discoverable only if you
+  already know it is there, and the one moment saying so means anything is the
+  moment the user has just finished the cards. Quieter than the tile banner —
+  that one argues for an action, this only says where something is — and it has
+  its own flag, so dismissing the hint is not a statement about the flow.
+- **A granted permission's row is dropped from the card entirely** (maintainer,
+  2026-09-05). Once there is no action left to offer, the row is a line of text
+  the user reads past, so the card ends at whatever still needs them. The recap
+  keeps its granted rows — saying what is already in place is that screen's
+  whole job — so this is the card's choice, not the row's.
 - **Shown once.** A persisted flag records that the flow has been seen; the
   permissions screen's own once-only routing stays as it is (§4.2). Replayable, so the
   cards are not lost once seen, from a **(?) icon in `MainScreen`'s title row, before
@@ -204,7 +223,7 @@ reads.
 
 ### 3 · How to start one
 
-> **Snooze from the shade**
+> **Snooze from Quick Settings**
 >
 > Swipe down and tap the **Zzz** tile.
 > Works with the phone locked.
@@ -232,8 +251,15 @@ this card; the permanent row in Settings is the standing route (§4.2).
 > ( Ring | **Vibrate** | Silent )
 >
 > [ Allow Do Not Disturb access ]
+> Filters · What still gets through            [ Edit ]
 
-Illustration: none; the ringer choice and the grant are the interactive elements.
+`Filters` is offered here, not only named (maintainer, 2026-09-05), through the
+same row `SettingsScreen` draws. It appears only once there is a rule to edit —
+access granted and the rule created — and is simply absent before that, so it is
+never a tap with nothing behind it. A card titled *One rule, yours* that gave the
+user no way to open it was describing ownership rather than handing it over.
+
+Illustration: none; the ringer choice and the grants are the interactive elements.
 Do Not Disturb access is the one grant that is a Settings screen rather than a
 dialog (§5.2): `Allow` leaves the app, the user flips the toggle, and on return the
 row reads as it does on `PermissionsScreen` — the action gone, its capability
@@ -243,16 +269,16 @@ so it comes last, after the user has seen everything it is for.
 One rule, named `Snoozemo`, created once and never churned (§5.3); the app turns off
 *only its own rule* and leaves any other Do Not Disturb alone (§5.6). Filters is the
 `SettingsScreen` row that deep-links to the system's own editor for the rule's
-policy (§4.2); it cannot open from this card because Do Not Disturb access has not
-been granted yet, so the card names where it lives instead of offering a button
-that opens to nothing. The ringer choice is §5.9's ceiling, defaulting to `Vibrate`,
+policy (§4.2), and the card offers it as well as naming it — the row's own null
+check keeps it absent until the rule exists, which is what earlier made a button
+here look impossible. The ringer choice is §5.9's ceiling, defaulting to `Vibrate`,
 written to the same setting `SettingsScreen`'s *Ring/vibrate* row edits.
 
 This card and card 2 are the densest of the five and the ones most likely to need
-cutting. If it
-has to lose something, lose the Filters sentence — the row exists in Settings and
-the rule is discoverable in the system's Modes screen either way — and keep the
-ringer choice, which is the setting a user is most surprised by after the fact.
+cutting. If it has to lose something, lose the Filters *sentence* in the body now
+that the row itself is there — the row says the same thing and can be acted on —
+and keep the ringer choice, which is the setting a user is most surprised by after
+the fact.
 
 ### 5 · If something goes wrong
 
@@ -289,6 +315,14 @@ neither moves. What this card decides is whether the flow *asks*:
 - **So `direct` has no fifth card.** It ships neither SDK (§12), so the question is
   absent — and with the debug-log sentence gone there is nothing left on the card.
   The flow is four cards there, and the dots count four.
+
+**Answering leaves the flow** (maintainer, 2026-09-05). Either button records the
+answer and exits — it is the last card, so answering it is finishing, and making
+the user then find `Done` asks them to confirm a choice they just made. The exit
+does not depend on the stored value changing: a user who said yes in an earlier
+session and says it again here changes nothing for the write to reconcile, so a
+value-gated exit would have left that tap looking dead for exactly the person
+most likely to make it.
 
 The consent is asked here, and this is the **last card** (maintainer, 2026-09-05).
 Last on purpose: it is the one question on the cards about data leaving the phone,

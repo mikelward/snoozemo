@@ -25,6 +25,7 @@ import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.TrackingMode
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -727,6 +728,84 @@ class MainScreenScreenshotTest {
     }
 
     @Test
+    fun `the replay hint points at the help icon`() {
+        // Shown just after the flow is left; the icon it names is in the title
+        // row above it, so the two read as one instruction.
+        capture("main-screen-replay-hint.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                showReplayHint = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                sharing = false,
+                onDismissTileBanner = {},
+                onAddTile = {},
+                onArm = {},
+                onRelease = {},
+                onOpenSettings = {},
+                onOpenPermissions = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Tap (?) to see the tutorial again").assertExists()
+        composeRule.onNodeWithText("Dismiss").assertExists()
+    }
+
+    @Test
+    fun `the replay hint yields to the tile banner`() {
+        // The hint blocks nothing, repairs nothing and asks nothing, so
+        // anything with something at stake outranks it — and the tile most of
+        // all, since `SPEC.md` §4.2 has the screen lead with it and it is the
+        // one action that makes arming from a locked phone work. Written above
+        // it first, where on a short window or at a large font it pushed that
+        // action down the scroll (Codex, PR #206).
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = false,
+                tileBannerDismissed = false,
+                showReplayHint = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                sharing = false,
+                onDismissTileBanner = {},
+                onAddTile = {},
+                onArm = {},
+                onRelease = {},
+                onOpenSettings = {},
+                onOpenPermissions = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        // Both up at once, which is the only arrangement that can get this
+        // wrong — and the case no capture covers, since the recorded hint
+        // shows it alone.
+        val tile = composeRule.onNodeWithText("Snooze from Quick Settings")
+            .fetchSemanticsNode().positionInRoot.y
+        val hint = composeRule.onNodeWithText("Tap (?) to see the tutorial again")
+            .fetchSemanticsNode().positionInRoot.y
+        assertTrue("the tile banner must sit above the replay hint", tile < hint)
+    }
+
+    @Test
     fun `a dismissed tile banner does not come back`() {
         capture("main-screen-idle.png") {
             MainScreen(
@@ -752,7 +831,7 @@ class MainScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("Snooze from the shade").assertDoesNotExist()
+        composeRule.onNodeWithText("Snooze from Quick Settings").assertDoesNotExist()
     }
 
     @Test
