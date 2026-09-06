@@ -483,11 +483,14 @@ rows' own fail-open rule. `PermissionsScreen` then follows only when a permissio
 as the recap, and its once-only routing stays as the backstop for an install that skipped the
 flow; a user who allowed everything on the cards lands on `MainScreen`. A row whose permission is
 already granted is dropped from its card rather than shown with no action (maintainer,
-2026-09-05) — the recap still shows it, since stating what is in place is that screen's job. Every
-card carries the same controls in the same places (maintainer, 2026-09-06): `Skip` in the
-top-right corner, and along the bottom `Back`, the progress dots, `Next` — so nothing moves
-between cards, and the two controls that step through the flow sit either side of the thing
-that says where in it you are. `Back` runs the same decision the system gesture does. Once the flow is left, `MainScreen`
+2026-09-05) — the recap still shows it, since stating what is in place is that screen's job. The card's
+title is the screen's title, in the same `SnoozemoTitleRow` every other screen uses, with
+`Skip` as its trailing action (maintainer, 2026-09-06) — absent on card 1, where offering to
+leave beside the one line that says what the app is invites skipping before there is anything
+to skip. Along the bottom: `Back`, the progress dots, `Next`, so the two controls that step
+through the flow sit either side of the thing that says where in it you are. `Back` runs the
+same decision the system gesture does, and still exits card 1, so D7's way out is there
+whether or not it is advertised. Once the flow is left, `MainScreen`
 carries a dismissible hint pointing at the (?) icon, because a replay behind an icon is
 discoverable only by someone who already knows it is there. The flow is shown once, on
 a persisted flag, and replayable from a **(?) icon in `MainScreen`'s title row** — the person who

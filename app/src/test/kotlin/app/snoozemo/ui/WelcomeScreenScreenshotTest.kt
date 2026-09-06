@@ -13,6 +13,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.assertIsDisplayed
 import app.snoozemo.core.CalendarPermission
 import app.snoozemo.core.LocationPermission
 import app.snoozemo.core.NotificationPermission
@@ -54,36 +56,44 @@ class WelcomeScreenScreenshotTest {
 
         composeRule.onNodeWithText("Silence your phone until you leave.").assertExists()
         composeRule.onNodeWithText("One tap.").assertExists()
-        // Every control is on card 1 too, so nothing arrives from nowhere on
-        // card 2 (maintainer, 2026-09-05).
+        // No `Skip` here (maintainer, 2026-09-06): offering to leave beside the
+        // one line that says what the app is invites skipping before there is
+        // anything to skip. D7 is untouched — back still exits card 1, so the
+        // way out is there, just not advertised yet.
         composeRule.onNodeWithText("Back").assertExists()
-        composeRule.onNodeWithText("Skip").assertExists()
         composeRule.onNodeWithText("Next").assertExists()
+        composeRule.onNodeWithText("Skip").assertDoesNotExist()
     }
 
     @Test
-    fun `skip sits above the flow's own controls, which read back-dots-next`() {
-        // The layout the maintainer asked for on 2026-09-06: `Skip` in the
-        // top-right corner, and along the bottom `Back`, the progress dots and
-        // `Next` in that order — the two controls that step through the flow
-        // either side of the thing that says where in it you are.
+    fun `the title row carries the title and skip, over back-dots-next`() {
+        // The layout the maintainer asked for on 2026-09-06: the card's title
+        // in the same row every other screen puts one, `Skip` its trailing
+        // action, and along the bottom `Back`, the progress dots and `Next` —
+        // the two controls that step through the flow either side of the thing
+        // that says where in it you are.
+        //
+        // Card 2, because card 1 is the one card with no `Skip`.
         //
         // Asserted rather than left to the snapshot: a recorded image goes red
         // for any pixel that moves, so it says nothing about which arrangement
         // was intended, and re-recording is what an agent does to a red one.
-        capture { Flow(WelcomeCard.WHAT) }
+        capture { Flow(WelcomeCard.ENDS) }
 
+        val title = composeRule.onNodeWithText("Ends automatically")
+            .fetchSemanticsNode().positionInRoot
         val skip = composeRule.onNodeWithText("Skip").fetchSemanticsNode().positionInRoot
         val back = composeRule.onNodeWithText("Back").fetchSemanticsNode().positionInRoot
-        val dots = composeRule.onNodeWithContentDescription("Card 1 of 5")
+        val dots = composeRule.onNodeWithContentDescription("Card 2 of 5")
             .fetchSemanticsNode().positionInRoot
         val next = composeRule.onNodeWithText("Next").fetchSemanticsNode().positionInRoot
 
-        assertTrue("Skip belongs above the bottom row", skip.y < back.y)
-        assertTrue("Skip belongs at the trailing edge", skip.x > back.x)
+        assertTrue("the title heads the screen", title.y < back.y)
+        assertTrue("Skip shares the title's row", skip.y < back.y)
+        assertTrue("Skip is that row's trailing action", skip.x > title.x)
         assertTrue("Back leads the bottom row", back.x < dots.x)
         assertTrue("Next trails it", dots.x < next.x)
-        assertTrue("the dots share the bottom row", dots.y > skip.y)
+        assertTrue("the dots share the bottom row", dots.y > title.y)
     }
 
     @Test
@@ -419,6 +429,41 @@ class WelcomeScreenScreenshotTest {
             composeRule.onAllNodesWithText("Couldn't open Settings")
                 .fetchSemanticsNodes().size,
         )
+    }
+
+    @Test
+    @Config(sdk = [36], qualifiers = "w411dp-h240dp-420dpi", fontScale = 2f)
+    fun `the body keeps a viewport when the title wraps on a short window`() {
+        // Android's largest font scale in a short multi-window pane, on the
+        // card with the longest title. With the title row pinned above the
+        // body, the wrapped heading plus the pinned controls consumed the
+        // column before the weighted body was measured, so its text and its
+        // `Add` button were not clipped but absent — no viewport to scroll
+        // them into (Codex, PR #209). The title row now scrolls with the body,
+        // as on every other screen, so the body is always reachable.
+        //
+        // No capture: a snapshot of a wrapped heading at this size would say
+        // nothing about whether what is below it can be reached.
+        // Both set on the method's `@Config` rather than in the body: the
+        // rule's activity is created before the body runs, and a font scale
+        // set after that reached nothing this test measures.
+        capture { Flow(WelcomeCard.TILE) }
+
+        // *Fully* visible after scrolling to it, not merely displayed: with the
+        // title pinned, the body was left a 26dp sliver — enough for
+        // `assertIsDisplayed` to pass on a corner of the button, and nothing
+        // like enough to ever show a 53dp button whole.
+        for (text in listOf("Swipe down and tap the Zzz tile.", "Add")) {
+            val node = composeRule.onNodeWithText(text).performScrollTo().fetchSemanticsNode()
+            assertEquals(
+                "'$text' must fit its viewport whole once scrolled to",
+                node.size.height,
+                node.boundsInRoot.height.toInt(),
+            )
+        }
+        // The pinned row is still pinned: the exit never left the screen.
+        composeRule.onNodeWithText("Back").assertIsDisplayed()
+        composeRule.onNodeWithText("Next").assertIsDisplayed()
     }
 
     /** Same shape as the sibling screenshot tests' — see `MainScreenScreenshotTest`. */
