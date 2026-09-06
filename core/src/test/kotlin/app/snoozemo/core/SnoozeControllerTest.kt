@@ -74,6 +74,16 @@ class SnoozeControllerTest {
         /** The mode each transition carried, so "reported once, already correct" is testable. */
         val announced = mutableListOf<TrackingMode?>()
         val releasing = mutableListOf<EndReason>()
+        /** Every departure readout handed over, in order. */
+        val observations = mutableListOf<DepartureObservation>()
+
+        /** How many transitions had already been announced when each readout arrived. */
+        val statesWhenObserved = mutableListOf<Int>()
+
+        override fun onDepartureObservation(observation: DepartureObservation) {
+            observations += observation
+            statesWhenObserved += states.size
+        }
 
         override fun onReleasing(reason: EndReason) {
             releasing += reason
@@ -557,6 +567,72 @@ class SnoozeControllerTest {
         // there is a test below that does.
         locationAccessLost: Boolean = degradation?.blocksLocationReads == true,
     ) = PresenceUpdate(event, degradation, graceActive, locationAccessLost)
+
+    private fun observation(distanceM: Double) = DepartureObservation(
+        distanceM = distanceM,
+        accuracyM = 10f,
+        radiusM = 150,
+        elapsedRealtimeMs = 0L,
+    )
+
+    @Test
+    fun `a readout reaches the screen without counting as news`() {
+        armFully()
+        val before = listener.tracking.size
+
+        controller.onPresenceUpdate(update().copy(observation = observation(200.0)))
+
+        assertEquals(listOf(200.0), listener.observations.map { it.distanceM })
+        // The whole reason it is not an event: a fix arrives every 90 s while a
+        // departure is being tested, and a tracking report per fix is the
+        // notification flapping the restated-level design exists to avoid.
+        assertEquals(before, listener.tracking.size)
+    }
+
+    @Test
+    fun `the fix that ends the snooze still hands over its reading`() {
+        // Handed over before the event, so the last thing the screen drew is
+        // the distance that actually ended the snooze rather than the one
+        // before it.
+        armFully()
+        val before = listener.states.size
+
+        controller.onPresenceUpdate(
+            update(event = PresenceEvent.Departed).copy(observation = observation(400.0)),
+        )
+
+        assertEquals(listOf(400.0), listener.observations.map { it.distanceM })
+        assertEquals(SnoozeState.IDLE, controller.state)
+        // And before the transition, not after: what the screen last drew is
+        // the distance that ended the snooze, not the one before it.
+        assertEquals(listOf(before), listener.statesWhenObserved)
+    }
+
+    @Test
+    fun `a reading measured under a degraded mode is never handed over`() {
+        // Not published, rather than published and invalidated later (Codex,
+        // PR #210). A fix arriving while the mode stays degraded moves no
+        // transition, so there is nothing for a transition-time clear to hang
+        // off — and a later level-only recovery would then show a reading
+        // taken while nothing was tracking.
+        armFully()
+
+        controller.onPresenceUpdate(
+            update(degradation = DegradationCause.NO_LOCATION_FIX)
+                .copy(observation = observation(200.0)),
+        )
+
+        assertTrue(listener.observations.isEmpty())
+    }
+
+    @Test
+    fun `an update no fix produced hands over nothing`() {
+        armFully()
+
+        controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX))
+
+        assertTrue(listener.observations.isEmpty())
+    }
 
     @Test
     fun `grace running reports WIFI_GRACE, not WIFI_ONLY, even with FULL machinery`() {

@@ -102,6 +102,78 @@ data class DepartureProgress(
     }
 }
 
+/**
+ * The departure test's arithmetic for one fix, without the position it came
+ * from (`SPEC.md` §4.6).
+ *
+ * The same three numbers the debug log already records — distance from the
+ * anchor, the fix's own accuracy, and the radius they are compared against —
+ * carried live rather than read back afterward. What makes it safe to show is
+ * what makes it safe to log: a distance locates nobody, where a coordinate
+ * locates exactly one place.
+ *
+ * Built by [Departure.observe] so the readout and the verdict cannot drift
+ * apart: both are computed from the same fix by the same functions, so a screen
+ * that says a phone is 40 m short of leaving is quoting the test rather than
+ * re-deriving it.
+ */
+data class DepartureObservation(
+    /** Great-circle meters from the anchor, before accuracy is accounted for. */
+    val distanceM: Double,
+    /** The fix's own 68%-confidence radius, in meters. */
+    val accuracyM: Float,
+    /** The anchor's radius, in meters — what [distanceM] is measured against. */
+    val radiusM: Int,
+    /** Elapsed realtime of the fix, so a stale reading can be told from a fresh one. */
+    val elapsedRealtimeMs: Long,
+) {
+    /**
+     * How far past the anchor's edge this fix can be *trusted* to be — the
+     * quantity the test actually thresholds ([Departure.marginM]).
+     *
+     * Negative means the fix does not establish being outside at all.
+     */
+    val marginM: Double get() = distanceM - accuracyM - radiusM
+
+    /**
+     * Meters still to go before a fix this accurate could qualify, or zero once
+     * one already does.
+     *
+     * The honest form of "how far left", and the reason it is derived rather
+     * than a plain `radius - distance`: the test subtracts the fix's accuracy
+     * before comparing, so a vague reading genuinely needs more distance than a
+     * sharp one. Reporting the nominal edge would promise a departure that this
+     * fix could not deliver.
+     */
+    val remainingM: Double get() = (Departure.HYSTERESIS_M - marginM).coerceAtLeast(0.0)
+
+    /** Whether this fix on its own is evidence of being outside. */
+    val qualifies: Boolean get() = marginM > Departure.HYSTERESIS_M
+
+    /**
+     * Whether this reading is recent enough to put in front of someone.
+     *
+     * The duty cycle asks every 90 seconds while a departure is being tested
+     * and every ten minutes or so while nothing suggests movement (SPEC.md
+     * §6.7), so a resting snooze legitimately has nothing fresh — and a
+     * ten-minute-old distance shown as if it were current is exactly the
+     * quietly-wrong reading principle 2 is about. Saying nothing is the honest
+     * answer; the number reappears as soon as movement escalates the duty
+     * cycle, which is the moment it means anything.
+     */
+    fun isFresh(nowElapsedRealtimeMs: Long): Boolean =
+        nowElapsedRealtimeMs - elapsedRealtimeMs in 0..FRESH_FOR_MS
+
+    companion object {
+        /**
+         * How long a reading stays showable — comfortably more than the
+         * 90-second [LocationDuty.ACTIVE] request that produces the readings
+         * worth watching, and well short of the ten-minute idle poll.
+         */
+        const val FRESH_FOR_MS: Long = 5 * 60 * 1000
+    }
+}
+
 /** The result of feeding one fix to the test: the verdict, and the state to carry forward. */
 data class DepartureStep(
     val verdict: DepartureVerdict,
@@ -211,6 +283,25 @@ object Departure {
     fun confirmsPresence(fix: Fix, anchor: Anchor): Boolean {
         val distance = distanceM(fix, anchor) ?: return false
         return distance + fix.accuracyM <= anchor.radiusM
+    }
+
+    /**
+     * The arithmetic behind this fix's verdict, for a live readout or a log.
+     *
+     * Null for exactly the case [distanceM] is null for — an anchor with no
+     * usable coordinates, which is a Wi-Fi-only snooze rather than a departure
+     * that can be measured (SPEC.md §8.4). A screen with nothing to measure
+     * against must say so rather than show a number computed from a reference
+     * point the app has already declared untrustworthy.
+     */
+    fun observe(fix: Fix, anchor: Anchor): DepartureObservation? {
+        val distance = distanceM(fix, anchor) ?: return null
+        return DepartureObservation(
+            distanceM = distance,
+            accuracyM = fix.accuracyM,
+            radiusM = anchor.radiusM,
+            elapsedRealtimeMs = fix.elapsedRealtimeMs,
+        )
     }
 
     /** Whether this fix is so far out that no confirmation is needed. */

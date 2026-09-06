@@ -5546,6 +5546,59 @@ the measured width allows and the title-over-condition split where it does not.
 largest font and display size, which is where the split actually fires — the
 recorded screenshots only show the default size.
 
+## Main screen: the departure readout (maintainer, 2026-09-06) — built
+
+Built: under a `FULL`-mode snooze, `200 m away · 10 m to go` (or `... · confirming`
+once a fix has cleared the band), taken from the engine's own step rather than
+re-derived. `SPEC.md` §4.2 carries the decision, §12 the privacy argument, and
+`docs/PRIVACY.md` the user-facing sentence. Two things the maintainer raised
+alongside it, both open:
+
+- [ ] **Honor the system's units.** The readout is meters everywhere today, which
+      reads wrong on a phone set to imperial. `android.icu.util.MeasureUnit` /
+      `LocaleData.getMeasurementSystem` is the API; the copy needs a second pair
+      of strings and the rounding wants revisiting (10 m is a sensible step, 30 ft
+      probably is not). Not a blocker for showing the number, and cheap to add.
+- [ ] **Does a visible threshold imply a settable one?** (maintainer, 2026-09-06:
+      "maybe it implies we need to add a distance threshold or something".) Showing
+      how far there is left to go invites the next question — *why that far?* — and
+      the answer today is a fixed 150 m radius plus a 50 m band with no way to
+      change either. Three shapes, unpicked: leave it fixed and let the readout be
+      the explanation; expose the radius per place once saved places exist
+      (`ActiveSnooze.radiusM` already anticipates a per-place override); or offer
+      one coarse choice at arm time. Wants a real handset first — whether 150 m
+      feels right is not a thing to decide from a screenshot.
+- [ ] **Still owed a device.** Whether a number that moves every 90 s reads as
+      informative or as fidgety, and whether the line survives the largest font
+      size beside the countdown.
+- [ ] **The readout is a cache kept valid by invalidation, and that shape drew
+      three rounds of review findings** (Codex, PR #210). `DepartureObservations`
+      is a process-wide value whose validity depends on state held elsewhere —
+      the tracking mode, whether a release is in flight, whether the snooze is
+      over — so every one of those has to remember to clear it. Codex found
+      four separate places that forgot: a real ending (`RELEASED`, not `IDLE`),
+      a mode drop, a fix arriving while the mode was *already* degraded, and a
+      refused release leaving a resolved fix reading `confirming`. Each was
+      fixed where it was found; the shape was not.
+      The design that deletes the class rather than the instance is to make
+      validity travel *with* the value instead of being maintained around it:
+      publish a record carrying the mode and the verdict it was measured under,
+      and have the screen render only what that record says about itself. Then
+      nothing needs clearing anywhere, and the next piece of state nobody
+      thought of cannot desynchronize it. Deferred rather than done in #210 at
+      the maintainer's instruction to keep that PR to what merging needed; it is
+      a design change and the call is the maintainer's.
+      A fifth instance came in the round after (Codex, PR #210, again): when two
+      platform callbacks leave `feedLock` in fix-then-non-fix order and reach
+      `publish` reversed, the newer non-fix advances `publishedSequence` and the
+      older fix's reading is dropped with it. Declined there rather than fixed —
+      the cost is a *missed* update, not a wrong one (the screen keeps a reading
+      that is still valid and still fresh), and the suggested remedy, carrying
+      the observation forward in `PublishedLevels`, adds another field to the
+      cache this entry is about and would need invalidation rules of its own.
+      The record-carrying design deletes it for free, because the reading would
+      ride with the update instead of being reconstructed from published levels.
+
 ## Deferred review findings (Codex, PR #206)
 
 - [ ] **A refused telemetry opt-out is silent once the welcome flow is left.**

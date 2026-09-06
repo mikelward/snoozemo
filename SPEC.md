@@ -612,6 +612,34 @@ knowable only by inference. The unread case keeps the gap, deliberately: an idle
 snooze this screen has not finished reading is the one wrong thing the line could say, and it is
 the wrong direction to be wrong in.
 
+**A tracked snooze shows how far there is left to go** (landed 2026-09-06). Under the full
+tracking mode, and only there, a line under the status block reports the departure test's own
+arithmetic for the last fix: `200 m away · 10 m to go`, or `400 m away · confirming` once a fix
+has cleared the band and the second one is what remains. It exists because the threshold is
+otherwise invisible. "Ends when you leave" does not say how far leaving is, so a user standing
+in the garden, or one watching a snooze survive a walk to the corner shop, has no way to tell a
+working app from a broken one — which is principle 2's failure, arrived at by omission rather
+than by silence. It is also the only way to *see* the mechanism work without walking out of
+range, which makes it the honest demonstration a screen recording can be made from.
+
+**Distance and how much further, not distance and a fixed edge.** The test subtracts each fix's
+accuracy before comparing (§6.6), so the meters still to go belong to *this reading* rather than
+to the anchor: a vague fix genuinely needs more distance than a sharp one, and naming the nominal
+radius would promise a departure the current fix could not deliver. Three consequences follow, and
+each is the safe direction. The number is the engine's own, taken from the step that acted on the
+fix rather than re-derived — two numbers that could disagree is worse than one. A reading a step
+*refused* to act on carries none: a stale fix's presence half is discarded (§6.1), so showing its
+distance would put a number the engine did not believe in front of the user as though it were
+live. And a reading ages off the screen after five minutes rather than sitting there, because a
+distance from a tracking gap describes where the phone *was*.
+
+**Nowhere but the screen.** It is never written to disk, never posted to the notification, and
+never counted as news: fixes arrive every 90 s while a departure is being tested (§6.7), so a
+notification reposting per fix is exactly the flapping the restated-level design exists to
+prevent. It lives in memory for as long as the process does, which means a snooze that outlives a
+process death comes back with no number until the next fix — the truth, rather than a stale one.
+See §12 for why a distance is a different kind of value from a position.
+
 **The active tile inverts, and that is the platform's doing, not ours.** A Quick Settings tile
 cannot specify a background: the system draws it from `Tile.state`, so `STATE_ACTIVE` while a
 snooze runs gives the same light-when-off / dark-when-on treatment as the system's own Do Not
@@ -3472,6 +3500,14 @@ doesn't mention shows up as a row with no rationale behind it.
   build would under-declare exactly as omitting the installation identifier would. `docs/play-store-declarations.md` carries the field-by-field
   answers; updating the Play Console form is a maintainer action the code cannot do.
 - Coordinates never leave the device. The v1 anchor is discarded when the snooze ends.
+- **A distance is not a position, and the on-screen readout (§4.2) rests on that.** How far the
+  phone is from an anchor locates nobody: the same 200 m describes every point on a circle, and
+  the circle's own center is never shown, stored beyond the snooze, or sent anywhere. It is the
+  same value the debug log has recorded since §4.6 was written, on a surface only the phone's
+  owner can see, computed on the device from a fix the app already had. So it collects nothing
+  new, needs no permission it did not already hold, and adds nothing to what leaves the device —
+  which is still nothing. The reason to show it is that a threshold nobody can see cannot be
+  trusted; the reason it is safe to show is that the number says *how far*, never *from where*.
 - Snooze history (if added) is local, off by default, and clearable.
 - **The debug log (§4.6) is the one sanctioned exception, and a narrow one.** It is on by default
   (maintainer, 2026-08-11) with a setting to switch it off, on-device, holding only recent runs, and

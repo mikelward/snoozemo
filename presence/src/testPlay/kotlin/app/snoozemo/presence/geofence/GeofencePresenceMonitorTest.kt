@@ -2,6 +2,7 @@ package app.snoozemo.presence.geofence
 
 import app.snoozemo.core.Anchor
 import app.snoozemo.core.CapabilityLossCause
+import app.snoozemo.core.DepartureObservation
 import app.snoozemo.core.LocationDuty
 import app.snoozemo.core.PresenceEvent
 import java.time.Instant
@@ -26,6 +27,75 @@ class GeofencePresenceMonitorTest {
         assertTrue(
             GeofencePresenceMonitor.settlesHeldExit(LocationDuty.SANITY, PresenceEvent.StillHere),
         )
+    }
+
+    @Test
+    fun `the published update carries the departure readout`() {
+        // The production seam the feed's own tests do not cross (Codex, PR
+        // #210). The monitor rebuilds the update from the newest published
+        // levels rather than forwarding the feed's, so a field it does not
+        // name reaches nobody — the readout was added, defaulted to null
+        // here, and never appeared on a `play` device while every test either
+        // side of this seam passed.
+        val observation = DepartureObservation(
+            distanceM = 200.0,
+            accuracyM = 10f,
+            radiusM = 150,
+            elapsedRealtimeMs = 0L,
+        )
+
+        val update = GeofencePresenceMonitor.published(
+            event = null,
+            levels = PublishedLevels(
+                degradation = null,
+                graceActive = false,
+                locationAccessLost = false,
+            ),
+            platformLevel = null,
+            observation = observation,
+        )
+
+        assertEquals(observation, update.observation)
+    }
+
+    @Test
+    fun `a superseded update publishes no readout of its own`() {
+        // Its reading is older than one already published, so carrying it
+        // would move the number on screen backwards.
+        val update = GeofencePresenceMonitor.published(
+            event = PresenceEvent.StillHere,
+            levels = PublishedLevels(
+                degradation = null,
+                graceActive = false,
+                locationAccessLost = false,
+            ),
+            platformLevel = null,
+            observation = null,
+        )
+
+        assertNull(update.observation)
+    }
+
+    @Test
+    fun `the published update still carries every level it did before`() {
+        // The rebuild is where a field gets silently dropped, so the rest of
+        // what it carries is pinned here alongside the readout.
+        val update = GeofencePresenceMonitor.published(
+            event = PresenceEvent.ProbablyLeft,
+            levels = PublishedLevels(
+                degradation = DegradationCause.NO_LOCATION_FIX,
+                graceActive = true,
+                locationAccessLost = true,
+            ),
+            // Outranks the engine's cause when both are set (PR #72).
+            platformLevel = DegradationCause.LOCATION_SERVICES_OFF,
+            observation = null,
+        )
+
+        assertEquals(PresenceEvent.ProbablyLeft, update.event)
+        assertEquals(DegradationCause.LOCATION_SERVICES_OFF, update.degradation)
+        assertTrue(update.graceActive)
+        assertTrue(update.locationAccessLost)
     }
 
     @Test

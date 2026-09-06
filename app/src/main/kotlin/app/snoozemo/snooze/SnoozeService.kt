@@ -17,6 +17,7 @@ import app.snoozemo.core.ClockChange
 import app.snoozemo.core.ClockChangeAction
 import app.snoozemo.core.ClockReading
 import app.snoozemo.core.DegradationCause
+import app.snoozemo.core.DepartureObservation
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.PolicyAccessAction
@@ -31,6 +32,7 @@ import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.SnoozeLifecycle
 import app.snoozemo.core.SnoozeRecordState
 import app.snoozemo.core.SnoozeState
+import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenController
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
@@ -406,6 +408,15 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         presenceJob?.cancel()
         presenceJob = null
         presenceMonitor.stop()
+        // Nothing is measuring a distance any more, so the last reading is
+        // stale by construction. Here rather than on a transition because
+        // both endings converge on this one call (Codex, PR #210): a refused
+        // arm reaches `IDLE`, a real ending reaches `RELEASED` and then
+        // settles to `IDLE` with no second callback — so clearing on `IDLE`
+        // alone left a successful ending's distance standing, and the next
+        // snooze armed within five minutes would open on where the last one
+        // finished.
+        DepartureObservations.clear()
         // The snooze is over, so its periodic wake goes with it; a cancel
         // this path never reaches (cold death) costs one empty backstop
         // wake, which retires itself.
@@ -603,6 +614,13 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // process that dies after the rule goes off but before the record is
         // cleared would find no reason recorded and read its own ending as the
         // user's — silently, since that is the one ending with no notification.
+        // The engine has resolved — the screen is waiting on the zen write now,
+        // not on a second confirming fix — so the readout stops before the
+        // release is attempted (Codex, PR #210). Left standing, a refused
+        // release keeps the snooze alive without reaching `stopPresence`, and
+        // the terminal fix would sit there reading `confirming` for the whole
+        // five-minute freshness window while nothing was confirming anything.
+        DepartureObservations.clear()
         val marked = runCatching { store.markReleasing(reason) }
             .onFailure { Log.w(TAG, "Recording the release reason failed; continuing.", it) }
             .getOrDefault(false)
@@ -614,6 +632,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     }
 
     override fun onReleaseSuperseded() {
+        // Same reason as [onReleasing]: a release is being attempted either
+        // way, so the readout stops either way (Codex, PR #210). This is the
+        // user's own ending, which reaches here rather than there — and a
+        // refused one keeps the snooze alive without reaching `stopPresence`
+        // exactly as a refused departure does.
+        DepartureObservations.clear()
         // Read first, written only if there is something to retire: the
         // ordinary tile tap finds nothing and pays a map lookup, not a write
         // at all (SPEC.md §5.8) — and the write, when there is one, is
@@ -2434,6 +2458,20 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         }, IN_PROCESS_RETRY_MS)
     }
 
+    /**
+     * The departure test's arithmetic for one fix, handed to whatever is on
+     * screen (`SPEC.md` §4.6).
+     *
+     * In memory only, and deliberately not on the paths [onTrackingChanged]
+     * takes: this arrives per fix, so persisting it would put a disk write on
+     * the fix path and reposting the notification for it would rewrite a line
+     * that has not changed. Nothing here decides anything — it is the same
+     * distance and accuracy the log already records, published live.
+     */
+    override fun onDepartureObservation(observation: DepartureObservation) {
+        DepartureObservations.publish(observation)
+    }
+
     override fun onTrackingChanged(snooze: ActiveSnooze, degradation: DegradationCause?) {
         // Said where the user is already looking, rather than left to be
         // discovered when the snooze doesn't end (SPEC.md §8.1) — and the same
@@ -2452,6 +2490,14 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         SnoozeDebugLog.event(
             "tracking → ${snooze.mode}" + (degradation?.let { " ($it)" } ?: " (recovered)"),
         )
+        // Nothing is measuring a distance outside FULL, so the last reading
+        // stops describing anything the moment the mode drops (Codex, PR
+        // #210). The screen already hides it, but hiding is not forgetting: a
+        // platform outage that clears within the freshness window restores
+        // FULL on a level-only update carrying no fix, and the pre-outage
+        // number would reappear as if it were current — where the phone
+        // *was*, presented as where it is.
+        if (snooze.mode != TrackingMode.FULL) DepartureObservations.clear()
         if (!store.update(snooze)) {
             Log.w(TAG, "Recording the tracking mode failed; a restart would misstate tracking.")
         }

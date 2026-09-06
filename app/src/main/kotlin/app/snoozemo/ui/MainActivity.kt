@@ -46,6 +46,7 @@ import app.snoozemo.progressForInstallStatus
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.CalendarPermission
+import app.snoozemo.core.DepartureObservation
 import app.snoozemo.core.LocationPermission
 import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
@@ -61,6 +62,7 @@ import app.snoozemo.snooze.ActiveSnoozeStore
 import app.snoozemo.crash.CrashReporting
 import app.snoozemo.snooze.DebugLogStore
 import app.snoozemo.snooze.DebugLogging
+import app.snoozemo.snooze.DepartureObservations
 import app.snoozemo.snooze.EndSheetSetting
 import app.snoozemo.snooze.reconcileRingerInBackground
 import app.snoozemo.snooze.SnoozeRingerSetting
@@ -227,6 +229,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var calendarPromptStore: CalendarPromptStore
     private lateinit var tileStore: TilePresenceStore
     private var recordWatch: AutoCloseable? = null
+
+    /** Follows [DepartureObservations] while this screen is visible; see [departure]. */
+    private var departureWatch: AutoCloseable? = null
     private var tileWatch: AutoCloseable? = null
 
     /**
@@ -258,6 +263,19 @@ class MainActivity : ComponentActivity() {
      */
     @androidx.annotation.VisibleForTesting
     internal var activeSnooze by mutableStateOf<ActiveSnooze?>(null)
+
+    /**
+     * The last departure reading the service published, or null if none has
+     * arrived since this process started (`SPEC.md` §4.6).
+     *
+     * Read from [DepartureObservations] rather than from the record: it is
+     * what the *last fix* measured, not part of the snooze, so it is
+     * deliberately absent after a process death until the next fix lands. The
+     * screen tests it for freshness against [now] before drawing it, so a
+     * reading left behind by a tracking gap ages off the screen on its own
+     * rather than sitting there looking live.
+     */
+    internal var departure by mutableStateOf<DepartureObservation?>(null)
 
     /**
      * The clock reading `MainScreen`'s status line computes [activeSnooze]'s
@@ -1070,6 +1088,11 @@ class MainActivity : ComponentActivity() {
                             trackingMode = activeSnooze?.mode,
                             remaining = activeSnooze?.remaining(now),
                             degradation = activeSnooze?.degradation,
+                            // Freshness decided here, against the same tick
+                            // the countdown uses: a reading older than
+                            // [DepartureObservation.FRESH_FOR_MS] describes
+                            // where the phone was, not where it is.
+                            departure = departure?.takeIf { it.isFresh(now.uptimeMillis) },
                             playUpdate = displayedPlayUpdate,
                             playUpdateRestartFailed = playUpdateRestartFailed,
                             backgroundLocationMissing = backgroundLocationMissing,
@@ -1344,6 +1367,28 @@ class MainActivity : ComponentActivity() {
         // reading it once.
         refreshSnoozing()
         recordWatch = store.observe { refreshSnoozing() }
+        // Followed rather than read once, and for the reason the record watch
+        // is: the fixes that move this number arrive while the screen is up,
+        // from the service's own presence callback — off the main thread, so
+        // the read is posted back to it.
+        //
+        // One call, not a read and then a watch (Codex, PR #210): registering
+        // delivers the current value through the same callback, so there is no
+        // window between the two for a fix to land in and be missed by both.
+        departureWatch = DepartureObservations.watch {
+            runOnUiThread {
+                departure = DepartureObservations.latest()
+                // And the clock the freshness test runs against, in the same
+                // step (Codex, PR #210). [now] only ticks once a minute, which
+                // is right for a countdown whose smallest unit is a minute and
+                // wrong for this: a fix that just arrived is stamped *later*
+                // than the cached reading, so [DepartureObservation.isFresh]
+                // read it as coming from the future and withheld it — every
+                // new reading hidden for up to a minute, and the line already
+                // on screen vanishing as a newer fix replaced it.
+                now = SnoozeClock.read()
+            }
+        }
         // Followed rather than read once. The tile service writes this when the
         // tile is added or removed from the shade, and the add-request's answer
         // arrives after a system dialog that can outlive the activity which
@@ -2130,6 +2175,8 @@ class MainActivity : ComponentActivity() {
         }
         recordWatch?.close()
         recordWatch = null
+        departureWatch?.close()
+        departureWatch = null
         tileWatch?.close()
         tileWatch = null
         askWhenToUnsnoozeWatch?.close()

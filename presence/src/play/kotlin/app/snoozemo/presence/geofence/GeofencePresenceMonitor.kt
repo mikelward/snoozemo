@@ -10,6 +10,7 @@ import app.snoozemo.core.Anchor
 import app.snoozemo.core.CapabilityLossCause
 import app.snoozemo.core.ClockReading
 import app.snoozemo.core.DegradationCause
+import app.snoozemo.core.DepartureObservation
 import app.snoozemo.core.LocationDuty
 import app.snoozemo.core.PresenceEvent
 import app.snoozemo.core.PresenceMonitor
@@ -394,24 +395,22 @@ class GeofencePresenceMonitor(
         // an outage to recover from, and restated on every send, so
         // [LocationModeWatch.reconcile] is idempotent rather than this call
         // conditional. Called under `publishLock` only.
-        fun emit(event: PresenceEvent?, levels: PublishedLevels) {
+        // [observation] defaults to nothing, and only the newest publication
+        // passes one (Codex, PR #210). This rebuilds the update rather than
+        // forwarding it — the levels published are the newest, not
+        // necessarily this update's — so every field the feed produces has to
+        // be carried across deliberately, and the readout was the field that
+        // was not: it defaulted back to null here and never reached a screen
+        // on the `play` flavor at all. A superseded update passes none: its
+        // reading is older than one already published, and moving the number
+        // backwards is worse than leaving it where it is.
+        fun emit(
+            event: PresenceEvent?,
+            levels: PublishedLevels,
+            observation: DepartureObservation? = null,
+        ) {
             locationModeWatch.reconcile(platformLevel() != null)
-            trySend(
-                PresenceUpdate(
-                    event = event,
-                    // The platform's level outranks the engine's when both
-                    // are set: the engine *infers* a generic NO_LOCATION_FIX
-                    // by counting misses, while a set platform level names
-                    // the sensor-layer fact behind those misses — services
-                    // off, the fence unavailable — which is the more specific
-                    // truth and the one the debug log should carry (flagged
-                    // by Codex on PR #72). Both lower the mode identically,
-                    // so only the recorded cause differs.
-                    degradation = platformLevel() ?: levels.degradation,
-                    graceActive = levels.graceActive,
-                    locationAccessLost = levels.locationAccessLost,
-                ),
-            )
+            trySend(published(event, levels, platformLevel(), observation))
         }
 
         // A restate from outside the feed: a registration refusal, a services
@@ -442,7 +441,7 @@ class GeofencePresenceMonitor(
                     Publication.Publish -> {
                         publishedSequence = sequence
                         published = PublishedLevels(update.degradation, graceActive, locationAccessLost)
-                        emit(update.event, published)
+                        emit(update.event, published, update.observation)
                     }
                     Publication.EventOnly -> {
                         SnoozeDebugLog.event(
@@ -2220,6 +2219,39 @@ class GeofencePresenceMonitor(
          * update with nothing to say is dropped. Equal sequences cannot occur;
          * treated as stale so a repeat never rewinds.
          */
+        /**
+         * The update this monitor puts on the flow, from the newest published
+         * levels rather than the one the feed returned.
+         *
+         * A pure function, and deliberately so (Codex, PR #210): the rebuild
+         * lives inside a `callbackFlow` closure no test can reach, and it is a
+         * *rebuild* — the levels it publishes are the newest, not necessarily
+         * this update's — so a field the feed produces reaches nobody unless it
+         * is named here. The departure readout was exactly that: added to
+         * `PresenceUpdate`, defaulted to null here, and so never seen on the
+         * `play` flavor at all while every test either side of this seam
+         * passed. Pulled out so the carrying is testable rather than assumed.
+         */
+        internal fun published(
+            event: PresenceEvent?,
+            levels: PublishedLevels,
+            platformLevel: DegradationCause?,
+            observation: DepartureObservation?,
+        ): PresenceUpdate = PresenceUpdate(
+            event = event,
+            // The platform's level outranks the engine's when both are set:
+            // the engine *infers* a generic NO_LOCATION_FIX by counting
+            // misses, while a set platform level names the sensor-layer fact
+            // behind those misses — services off, the fence unavailable —
+            // which is the more specific truth and the one the debug log
+            // should carry (flagged by Codex on PR #72). Both lower the mode
+            // identically, so only the recorded cause differs.
+            degradation = platformLevel ?: levels.degradation,
+            graceActive = levels.graceActive,
+            locationAccessLost = levels.locationAccessLost,
+            observation = observation,
+        )
+
         internal fun publication(
             sequence: Long,
             publishedSequence: Long,

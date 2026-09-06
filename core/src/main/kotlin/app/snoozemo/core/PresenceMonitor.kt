@@ -140,6 +140,16 @@ data class PresenceUpdate(
      * from this reports what is actually running.
      */
     val locationAccessLost: Boolean = false,
+    /**
+     * The departure test's arithmetic for the fix this update came from, or
+     * null for an update no fix produced.
+     *
+     * A readout rather than a decision: nothing in the controller branches on
+     * it, and in particular it never counts as news for the notification —
+     * a line reposted per fix is the flapping [graceActive] and [degradation]
+     * are restated levels to avoid.
+     */
+    val observation: DepartureObservation? = null,
 )
 
 /** What the presence engine has concluded, in increasing order of confidence. */

@@ -352,6 +352,15 @@ data class PresenceStep(
      */
     val event: PresenceEvent?,
     val duty: LocationDuty,
+    /**
+     * The departure test's arithmetic for the fix this step considered, or
+     * null for a step no usable fix produced.
+     *
+     * Deliberately absent for a *stale* fix: its presence half is discarded
+     * here, so reporting its distance would put a reading the engine refused
+     * to act on in front of the user as though it were live.
+     */
+    val observation: DepartureObservation? = null,
 )
 
 /**
@@ -692,6 +701,10 @@ object Presence {
         if (isStale(state, fix.elapsedRealtimeMs)) return staleFix(state, fix, anchor)
 
         val outcome = Departure.consider(fix, anchor, state.progress)
+        // The same fix, against the same anchor, on the same step that acts on
+        // it — so a screen drawing this is quoting the engine rather than
+        // re-deriving a number that could disagree with it.
+        val observation = Departure.observe(fix, anchor)
         val accepted = state.copy(latestEvidenceMs = fix.elapsedRealtimeMs)
         // SPEC.md §6.1's "evidence of health must be newer than the failure it
         // claims is over", applied on this path too. It used to live only in
@@ -717,7 +730,7 @@ object Presence {
         // grace period all still act on it.
         val healthAfter = if (provesHealth) null else state.degradation
         val uselessAfter = if (provesHealth) 0 else state.uselessObservations
-        return when (outcome.verdict) {
+        val considered = when (outcome.verdict) {
             DepartureVerdict.DEPARTED -> departed(accepted, anchor)
 
             DepartureVerdict.AWAITING_CONFIRMATION -> {
@@ -779,6 +792,7 @@ object Presence {
                 anchor,
             )
         }
+        return considered.copy(observation = observation)
     }
 
     /**

@@ -6,6 +6,7 @@ import app.snoozemo.core.ZenOutcome
 import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -137,6 +138,53 @@ class SnoozeServiceReleaseTest {
             "a release that worked must retire the claim that it couldn't",
             shadeShows(stringOf(R.string.failure_could_not_end)),
         )
+    }
+
+    @Test
+    fun `a successful ending takes the departure readout down with it`() {
+        // Clearing on the `IDLE` transition alone was not enough (Codex, PR
+        // #210): a real ending reaches `RELEASED` and settles to `IDLE` with no
+        // second callback, so only a *refused arm* ever cleared it. The next
+        // snooze armed inside the five-minute freshness window would then open
+        // on the distance the previous one finished at — a number about a place
+        // the user has already left. Both endings converge on `stopPresence`,
+        // which is where the clear lives now.
+        TestSnoozeService.zen.outcome = ZenOutcome.Applied("a-zen-rule-id")
+        val record = snoozeFixture(now)
+        DepartureObservations.publish(
+            app.snoozemo.core.DepartureObservation(
+                distanceM = 200.0,
+                accuracyM = 10f,
+                radiusM = 150,
+                elapsedRealtimeMs = 0L,
+            ),
+        )
+
+        startService(SnoozeService.ACTION_END, record)
+
+        assertNull(DepartureObservations.latest())
+    }
+
+    @Test
+    fun `a refused release stops calling the terminal fix confirming`() {
+        // The engine has resolved; the app is waiting on the zen write, not on
+        // a second confirming fix. A refused release keeps the snooze alive
+        // without reaching `stopPresence`, so without this the terminal
+        // reading sat there reading `confirming` for the whole freshness
+        // window (Codex, PR #210). The default fixture refuses.
+        val record = snoozeFixture(now)
+        DepartureObservations.publish(
+            app.snoozemo.core.DepartureObservation(
+                distanceM = 400.0,
+                accuracyM = 15f,
+                radiusM = 150,
+                elapsedRealtimeMs = 0L,
+            ),
+        )
+
+        startService(SnoozeService.ACTION_END, record)
+
+        assertNull(DepartureObservations.latest())
     }
 
     @Test

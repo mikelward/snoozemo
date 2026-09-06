@@ -27,11 +27,14 @@ import androidx.compose.ui.unit.dp
 import app.snoozemo.PlayUpdateState
 import app.snoozemo.R
 import app.snoozemo.core.DegradationCause
+import app.snoozemo.core.DepartureObservation
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.degradationReasonRes
 import app.snoozemo.tile.R as TileR
 import java.time.Duration
+import kotlin.math.ceil
+import kotlin.math.roundToInt
 
 /**
  * The home screen: the Arm/Release control the tile mirrors, plus whatever
@@ -68,6 +71,13 @@ internal fun MainScreen(
     // healthy snooze by construction, and also null for the causes that earn
     // no line of their own ([degradationReasonRes]).
     degradation: DegradationCause?,
+    /**
+     * The most recent departure reading, where one has arrived and is still
+     * fresh ([DepartureObservation.isFresh]). Null until the first fix of a
+     * snooze lands, and null again once a reading has gone stale — a distance
+     * from ten minutes ago is worse than no distance at all.
+     */
+    departure: DepartureObservation? = null,
     lastOutcome: String?,
     /** Whether a crashed run is currently pinned (SPEC.md §4.6) — the crash banner's own state. */
     crashPending: Boolean,
@@ -263,7 +273,7 @@ internal fun MainScreen(
         // first would only read as filler.
         when {
             snoozing == true && trackingMode != null && remaining != null ->
-                SnoozeStatus(trackingMode, remaining, degradation)
+                SnoozeStatus(trackingMode, remaining, degradation, departure)
             snoozing == false -> NotSnoozingStatus()
             // Nothing yet: either the record is still being read, or it read
             // as running but without the mode and cap the line reports. Same
@@ -352,6 +362,12 @@ private fun NotSnoozingStatus() {
  * Only the full tracking mode has a one-row form. "Snoozing, Wi-Fi only" does
  * not compose, so a degraded snooze always takes the two-row shape and states
  * its mode — and its reason — on the second line.
+ *
+ * **[readout] is last and quietest, and that ordering is the point.** Above it
+ * sit things that are true of the snooze — what ends it, and by when at the
+ * latest. It is true of one *reading*, replaced ninety seconds later, so it
+ * takes the smallest role and the muted color rather than competing with the
+ * guarantee above it.
  */
 @Composable
 private fun StatusBlock(
@@ -359,6 +375,7 @@ private fun StatusBlock(
     oneRow: String? = null,
     condition: String? = null,
     detail: String? = null,
+    readout: String? = null,
 ) {
     val headlineStyle = MaterialTheme.typography.headlineSmall
     val measurer = rememberTextMeasurer()
@@ -397,6 +414,17 @@ private fun StatusBlock(
                     textAlign = TextAlign.Center,
                 )
             }
+            // Last and quietest. The cap above it is the guarantee — the snooze
+            // ends by then whatever every sensor does — where this is one
+            // reading of one fix, true now and replaced in ninety seconds.
+            readout?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+            }
         }
     }
 }
@@ -428,9 +456,21 @@ private fun StatusBlock(
  * settings, or simply not the surface they opened. `Timer only` on its own
  * reads as a choice someone made; `Timer only — no location` reads as the
  * thing that went wrong, which is the difference principle 2 is about.
+ *
+ * And why a tracked snooze shows a distance ([departure], `SPEC.md` §4.2):
+ * `Ends when you leave` never says how far leaving *is*, so a user standing in
+ * the garden watching a snooze survive has no way to tell a working app from a
+ * broken one. Only under `FULL` — the other modes are measuring no distance,
+ * and a leftover reading from before tracking degraded would explain a
+ * threshold that is no longer what ends this snooze.
  */
 @Composable
-private fun SnoozeStatus(mode: TrackingMode, remaining: Duration, degradation: DegradationCause?) {
+private fun SnoozeStatus(
+    mode: TrackingMode,
+    remaining: Duration,
+    degradation: DegradationCause?,
+    departure: DepartureObservation?,
+) {
     val body = when (mode) {
         TrackingMode.FULL -> stringResource(R.string.ongoing_ends_when_you_leave)
         TrackingMode.WIFI_ONLY -> stringResource(R.string.ongoing_wifi_only)
@@ -454,7 +494,45 @@ private fun SnoozeStatus(mode: TrackingMode, remaining: Duration, degradation: D
         condition = reason?.let { stringResource(R.string.ongoing_degraded_reason, body, it) }
             ?: body,
         detail = remainingText(remaining),
+        // Only under `FULL`. The other modes are not measuring a distance —
+        // showing one from the last fix before tracking degraded would explain
+        // a threshold that is no longer what ends this snooze.
+        readout = departure.takeIf { mode == TrackingMode.FULL }?.let { departureText(it) },
     )
+}
+
+/**
+ * The departure test's own arithmetic, in a sentence (`SPEC.md` §4.6).
+ *
+ * **Distance and how much further, not distance and a fixed edge.** The test
+ * subtracts each fix's accuracy before comparing, so the meters still to go are
+ * a property of *this* reading rather than of the anchor — a vague fix genuinely
+ * needs more distance than a sharp one, and naming the nominal edge would
+ * promise a departure the current fix could not deliver.
+ *
+ * Rounded to whole meters: the underlying doubles carry centimeters that mean
+ * nothing next to a fix's own accuracy, and a readout that twitches in the last
+ * digit reads as noise rather than movement.
+ */
+@Composable
+private fun departureText(observation: DepartureObservation): String {
+    val away = observation.distanceM.roundToInt()
+    return if (observation.qualifies) {
+        // Far enough on this fix, but a departure still needs a second one
+        // thirty seconds later, so this reports the wait rather than the end.
+        stringResource(R.string.main_distance_confirming, away)
+    } else {
+        // Rounded *up*, and never below one (Codex, PR #210). `qualifies` is a
+        // strict comparison, so a reading exactly on the band reports zero
+        // meters remaining while the engine still wants more — and anything
+        // under half a meter rounds there too. Either way `0 m to go` beside a
+        // snooze that has not ended contradicts the verdict it is quoting.
+        stringResource(
+            R.string.main_distance_to_go,
+            away,
+            ceil(observation.remainingM).toInt().coerceAtLeast(1),
+        )
+    }
 }
 
 /** The same hours/minutes split and copy [app.snoozemo.tile.TileSnapshot] formats the tile's countdown from. */

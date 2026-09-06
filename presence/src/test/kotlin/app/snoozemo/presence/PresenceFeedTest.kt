@@ -65,6 +65,56 @@ class PresenceFeedTest {
     }
 
     @Test
+    fun `a usable fix carries the distance the engine measured`() {
+        val feed = PresenceFeed(anchor, seedElapsedRealtimeMs = armedAtMs)
+
+        val update = feed.accept(
+            PresenceSignal.FixArrived(
+                // ~200 m north of an anchor at (0, 0): fictional, like every
+                // coordinate in this suite.
+                Fix(
+                    lat = 200.0 / 111_320.0,
+                    lon = 0.0,
+                    accuracyM = 10f,
+                    elapsedRealtimeMs = armedAtMs + 60_000,
+                ),
+            ),
+        )
+
+        val observation = update.observation!!
+        assertEquals(200.0, observation.distanceM, 1.0)
+        assertEquals(anchor.radiusM, observation.radiusM)
+    }
+
+    @Test
+    fun `a stale fix reports no distance at all`() {
+        // Its presence half is discarded (`a fix from before the arm is not
+        // acted on`, above), so putting its distance on screen would show a
+        // live-looking number the engine refused to believe.
+        val feed = PresenceFeed(anchor, seedElapsedRealtimeMs = armedAtMs)
+
+        val update = feed.accept(
+            PresenceSignal.FixArrived(
+                Fix(
+                    lat = 200.0 / 111_320.0,
+                    lon = 0.0,
+                    accuracyM = 10f,
+                    elapsedRealtimeMs = armedAtMs - 5_000,
+                ),
+            ),
+        )
+
+        assertNull(update.observation)
+    }
+
+    @Test
+    fun `a signal that is not a fix reports no distance`() {
+        val feed = PresenceFeed(anchor, seedElapsedRealtimeMs = armedAtMs)
+
+        assertNull(feed.accept(PresenceSignal.GeofenceExit(armedAtMs + 60_000)).observation)
+    }
+
+    @Test
     fun `a restored grace deadline is not read as stale`() {
         // TODO.md: "the grace deadline has to survive process death". A
         // deadline seeded from disk must be believed, not treated as a fresh

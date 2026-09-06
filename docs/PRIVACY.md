@@ -190,6 +190,12 @@ armed the snooze. The only other thing it captures is the access point note desc
 - **Compared on your phone.** Snoozemo stores one anchor point and measures your distance
   from it. The comparison, and the decision it leads to, happen on the device.
 - **Deliberately coarse in what it keeps.** One point, one radius, no path, no history.
+- **The app shows you how far you are, and only that.** While a snooze is tracking your
+  location, Snoozemo's home screen shows how many meters from the anchor the last reading
+  put you and how much further you would have to go for the snooze to end. It is a
+  distance, not a place: it says how far, never from where, and it is not saved, not put
+  in the notification, and not sent anywhere. It disappears a few minutes after the last
+  reading, and it is gone when the snooze ends.
 - **Background location.** The Google Play build uses Android's geofencing, which needs
   permission to check your location while the app is not open — otherwise a snooze could
   only end while you were staring at the app, which defeats the purpose. Snoozemo explains
