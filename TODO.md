@@ -5557,11 +5557,17 @@ re-derived. `SPEC.md` §4.2 carries the decision, §12 the privacy argument, and
 in from 150 m to 100 m at the same time (`SPEC.md` §6.6, `DefaultRadiusTest`).
 What is left open:
 
-- [ ] **Honor the system's units.** The readout is meters everywhere today, which
-      reads wrong on a phone set to imperial. `android.icu.util.MeasureUnit` /
-      `LocaleData.getMeasurementSystem` is the API; the copy needs a second pair
-      of strings and the rounding wants revisiting (10 m is a sensible step, 30 ft
-      probably is not). Not a blocker for showing the number, and cheap to add.
+- [x] **Honor the system's units.** Done: `LocaleData.getMeasurementSystem`
+      picks meters or feet, and the value is formatted with its unit into a
+      single placeholder, so one pair of sentences covers both.
+- [ ] **Is whole-unit rounding right, in either system?** Both forms round to
+      whole units, which is what the meters-only version shipped with rather
+      than a decision anyone made. Neither is meaningful below a fix's own
+      accuracy — ±10 m is a *good* reading — so `656 ft away · 33 ft to go`
+      claims a precision nothing behind it has. A coarser step in both (5 m /
+      25 ft, say) would read more honestly; it wants a handset before choosing,
+      since it trades honesty against looking like the number has stopped
+      moving.
 - [ ] **Does a visible threshold imply a settable one?** (maintainer, 2026-09-06:
       "maybe it implies we need to add a distance threshold or something".) Showing
       how far there is left to go invites the next question — *why that far?* — and
