@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -16,6 +17,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import app.snoozemo.PlayUpdateState
 import app.snoozemo.UpdateProgress
+import app.snoozemo.core.FontSizeSettings
 import app.snoozemo.core.SnoozeRinger
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Assert.assertEquals
@@ -257,6 +259,71 @@ class SettingsScreenScreenshotTest {
 
         composeRule.onNodeWithText("Debug log").assertExists()
         composeRule.onNodeWithText("Save snooze details to help fix issues").assertExists()
+    }
+
+    @Test
+    fun `the text size row states the size the page is drawn at`() {
+        var previewed: Float? = null
+        var settledAt: Float? = null
+
+        capture("settings-screen-text-size.png", fontScale = 1.25f) {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                fontScale = 1.25f,
+                pinchFontSize = true,
+                debugLogCleanupFailed = false,
+                shareFailed = false,
+                versionName = SAMPLE_VERSION_NAME,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onFontScalePreview = { previewed = it },
+                onFontScaleSettled = { settledAt = it },
+                onShareDebugLog = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Text size").assertExists()
+        // The percentage is what tells the user where they are in the range —
+        // the page itself is the rest of the preview.
+        composeRule.onNodeWithText("125%").assertExists()
+        // The switch reads as part of the same setting, directly under it.
+        composeRule.onNodeWithText("Pinch to resize text").assertExists()
+        assertEquals(null, previewed)
+        assertEquals(null, settledAt)
+    }
+
+    @Test
+    fun `a refused text size save says so on the setting`() {
+        capture(fontScale = 1.25f) {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                fontScale = 1.25f,
+                fontScaleSaveFailed = true,
+                pinchFontSizeSaveFailed = true,
+                debugLogCleanupFailed = false,
+                shareFailed = false,
+                versionName = SAMPLE_VERSION_NAME,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onShareDebugLog = {},
+            )
+        }
+
+        // The size has already sprung back to the stored one by now; this line
+        // is what stops that reading as a missed drag.
+        composeRule.onAllNodesWithText("Couldn't save this setting").assertCountEquals(2)
     }
 
     @Test
@@ -1006,9 +1073,32 @@ class SettingsScreenScreenshotTest {
         composeRule.onAllNodesWithText("Couldn\'t save this setting")[0].assertExists()
     }
 
-    private fun capture(name: String? = null, content: @Composable () -> Unit) {
+    /**
+     * [fontScale] sizes the *theme*, not just the row that reports it (Codex,
+     * PR #217): `SnoozemoTheme` is what applies the user's size, so a snapshot
+     * that passed a scale to `SettingsScreen` alone labelled the setting 125%
+     * over a page still drawn at 100% — and could not catch the clipping and
+     * layout drift at a larger size that it exists to show. `MainActivity`
+     * hands the theme its own state for the same reason.
+     */
+    private fun capture(
+        name: String? = null,
+        fontScale: Float? = null,
+        content: @Composable () -> Unit,
+    ) {
         composeRule.setContent {
-            SnoozemoTheme {
+            val fontSize = if (fontScale == null) {
+                rememberFontSizeState()
+            } else {
+                remember(fontScale) {
+                    FontSizeState(
+                        initial = FontSizeSettings(scale = fontScale),
+                        onScaleSettled = {},
+                        onPinchEnabledChange = {},
+                    )
+                }
+            }
+            SnoozemoTheme(fontSize) {
                 Surface(modifier = Modifier.fillMaxSize()) { content() }
             }
         }

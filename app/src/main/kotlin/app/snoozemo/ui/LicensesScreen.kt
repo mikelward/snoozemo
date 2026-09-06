@@ -183,13 +183,25 @@ internal fun LibraryDetailsDialog(
     // Cleared on the next tap, so a retry that works clears the message too.
     var linkFailed by rememberSaveable { mutableStateOf(false) }
     val authors = remember(library) { library.authorsOrEmpty() }
+    // Each slot is wrapped: a dialog is its own window, so the theme's scaled
+    // density does not reach it and the text would come out at the system size
+    // whatever the user chose (Codex, PR #217). This dialog is the one where
+    // that shows most — it is a wall of license text.
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_close)) }
+            FontSizeWindow {
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_close)) }
+            }
         },
-        title = { Text(library.name) },
+        title = { FontSizeWindow { Text(library.name) } },
+        // The body takes the pinch as well as the size (Codex, PR #217): it is
+        // the one overlay in the app that is a page of text to read, so
+        // enlarging it in place is the thing a user would actually reach for.
+        // Hosted on the body rather than over the dialog's whole window, whose
+        // scrim owes a tap its dismissal.
         text = {
+            FontSizePinchWindow {
             Column(
                 modifier = Modifier
                     .heightIn(max = 360.dp)
@@ -248,6 +260,7 @@ internal fun LibraryDetailsDialog(
                         modifier = Modifier.padding(top = 8.dp),
                     )
                 }
+            }
             }
         },
     )

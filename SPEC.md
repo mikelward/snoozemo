@@ -1357,6 +1357,57 @@ copy control would be more chrome than a two-line metadata dialog earns.
 and there is no search, so the displayed name is the only thing a reader can scan by. The ordering
 is the page's own guarantee rather than a side effect of how the list happens to be parsed.
 
+### 4.8 Text size
+
+Snoozemo's own text can be sized from Settings. The setting is a **multiplier applied on top of
+the system font scale**, not a replacement for it: a user who has already enlarged text system-wide
+keeps that, and this only says how much bigger or smaller Snoozemo should be than everything else.
+80%–160%, **continuous**, **defaulting to the system's own size** — unlike the sibling Simmo repo,
+which starts a notch above because its screens are read mid-call against a deadline, Snoozemo's are
+read at leisure and the surface that matters is the tile, which is not ours to size. Only text
+scales; paddings, icons, and touch targets keep the layout the 4dp grid describes.
+
+Two ways to change it, both moving the same value:
+
+- **The Settings slider**, which resizes the page as it is dragged — the settings screen is its own
+  preview — and persists once on release.
+- **A two-finger pinch anywhere in Snoozemo** — every screen, the welcome flow and the tile's
+  end-condition sheet included — tracking the fingers as they move and persisting where they stop.
+
+The gesture is **continuous, not stepped**: the text lands wherever the fingers put it, and the
+slider is continuous for the same reason — a stepped slider beside a continuous pinch would round
+the user's size away the next time they touched it. It is also **amplified rather than 1:1**: the
+offered range is only 2× wide, so fingers tracked exactly would need a screen-wide spread to cross
+it and an ordinary pinch would be worth almost nothing, which reads as the gesture not working. A
+comfortable one-hand spread covers most of the range instead.
+
+**A small gesture does nothing at all.** The fingers must change their *separation* — not merely
+travel — by a threshold well above the platform's own touch slop before anything resizes, and the
+movement that crosses it is spent rather than applied, so the size starts moving from where the
+gesture became a pinch instead of jumping by it. Both halves of that are the point: a two-finger
+scroll, or a phone picked up by its screen, changes nothing and leaves the user no setting they
+never knew they changed, while anyone deliberately trying a pinch crosses the threshold in the
+first moment, which is what keeps a gesture nobody documented discoverable. Below it the events are
+not claimed either, so a two-finger scroll still scrolls the page; a real pinch takes them, so a
+list does not scroll under the fingers. Single-finger taps, drags, and scrolling are never
+affected. The distance itself is a tuning value and lives in the code, not here: the device check
+`TODO.md` carries may move it.
+
+A **Pinch to resize text** switch turns the gesture off for users who trigger it by accident. It is
+on by default, because the gesture is how most people will discover the setting at all.
+
+The stored size is clamped on read, so a value written by a build with a wider range can never size
+a screen past what this build lays out. Every screen renders from the size held in memory, warmed
+at startup (§4.1), so no screen waits on disk to draw. **That narrows the window rather than
+closing it**: the warm-up cannot block startup, because a cold tile tap runs through
+`Application.onCreate` on its way to arming and nothing may sit in front of that (§6.9) — so a
+screen composed in the first instant of a cold process can still draw at the default and correct
+itself when the read lands. Blocking the first frame on it instead would trade a rare one-frame
+resize for a guaranteed wait, which is the worse of the two (principle 5). A refused save says so
+on the setting — per field, since the size and the pinch switch can be saved in the same breath and
+only one of them fail — rather than letting either springing back read as a missed tap (principle
+2).
+
 ---
 
 ## 5. Do Not Disturb mechanism

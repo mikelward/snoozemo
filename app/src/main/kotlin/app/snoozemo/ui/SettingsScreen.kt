@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.snoozemo.PlayUpdateState
+import app.snoozemo.core.DEFAULT_FONT_SCALE
 import app.snoozemo.core.SnoozeRinger
 import app.snoozemo.R
 
@@ -67,6 +68,26 @@ internal fun SettingsScreen(
     snoozeRinger: SnoozeRinger? = null,
     /** Whether the last tap on that row failed to reach disk. */
     snoozeRingerSaveFailed: Boolean = false,
+    /**
+     * How big the app's own text is (`SPEC.md` §4.8) — the size the page is
+     * drawn at right now, including mid-drag, since this screen is its own
+     * preview.
+     *
+     * Not null-until-read like the switches around it: there is no honest way
+     * to draw text at "not read yet", so the size is warmed into memory at
+     * startup and every screen renders from that.
+     */
+    fontScale: Float = DEFAULT_FONT_SCALE,
+    /** Whether a two-finger pinch may change [fontScale]. */
+    pinchFontSize: Boolean = true,
+    /** Whether the last size save failed to reach disk. */
+    fontScaleSaveFailed: Boolean = false,
+    /**
+     * The same for the pinch switch, separately: a refused switch and a saved
+     * size can happen in the same breath, and one flag for both would have
+     * either row speaking for the other (Codex, PR #217).
+     */
+    pinchFontSizeSaveFailed: Boolean = false,
     // `PlayUpdateState.NotAvailable` on `direct` (no flavor branch needed
     // here — that flavor's checker never reports anything else) and while
     // `MainActivity` hasn't finished its own first resume check yet.
@@ -97,6 +118,11 @@ internal fun SettingsScreen(
     onCrashReporting: (Boolean) -> Unit = {},
     onAskWhenToUnsnooze: (Boolean) -> Unit = {},
     onSnoozeRinger: (SnoozeRinger) -> Unit = {},
+    /** The size while the slider is moving — shown, not stored. */
+    onFontScalePreview: (Float) -> Unit = {},
+    /** Where the slider was released — shown and stored. */
+    onFontScaleSettled: (Float) -> Unit = {},
+    onPinchFontSize: (Boolean) -> Unit = {},
     onStartPlayUpdate: () -> Unit = {},
     onCompletePlayUpdate: () -> Unit = {},
     onDismissPlayUpdate: () -> Unit = {},
@@ -206,6 +232,25 @@ internal fun SettingsScreen(
                 onChange = onSnoozeRinger,
             )
         }
+        // Below the settings that decide what the app *does*, above the
+        // diagnostics that decide what it records: this one only changes how it
+        // looks. Always present — it needs no permission and no capability to be
+        // a meaningful choice.
+        FontSizeRow(
+            scale = fontScale,
+            saveFailed = fontScaleSaveFailed,
+            onPreview = onFontScalePreview,
+            onSettled = onFontScaleSettled,
+        )
+        // Directly under the slider it governs: the switch is only meaningful
+        // beside the setting the gesture changes, and reading the two together
+        // is also how a user who never knew about the pinch finds out there is
+        // one (`SPEC.md` §4.8).
+        PinchFontSizeRow(
+            enabled = pinchFontSize,
+            saveFailed = pinchFontSizeSaveFailed,
+            onChange = onPinchFontSize,
+        )
         // Below the tile row, deliberately: touched rarely — usually never.
         // Same null-until-read discipline as the row above: a switch that
         // asserted the default and corrected itself a frame later would flash

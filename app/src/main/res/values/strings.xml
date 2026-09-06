@@ -433,6 +433,30 @@
     <string name="setup_ask_unsnooze_description" tools:ignore="MissingTranslation">Offer an end time when a snooze starts</string>
 
     <!--
+      Text size (SPEC.md §4.8): a multiplier over the system font scale, set by
+      a slider or a two-finger pinch anywhere in the app.
+    -->
+    <!-- TODO: translate -->
+    <string name="setup_font_size_title" tools:ignore="MissingTranslation">Text size</string>
+    <!--
+      Says "on top of" rather than naming a size, because this multiplies
+      whatever the system is already set to rather than replacing it.
+    -->
+    <!-- TODO: translate -->
+    <string name="setup_font_size_description" tools:ignore="MissingTranslation">Snoozemo\'s text, on top of your system font size</string>
+    <!-- A percentage of the system font size; %% is a literal percent sign. -->
+    <!-- TODO: translate -->
+    <string name="setup_font_size_value" tools:ignore="MissingTranslation">%1$d%%</string>
+    <!--
+      The switch that turns the gesture off. On by default, because the pinch is
+      how most people will find the setting above at all.
+    -->
+    <!-- TODO: translate -->
+    <string name="setup_pinch_font_size_title" tools:ignore="MissingTranslation">Pinch to resize text</string>
+    <!-- TODO: translate -->
+    <string name="setup_pinch_font_size_description" tools:ignore="MissingTranslation">Two fingers anywhere in Snoozemo</string>
+
+    <!--
       Appended to the ongoing card when the phone is louder than the chosen
       ceiling (SPEC.md §5.9) — a ceiling the user chose and did not get is
       something they will hear, so the card says so rather than leaving them to

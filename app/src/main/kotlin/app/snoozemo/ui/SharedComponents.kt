@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.heightIn
@@ -22,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -29,22 +31,32 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.snoozemo.core.MAX_FONT_SCALE
+import app.snoozemo.core.MIN_FONT_SCALE
 import app.snoozemo.core.SnoozeRinger
+import app.snoozemo.core.fontScalePercent
 import app.snoozemo.R
 import app.snoozemo.UpdateProgress
 
@@ -55,8 +67,111 @@ import app.snoozemo.UpdateProgress
  * capability row looks like wherever one appears, so it lives here rather than
  * inside any one screen's file.
  */
+/**
+ * The text size in force, reachable from a composable Compose hosts in its own
+ * **window** (Codex, PR #217).
+ *
+ * A `ModalBottomSheet`, an `AlertDialog` and a `DropdownMenu` each render in a
+ * separate window whose own owner provides `LocalDensity` afresh — so the
+ * scaled density [SnoozemoTheme] provides never reaches them, and their text
+ * came out at the system size however the user had set it. The gesture is
+ * lost the same way: a pointer handler on the activity's root never sees a
+ * touch made in another window.
+ *
+ * Null outside the theme, so a composable used on its own still renders.
+ */
+internal val LocalFontSizeState = staticCompositionLocalOf<FontSizeState?> { null }
+
+/**
+ * The density before the text-size multiplier, for a control whose own gesture
+ * would otherwise be hosted under a density its drag keeps changing (Codex,
+ * PR #217).
+ *
+ * Compose resets a pointer-input handler when the density under it changes, so
+ * the size slider — which changes exactly that on every frame of its drag —
+ * died on its first resizing movement, the same way the pinch host did before
+ * it was lifted out. Null outside the theme.
+ */
+internal val LocalBaseDensity = staticCompositionLocalOf<Density?> { null }
+
+/**
+ * Hosts [content] at the unscaled density, for a control that resizes text
+ * while being dragged. See [LocalBaseDensity].
+ *
+ * Only `fontScale` differs between the two densities, so a control with no text
+ * of its own — a slider's track and thumb are dp — looks identical either way.
+ */
 @Composable
-fun SnoozemoTheme(content: @Composable () -> Unit) {
+internal fun StableInputDensity(content: @Composable () -> Unit) {
+    val base = LocalBaseDensity.current
+    if (base == null) {
+        content()
+        return
+    }
+    CompositionLocalProvider(LocalDensity provides base, content = content)
+}
+
+/**
+ * Re-provides the chosen text size inside one of those windows.
+ *
+ * For a slot that only shows text — a dialog's title, body or buttons. Reads
+ * the window's own density as its base, which is the unscaled one, so this
+ * applies the multiplier exactly once wherever it is used.
+ */
+@Composable
+internal fun FontSizeWindow(content: @Composable () -> Unit) {
+    val state = LocalFontSizeState.current
+    val base = LocalDensity.current
+    if (state == null) {
+        content()
+        return
+    }
+    val scaled = remember(base, state.scale) { Density(base.density, base.fontScale * state.scale) }
+    CompositionLocalProvider(LocalDensity provides scaled, content = content)
+}
+
+/**
+ * [FontSizeWindow] plus the pinch, for a whole surface in its own window — the
+ * end-condition sheet, which is a screen in its own right and where "pinch
+ * anywhere in Snoozemo" would otherwise be a promise the app breaks.
+ *
+ * The gesture is hosted outside the scaled density for the reason
+ * [SnoozemoTheme] is: a density change restarts a pointer handler, so a
+ * gesture hosted under the size it is changing dies on its own first resize.
+ */
+@Composable
+internal fun FontSizePinchWindow(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    val state = LocalFontSizeState.current
+    if (state == null) {
+        Box(modifier) { content() }
+        return
+    }
+    Box(
+        modifier = modifier.pinchFontSize(
+            enabled = { state.pinchEnabled },
+            scale = { state.scale },
+            onStart = state::startGesture,
+            onPreview = state::preview,
+            onSettled = state::commit,
+        ),
+    ) {
+        FontSizeWindow(content)
+    }
+}
+
+@Composable
+fun SnoozemoTheme(
+    /**
+     * The text size in force, and whether a pinch may change it (`SPEC.md`
+     * §4.8). Defaulted so every existing call site — the app screens, the tile
+     * trampoline's sheet, and the screenshot tests — is sized by the user's
+     * setting and answers a pinch without having to say so; a caller that also
+     * *shows* the setting (Settings) passes its own handle in so the slider and
+     * the gesture move one value.
+     */
+    fontSize: FontSizeState = rememberFontSizeState(),
+    content: @Composable () -> Unit,
+) {
     // Built once per dark-mode reading rather than on every recomposition:
     // `lightColorScheme()`/`darkColorScheme()` allocate a whole new
     // `ColorScheme` (dozens of `Color` fields), and this composable sits
@@ -65,10 +180,54 @@ fun SnoozemoTheme(content: @Composable () -> Unit) {
     // for no visual difference.
     val darkTheme = isSystemInDarkTheme()
     val colorScheme = remember(darkTheme) { if (darkTheme) darkColorScheme() else lightColorScheme() }
-    MaterialTheme(
-        colorScheme = colorScheme,
-        content = content,
-    )
+    // Only `fontScale` is overridden, so text grows while paddings, icons, and
+    // touch targets keep the layout the 4dp grid describes — and it multiplies
+    // the system's own scale rather than replacing it, so an accessibility
+    // setting made in Android is respected (`SPEC.md` §4.8).
+    val density = LocalDensity.current
+    val scaled = remember(density, fontSize.scale) {
+        Density(density.density, density.fontScale * fontSize.scale)
+    }
+    MaterialTheme(colorScheme = colorScheme) {
+        // The gesture sits above every screen rather than on any one of them: a
+        // pinch resizes the app, so it must work wherever the user happens to
+        // be — the welcome flow and the end-condition sheet included.
+        //
+        // **Outside the scaled density, not inside it** (Codex, PR #217).
+        // Compose restarts a pointer-input handler when the density under it
+        // changes, and every preview frame of a pinch changes exactly that —
+        // so hosting the gesture under `scaled` killed it on its own first
+        // resize: the fingers kept moving, nothing followed them, and the
+        // release persisted nothing. The scaled density belongs to the content
+        // being sized, not to the hand doing the sizing. Only `fontScale`
+        // differs between the two, so the slop this reads is unchanged either
+        // way — it is a distance in fingers, not in text.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pinchFontSize(
+                    enabled = { fontSize.pinchEnabled },
+                    scale = { fontSize.scale },
+                    onStart = fontSize::startGesture,
+                    onPreview = fontSize::preview,
+                    onSettled = fontSize::commit,
+                ),
+        ) {
+            CompositionLocalProvider(
+                LocalDensity provides scaled,
+                // So a sheet, dialog or menu in its own window can re-establish
+                // both — neither the density nor the gesture crosses a window
+                // boundary on its own. See [LocalFontSizeState].
+                LocalFontSizeState provides fontSize,
+                // And so a control that resizes text as it is dragged can host
+                // its own input where the density does not move. See
+                // [LocalBaseDensity].
+                LocalBaseDensity provides density,
+            ) {
+                content()
+            }
+        }
+    }
 }
 
 /**
@@ -751,16 +910,22 @@ internal fun SnoozeRingerRow(
                     )
                 }
                 DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                    // Loudest first, matching the volume panel's own order and
-                    // `SnoozeRinger`'s declaration.
-                    SnoozeRinger.entries.forEach { option ->
-                        DropdownMenuItem(
-                            text = { Text(stringResource(option.labelRes())) },
-                            onClick = {
-                                open = false
-                                onChange(option)
-                            },
-                        )
+                    // A menu is a window of its own, so the chosen size has to
+                    // be re-provided here too (Codex, PR #217) — otherwise the
+                    // options read at the system size while the row that opened
+                    // them does not.
+                    FontSizeWindow {
+                        // Loudest first, matching the volume panel's own order
+                        // and `SnoozeRinger`'s declaration.
+                        SnoozeRinger.entries.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(stringResource(option.labelRes())) },
+                                onClick = {
+                                    open = false
+                                    onChange(option)
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -802,6 +967,148 @@ internal fun AskWhenToUnsnoozeRow(
     SwitchRow(
         title = stringResource(R.string.setup_ask_unsnooze_title),
         description = stringResource(R.string.setup_ask_unsnooze_description),
+        enabled = enabled,
+        failures = listOfNotNull(
+            stringResource(R.string.setup_debug_log_save_failed).takeIf { saveFailed },
+        ),
+        onChange = onChange,
+    )
+}
+
+/**
+ * How big Snoozemo's own text is (`SPEC.md` §4.8): a multiplier over the system
+ * font scale, 80%-160%, continuous.
+ *
+ * Structurally the same card as [SwitchRow] and the ringer row — one surface,
+ * one 16dp padding, title and description in a column — with the slider under
+ * them because it needs the row's whole width; a settings screen where one
+ * setting is built differently reads as two screens.
+ *
+ * The page resizes as the slider moves and only the release is persisted, so
+ * this screen is its own preview: the value shown beside the title is the size
+ * the page is currently drawn at.
+ */
+@Composable
+internal fun FontSizeRow(
+    scale: Float,
+    saveFailed: Boolean,
+    onPreview: (Float) -> Unit,
+    onSettled: (Float) -> Unit,
+) {
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = stringResource(R.string.setup_font_size_title),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    text = stringResource(R.string.setup_font_size_value, fontScalePercent(scale)),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            }
+            Text(
+                text = stringResource(R.string.setup_font_size_description),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            // Same place and reason as a switch's: the size has already sprung
+            // back to the stored one by the time this shows, and the line is
+            // what stops that reading as a missed drag.
+            if (saveFailed) {
+                Text(
+                    text = stringResource(R.string.setup_debug_log_save_failed),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            // The value the slider last reported, so the release persists
+            // exactly where the finger left it — [scale] comes back through
+            // recomposition, which a release in the same frame as the last drag
+            // step would beat.
+            var dragged by remember { mutableFloatStateOf(scale) }
+            // Whether this row currently holds the gesture, so its disposal can
+            // end one that is still in flight (Codex, PR #217). Leaving Settings
+            // with a finger still on the slider disposes it without ever calling
+            // `onValueChangeFinished`, and the state lives above the screen
+            // switch — so it stayed `moving` for the life of the activity,
+            // deferring every later stored value to a drag that had ended.
+            // The pinch closes the same window with a `finally`; a slider has
+            // no equivalent, so this is it.
+            var dragging by remember { mutableStateOf(false) }
+            // Kept level with the size whenever this row is not the one moving
+            // it (Codex, PR #217): a pinch changes the size without going
+            // through the slider, and a cache that went stale against it would
+            // be a pre-pinch size waiting to be written by the next thing that
+            // reports a finish. Writing it here recomposes nothing — the cache
+            // is read only by the callbacks below.
+            if (!dragging) dragged = scale
+            DisposableEffect(Unit) {
+                onDispose { if (dragging) onSettled(dragged) }
+            }
+            // Hosted at the unscaled density (Codex, PR #217): dragging this
+            // changes the text size, which changes the density around it, which
+            // resets its own pointer handler — measured, the drag froze at
+            // whatever the first resizing movement had reached and the release
+            // never persisted. A slider has no text, so nothing about it looks
+            // different for being sized here.
+            // What the row shows, said out loud (Codex, PR #217). A `Slider`
+            // describes itself as its position within its own range, so the
+            // default read as "25%" beside a row saying 100% — on the one
+            // setting whose users are most likely to be listening rather than
+            // looking.
+            val spoken = stringResource(R.string.setup_font_size_value, fontScalePercent(scale))
+            StableInputDensity {
+                Slider(
+                    modifier = Modifier.semantics { stateDescription = spoken },
+                    value = scale,
+                    onValueChange = {
+                        dragging = true
+                        dragged = it
+                        onPreview(it)
+                    },
+                    onValueChangeFinished = {
+                        dragging = false
+                        onSettled(dragged)
+                    },
+                    // No steps: the pinch is continuous, and a stepped slider
+                    // would round a size the user set with their fingers away
+                    // the next time they touched this (maintainer, 2026-09-06).
+                    valueRange = MIN_FONT_SCALE..MAX_FONT_SCALE,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Whether a two-finger pinch resizes the text (`SPEC.md` §4.8) — **on by
+ * default**, because the gesture is how most people will find [FontSizeRow] at
+ * all. The switch is for whoever keeps triggering it by accident.
+ *
+ * No cleanup-failure line: turning it off stops a gesture and deletes nothing,
+ * so a refused save is the only thing that can go wrong.
+ */
+@Composable
+internal fun PinchFontSizeRow(
+    enabled: Boolean,
+    saveFailed: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    SwitchRow(
+        title = stringResource(R.string.setup_pinch_font_size_title),
+        description = stringResource(R.string.setup_pinch_font_size_description),
         enabled = enabled,
         failures = listOfNotNull(
             stringResource(R.string.setup_debug_log_save_failed).takeIf { saveFailed },

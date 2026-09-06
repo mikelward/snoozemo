@@ -283,20 +283,24 @@ internal fun EndConditionBottomSheet(
         sheetState = state,
         onDismissRequest = { if (!committing) onDismiss() },
     ) {
-        EndConditionSheetContent(
-            condition = condition,
-            formattedTime = formattedTime,
-            onChooseTime = onChooseTime,
-            // The departure row commits by changing nothing: tracking is
-            // already armed and the default cap is already the backstop, so
-            // "until I leave" is the snooze exactly as it stands (§4.4).
-            onChooseDeparture = onDismiss,
-            onStepDown = onStepDown,
-            onStepUp = onStepUp,
-            failed = failed,
-            committing = committing,
-            tracksDeparture = app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE,
-            modifier = androidx.compose.ui.Modifier.navigationBarsPadding(),
-        )
+        // Its own window, so neither the chosen text size nor the pinch reaches
+        // it from the theme (Codex, PR #217); this re-establishes both.
+        FontSizePinchWindow {
+            EndConditionSheetContent(
+                condition = condition,
+                formattedTime = formattedTime,
+                onChooseTime = onChooseTime,
+                // The departure row commits by changing nothing: tracking is
+                // already armed and the default cap is already the backstop, so
+                // "until I leave" is the snooze exactly as it stands (§4.4).
+                onChooseDeparture = onDismiss,
+                onStepDown = onStepDown,
+                onStepUp = onStepUp,
+                failed = failed,
+                committing = committing,
+                tracksDeparture = app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE,
+                modifier = androidx.compose.ui.Modifier.navigationBarsPadding(),
+            )
+        }
     }
 }

@@ -1059,7 +1059,12 @@ class MainActivity : ComponentActivity() {
         // through the flow and not yet dismissed it.
         showReplayHint = welcomeSeen && !welcomeStore.replayHintDismissed()
         setContent {
-            SnoozemoTheme {
+            // Created here rather than left to the theme's own default, so the
+            // Settings slider and the pinch move one value (`SPEC.md` §4.8):
+            // the theme sizes the app from this, and the settings screen shows
+            // and changes the same handle.
+            val fontSize = rememberFontSizeState()
+            SnoozemoTheme(fontSize) {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     when (screen) {
                         Screen.WELCOME -> {
@@ -1241,6 +1246,10 @@ class MainActivity : ComponentActivity() {
                                 askWhenToUnsnoozeSaveFailed = askWhenToUnsnoozeSaveFailed,
                                 snoozeRinger = snoozeRinger,
                                 snoozeRingerSaveFailed = snoozeRingerSaveFailed,
+                                fontScale = fontSize.scale,
+                                pinchFontSize = fontSize.pinchEnabled,
+                                fontScaleSaveFailed = FontSizeSetting.scaleSaveRefused,
+                                pinchFontSizeSaveFailed = FontSizeSetting.pinchSaveRefused,
                                 playUpdate = displayedPlayUpdate,
                                 playUpdateRestartFailed = playUpdateRestartFailed,
                                 debugLogCleanupFailed = debugLogCleanupFailed,
@@ -1256,6 +1265,13 @@ class MainActivity : ComponentActivity() {
                                 onCrashReporting = ::setCrashReporting,
                                 onAskWhenToUnsnooze = ::setAskWhenToUnsnooze,
                                 onSnoozeRinger = ::chooseSnoozeRinger,
+                                // Preview as the slider moves, persist on
+                                // release — the same shape the pinch uses, so
+                                // both controls write once per gesture rather
+                                // than once per frame.
+                                onFontScalePreview = fontSize::preview,
+                                onFontScaleSettled = fontSize::commit,
+                                onPinchFontSize = fontSize::choosePinch,
                                 onStartPlayUpdate = ::startPlayUpdate,
                                 onCompletePlayUpdate = ::completePlayUpdate,
                                 onDismissPlayUpdate = ::dismissPlayUpdate,
@@ -1305,18 +1321,34 @@ class MainActivity : ComponentActivity() {
                     // ClothesCast repo's background-location rationale, which
                     // has already cleared Play review with this pattern.
                     if (showBackgroundLocationRationale) {
+                        // Each slot is wrapped: a dialog is its own window, so
+                        // the theme's scaled density does not reach it and the
+                        // text would come out at the system size whatever the
+                        // user chose (Codex, PR #217).
                         AlertDialog(
                             onDismissRequest = { showBackgroundLocationRationale = false },
-                            title = { Text(stringResource(R.string.location_background_rationale_title)) },
-                            text = { Text(stringResource(R.string.location_background_rationale_body)) },
+                            title = {
+                                FontSizeWindow {
+                                    Text(stringResource(R.string.location_background_rationale_title))
+                                }
+                            },
+                            text = {
+                                FontSizeWindow {
+                                    Text(stringResource(R.string.location_background_rationale_body))
+                                }
+                            },
                             confirmButton = {
-                                TextButton(onClick = ::beginBackgroundLocationRequest) {
-                                    Text(stringResource(R.string.location_background_rationale_continue))
+                                FontSizeWindow {
+                                    TextButton(onClick = ::beginBackgroundLocationRequest) {
+                                        Text(stringResource(R.string.location_background_rationale_continue))
+                                    }
                                 }
                             },
                             dismissButton = {
-                                TextButton(onClick = { showBackgroundLocationRationale = false }) {
-                                    Text(stringResource(R.string.location_background_rationale_dismiss))
+                                FontSizeWindow {
+                                    TextButton(onClick = { showBackgroundLocationRationale = false }) {
+                                        Text(stringResource(R.string.location_background_rationale_dismiss))
+                                    }
                                 }
                             },
                         )
