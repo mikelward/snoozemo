@@ -162,8 +162,11 @@ class AnchorCaptureRunner(context: Context) {
             // (flagged by Codex on PR #71). A cached fix read now is the one
             // answer that cannot lose that race. The same accuracy gate
             // applies, plus a freshness one: the anchor is where the user is
-            // *now*, and a minute at walking pace stays well inside the 150 m
-            // radius where ten minutes does not.
+            // *now*, and a minute at walking pace is most of the 100 m radius
+            // where ten minutes is far outside it. The direction is the safe
+            // one either way: an anchor set where the user was a minute ago
+            // makes a departure *easier* to reach, never a snooze that will
+            // not end.
             try {
                 lm.getLastKnownLocation(provider)?.let { last ->
                     val ageMs = (SystemClock.elapsedRealtimeNanos() -
@@ -188,7 +191,9 @@ class AnchorCaptureRunner(context: Context) {
             // Updates rather than one shot, so a first fix too vague for the
             // gate does not spend the only answer — the pure half keeps
             // waiting for a better one until the ceiling. Balanced power is
-            // right for a 150 m decision boundary (SPEC.md §6.5), and the
+            // right for a 100 m decision boundary (SPEC.md §6.5) — a vaguer
+            // fix is subtracted rather than believed, so a tighter boundary
+            // costs latency rather than correctness — and the
             // duration bound has the platform stop the request even if this
             // process dies before cleanup.
             val request = LocationRequest.Builder(FIX_INTERVAL_MS)

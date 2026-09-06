@@ -32,12 +32,16 @@ class DepartureObservationTest {
         elapsedRealtimeMs = atSeconds * 1_000L,
     )
 
+    // Pinned for the reason `DepartureTest`'s is: the arithmetic below is
+    // stated against this number, not against whatever the product default
+    // happens to be this month.
     private val anchor = Anchor(
         lat = 0.0,
         lon = 0.0,
         fixAccuracyM = 20f,
         capturedAt = t0,
         ssid = "ExampleWifi",
+        radiusM = 150,
     )
 
     @Test

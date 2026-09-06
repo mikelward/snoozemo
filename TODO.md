@@ -4270,7 +4270,7 @@ Nothing here is scheduled; each is a sequel that follows from something already 
         down — with a dwell before it counts (maintainer: *"out of range for 5 minutes or
         something"*).
       - **The check cannot be §6.6's, and the exit criterion is undesigned** (Codex,
-        PR #24). §6.6 tests against a 150 m radius on a balanced-power request; a room is
+        PR #24). §6.6 tests against a 100 m radius on a balanced-power request; a room is
         ten meters, so it can never fire. **Do not conclude from that that location is
         useless here** — an earlier draft did, reasoning from `MAX_ANCHOR_ACCURACY_M` (a
         rejection ceiling, not the accuracy of a fix). A tighter gate with a
@@ -5069,9 +5069,11 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   2026-08-22). A tile-tap arm drops to the background within a frame of the trampoline
   finishing, and a while-in-use grant then delivers fresh fixes throttled or not at all (Codex,
   PR #71) — the synchronous cached read inside the tap's start is the one answer that cannot
-  lose that race. Sixty seconds at walking pace is under 100 m, inside the anchor's 150 m
-  radius, and a stale seed errs open (an anchor the user is not at reads as a departure, not a
-  snooze that won't end). **The alternative** was a foreground component holding location
+  lose that race. Sixty seconds at walking pace is under 100 m, so a seed that stale can put the
+  anchor most of the anchor's own 100 m radius away from where the user actually is — but the
+  direction is the safe one, and that was always the load-bearing half of this argument rather
+  than the arithmetic: a stale seed errs open (an anchor the user is not at reads as a departure,
+  not a snooze that won't end), and it errs open harder now the radius is tighter. **The alternative** was a foreground component holding location
   access through capture, which in the `play` flavor is the §3 minefield and in `direct` is
   Phase 7's monitor anyway. Reversible: one constant, one read. What a device would settle:
   how often the seed is present and fresh in practice, and whether the live request ever
@@ -5551,8 +5553,9 @@ recorded screenshots only show the default size.
 Built: under a `FULL`-mode snooze, `200 m away · 10 m to go` (or `... · confirming`
 once a fix has cleared the band), taken from the engine's own step rather than
 re-derived. `SPEC.md` §4.2 carries the decision, §12 the privacy argument, and
-`docs/PRIVACY.md` the user-facing sentence. Two things the maintainer raised
-alongside it, both open:
+`docs/PRIVACY.md` the user-facing sentence. The radius it measures against came
+in from 150 m to 100 m at the same time (`SPEC.md` §6.6, `DefaultRadiusTest`).
+What is left open:
 
 - [ ] **Honor the system's units.** The readout is meters everywhere today, which
       reads wrong on a phone set to imperial. `android.icu.util.MeasureUnit` /
@@ -5562,12 +5565,18 @@ alongside it, both open:
 - [ ] **Does a visible threshold imply a settable one?** (maintainer, 2026-09-06:
       "maybe it implies we need to add a distance threshold or something".) Showing
       how far there is left to go invites the next question — *why that far?* — and
-      the answer today is a fixed 150 m radius plus a 50 m band with no way to
+      the answer today is a fixed 100 m radius plus a 50 m band with no way to
       change either. Three shapes, unpicked: leave it fixed and let the readout be
       the explanation; expose the radius per place once saved places exist
       (`ActiveSnooze.radiusM` already anticipates a per-place override); or offer
-      one coarse choice at arm time. Wants a real handset first — whether 150 m
-      feels right is not a thing to decide from a screenshot.
+      one coarse choice at arm time. Wants a real handset first — whether 100 m
+      feels right is not a thing to decide from a screenshot. Going much *below*
+      it is not a constant change at all: `STILL_HERE` needs
+      `distance + accuracy <= radius`, so at 50 m any fix vaguer than 50 m could
+      never confirm presence even standing on the anchor, and balanced-power
+      fixes are routinely 20–60 m — the degraded mode would become the normal
+      one. A smaller radius needs a different presence signal (the anchor's
+      Wi-Fi association, already captured) rather than a smaller number.
 - [ ] **Still owed a device.** Whether a number that moves every 90 s reads as
       informative or as fidgety, and whether the line survives the largest font
       size beside the countdown.

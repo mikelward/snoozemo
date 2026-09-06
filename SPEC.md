@@ -2012,7 +2012,7 @@ data class Anchor(
     val lat: Double?, val lon: Double?, val fixAccuracyM: Float?, val capturedAt: Instant,
     val ssid: String?,          // the SSID we were associated with, if any
     val bssid: String?,         // recorded for diagnostics only — see below
-    val radiusM: Int = 150,     // default; per-place override later
+    val radiusM: Int = 100,     // default; per-place override later
 )
 ```
 
@@ -2054,7 +2054,7 @@ check again event is good for now"*).
 
 **But the check it triggers cannot be §6.6's** (Codex, PR #24), and an earlier draft of this
 section said it could, which was wrong in a way worth keeping written down. §6.6 is a *location*
-test: a fix outside the anchor's 150 m radius, plus hysteresis and confirmation. Walking out of a
+test: a fix outside the anchor's 100 m radius, plus hysteresis and confirmation. Walking out of a
 meeting room and down the corridor is ten meters. **§6.6 as it stands cannot resolve a room** —
 that much is true by construction, not by argument. Reusing it here was a plausible-sounding
 shortcut that quietly made the feature impossible.
@@ -2064,7 +2064,7 @@ early** (Codex, PR #24). That draft reasoned from `MAX_ANCHOR_ACCURACY_M = 200f`
 cannot resolve a room, at all" — but that constant is the *rejection ceiling*, the worst fix the
 capture will accept, not the accuracy a fix actually has. A qualifying fix can be far better than
 200 m, so the ceiling proves nothing about the best case. What §6.6 actually rules out is its own
-150 m radius and its balanced-power request; a tighter gate with a higher-accuracy request is a
+100 m radius and its balanced-power request; a tighter gate with a higher-accuracy request is a
 different test that has not been evaluated.
 
 It should be evaluated **before** the D4 question below, because if location can corroborate at
@@ -2212,7 +2212,8 @@ LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 90_000L)
 ```
 
 `BALANCED_POWER_ACCURACY` is roughly city-block accuracy from Wi-Fi and cell, without waking GPS —
-correct for a 150 m decision boundary. `HIGH_ACCURACY` would burn GPS to answer a question that does
+correct for a 100 m decision boundary, and still correct after that boundary moved in from 150: a
+vaguer fix is subtracted rather than believed (§6.6), so it departs *later* rather than wrongly. `HIGH_ACCURACY` would burn GPS to answer a question that does
 not need GPS.
 
 If Play Services is absent (unlikely on Pixel or Samsung, but the app should not hard-crash), fall
@@ -2220,7 +2221,7 @@ back to `LocationManager` with `PROVIDER_FUSED` on API 31+, or `NETWORK_PROVIDER
 
 ### 6.6 The departure test
 
-Never compare raw distance to radius; a 500 m-accuracy cell fix "outside" a 150 m radius means
+Never compare raw distance to radius; a 500 m-accuracy cell fix "outside" a 100 m radius means
 nothing. Gate on accuracy:
 
 ```kotlin
@@ -2234,6 +2235,24 @@ Then require **confirmation**: two consecutive qualifying fixes at least 30 s ap
 where `d - accuracy > radiusM + 500`. The first rule kills GPS-jump false positives; the second
 means that when you are unambiguously a kilometer away, the phone comes back immediately rather than
 making you wait out a debounce.
+
+**The radius is 100 m, moved in from 150** (maintainer, 2026-09-06). It is not a jitter setting:
+the hysteresis band, the accuracy subtraction and the two-fix confirmation above are what absorb a
+wandering fix, and none of them move with it. What it decides is how far you can walk *inside*
+somewhere before this counts as leaving, so the floor is a large building rather than a room —
+shrinking it much further ends a snooze while the user is still in the venue, which is principle 1's
+failure direction rather than principle 2's. It was moved in because the departure was further out
+than users expect, and because the on-screen readout (§4.2) made that distance visible for the first
+time.
+
+**What it costs is the confidently-inside zone, and that is a real trade rather than a free win.**
+`STILL_HERE` needs `d + accuracy <= radiusM`, so with a 10 m fix a phone reads as comfortably inside
+up to 90 m rather than 140 m. The ambiguous band between "inside" and "outside" is the same width as
+before — `2 × accuracy + HYSTERESIS_M` — it simply sits closer in, so a phone parked 120 m from where
+it armed now produces inconclusive readings where it used to produce confident ones. Three of those
+in a row degrade tracking to Wi-Fi-only (§8.1), which lands on exactly the large-venue case this app
+is aimed at: a different floor, the far end of a site. `DefaultRadiusTest` asserts both halves so the
+next person to move this number sees the bill as well as the benefit.
 
 Anchor with no location fix at all (arming indoors with no signal): Wi-Fi-only mode. Losing the
 anchor SSID escalates, but with no location to confirm with, resolve after a 5-minute grace period
@@ -2458,7 +2477,7 @@ Low, and for a structural reason rather than a tuning one:
 No GPS wakeups. Registration is handed to a system process that is already computing network
 location for other reasons, so an idle geofence is close to free — well under 1% for a 4-hour snooze,
 and materially cheaper than the `direct` flavor's foreground service. `setNotificationResponsiveness`
-trades latency for power on top of that; at our 150 m radius the default is already fine and there is
+trades latency for power on top of that; at our 100 m radius the default is already fine and there is
 little left to win. Battery is **not** the reason to worry about this API.
 
 #### Reliability: the actual risk
