@@ -43,6 +43,12 @@ class MainActivityNotificationBannerTest {
         context.getSharedPreferences("welcome", Context.MODE_PRIVATE).edit().clear().commit()
         // Spent, so these land on Main rather than the welcome flow.
         WelcomeStore(context).markSeen()
+        // Before the reset, and before any case deletes a channel: the
+        // application's own warm-up creates the channels on a thread of its
+        // own, and `Application.onCreate` running before this body does not
+        // mean that thread has. A case that deletes a channel and asserts it is
+        // gone was racing a recreation landing a moment later.
+        SnoozeNotifications.awaitWarmForTest()
         // `channelsCreated` is process-wide, so a class that ran earlier in
         // this JVM leaves it set — and the next construction then skips
         // creation against a shadow manager that has no channels, which reads
