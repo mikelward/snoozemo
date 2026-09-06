@@ -1162,7 +1162,7 @@ class SnoozeNotifications(private val context: Context) {
          * this is two binder calls and none of them belong in front of an arm.
          */
         fun warm(context: Context) {
-            Thread {
+            val thread = Thread {
                 // A bare thread has no handler, so anything escaping here takes
                 // the process down — including a process that is mid-arm. The
                 // construction is contained already; this covers the rest of it
@@ -1171,8 +1171,67 @@ class SnoozeNotifications(private val context: Context) {
                 runCatching { SnoozeNotifications(context.applicationContext) }.onFailure {
                     Log.e(TAG, "Warming the notification channels failed; the service retries.", it)
                 }
-            }.start()
+            }
+            warmThread = thread
+            thread.start()
         }
+
+        /**
+         * The warm-up in flight, kept only so a test can wait for it; see
+         * [awaitWarmForTest].
+         */
+        @Volatile
+        private var warmThread: Thread? = null
+
+        /**
+         * Waits for the warm-up started by `Application.onCreate` to finish.
+         *
+         * A test that asserts on the *absence* of a channel is racing it:
+         * `Application.onCreate` runs before the test body, but its thread need
+         * not, so a channel deleted by the test can be recreated a moment later
+         * and the assertion reads the opposite of what the test set up. Nothing
+         * in production waits on this — the warm-up is optional by design and
+         * the service creates the channels again if it has not run — so this is
+         * ordering made explicit for the tests rather than a new guarantee.
+         *
+         * **Throws rather than returning when the wait runs out** (Codex, PR
+         * #217). `Thread.join(millis)` returns normally either way, so a bare
+         * join on a loaded runner would let the test proceed with that thread
+         * still able to recreate the channel it just deleted — the very race
+         * this seam exists to close, back again and now invisible. Failing the
+         * test that waited is the honest outcome: the ordering it asked for did
+         * not happen.
+         */
+        @VisibleForTesting
+        internal fun awaitWarmForTest(timeoutMillis: Long = WARM_JOIN_MILLIS) {
+            val thread = warmThread ?: return
+            thread.join(timeoutMillis)
+            check(!thread.isAlive) {
+                "The notification-channel warm-up was still running after " +
+                    "${timeoutMillis}ms, so this test cannot rely on it having " +
+                    "finished; a channel it deletes may be recreated underneath it."
+            }
+        }
+
+        /**
+         * Plants the thread [awaitWarmForTest] waits on.
+         *
+         * Only a test that *is* the wedged warm-up can prove the wait fails
+         * rather than returning, and no real warm-up can be made to hang on
+         * demand — the same reasoning as the ordering seams below, where the
+         * test drives the race rather than hoping for it.
+         */
+        @VisibleForTesting
+        internal fun setWarmThreadForTest(thread: Thread?) {
+            warmThread = thread
+        }
+
+        /**
+         * How long [awaitWarmForTest] waits. Long enough for two binder calls on
+         * a loaded CI runner, short enough that a warm-up wedged on something
+         * fails the test that waited rather than hanging the suite.
+         */
+        private const val WARM_JOIN_MILLIS = 10_000L
 
         /**
          * Whether this process has already created the channels. Process-wide
