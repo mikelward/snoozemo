@@ -147,13 +147,17 @@ fun welcomeExitNeedsRecap(
  * `Done` and back off card 1 all land in the same place, so no route through
  * this misses a missing permission and none gets stuck.
  *
- * **The same controls in the same places on every card** (maintainer,
- * 2026-09-06): `Skip` in the top-right corner, and along the bottom `Back`, the
- * progress dots, `Next`. Nothing moves between cards, so the thumb learns one
- * place for each — and the two controls that step through the flow sit either
- * side of the thing that says where in it you are. `Skip` is on card 1 too: the
- * flow has always been leavable from there by back, so naming the exit costs
- * nothing D7 was protecting.
+ * **The card's title is the screen's title** (maintainer, 2026-09-06), drawn by
+ * the same [SnoozemoTitleRow] every other screen uses, with `Skip` as its
+ * trailing action. Along the bottom: `Back`, the progress dots, `Next` — the two
+ * controls that step through the flow either side of the thing that says where
+ * in it you are.
+ *
+ * **`Skip` is absent on card 1**, the one place the row's action slot is empty:
+ * offering to leave beside the one line that says what the app is invites
+ * skipping before there is anything to skip. D7 is untouched — back still exits
+ * card 1, so the way out is there, just not advertised before that line has
+ * been read.
  *
  * **The grants are the real rows, not a copy of them.** Each card embeds the
  * same [SetupRow] `PermissionsScreen` draws, so the observed-denial handling,
@@ -224,6 +228,7 @@ fun WelcomeScreen(
     modifier: Modifier = Modifier,
 ) {
     val position = cards.indexOf(card).takeIf { it >= 0 } ?: 0
+    val first = position == 0
     val last = position == cards.lastIndex
     Column(
         modifier = modifier
@@ -233,25 +238,21 @@ fun WelcomeScreen(
             .safeDrawingPadding()
             .padding(16.dp),
     ) {
-        // `Skip` sits in the top-right corner rather than in the bottom row
-        // (maintainer, 2026-09-06), which leaves that row to the two controls
-        // that move through the flow. Out of the scroll, like the row below,
-        // so growing type never carries the exit off the screen — and on every
-        // card, including the first: the flow has always been leavable from
-        // there by back, so advertising it costs nothing D7 was protecting.
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-        ) {
-            TextButton(onClick = onSkip) {
-                Text(stringResource(R.string.welcome_skip))
-            }
-        }
         // The body scrolls and the controls below do not. At the default font
         // and display size nothing scrolls at all; as those grow the body is
-        // what gives, so `Next`, `Skip` and the dots stay reachable and no
+        // what gives, so `Back`, `Next` and the dots stay reachable and no
         // `Allow` is ever clipped off the bottom. Clipping a grant is the worse
         // of the two failures the no-scroll rule was trying to avoid.
+        //
+        // The title row is *inside* the scroll, as it is on every other screen
+        // (`MainScreen`'s note has the reasoning). It was pinned above the body
+        // first, and that could not hold: a wrapped heading at the largest font
+        // on a short window, plus the pinned row below, left the weighted body
+        // nothing to measure into — text and `Allow` buttons that were not just
+        // clipped but absent, with no viewport to scroll them into (Codex,
+        // PR #209). Letting the title give with the body is what deletes that
+        // case; the exit is never lost with it, since `Back` stays pinned and
+        // leaves the flow from card 1, and `Skip` is one scroll up on the rest.
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -264,6 +265,29 @@ fun WelcomeScreen(
                 .verticalScroll(remember(card) { ScrollState(0) }),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            // The card's title is the screen's title, in the same row every
+            // other screen puts one (maintainer, 2026-09-06) — so the mark sits
+            // where a user already finds it, and the title reads as a page
+            // heading rather than the first line of the body.
+            //
+            // `Skip` is that row's trailing action, which is where a flow's
+            // exit is looked for.
+            SnoozemoTitleRow(
+                title = stringResource(cardTitle(card)),
+                actions = {
+                    // Not on card 1 (maintainer, 2026-09-06): offering to
+                    // leave beside the one line that says what the app is
+                    // invites skipping before there is anything to skip. D7 is
+                    // untouched — back still exits card 1, so the way out is
+                    // there, just not advertised before that line has been
+                    // read.
+                    if (!first) {
+                        TextButton(onClick = onSkip) {
+                            Text(stringResource(R.string.welcome_skip))
+                        }
+                    }
+                },
+            )
             // Above the card, on whichever card is showing: the same placement
             // and reasoning as the other two landing screens'.
             if (crashPending) {
@@ -351,7 +375,6 @@ fun WelcomeScreen(
 /** Card 1: the product in one line, and the promise the rest of the app keeps. */
 @Composable
 private fun WhatCard(tracksDeparture: Boolean) {
-    CardTitle(stringResource(R.string.welcome_what_title))
     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         SnoozemoMark(size = 96.dp)
     }
@@ -385,7 +408,6 @@ private fun EndsCard(
     onLocationRow: () -> Unit,
     onCalendarRow: () -> Unit,
 ) {
-    CardTitle(stringResource(R.string.welcome_ends_title))
     NotificationRender(tracksDeparture)
     CardBody(
         stringResource(
@@ -425,7 +447,6 @@ private fun TileCard(
     settingsFailure: SetupRowId?,
     onAddTile: () -> Unit,
 ) {
-    CardTitle(stringResource(R.string.welcome_tile_title))
     CardBody(stringResource(R.string.welcome_tile_body))
     CardBody(stringResource(R.string.welcome_tile_locked))
     PermissionRows.Tile(
@@ -464,7 +485,6 @@ private fun RuleCard(
     onRuleRow: () -> Unit,
     onSnoozeRinger: (SnoozeRinger) -> Unit,
 ) {
-    CardTitle(stringResource(R.string.welcome_rule_title))
     CardBody(stringResource(R.string.welcome_rule_body))
     snoozeRinger?.let {
         SnoozeRingerRow(chosen = it, saveFailed = snoozeRingerSaveFailed, onChange = onSnoozeRinger)
@@ -499,7 +519,6 @@ private fun RuleCard(
  */
 @Composable
 private fun TelemetryCard(onAnswer: (Boolean) -> Unit) {
-    CardTitle(stringResource(R.string.telemetry_invite_title))
     CardBody(stringResource(R.string.telemetry_invite_body))
     // The same shape as MainScreen's invite card, which is the same question:
     // opposite ends, affirmative trailing and filled.
@@ -616,9 +635,16 @@ private fun WelcomeDots(position: Int, count: Int, modifier: Modifier = Modifier
     }
 }
 
-@Composable
-private fun CardTitle(text: String) {
-    Text(text = text, style = MaterialTheme.typography.headlineSmall)
+/**
+ * The card's title, which the title row draws rather than the card itself — one
+ * per card, so the row always has one and no card can forget to supply it.
+ */
+private fun cardTitle(card: WelcomeCard): Int = when (card) {
+    WelcomeCard.WHAT -> R.string.welcome_what_title
+    WelcomeCard.ENDS -> R.string.welcome_ends_title
+    WelcomeCard.TILE -> R.string.welcome_tile_title
+    WelcomeCard.RULE -> R.string.welcome_rule_title
+    WelcomeCard.TELEMETRY -> R.string.telemetry_invite_title
 }
 
 @Composable

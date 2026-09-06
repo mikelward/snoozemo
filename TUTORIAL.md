@@ -21,32 +21,41 @@ screen already has a reason attached.
   is fixed and nothing scrolls; as the sizes grow the illustration gives way to the
   text first, and only where the text still cannot fit — a small handset at Android's
   largest font and display scale, on the two densest cards — does the body scroll
-  vertically, with `Skip` pinned above it and `Back`, the progress dots and `Next`
-  pinned below. The text is
+  vertically, with the title row scrolling as part of it and only `Back`, the
+  progress dots and `Next` pinned below. The title row is *in* the scroll on
+  purpose, as on every other screen: pinned, a wrapped heading at the largest
+  font on a short window left the body no viewport at all (Codex, PR #209). The text is
   never truncated and no `Allow` is ever clipped off the bottom: with both "no
   scrolling" and "no truncation" held absolutely there is no valid overflow at those
   sizes (Codex, PR #193), and clipping a grant is the worse of the two. Verify at the
   largest display and font size Android offers before calling any card done.
-- **`Skip` in the top-right corner; `Back`, the progress dots and `Next` along
-  the bottom** (maintainer, 2026-09-06). Nothing moves between cards, so the
-  thumb learns one place for each. `Back` goes to the previous card and, off
-  card 1, out of the flow — the same lambda the system back gesture runs, so the
-  control and the gesture can never disagree.
+- **The card's title is the screen's title, in the app's own title row, with
+  `Skip` as its trailing action** (maintainer, 2026-09-06). The same
+  `SnoozemoTitleRow` every other screen uses, so the mark sits where a user
+  already finds it and the title reads as a page heading rather than the first
+  line of a body that scrolls away under it.
 
-  The bottom row is the flow's own two controls with the place in it read
-  between them. `Skip` is not one of those: it goes somewhere else entirely, and
-  in the middle of that row it was a third tap in the band the thumb rests on,
-  next to the one that moves forward. The corner is where a flow's exit is
-  looked for, and it is out of the scroll, so growing type never carries it off
-  the screen.
+- **`Back`, the progress dots and `Next` along the bottom** (maintainer,
+  2026-09-06): the flow's own two controls with the place in it read between
+  them. `Back` goes to the previous card and, off card 1, out of the flow — the
+  same lambda the system back gesture runs, so the control and the gesture can
+  never disagree. The dots are centered in what the buttons leave rather than in
+  the row, since the two buttons are different widths and grow at different
+  rates with type size; true centering would have them collide at the sizes
+  where the row is tightest.
 
-  This replaces the same-week arrangement of `Back` / `Skip` / `Next` across the
-  bottom with the dots on their own line above — which in turn had reversed a
-  decision to withhold `Skip` on card 1 entirely, on the reasoning that offering
-  to leave beside the one line saying what the app is invites skipping before
-  there is anything to skip. `Skip` stays on card 1: D7 was never at stake, since
-  the flow has always been leavable from there by back, so the exit was already
-  available and only unnamed.
+- **No `Skip` on card 1** (maintainer, 2026-09-06) — the one card where the
+  title row's action slot is empty. Offering to leave beside the one line that
+  says what the app is invites skipping before there is anything to skip. D7 is
+  untouched: back still exits card 1, so the way out is there, just not
+  advertised before that line has been read.
+
+  This went back and forth within the week. `Skip` was withheld from card 1,
+  then restored when the three controls sat across the bottom together — a
+  middle control appearing from nowhere on card 2 was the worse cost — and
+  withheld again once `Skip` left that row for the title bar, where its absence
+  is an empty action slot rather than a gap between two buttons. The reasoning
+  for withholding never changed; what changed is what it cost.
 
   `Skip` and the last card's `Next` both land in the same place:
   `PermissionsScreen` while a permission is still missing, `MainScreen` once nothing
@@ -416,13 +425,13 @@ flow.
   a title about editing only repeated it, where this one names what the first
   sentence is really promising: Snoozemo touches nothing else of yours.
 - ~~Whether `Skip` is visible on card 1.~~ **Decided (maintainer, 2026-09-06):
-  yes, and in the top-right corner on every card.** The earlier answer the same
-  week was no `Skip` on card 1 — offering to leave beside the one line that says
-  what the app is invites skipping before there is anything to skip — reversed
-  first because a bottom-row control appearing from nowhere on card 2 costs
-  more, and settled once the exit moved out of that row altogether. D7 was
-  untouched throughout: back has always exited card 1, so the way out existed
-  either way; the question was only whether it was named.
+  no `Skip` on card 1**, and `Skip` lives in the title row's action slot on
+  every other card. Offering to leave beside the one line that says what the app
+  is invites skipping before there is anything to skip; once the exit moved out
+  of the bottom row, withholding it costs only an empty action slot rather than
+  a gap between two buttons. D7 was untouched throughout: back has always exited
+  card 1, so the way out existed either way; the question was only whether it
+  was named.
 - ~~Whether the flow replays after an update that adds a card.~~ **Decided
   (maintainer, 2026-09-05): never automatically.** Anyone who skipped or finished
   it is done with it, and only the (?) icon replays it. So the seen-flag stays a
