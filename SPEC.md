@@ -633,6 +633,16 @@ distance would put a number the engine did not believe in front of the user as t
 live. And a reading ages off the screen after five minutes rather than sitting there, because a
 distance from a tracking gap describes where the phone *was*.
 
+**In whichever units the phone is set to** (landed 2026-09-06). Only the US measurement system
+takes feet; the UK's is `UK` rather than `SI` — it keeps miles for road distance — but a walk down
+the street is read in meters there, so it falls in with everyone else. The distance and its unit are
+formatted together and interpolated as a single placeholder, so there is one pair of sentences
+rather than a metric and an imperial copy of each — which is also the shape a translator needs,
+since where a unit sits in a sentence is not the same in every language. Both forms round to whole
+units, which is the precision the meters-only version shipped with rather than a second decision:
+neither is meaningful below a fix's own accuracy, and the line is replaced only when a fix arrives,
+ninety seconds apart at the fastest.
+
 **Nowhere but the screen.** It is never written to disk, never posted to the notification, and
 never counted as news: fixes arrive every 90 s while a departure is being tested (§6.7), so a
 notification reposting per fix is exactly the flapping the restated-level design exists to

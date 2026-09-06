@@ -16,9 +16,13 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import android.icu.util.LocaleData
+import android.icu.util.ULocale
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
@@ -28,13 +32,14 @@ import app.snoozemo.PlayUpdateState
 import app.snoozemo.R
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.DepartureObservation
+import app.snoozemo.core.DistanceUnit
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.degradationReasonRes
 import app.snoozemo.tile.R as TileR
+import androidx.core.os.ConfigurationCompat
 import java.time.Duration
-import kotlin.math.ceil
-import kotlin.math.roundToInt
+import java.util.Locale
 
 /**
  * The home screen: the Arm/Release control the tile mirrors, plus whatever
@@ -510,28 +515,62 @@ private fun SnoozeStatus(
  * needs more distance than a sharp one, and naming the nominal edge would
  * promise a departure the current fix could not deliver.
  *
- * Rounded to whole meters: the underlying doubles carry centimeters that mean
- * nothing next to a fix's own accuracy, and a readout that twitches in the last
- * digit reads as noise rather than movement.
+ * **In whichever units the phone is set to.** The distance and its unit are
+ * formatted together and interpolated as one placeholder, so there is one pair
+ * of sentences rather than a metric and an imperial copy of each — which is
+ * also the shape a translator wants, since where the unit sits in a sentence is
+ * not the same in every language. The rounding rules and the conversion are
+ * [DistanceUnit]'s, and pure.
  */
 @Composable
 private fun departureText(observation: DepartureObservation): String {
-    val away = observation.distanceM.roundToInt()
+    val unit = rememberDistanceUnit()
+    val away = distanceText(unit, unit.away(observation.distanceM))
     return if (observation.qualifies) {
         // Far enough on this fix, but a departure still needs a second one
         // thirty seconds later, so this reports the wait rather than the end.
         stringResource(R.string.main_distance_confirming, away)
     } else {
-        // Rounded *up*, and never below one (Codex, PR #210). `qualifies` is a
-        // strict comparison, so a reading exactly on the band reports zero
-        // meters remaining while the engine still wants more — and anything
-        // under half a meter rounds there too. Either way `0 m to go` beside a
-        // snooze that has not ended contradicts the verdict it is quoting.
         stringResource(
             R.string.main_distance_to_go,
             away,
-            ceil(observation.remainingM).toInt().coerceAtLeast(1),
+            distanceText(unit, unit.toGo(observation.remainingM)),
         )
+    }
+}
+
+/** A whole number of [unit], with the unit's own translatable abbreviation. */
+@Composable
+private fun distanceText(unit: DistanceUnit, value: Int): String = stringResource(
+    when (unit) {
+        DistanceUnit.METER -> R.string.distance_meters
+        DistanceUnit.FOOT -> R.string.distance_feet
+    },
+    value,
+)
+
+/**
+ * The unit this phone measures distance in, read from its own locale.
+ *
+ * Only the US measurement system takes feet. The UK's is `UK` rather than `SI`
+ * — it keeps miles for road distance — but short distances there are read in
+ * meters, so it falls in with everyone else rather than getting the imperial
+ * form of a walk down the street.
+ *
+ * Remembered against the configuration rather than read per recomposition: it
+ * changes when the locale does, and a configuration change recreates the
+ * activity anyway.
+ */
+@Composable
+private fun rememberDistanceUnit(): DistanceUnit {
+    val configuration = LocalConfiguration.current
+    return remember(configuration) {
+        val locale = ULocale.forLocale(ConfigurationCompat.getLocales(configuration)[0] ?: Locale.getDefault())
+        if (LocaleData.getMeasurementSystem(locale) == LocaleData.MeasurementSystem.US) {
+            DistanceUnit.FOOT
+        } else {
+            DistanceUnit.METER
+        }
     }
 }
 

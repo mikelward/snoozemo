@@ -332,6 +332,11 @@ class MainScreenScreenshotTest {
         composeRule.onNodeWithText("Not snoozing").assertDoesNotExist()
     }
 
+    // Pinned to a metric locale: the readout follows the phone's own
+    // measurement system now, and Robolectric's default is en-US, which
+    // takes feet. The UK's system is `UK` rather than `SI` — it keeps miles
+    // for road distance — but short distances there read in meters.
+    @Config(qualifiers = "+en-rGB")
     @Test
     fun `a tracked snooze shows how far there is left to go`() {
         capture("main-screen-snoozing-distance.png") {
@@ -370,6 +375,11 @@ class MainScreenScreenshotTest {
         composeRule.onNodeWithText("200 m away · 10 m to go").assertExists()
     }
 
+    // Pinned to a metric locale: the readout follows the phone's own
+    // measurement system now, and Robolectric's default is en-US, which
+    // takes feet. The UK's system is `UK` rather than `SI` — it keeps miles
+    // for road distance — but short distances there read in meters.
+    @Config(qualifiers = "+en-rGB")
     @Test
     fun `a fix far enough to end the snooze says it is confirming`() {
         capture("main-screen-snoozing-confirming.png") {
@@ -409,6 +419,11 @@ class MainScreenScreenshotTest {
         composeRule.onNodeWithText("400 m away · 0 m to go").assertDoesNotExist()
     }
 
+    // Pinned to a metric locale: the readout follows the phone's own
+    // measurement system now, and Robolectric's default is en-US, which
+    // takes feet. The UK's system is `UK` rather than `SI` — it keeps miles
+    // for road distance — but short distances there read in meters.
+    @Config(qualifiers = "+en-rGB")
     @Test
     fun `a reading exactly on the band still says there is a meter to go`() {
         capture("main-screen-snoozing-on-the-band.png") {
@@ -448,6 +463,46 @@ class MainScreenScreenshotTest {
         composeRule.onNodeWithText("210 m away · 1 m to go").assertExists()
         composeRule.onNodeWithText("210 m away · 0 m to go").assertDoesNotExist()
         composeRule.onNodeWithText("210 m away · confirming").assertDoesNotExist()
+    }
+
+    @Config(qualifiers = "+en-rUS")
+    @Test
+    fun `a US phone reads the same distance in feet`() {
+        capture("main-screen-snoozing-distance-feet.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.FULL,
+                remaining = Duration.ofHours(3).plusMinutes(40),
+                degradation = null,
+                // The same reading as the metric case above: 200 m out with 10 m
+                // of accuracy against a 150 m radius, so 10 m still to go.
+                departure = DepartureObservation(
+                    distanceM = 200.0,
+                    accuracyM = 10f,
+                    radiusM = 150,
+                    elapsedRealtimeMs = 0L,
+                ),
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        // 200 m is 656.17 ft; 10 m still to go rounds up to 33 ft.
+        composeRule.onNodeWithText("656 ft away · 33 ft to go").assertExists()
+        composeRule.onNodeWithText("200 m away · 10 m to go").assertDoesNotExist()
     }
 
     @Test
