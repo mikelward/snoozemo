@@ -418,7 +418,7 @@ it in the same commit.
 - Link every open PR in the stack (one URL per line — the "View PR" chip sticks to the
   first link and hides the rest, anthropics/claude-code#46625) whenever you push, summarize
   CI, or invite review.
-- Refresh the PR title and body with the push, not after it, so they describe the full,
+- Refresh the PR title and body with the push — body first, then push — so they describe the full,
   latest state of the branch — re-read `git diff origin/main...HEAD` and patch whatever
   drifted.
 - Skip echo events silently. Replies posted via `mcp__github__*` come back moments later as
