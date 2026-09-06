@@ -60,7 +60,51 @@ fun tileTapNeedsSetup(
     activeChannelEnabled: Boolean?,
 ): Boolean {
     val accessMissing = access?.let { it != PolicyAccess.GRANTED } == true
-    val notificationsMissing = notifications == NotificationPermission.BLOCKED ||
-        activeChannelEnabled == false
-    return accessMissing || notificationsMissing
+    return accessMissing || notificationsNeedSettings(notifications, activeChannelEnabled)
 }
+
+/**
+ * Whether notifications are missing **and only the app's settings can fix it** —
+ * the notifications half of [tileTapNeedsSetup].
+ *
+ * [NotificationPermission.ASKABLE] is deliberately excluded, and the exclusion
+ * is about the *caller*, not about the capability: the tile trampoline answers
+ * that state with the runtime dialog, which is one tap where a screen is a
+ * detour. A caller that does not prompt must not reuse this — see
+ * [notificationsMissing], which is the same question without that assumption
+ * (Codex, PR #216).
+ *
+ * The channel read is the ongoing one alone rather than the three-channel
+ * aggregate: a silenced `snooze_ended` does not make a *running* snooze
+ * invisible (maintainer, 2026-09-06).
+ */
+fun notificationsNeedSettings(
+    notifications: NotificationPermission?,
+    activeChannelEnabled: Boolean?,
+): Boolean = notifications == NotificationPermission.BLOCKED || activeChannelEnabled == false
+
+/**
+ * Whether notifications are missing at all — what a *screen* asks.
+ *
+ * Wider than [notificationsNeedSettings] by exactly one state, and the
+ * difference is load-bearing. A permission granted and then revoked in system
+ * settings reads [NotificationPermission.ASKABLE], because granting clears the
+ * denial history the platform counts — so the prompt really is available again.
+ * The tile's gate skips that state because the tap itself shows the prompt; the
+ * main screen shows no prompt and its Snooze button arms immediately, so
+ * reusing the tile's predicate there hid the banner and let the app arm with
+ * its ongoing card and quick exit silently dropped (Codex, PR #216).
+ *
+ * That is principle 2's failure — doing the wrong thing quietly — so the screen
+ * asks the wider question and states the capability. Its own Allow button
+ * routes to the setup screen, whose notifications row shows the prompt for
+ * exactly this state, so nothing is lost by not prompting from the banner.
+ *
+ * An unread reading is still not a missing capability: null is a reading that
+ * has not landed, and every launch passes through it before the first refresh.
+ */
+fun notificationsMissing(
+    notifications: NotificationPermission?,
+    activeChannelEnabled: Boolean?,
+): Boolean = notifications?.let { it != NotificationPermission.GRANTED } == true ||
+    activeChannelEnabled == false

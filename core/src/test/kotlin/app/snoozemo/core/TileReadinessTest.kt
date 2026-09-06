@@ -116,4 +116,73 @@ class TileReadinessTest {
             ),
         )
     }
+
+    @Test
+    fun `the notifications half stands alone for the tile`() {
+        // Extracted so the two surfaces call named questions rather than
+        // repeating a condition each.
+        assertTrue(
+            "blocked is missing",
+            notificationsNeedSettings(NotificationPermission.BLOCKED, activeChannelEnabled = true),
+        )
+        assertTrue(
+            "a switched-off ongoing channel is missing",
+            notificationsNeedSettings(NotificationPermission.GRANTED, activeChannelEnabled = false),
+        )
+    }
+
+    @Test
+    fun `the tile's notifications question withholds where the tap would too`() {
+        assertFalse(
+            "granted and reachable is not missing",
+            notificationsNeedSettings(NotificationPermission.GRANTED, activeChannelEnabled = true),
+        )
+        assertFalse(
+            "askable is answered by a prompt, not a screen",
+            notificationsNeedSettings(NotificationPermission.ASKABLE, activeChannelEnabled = true),
+        )
+        assertFalse(
+            "unread is not missing",
+            notificationsNeedSettings(notifications = null, activeChannelEnabled = null),
+        )
+    }
+
+    @Test
+    fun `the screen asks the wider question the tile does not`() {
+        // The whole point of two functions. A permission granted and then
+        // revoked in system settings reads ASKABLE, because granting clears the
+        // denial history — so the prompt really is available again. The tile
+        // skips that state because the tap shows the prompt itself; the main
+        // screen shows none and arms immediately, so it must say so.
+        assertFalse(
+            "the tile answers askable with a prompt, not a screen",
+            notificationsNeedSettings(NotificationPermission.ASKABLE, activeChannelEnabled = true),
+        )
+        assertTrue(
+            "the screen has no prompt, so askable is missing there",
+            notificationsMissing(NotificationPermission.ASKABLE, activeChannelEnabled = true),
+        )
+    }
+
+    @Test
+    fun `the wider question keeps every bound that is not about prompting`() {
+        assertTrue(
+            "blocked is missing on either surface",
+            notificationsMissing(NotificationPermission.BLOCKED, activeChannelEnabled = true),
+        )
+        assertTrue(
+            "a switched-off ongoing channel is missing on either surface",
+            notificationsMissing(NotificationPermission.GRANTED, activeChannelEnabled = false),
+        )
+        assertFalse(
+            "granted and reachable is not missing",
+            notificationsMissing(NotificationPermission.GRANTED, activeChannelEnabled = true),
+        )
+        // The one that keeps this from flashing on every cold start: null is a
+        // reading that has not landed, not a capability that is gone.
+        assertFalse(
+            "unread is not missing",
+            notificationsMissing(notifications = null, activeChannelEnabled = null),
+        )
+    }
 }

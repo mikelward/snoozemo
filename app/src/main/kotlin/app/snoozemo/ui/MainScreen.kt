@@ -22,6 +22,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -33,7 +35,9 @@ import app.snoozemo.R
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.DepartureObservation
 import app.snoozemo.core.DistanceUnit
+import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
+import app.snoozemo.core.notificationsMissing
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.degradationReasonRes
 import app.snoozemo.tile.R as TileR
@@ -57,6 +61,21 @@ import java.util.Locale
 @Composable
 internal fun MainScreen(
     access: PolicyAccess?,
+    /**
+     * The notification permission, or null until a reading lands. Paired with
+     * [activeChannelEnabled] and judged by `notificationsMissing` — the tile
+     * tap sends the user to the setup screen for a reason this screen has to be
+     * able to state too, and it asks the *wider* of the two questions, since
+     * this screen shows no prompt of its own (Codex, PR #216).
+     */
+    notifications: NotificationPermission? = null,
+    /**
+     * Whether the channel a running snooze reports on is switched on, null
+     * until read. Deliberately the ongoing channel alone rather than the
+     * three-channel aggregate: a silenced `snooze_ended` is not a reason to put
+     * a red banner on this screen.
+     */
+    activeChannelEnabled: Boolean? = null,
     tileAdded: Boolean?,
     tileBannerDismissed: Boolean,
     /**
@@ -208,6 +227,27 @@ internal fun MainScreen(
         // unread is not "missing".
         if (access != null && access != PolicyAccess.GRANTED) {
             RequiredPermissionBanner(onFix = onOpenPermissions)
+        }
+        // The second required capability, and it had no banner at all until
+        // the tile tap started routing people here for it (Codex, PR #215):
+        // `MainScreen` has stated missing Do Not Disturb access since it
+        // existed, so a user sent to the setup screen by a dead tap and then
+        // backing out to Main found nothing here saying why. Below the access
+        // banner, because without access nothing arms at all — this only
+        // silences the reports about it.
+        //
+        // Separate from the banner above rather than merged with it: two
+        // required capabilities with two different remedies, and one banner
+        // would have to say both things at once.
+        //
+        // The *wider* of the two questions, not the tile's (Codex, PR #216).
+        // The tile skips an askable permission because the tap itself shows the
+        // prompt; nothing here does, and Snooze arms immediately — so sharing
+        // that predicate hid this banner in exactly the state a user reaches by
+        // granting the permission and later revoking it in system settings, and
+        // let the app arm with its ongoing card silently dropped.
+        if (notificationsMissing(notifications, activeChannelEnabled)) {
+            RequiredNotificationsBanner(onFix = onOpenPermissions)
         }
         // Above the buttons and louder than a row, because the screen leads
         // with the tile rather than offering a symmetrical choice (SPEC.md
@@ -711,6 +751,29 @@ private fun BackgroundLocationBanner(onAllow: () -> Unit, onDismiss: () -> Unit)
  * the primary button on the screen the user is looking at is disabled right
  * now, so it reads as a problem rather than a checklist item.
  */
+/**
+ * The `Allow` button both required-capability banners use.
+ *
+ * The visible label is the same word on each, so a screen reader announcing it
+ * alone cannot tell a user which capability a given button opens once both
+ * banners are up at once — reachable on any install missing both (Codex, PR
+ * #216). `SetupRow` solved exactly this for the rows on `PermissionsScreen`
+ * (Codex, PR #103) and this reuses its string, so the two surfaces stay
+ * consistent and a translation can reorder the parts independently of English
+ * word order.
+ *
+ * Nothing drawn changes: the label stays `Allow` on both.
+ */
+@Composable
+private fun AllowButton(capability: String, onClick: () -> Unit) {
+    val label = stringResource(R.string.setup_action_allow)
+    val description = stringResource(R.string.setup_row_action_description, label, capability)
+    Button(
+        onClick = onClick,
+        modifier = Modifier.semantics { contentDescription = description },
+    ) { Text(label) }
+}
+
 @Composable
 private fun RequiredPermissionBanner(onFix: () -> Unit) {
     Surface(
@@ -738,9 +801,48 @@ private fun RequiredPermissionBanner(onFix: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
             ) {
-                Button(onClick = onFix) {
-                    Text(stringResource(R.string.setup_action_allow))
-                }
+                AllowButton(capability = stringResource(R.string.setup_dnd_title), onClick = onFix)
+            }
+        }
+    }
+}
+
+/**
+ * The notifications half of what a tile tap needs, stated the same way its
+ * sibling states Do Not Disturb access.
+ *
+ * Same `errorContainer` treatment as [RequiredPermissionBanner], because it is
+ * the same class of problem: the app cannot do its job, and no row further down
+ * a settings screen is going to be found by someone who does not already know
+ * to look. Body and button are the notifications row's own strings, so the two
+ * surfaces cannot describe the same missing capability differently.
+ */
+@Composable
+private fun RequiredNotificationsBanner(onFix: () -> Unit) {
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.notifications_banner_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = stringResource(R.string.setup_notifications_missing),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            // End-aligned, matching every other banner's action row here.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                AllowButton(capability = stringResource(R.string.setup_notifications_title), onClick = onFix)
             }
         }
     }

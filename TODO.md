@@ -4422,6 +4422,53 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
+- [ ] **The main screen states a missing notification permission but does not prompt for
+  it** (Codex, PR #216 — the banner was added there, the prompt was not). Its `Allow`
+  routes to `PermissionsScreen`, whose notifications row shows the runtime dialog for an
+  askable permission, so the prompt is one tap further than the tile's. The stronger
+  option is for `armFromScreen` to ask the way `TileTrampolineActivity` does before
+  arming — the same treatment the tap gets. Not taken here because it changes the main
+  screen's arm path rather than what the screen says, and the banner already makes the
+  state visible *before* the user taps Snooze, which is what principle 2 requires.
+  Reversible: it is the trampoline's existing `shouldAskForNotifications` plus a launcher
+  on the activity, both of which already exist.
+
+- [ ] **Only the required capabilities got a banner, not every unanswered question**
+  (autopilot, 2026-09-06). The ask was "banner cards for any unanswered questions"; what
+  landed is one banner, for notifications, beside the Do Not Disturb one that already
+  existed. Calendar and background location were left as they are — background location
+  already has its own dismissible banner, and calendar has a row on `PermissionsScreen`
+  and nothing on `MainScreen`.
+  **Why this way**: the two that landed are *required* — without them the product does
+  nothing, or does it silently — and both are what the tile tap's gate routes on, so the
+  screen a dead tap opens and the screen it opened from now say the same thing. Calendar
+  degrades and says so in the ongoing notification, which is the opposite case: a banner
+  for it would be a nag about a working state, and the same maintainer instruction that
+  set aside the card reorder ("too much going on here now") argues against stacking a
+  fourth card above the Snooze button.
+  **Reversible**: adding a calendar banner is one `if` and one composable beside the two
+  that are there; removing the notifications one is the same edit backwards. Nothing
+  persists and no data model changed.
+  **Still open, with a shape now** (maintainer, 2026-09-06 — "idk let's decide that
+  later, for now go with what you've got. for later maybe it could just say Permissions
+  needed"): collapse the two required banners into **one titled `Permissions needed`**,
+  opening `PermissionsScreen`. That is the "one card" option, and it scales — a third
+  required capability joins it without a third banner, and the count above the Snooze
+  button stops growing.
+  What it costs is the copy: today each banner names its own capability in the body
+  (`Snoozes can't silence your phone`, `Snoozes can't show status and quick actions`),
+  and one banner either drops that or has to compose it. Deciding that is deciding
+  whether the banner explains or merely routes.
+  Note the route is already right either way — both banners' `Allow` opens
+  `PermissionsScreen`, not a system settings page, so a merged banner changes what is
+  said and not where it goes.
+
+- [ ] **New copy awaiting approval before translation**: `notifications_banner_title`
+  ("Notifications needed"), written to match `dnd_banner_title`'s shape. Carries
+  `tools:ignore="MissingTranslation"` and a `TODO: translate` comment until the wording
+  is signed off, then fans out to the locales. Body and button reuse the notifications
+  row's existing strings, so only the title is new.
+
 - [ ] **Consider moving the tile card after the rule card** (maintainer,
   2026-09-06 — tried, then set aside as "too much going on here now"). The flow
   is `WHAT → ENDS → TILE → RULE → TELEMETRY`, so the tile is offered on card 3,

@@ -455,14 +455,39 @@ leads with — it is no longer true as a statement that the tile is the *only* w
 
 **The app is four screens, not one** (`TODO.md` Phase 4, landed 2026-08-23; the fourth,
 `LicensesScreen`, arrived later — §4.7). `MainScreen` is the
-tile-equivalent Arm/Release control: the app's title, a banner for the one required-and-missing
-capability (Do Not Disturb access — nothing on this screen can arm without it), the tile banner
-below, and the Snooze/End snooze controls — **exactly one of Snooze and End snooze at a
+tile-equivalent Arm/Release control: the app's title, a banner for each required-and-missing
+capability, the tile banner below, and the Snooze/End snooze controls — **exactly one of Snooze and End snooze at a
 time**, split on a confident "nothing is running" rather than on a confident "something is". End
 snooze is the one guaranteed way back to a ringing phone (§7), so it disappears only where the
 screen has actually read the record and found nothing; while that reading is still unknown it
 stays, and Snooze — which could otherwise arm over a snooze the screen has not seen, costing the
-user the deadline they were promised — is the one that waits. `PermissionsScreen` is the interstitial that
+user the deadline they were promised — is the one that waits. **Two capabilities are required, and each states itself** (maintainer, 2026-09-06). Do Not
+Disturb access has had a banner since this screen existed — nothing here can arm without it. The
+second is notifications, and it had none until the tile-tap gate (§4.1) started sending people
+here for it: a user routed to the setup screen by a dead tap and then backing out to `MainScreen`
+found nothing saying why it had opened. They stay separate rather than merging, because two
+capabilities with two different remedies would make one banner that has to say both things at
+once. Notifications sits below access: without access nothing arms at all, where a silenced app
+arms and cannot report on it.
+
+**The screen and the tile ask different questions about notifications, and the difference is
+load-bearing** (Codex, PR #216). The tile skips a permission the runtime prompt can still fix,
+because its own tap shows that prompt — one tap, where a screen is a detour. The screen shows no
+prompt and its Snooze button arms immediately, so it asks the wider question: *is the capability
+missing at all*. Sharing the tile's narrower one hid the banner in exactly the state a user
+reaches by granting notifications and later revoking them in system settings — granting clears the
+denial history the platform counts, so the reading is "askable" rather than "blocked" — and let
+the app arm with its ongoing card and quick exit silently dropped, which is principle 2's failure.
+The banner's own button routes to the setup screen, whose notifications row shows the prompt for
+that state, so nothing is lost by not prompting from the banner itself. An unread reading remains
+a missing capability on neither.
+
+**"Missing" on the screen means the ongoing card cannot post, by any of its routes** (Codex, PR
+#216): the permission not held, the app-wide notification switch off while the permission still
+reads granted, the ongoing channel switched off, or its creation refused. The last is why the
+screen and the tile differ again — on the tile's path an absent channel means the service has not
+created them yet, while the screen reads after creation has already had its chance, so absent
+there is a refusal and posting to it would throw. `PermissionsScreen` is the interstitial that
 carries the DND, notification and location setup rows — reached automatically the first time DND
 access reads as missing (so a fresh install lands there rather than on a screen whose Arm button is
 disabled with nothing yet explaining why), and from `SettingsScreen`'s Permissions entry any time

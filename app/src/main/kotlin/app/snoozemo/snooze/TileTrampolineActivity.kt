@@ -811,45 +811,10 @@ class TileTrampolineActivity : ComponentActivity() {
         return tileTapNeedsSetup(
             access = access,
             notifications = notifications,
-            activeChannelEnabled = activeChannelEnabled(),
+            activeChannelEnabled = activeChannelEnabled(getSystemService(NotificationManager::class.java)),
         )
     }
 
-    /**
-     * Whether the channel a *running* snooze reports on is switched on, read
-     * straight off [NotificationManager].
-     *
-     * Narrower than `SnoozeNotifications.canReachTheUser` on purpose, and the
-     * same narrowing `showEnded` needed for the ended channel (Codex, PR #212):
-     * the aggregate answers "can any of our surfaces reach them", which is the
-     * wrong question for a gate about the ongoing card. A user who silenced
-     * `snooze_ended` can still see a snooze running and end it from the shade,
-     * so routing them to a setup screen would nag about a capability they are
-     * not missing.
-     *
-     * Read here rather than through `SnoozeNotifications` because constructing
-     * one runs `ensureChannels()` — up to three `createNotificationChannel`
-     * binder calls — and this block races the arm rather than following it
-     * (see `dispatch`). Reading one channel is one call; creating three on the
-     * way past is work the tap never asked for.
-     *
-     * Null is *unread*, and two different things reach it. No manager is the
-     * obvious one. A channel that does not exist yet is the other, and it is
-     * deliberately not `false`: absent is not switched off. The service creates
-     * the channels as it starts, so a first-ever tap can read this before they
-     * exist, and sending that user to settings would point them at a row that
-     * is not there. The permission is what covers reachability until then.
-     */
-    private fun activeChannelEnabled(): Boolean? {
-        val channel = runCatching {
-            getSystemService(NotificationManager::class.java)
-                ?.getNotificationChannel(SnoozeNotifications.CHANNEL_ACTIVE)
-        }.getOrElse {
-            Log.w(TAG, "Reading the ongoing channel failed; treating it as unread.", it)
-            return null
-        } ?: return null
-        return channel.importance != NotificationManager.IMPORTANCE_NONE
-    }
 
     /**
      * Opens the setup screen, which carries the rows that repair whatever
