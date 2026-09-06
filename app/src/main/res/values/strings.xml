@@ -23,6 +23,14 @@
     -->
     <string name="dnd_banner_title">Do Not Disturb access needed</string>
     <!--
+      MainScreen's notifications banner, the sibling of the one above and
+      written the same way: the notifications row's own `setup_notifications_missing`
+      for the body and `setup_action_allow` for the button, so the banner and
+      the row cannot describe the same missing capability differently.
+    -->
+    <!-- TODO: translate -->
+    <string name="notifications_banner_title" tools:ignore="MissingTranslation">Notifications needed</string>
+    <!--
       The setup rows: a title, how the capability stands, and a button carrying
       the verb — but only while there is something left to do. A row whose
       capability is in place says so and offers nothing.

@@ -1342,3 +1342,38 @@ class SnoozeNotifications(private val context: Context) {
         const val ACTION_DISMISS_STUCK = "app.snoozemo.action.DISMISS_STUCK"
     }
 }
+
+/**
+ * Whether the channel a *running* snooze reports on is switched on.
+ *
+ * A top-level read taking the manager, rather than a method on
+ * [SnoozeNotifications], because its two callers cannot both afford to
+ * construct one: the tile trampoline asks this on a block that races the arm,
+ * and constructing a `SnoozeNotifications` runs `ensureChannels()` — up to
+ * three `createNotificationChannel` binder calls — on the way past. Shared
+ * rather than written twice so the tile tap's gate and the main screen's banner
+ * cannot come to different conclusions about the same phone.
+ *
+ * Narrower than [SnoozeNotifications.canReachTheUser] on purpose, and the same
+ * narrowing `showEnded` needed for the ended channel (Codex, PR #212): the
+ * aggregate answers "can any of our surfaces reach them", which is the wrong
+ * question for the ongoing card. A user who silenced `snooze_ended` can still
+ * see a snooze running and end it from the shade.
+ *
+ * Null is *unread*, and two different things reach it. No manager is the
+ * obvious one. A channel that does not exist yet is the other, and it is
+ * deliberately not `false`: absent is not switched off. `SnoozeService` creates
+ * the channels as it starts, so a first-ever tile tap can read this before they
+ * exist, and treating that as missing would point the user at a settings row
+ * that is not there. `POST_NOTIFICATIONS` is what covers reachability until
+ * then, and both callers read it alongside.
+ */
+internal fun activeChannelEnabled(manager: NotificationManager?): Boolean? {
+    val channel = runCatching {
+        manager?.getNotificationChannel(SnoozeNotifications.CHANNEL_ACTIVE)
+    }.getOrElse {
+        Log.w("SnoozeNotifications", "Reading the ongoing channel failed; treating it as unread.", it)
+        return null
+    } ?: return null
+    return channel.importance != NotificationManager.IMPORTANCE_NONE
+}

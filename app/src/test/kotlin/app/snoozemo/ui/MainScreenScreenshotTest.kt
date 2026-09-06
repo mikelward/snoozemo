@@ -22,6 +22,7 @@ import androidx.compose.ui.test.performScrollTo
 import app.snoozemo.PlayUpdateState
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.DepartureObservation
+import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.TrackingMode
 import com.github.takahirom.roborazzi.captureRoboImage
@@ -138,6 +139,194 @@ class MainScreenScreenshotTest {
         // allow anything itself.
         composeRule.onNodeWithText("Allow").performClick()
         assertEquals(1, opened)
+    }
+
+    @Test
+    fun `blocked notifications get a banner of their own`() {
+        var opened = 0
+
+        capture("main-screen-notifications-missing.png") {
+            MainScreen(
+                // Granted, so the access banner is not what this captures. The
+                // two are separate required capabilities with separate
+                // remedies, and a test that let them overlap would pass on
+                // either one.
+                access = PolicyAccess.GRANTED,
+                notifications = NotificationPermission.BLOCKED,
+                activeChannelEnabled = true,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = { opened++ },
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Notifications needed").assertExists()
+        composeRule.onNodeWithText("Snoozes can't show status and quick actions").assertExists()
+        composeRule.onNodeWithText("Do Not Disturb access needed").assertDoesNotExist()
+        // Unlike missing access, this does not stop a snooze arming — it stops
+        // the app reporting on one. Hiding the button would be the gate firing
+        // where it shouldn't.
+        composeRule.onNodeWithText("Snooze").assertExists()
+        composeRule.onNodeWithText("Allow").performClick()
+        assertEquals(1, opened)
+    }
+
+    @Test
+    fun `a revoked-then-askable permission still gets the banner`() {
+        // The state a user reaches by granting notifications and later revoking
+        // them in system settings: granting cleared the denial history, so the
+        // next reading is ASKABLE rather than BLOCKED. The tile skips that
+        // state because its tap shows the prompt; this screen shows none and
+        // Snooze arms immediately, so hiding the banner here would let the app
+        // arm with its ongoing card silently dropped (Codex, PR #216).
+        capture("main-screen-notifications-askable.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                notifications = NotificationPermission.ASKABLE,
+                activeChannelEnabled = true,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Notifications needed").assertExists()
+    }
+
+    @Test
+    fun `two banners at once name their own capabilities to a screen reader`() {
+        // Both buttons read "Allow", so the visible label cannot tell them
+        // apart — the same ambiguity SetupRow already solved for the rows
+        // (Codex, PR #103, and again here on PR #216).
+        capture("main-screen-both-required-missing.png") {
+            MainScreen(
+                access = PolicyAccess.DENIED,
+                notifications = NotificationPermission.BLOCKED,
+                activeChannelEnabled = true,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Do Not Disturb access needed").assertExists()
+        composeRule.onNodeWithText("Notifications needed").assertExists()
+        composeRule.onNodeWithContentDescription("Allow Do Not Disturb access").assertExists()
+        composeRule.onNodeWithContentDescription("Allow Notifications").assertExists()
+    }
+
+    @Test
+    fun `a switched-off ongoing channel gets the same banner`() {
+        // The permission can be held while the user silences the channel in
+        // system settings, and the platform then drops the post — the same
+        // outcome by a different route, and the same remedy.
+        capture("main-screen-ongoing-channel-off.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                notifications = NotificationPermission.GRANTED,
+                activeChannelEnabled = false,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Notifications needed").assertExists()
+    }
+
+    @Test
+    fun `an unread notification reading shows no banner`() {
+        // The other direction, and the one that decides whether this is a
+        // banner or a nag: null is a reading that has not landed, and every
+        // launch passes through it before the first refresh. A banner here
+        // would flash on every cold start.
+        capture("main-screen-notifications-unread.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                notifications = null,
+                activeChannelEnabled = null,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Notifications needed").assertDoesNotExist()
     }
 
     @Test

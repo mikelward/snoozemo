@@ -2,6 +2,7 @@ package app.snoozemo.ui
 
 import android.Manifest
 import android.app.NotificationManager
+import androidx.annotation.VisibleForTesting
 import android.app.StatusBarManager
 import android.content.BroadcastReceiver
 import android.content.ComponentName
@@ -81,6 +82,7 @@ import app.snoozemo.snooze.PlayUpdateStore
 import app.snoozemo.snooze.WelcomeStore
 import app.snoozemo.snooze.SnoozeClock
 import app.snoozemo.snooze.SnoozeNotifications
+import app.snoozemo.snooze.activeChannelEnabled
 import app.snoozemo.snooze.SnoozeService
 import app.snoozemo.snooze.releaseDirectly
 import app.snoozemo.tile.SnoozeTileService
@@ -340,6 +342,16 @@ class MainActivity : ComponentActivity() {
      * anyway.
      */
     private var notificationsReachTheUser by mutableStateOf(true)
+
+    /**
+     * Whether the channel a running snooze reports on is switched on, or null
+     * until a reading lands. Narrower than [notificationsReachTheUser] and read
+     * separately for that reason: `MainScreen`'s required-notifications banner
+     * asks the same question the tile tap's gate does, and a silenced
+     * `snooze_ended` channel is not a reason to put a red banner on the screen.
+     */
+    @VisibleForTesting
+    internal var activeChannelEnabled by mutableStateOf<Boolean?>(null)
 
     /**
      * Null until the platform has been asked, for the same reason [notifications]
@@ -1110,6 +1122,12 @@ class MainActivity : ComponentActivity() {
                         }
                         Screen.MAIN -> MainScreen(
                             access = access,
+                            // The same two readings the tile tap's gate makes,
+                            // handed over raw so the screen and the gate share
+                            // one definition of "notifications are missing"
+                            // rather than each keeping its own.
+                            notifications = notifications,
+                            activeChannelEnabled = activeChannelEnabled,
                             tileAdded = tileAdded,
                             tileBannerDismissed = tileBannerDismissed,
                             showReplayHint = showReplayHint,
@@ -1769,6 +1787,12 @@ class MainActivity : ComponentActivity() {
      * application has already warmed — and every caller is either already
      * past the first frame or reacting to a dialog the user just answered.
      */
+    /** Re-reads the notification state, for a test that has changed it underneath. */
+    @VisibleForTesting
+    internal fun refreshNotificationsForTest() {
+        refreshNotifications()
+    }
+
     private fun refreshNotifications(): NotificationPermission {
         val granted = checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PERMISSION_GRANTED
         val rationale = shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)
@@ -1783,6 +1807,37 @@ class MainActivity : ComponentActivity() {
         // channel creation, so an absent channel afterwards means the creation
         // was refused rather than merely not attempted yet.
         notificationsReachTheUser = SnoozeNotifications(applicationContext).canReachTheUser()
+        // The narrow half, off the same manager. Read here for the same reason
+        // the line above is: this method already runs after the first frame,
+        // and a binder call has no business in composition.
+        //
+        // Narrow in *which channel* it reads, not in what counts as broken
+        // (Codex, PR #216). Two things the shared read leaves as "unread" are
+        // definite failures by the time this runs, and both were already known
+        // here — `canReachTheUser` has carried them since PR #18:
+        //
+        // - The app-wide switch. `POST_NOTIFICATIONS` can read granted while
+        //   `areNotificationsEnabled()` is false, and the system then drops
+        //   every post.
+        // - An absent channel. On the tile's path that means "the service has
+        //   not created them yet", which is why the shared read calls it
+        //   unread — but the line above has just constructed a
+        //   `SnoozeNotifications`, which runs `ensureChannels()`, so absent
+        //   *here* means the creation was refused. Posting to a channel that
+        //   does not exist throws.
+        //
+        // Null stays reserved for having no manager at all.
+        //
+        // Off `applicationContext`, matching the line above: `ensureChannels()`
+        // ran against that context's manager, and reading a different instance
+        // is how "absent" and "just created" get confused — the exact
+        // distinction the rest of this block turns on.
+        val manager = applicationContext.getSystemService(NotificationManager::class.java)
+        activeChannelEnabled = when {
+            manager == null -> null
+            !manager.areNotificationsEnabled() -> false
+            else -> activeChannelEnabled(manager) ?: false
+        }
         val current = NotificationPermission.of(
             granted = granted,
             everDenied = promptStore.everDenied(),
