@@ -3447,6 +3447,23 @@ that can only be settled on a real device, ordered by risk.
         one reflective read). Once is enough; after that every pull request exercises the
         pipeline.
 
+### Pinch to resize text
+
+Added 2026-09-06 with the feature (`SPEC.md` §4.8). Robolectric can drive synthetic pointer
+events and does (`PinchFontSizeTest`), but it cannot answer what the gesture *feels* like,
+which is the whole of what was tuned here.
+
+- [ ] Does the 24dp slop hold both ends of its job on a real hand: no accidental resize
+      from a two-finger scroll or a phone picked up by its screen, and still obvious enough
+      that someone who tries a pinch gets one on the first attempt?
+- [ ] Is the gain right — does a comfortable one-hand spread cover the range without
+      overshooting past what the user meant?
+- [ ] Does the text keep up with the fingers on a mid-range device, or does resizing the
+      whole tree every frame drop them? The sheet and the welcome flow are the two worth
+      watching, since both are drawn over something else.
+- [ ] Does the gesture reach the end-condition sheet, which lives in its own activity and
+      its own window?
+
 ### The calendar action
 
 Added 2026-08-31 with the feature (`SPEC.md` §4.3). Neither can be answered in this
@@ -6132,6 +6149,55 @@ what sets it off.
 - Is it a per-snooze end condition the user picks (§4.4's sheet), or a global
   behavior? A cinema and a walk in a park want opposite answers.
 - Thirty seconds is a guess. It wants a handset in an actual cinema.
+
+## Deferred review findings (Codex, PR #217)
+
+- [ ] **A refused font-size save is silent unless the user is on Settings.** The pinch
+  works on every screen (`SPEC.md` §4.8), but `scaleSaveRefused` / `pinchSaveRefused` are
+  rendered by `SettingsScreen` alone. Pinch on Main, the welcome flow, Licenses or the
+  tile's end-condition sheet, have the write refused, and the text simply springs back to
+  the stored size with nothing saying why — principle 2's failure, and the more visible
+  for being a gesture the user just made.
+
+  **This is the third finding in the same mechanism** (Codex, PR #217: reconciling the
+  displayed value, then reporting per field, then this), which by `AGENTS.md` makes it
+  evidence about the design rather than another bug — and the same shape is already
+  deferred from PR #206 for the telemetry opt-out. Both are one question: **where does a
+  refused settings write get reported when the user is not on the screen that owns the
+  setting?** Fixing either one alone builds half of a mechanism the other then needs.
+
+  What it costs to answer: a place to say it (a snackbar host above every screen, or the
+  ongoing notification, or the next visit to Settings), new user-facing copy — which waits
+  for the maintainer either way (`AGENTS.md`, *Translations*) — and a decision about
+  whether a gesture's failure is worth interrupting whatever the user was doing for. The
+  springing back is itself feedback that it did not take; what is missing is why.
+
+- [ ] **Whether a transient overlay should take the pinch, not just the size.** Every
+  popup window now re-establishes the chosen text size — the end-condition sheet, both
+  dialogs and the ringer menu (they had been drawing at the system size, which was the
+  actual bug). The *gesture* is installed on two of them: the sheet, which is a screen in
+  its own right, and the licenses dialog's body, which is a page of text to read. It is
+  not installed on the background-location rationale dialog or the ringer dropdown.
+
+  **The second finding in the windows mechanism** (Codex, PR #217: the sheet, then these),
+  so by `AGENTS.md` it is a design question rather than another instance. Two things make
+  it one:
+  - A dialog's window is **full-screen** — its scrim included — so while a dialog is up,
+    a pinch anywhere on the display belongs to that window. Hosting the gesture over the
+    whole window would put it in competition with the scrim's own tap-to-dismiss; hosting
+    it on the body alone (what the licenses dialog does) leaves the scrim inert.
+  - A two-finger pinch inside a three-item dropdown is not a gesture anyone makes, and
+    consuming events there costs the menu's own handling.
+
+  So the options are: leave it as it stands (the size everywhere, the gesture where there
+  is something to read); host the gesture on every overlay's body; or host it over the
+  whole dialog window and decide what that does to dismissal. `SPEC.md` §4.8 says
+  "anywhere in Snoozemo" and enumerates *screens*, so it does not settle this by itself.
+  `SheetFontSizeWindowTest` pins both halves as they stand, so a change here is deliberate.
+
+  Not urgent: a refused `commit()` means storage is failing, which is rare and rarely
+  quiet elsewhere. Recorded rather than guessed at, because the answer is a product
+  decision and the copy is the maintainer's.
 
 ## Deferred review findings (Codex, PR #206)
 

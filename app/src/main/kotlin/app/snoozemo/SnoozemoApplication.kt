@@ -66,6 +66,12 @@ class SnoozemoApplication : Application(), androidx.work.Configuration.Provider 
         // before it — so a cold tap should find it in memory rather than
         // waiting on the file.
         SnoozeRingerStore(this).warm()
+        // How big the app's own text is (SPEC.md §4.8). Not on the arm path —
+        // nothing between a tile tap and the zen rule reads it — but every
+        // screen's first frame is sized from it, and a screen that rendered at
+        // the default and resized when the file landed would move the targets
+        // under a finger already on its way down.
+        app.snoozemo.ui.FontSizeSetting.warm(this)
         // The debug log's rotation and file sink (SPEC.md §4.6). Spawns its
         // own thread, so the cold tap above never waits on it; entries
         // recorded before the sink registers still reach the file, since the
