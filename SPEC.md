@@ -2364,7 +2364,8 @@ This is where the battery budget is won:
 - **Not associated** → register `Sensor.TYPE_SIGNIFICANT_MOTION` via
   `SensorManager.requestTriggerSensor`. It is a hardware-backed one-shot trigger, requires **no
   permission**, and costs approximately nothing. While it has not fired, the phone has not moved, so
-  poll location slowly, purely as a sanity check — at the resting cadence below.
+  poll location slowly, purely as a sanity check — at the resting cadence below. **On `play` the
+  firing is not something to count on** — see the second note below.
 - **Significant motion fired** → switch to the 90 s request above until the state resolves, then
   re-arm the trigger.
 
@@ -2390,6 +2391,22 @@ bounded — the geofence and the Wi-Fi watch are both unaffected, since the poll
 behind them, not the mechanism. What such a device loses is escalation latency while resting away
 from the anchor's Wi-Fi: it waits for the backstop rather than for motion. The duration cap is
 unchanged and remains the only hard bound (D7).
+
+**On `play`, plan as though the trigger never fires in the background** (2026-09-06, PR #212).
+Android 9 gives a background app no events from continuous *or* one-shot sensors and names a
+foreground service as the remedy; `minSdk` 35 puts every supported device inside that restriction,
+and `play` runs no foreground service (§3.4). An earlier reading granted `play` a live window of
+roughly the minute after each wake, on the grounds that `requestTriggerSensor` stays registered
+while the process is alive — but that argued from process lifetime rather than importance. A
+geofence broadcast does reach foreground importance, only while its receiver runs; the trigger
+fires later, when the user moves, and by then just the started service is left. **A handset cannot
+settle it either**: a device that delivered the event would be showing undocumented leniency, not a
+guarantee, so a positive result would license nothing. So every `play` device rests on the
+backstop's ~30 minutes — the same position the paragraph above describes for a device with no
+sensor at all, now reached for a different reason and reaching every device. `direct` is
+unaffected: Phase 7's foreground service lifts the restriction, and the trigger works as this
+section intends wherever the hardware exists. §6.10's three wake-up sources are untouched on both
+flavors — what is at stake here is escalation latency, never whether a departure is detected.
 
 ### 6.8 Foreground service
 

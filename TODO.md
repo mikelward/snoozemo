@@ -1052,12 +1052,28 @@ the point is that every other line of the app is worthless if it isn't true.
       alarm already covers, while making the alarm look optional". It is not quite that, because
       it *does* beat the backstop inside its window, but the shape is the same and the commit
       subject was rewritten to stop promising more.
+      **That window is unverified, not established** (2026-09-06, PR #212). This paragraph
+      reasoned only from the in-process lifetime of `requestTriggerSensor` and did not
+      consider Android 9's background-sensor restriction, which names one-shot reporting
+      mode and is not lifted by a process merely being alive. A geofence broadcast does
+      reach foreground importance while `onReceive` runs (`ProcessExitReasonsTest`), but
+      the trigger fires later, when the user moves, and by then only the started service
+      remains — which is background. So
+      nothing should be built or measured on the assumption that the trigger fires inside
+      the minute; a handset that delivered it would be showing undocumented leniency
+      rather than a supported guarantee. Left as the record of what was reasoned then.
       **The durable version is a product decision, not more engineering.** Nothing in the
       platform delivers significant motion to a dead process. The one mechanism that would is
       Play Services' Activity Recognition transition API, which takes a `PendingIntent` — and
-      needs the `ACTIVITY_RECOGNITION` runtime permission, a new Data Safety answer, and a
-      second `play`-only dependency. That is a distribution decision (`AGENTS.md`, *Cost and
-      reliability*), so it is recorded here rather than guessed. On `direct`, Phase 7's
+      needs the `ACTIVITY_RECOGNITION` runtime permission — and, this paragraph originally
+      said, a new Data Safety answer and a second `play`-only dependency. **Both of those
+      are wrong or unsettled** (Codex, PR #212): the API ships in
+      `play-services-location`, which `presence/build.gradle.kts` already puts on `play`
+      for the Geofencing API, so there is no second artifact; and whether it moves a Data
+      Safety answer is genuinely open, recorded under *Decisions needing review*. What
+      remains is the runtime permission and its policy question — still a distribution
+      decision (`AGENTS.md`, *Cost and reliability*), so still recorded rather than
+      guessed, but a cheaper one than this paragraph claimed. On `direct`, Phase 7's
       foreground service keeps the process resident and the trigger as written works as §6.7
       intends, with no new permission — which is why both classes live in the shared source set.
       **What landed:** `MotionTrigger` owns the lifecycle over a
@@ -3252,6 +3268,31 @@ that can only be settled on a real device, ordered by risk.
        ordinary use, Wi-Fi on and off, including a stationary-overnight case. Pixel first;
        repeat on Samsung at Phase 8. If the three-source layering closes the gap, the
        fallback end conditions stay off the roadmap.
+- [ ] **2a. Characterize the motion trigger on `play` — do not plan on it.**
+       Android 9 states that an app in the background receives no events from
+       one-shot sensors and names a foreground service as the remedy;
+       `TYPE_SIGNIFICANT_MOTION` is one-shot, no service in the `play` build
+       calls `startForeground`, and `minSdk` 35 puts every supported device
+       inside that restriction. **This is §6.7's escalation, not §6.10's
+       ladder** — motion is a duty-cycle input, and the three §6.10 sources
+       (geofence exit, Wi-Fi loss, the backstop) are intact either way.
+       Phase 3 records a live window of roughly the minute after each wake,
+       from `requestTriggerSensor` being in-process; that window is
+       **unverified**, and the reason is the timing rather than the importance
+       (Codex, PR #212). A geofence broadcast *does* put the process in the
+       foreground while `onReceive` runs — `ProcessExitReasonsTest` records
+       exactly that — but the trigger fires later, when the user moves, by
+       which point only the started service is left and that is background.
+       **A handset cannot license relying on it either** — a device that
+       delivered the event would be showing undocumented leniency, not a
+       guarantee — so this item is characterization, not a decision input:
+       find out what actually happens, and record it, while the plan proceeds
+       as though the trigger does not fire. The number that *does* decide
+       something is the backstop's own latency, since that is what escalation
+       falls back to; take it here alongside item 2's geofence measurements.
+       `direct` is unaffected where the sensor exists: Phase 7's foreground
+       service keeps the process resident, which is the remedy the platform
+       names.
 - [ ] **2b. The same, for `direct`'s `ForegroundPresenceMonitor`** — conditional on Phase 7
        being built, and tracked there too. Item 2 measures the `play` geofence; the
        foreground detector and its §6.7 duty cycle are a separate measurement, including
@@ -4380,6 +4421,85 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     a snooze that ends on a duration cap needs the same controller.
 
 ## Decisions needing review
+
+- **Open: whether `ACTIVITY_RECOGNITION` moves a Data Safety answer** (raised under
+  autopilot from PR #212; put to the maintainer 2026-09-06 and **not yet answered** —
+  recorded here on their instruction to "record open questions and drive to merge").
+  Phase 3's durable-motion paragraph originally said the Play Services Activity
+  Recognition transition API needs "a new Data Safety answer, and a second `play`-only
+  dependency". **The dependency half is simply wrong and has been corrected there** —
+  the API ships in `play-services-location`, already on `play` for the Geofencing API —
+  so what is left is the Data Safety answer alone. Nothing in the tree answers it now —
+  Phase 3, the motion entry and that entry's own question list all defer to here — so
+  **this is one unresolved policy question, argued in this record and nowhere else,
+  not a disagreement to reconcile.** Keeping it in one place is deliberate: seven review
+  passes on PR #212 went to copies of this argument drifting apart, one fix at a time.
+  When it is answered, write the answer in each of those places; do not re-argue it there.
+
+  What the motion entry leans toward, and what that leaning assumes: "no answer moves",
+  by the reading `docs/play-store-declarations.md` already applies to `READ_CALENDAR` —
+  that read is local, nothing is transmitted, so nothing is *collected* in the form's
+  sense. **That reading only transfers if the recognition is likewise local**, which is
+  the very fact below that nobody here has established, so the leaning is conditional and
+  not evidence. What is settled is the smaller half: a motion `EndReason` would be stored
+  and logged, since `ActiveSnoozeStore.markReleasing` persists it and
+  `SnoozeService.onStateChanged` writes every reason to the debug log — both on the
+  device, so that half moves nothing on its own.
+
+  The fact that settles it is whether Play Services' Activity Recognition transmits
+  physical-activity data off the device as part of providing the API, which is not
+  answerable from anything read here and is not autopilot's to guess — a Data Safety
+  answer is a §3 distribution decision (*Play policy questions are never autopilot's to
+  guess*). The cost of leaving it is that the permission's real distribution cost cannot
+  be assessed, which is exactly the input the durable-motion decision needs. Settle it by
+  reading Play Services' own Data Safety guidance for the Activity Recognition API, then
+  write the answer into both places.
+
+- **Open: what a cheap repair for a wrong ending would actually cost** (raised under
+  autopilot from PR #212; put to the maintainer 2026-09-06 alongside the above and **not
+  yet answered**). The motion idea leans on a false ending being trivial to undo, and
+  the obvious repair — a one-tap re-arm on the ending notification — turns out to have
+  four unsettled parts rather than none:
+  - **the anchor**, which `docs/PRIVACY.md` promises is erased when the snooze ends, so
+    same-anchor re-arm keeps a copy past a promise users read, while re-capture keeps the
+    promise but silently differs wherever they have moved;
+  - **the cap state** — not just `capExpiresAt` but `bootReference` (which is what makes
+    `remaining()` survive a backward clock change) and `capCeilingAt` (which keeps a later
+    `+30 min` under the original ceiling) — all behind the same boundary and none
+    reconstructible by re-capture, so no option offers "whatever is left" without
+    retaining them or explicitly dropping those behaviors; starting a fresh cap instead
+    can keep the phone quiet past the limit the user set, principle 1's failure rather
+    than principle 3's;
+  - **reachability**, meaning global notification access plus `CHANNEL_ENDED`
+    specifically — `showEnded()` posts only there, so a silenced `snooze_active` does not
+    block the repair, and `canReachTheUser()`'s three-channel aggregate is the wrong test
+    here. Where the narrow test does fail, a notification action is no repair at all and
+    records nothing either;
+  - **which snooze it repairs**, since nothing cancels `ID_ENDED` when a new snooze arms,
+    so a stale ended card can restore an old anchor and cap over a live snooze unless the
+    action carries the ended snooze's identity — §4.3's calendar action already has that
+    shape.
+
+  **That list is what has been found, not all there is.** A fourth item appeared as soon
+  as the third was written; a complete accounting is part of answering this question.
+
+  Each is cheap to change now and expensive later: a retention promise cannot be quietly
+  withdrawn once shipped, and a repair path users cannot reach is discovered in the
+  field. The cost of leaving it open is that the argument for aggressive motion endings
+  rests on a dependency whose price nobody has established. Three shapes, cheapest first: **re-capture**
+  (keeps the *retention* promise and breaks the *cap* one, rather than costing nothing:
+  nothing is held past the ending, but the deadline, its monotonic reference and the
+  extension ceiling cannot be rebuilt, so a repaired snooze runs on a fresh cap that can
+  outlast the limit the user set — and the anchor is nearly right in the case that
+  matters, since the user is still in the seat, but differs silently wherever they have
+  moved), **retain briefly**
+  (a bounded window after an ending, a smaller change to the promise than it looks),
+  **retain until replaced** (simplest to build, largest change to the promise).
+  Reversible in the sense that nothing is built yet — but not reversible once shipped,
+  since a retention promise is read by users and cannot be quietly withdrawn, which is
+  why autopilot did not pick one. It is upstream of the motion feature: the argument for
+  an aggressive trigger rests on the repair being cheap, and re-capture is only cheap
+  where the user has not moved — precisely the case a false ending cannot distinguish.
 
 - **Decided: a refused release keeps its recorded reason until the ending completes or
   is abandoned** (maintainer, 2026-09-05, "sounds fine i think"; raised under autopilot
@@ -5613,6 +5733,341 @@ What is left open:
       cache this entry is about and would need invalidation rules of its own.
       The record-carrying design deletes it for free, because the reading would
       ride with the update instead of being reconstructed from published levels.
+
+## Ending on motion, for the cinema and the meeting room (maintainer, 2026-09-06) — undecided
+
+The case location cannot serve. Indoors there is no usable fix, the venue's
+Wi-Fi is one you would not join, and the user is stationary by definition — so
+neither of the two presence signals this app has says anything. And the intent
+is not geographic anyway: "quiet until this film ends" is about sitting through
+a thing, not about a radius. Motion is a much closer proxy for that than
+distance.
+
+The maintainer raised it directly ("my initial thinking was cinema and meeting
+room, end snooze after any significant motion") and it is **undecided** — this
+entry is the thinking, not a plan.
+
+### The three situations, and which are separable
+
+| what happens | signal | should it end? | separable? |
+|---|---|---|---|
+| Shifting in the seat, standing to let someone past | a burst, seconds, back in the seat | no | **yes** — by duration |
+| Trip to the toilet and back | sustained walking, out and back | no, but it will | **no** |
+| Actually leaving | sustained walking, out | yes | — |
+
+**The stand-up case is filterable and the toilet trip is not**, and the reason
+is worth stating because it does not yield to tuning: getting up and walking out
+to the toilet is the *same* signal as getting up and walking out to go home —
+same steps, same duration, same direction. What separates them is whether you
+come back, which is information that only exists later. Any threshold that
+catches leaving catches the toilet trip too.
+
+### What makes an aggressive trigger acceptable
+
+Ending wrongly is the safe direction (D7, fail open) — a phone that rings when
+it could have stayed quiet, against one that stays silent through something that
+mattered. But "safe" is not "free": a snooze that ends every time the user
+stretches is deleted, not tolerated. The maintainer's own condition is the
+answer: **filter what is filterable, and be loud about what is not.**
+
+- [ ] **A cheap repair for a wrong ending — shape undecided.** The argument for
+      an aggressive trigger rests entirely on a false ending being trivial to
+      undo, so *something* has to make it trivial. The obvious candidate is a
+      one-tap action on the ending notification (`Still here — snooze again`),
+      and it is **separable and independently valuable**: it repairs every
+      fail-open ending, not just a motion one — two poor fixes passing §6.6's
+      confirmation, or a Wi-Fi-only anchor whose router outage outlasted the
+      5-minute grace period (§6.3). **Not** a brief Wi-Fi drop: D4 makes Wi-Fi
+      loss an escalation hint and never an ending on its own — "Anchor SSID
+      lost → escalate to `CHECKING`, do not end" — and on a Wi-Fi-only anchor a
+      prompt reassociation cancels the grace period (Codex, PR #212). Worth
+      building and living with *first*, since it would also show how often
+      endings are wrong today, before deciding whether motion is worth adding.
+
+      **It is a prerequisite, not a designed feature, and these are the parts
+      found so far — the list is not exhaustive, and enumerating it completely
+      is part of answering the question rather than something this entry
+      does** (Codex, PR #212, over four passes; a fourth item appeared as soon
+      as the third was written, which is the evidence for that caveat):
+      - **The anchor.** `docs/PRIVACY.md` promises the anchor — coordinates,
+        SSID, BSSID, place name — is "erased when the snooze ends", and that
+        there is no history of past places or networks. Re-arming on the *same*
+        anchor keeps a copy past that boundary, so the doc changes before the
+        action can. Re-capturing instead keeps the promise but is a different
+        behavior wherever the user has moved, and silently so.
+      - **The cap state, which is the dangerous part — and it is more than one
+        value.** The same table puts "when its time limit runs out" behind the
+        same boundary, and no option that only recovers the anchor can
+        reconstruct it — re-capture included. Nor is the deadline alone enough
+        (Codex, PR #212): `remaining()` needs `bootReference` to survive a
+        backward wall-clock change, and `extendedCap()` needs `capCeilingAt` to
+        keep a later `+30 min` under the original ceiling. Reconstructing from
+        `capExpiresAt` alone loses both defenses, each in the direction of the
+        phone staying quiet longer than it should. So "whatever is left of the
+        cap" is not available to *any* shape that does not retain the whole cap
+        state — or that does not explicitly drop the affected behaviors from a
+        repaired snooze and say so. Silently starting a fresh cap
+        instead can keep the phone quiet past the limit the user set, which is
+        principle 1's failure rather than principle 3's. Either every option
+        retains the deadline, or the ones that cannot must drop the
+        remaining-cap promise and say what they are offering instead.
+      - **Reachability, but narrower than `canReachTheUser()`.** That helper
+        aggregates all three channels, while `showEnded()` posts on
+        `CHANNEL_ENDED` alone — so the question for this action is the global
+        notification permission plus that one channel, not the aggregate
+        (Codex, PR #212). A user with `snooze_active` silenced still gets the
+        repair. Where the narrower test *does* fail, a notification action is
+        no repair path at all, and the "it would show how often endings are
+        wrong" argument does not hold for those users either, since nothing
+        records a tap that cannot happen. So either the repair has a second
+        surface (in-app, or the tile) or an aggressive trigger is gated on a
+        reachable ended channel specifically.
+      - **Which snooze it repairs.** `showEnded()` posts `ID_ENDED` with only
+        `setAutoCancel(true)`, and nothing cancels that id when a new snooze
+        arms — so an ended card can still be sitting in the shade after the
+        user has armed a fresh snooze from the tile. A repair tapped then would
+        restore an old anchor and cap over a live one. The action has to carry
+        the ended snooze's identity and no-op once a newer snooze exists, the
+        same shape as §4.3's calendar action, which "carries the snooze it was
+        offered for" and whose service "declines a claim that no longer
+        matches".
+
+      Until those are answered this is a dependency with an unknown cost, not a
+      cheap fix to lean on — which is the honest state of the argument for
+      motion endings generally.
+- [ ] **Sustained motion, not any motion.** Letting someone past is a few
+      seconds; walking out of a cinema is thirty or more before the door. The
+      duration is the discriminator.
+
+      **This is a different proposal from the `until I move` fallback the spec
+      already carries, and the difference is the whole point** (Codex, PR
+      #212). §6.10's fallback table defines that one as instant
+      `TYPE_SIGNIFICANT_MOTION` and accepts the consequence outright — "standing
+      up ends it. Genuinely useful for *quiet while I'm sitting here*, which is
+      a real and different intent" — and §4.4's row says the same. That is a
+      coherent feature; it is just not the cinema, where standing to let someone
+      past is exactly the ending the maintainer wants avoided. So the two answer
+      different intents and a future implementer could reasonably build either.
+      **Whether sustained motion supersedes the instant fallback, or ships
+      beside it as a second option, is the maintainer's call** — and if it
+      supersedes, `SPEC.md` §4.4 and §6.10 change with it, reasoning included
+      (`AGENTS.md`: a decision that changed belongs in `SPEC.md` with its
+      reason). Nothing here changes the spec; the entry only records that the
+      two exist and differ.
+
+### The sensor, and what it costs
+
+- `TYPE_SIGNIFICANT_MOTION` is a one-shot hardware trigger: **no permission**,
+  near-zero power, already wired here as §6.7's duty-cycle escalation input
+  (`MotionTrigger`) — not one of §6.10's three wake-up sources — where it
+  currently means "go ask location" rather than "end".
+- It cannot measure duration — it only says something happened. So the obvious
+  shape is a **chain**: significant motion fires → subscribe to the
+  accelerometer for ~30 s → sustained? end : re-arm the one-shot and go back to
+  sleep. **That chain does not work on `play`, and the reason is the platform,
+  not the power budget** — see the next section. It is written down here
+  because it is the shape anyone reaches for first, and because it is fine on a
+  flavor that has a foreground service.
+- `ACTIVITY_RECOGNITION` would give cleaner walking detection, and costs a
+  runtime permission. It is a distribution decision (§3) on that alone — a
+  runtime prompt and a new line on the store listing's permission list.
+  **Whether it also moves a Data Safety answer is the open question recorded
+  under *Decisions needing review*, and the argument lives there rather than
+  here.** This bullet restated it twice and drifted from it twice (Codex,
+  PR #212) — first claiming nothing derived from it is stored or logged, then
+  asserting the recognition is on-device, which is the exact fact that question
+  says nobody has established. One copy of an unsettled argument is enough.
+  What belongs here is only what this feature adds to it: whatever Play
+  Services does with the recognition itself, Snoozemo would store and log
+  something motion-derived, because a motion `EndReason` is persisted by
+  `ActiveSnoozeStore.markReleasing` and written to the on-by-default debug log
+  by `SnoozeService.onStateChanged` (`SPEC.md` §4.6) — both on the device.
+  Not obviously worth the prompt if a windowed accelerometer read would do —
+  except that on `play` the accelerometer read is the thing that doesn't work,
+  which makes this the *cheaper* of the two options there rather than the
+  dearer one.
+
+### The background-sensor restriction, which decides most of this
+
+Android 9 limits what an app in the background receives, and the wording is
+wider than the accelerometer:
+
+> Sensors that use the continuous reporting mode, such as accelerometers and
+> gyroscopes, don't receive events. Sensors that use the on-change or one-shot
+> reporting modes don't receive events.
+>
+> If your app needs to detect sensor events on devices running Android 9, use a
+> foreground service.
+>
+> — `developer.android.com/about/versions/pie/android-9.0-changes-all`
+
+**No service in the `play` build calls `startForeground`** (§3.3, and
+`DeclaredPermissionsTest` pins that no service declares a
+`foregroundServiceType`). During a snooze there is no activity either — the
+phone is in a pocket, in a cinema, which is the entire scenario. So on `play`
+the app is *background* in exactly this sense, and two things follow:
+
+- **The 30-second accelerometer window cannot happen.** Continuous sensors are
+  named explicitly. The chain above is therefore a `direct`/Phase 7 shape, or
+  it needs a foreground service on `play` — which is the §3 distribution
+  decision this whole flavor split exists to avoid, and not one to take for a
+  convenience feature.
+- **The one-shot is named too, and that bears on shipped code — but narrowly.**
+  The restriction covers one-shot reporting mode in the same sentence, and
+  `TYPE_SIGNIFICANT_MOTION` is one-shot. `MotionTrigger` is live on `play`
+  today, armed whenever duty drops to `SANITY`, to escalate the sanity poll
+  when the user starts moving (`GeofencePresenceMonitor`).
+
+  **Two things keep that from being "the source is dead", and both were
+  already written down** (Codex, PR #212, pointing at Phase 3's own record).
+  First, motion is a **§6.7 duty-cycle input, not a §6.10 wake-up source** —
+  Phase 3 says outright that `TYPE_SIGNIFICANT_MOTION` "is *not* a fourth
+  wake-up source", and the three that are (geofence exit, Wi-Fi loss, the
+  backstop) are untouched by any of this. The confirmation design is not
+  degraded. Second, the trigger's reach on `play` is already known to be
+  small: `requestTriggerSensor` is in-process with no `PendingIntent` form, so
+  it is armed for roughly the minute after each wake rather than for the
+  snooze — Phase 3 calls that "a real but narrow win" and the commit subject
+  was rewritten to stop promising more.
+
+  **But the plan does not get to rely on that minute either** (Codex, PR #212,
+  third pass on this same mechanism — so this is a conclusion about the
+  write-up, not another patch to it). Whether the restriction bites *inside*
+  the window turns on the process's importance *when the trigger actually fires*,
+  which is later than the wake that armed it. A geofence broadcast reaches
+  foreground importance while `onReceive` runs (`ProcessExitReasonsTest`), but the
+  user moves afterwards, by which point only the started service is left and that
+  is background — and neither the Android 9 page nor anything else read here
+  settles the case outright. The decisive point is that **a handset
+  cannot settle it either**: a device that delivered the event would be showing
+  undocumented leniency, not a supported guarantee, so a positive result would
+  license nothing. Planning on a window no document promises is how the app
+  ends up believing in an escalation that supported devices are not required
+  to deliver.
+
+  So: **treat the trigger as unavailable for background `play` snoozes.** Not
+  "it is dead" — that overstates what is known — but "nothing is built or
+  measured on the assumption that it fires". The cost is the same either way
+  and it is small: escalation falls back to the 30-minute backstop, exactly as
+  it did before the trigger landed, and §6.10's three sources are untouched.
+  **That conclusion is normative, so it is recorded in `SPEC.md` §6.7** (Codex,
+  PR #212) — the section defined the escalation for both flavors and
+  distinguished only devices without the sensor, which would have left an
+  implementer or a QA pass counting an escalation that cannot fire.
+
+  **This retires Phase 3's "real but narrow win" as a claim to rely on.** That
+  paragraph was written from the in-process lifetime of `requestTriggerSensor`
+  and did not consider the background-sensor restriction at all, so the window
+  it describes is unverified rather than established. Left in place as the
+  record of what was reasoned then; annotated there, not rewritten here.
+
+- **None of which touches `direct`, on a device that has the sensor.** Phase 7's
+  `ForegroundPresenceMonitor` is foreground-service-backed, which is exactly the
+  remedy the platform names, so the background-delivery restriction lifts and
+  both the one-shot and the accelerometer window become available — Phase 3 says
+  as much: the trigger "as written works as §6.7 intends" once a foreground
+  service keeps the process resident. A "no" on `play` narrows this entry to one
+  flavor; it does not end it.
+
+  **But a foreground service removes a restriction, not a hardware gap** (Codex,
+  PR #212). `TYPE_SIGNIFICANT_MOTION` is optional, and
+  `PlatformMotionTrigger.arm()` already returns null when
+  `getDefaultSensor` does — the sensorless path the existing plan records. So a
+  motion end condition can never be the only way out on any flavor: it is
+  offered where the sensor exists and falls back to duration-only where it does
+  not, said plainly to the user (principle 2), the same shape as every other
+  degradation in this app.
+### What the platform actually promises, and what it does not
+
+The one-shot's *intent* is already closer to what this feature wants than a raw
+accelerometer threshold would be. The motion-sensors guide defines it as:
+
+> The significant motion sensor triggers an event each time significant motion
+> is detected and then it disables itself. A significant motion is a motion
+> that might lead to a change in the user's location; for example walking,
+> biking, or sitting in a moving car.
+
+So the platform is already aiming at "the user has probably gone somewhere",
+not "the phone moved". Re-arming is explicit — `requestTriggerSensor` after
+every firing — which is what makes it near-free, and what any chain built on it
+returns to when a window turns out not to be sustained.
+
+None of which survives the background restriction above if that restriction
+bites: an intent the sensor is never given the chance to act on is worth
+nothing. Read this section as what the sensor *means* when it fires, not as
+evidence that it will.
+
+Where to read further, in order of authority:
+
+- `Sensor.TYPE_SIGNIFICANT_MOTION` and `TriggerEventListener` — the API contract.
+- **`source.android.com/docs/core/interaction/sensors/sensor-types#significant_motion`**
+  is the one that matters: the normative definition device makers implement
+  against. Not reachable from the Claude Code web sandbox (the request returns
+  nothing, unlike `developer.android.com`), so read it from a real machine.
+- The CDD §7.3, for what a device that ships the sensor is *required* to do.
+
+**The threshold is the OEM's, not Android's**, and that is the load-bearing
+caveat for this whole entry. The documentation defines the intent; each
+vendor's implementation decides what counts as significant. So "does standing
+to let someone past trip it?" is not answerable from any document — it is a
+per-device question, and it is precisely why the accelerometer window exists
+rather than trusting the one-shot to mean "left the room". Any evaluation of
+this feature starts with firing it on a real handset, in a seat, and watching
+what sets it off.
+
+### What it is not a substitute for
+
+- **A meeting room often has a better answer, but not always.** The ongoing
+  notification's third action (§4.3 — the notification, not §4.4's
+  end-condition sheet) offers the next meeting's end time, which is more
+  precisely what the user means than any sensor reading. But §4.3 makes it
+  **"absent, never disabled, and never a promise"**: no calendar permission,
+  no meeting, or nothing inside the cap, and the card carries its usual two
+  actions and says nothing. And where `POST_NOTIFICATIONS` is denied the card
+  is not there at all.
+
+  So motion's scope is not just the cinema (Codex, PR #212). It is **any
+  sitting-through case the calendar cannot cover** — which includes the
+  meeting room for a user who declined calendar access, whose meeting was
+  never in a calendar, or who is in one that overran its entry. Scoping this
+  idea to "the cinema, where there is no calendar entry" quietly wrote the
+  maintainer's own stated use case out of it.
+- **A duration chosen at arm time** is the other honest answer for a film, and
+  it already exists. Motion competes with "2h", not with location.
+
+### Open questions
+
+- **Settled, not open: the trigger is not something to plan on for background
+  `play` snoozes.** Three review passes went round this, and the resolution is
+  that no document promises the window and no handset can license relying on
+  it. Item 2a characterizes what actually happens; the plan proceeds as though
+  the trigger does not fire. §6.10's three sources are untouched, and `direct`
+  is unaffected where the sensor exists.
+- **Does `ACTIVITY_RECOGNITION` move a Data Safety answer?** Nowhere in this
+  tree answers it, and nowhere should until Play Services' own guidance is
+  read — **open with the maintainer since 2026-09-06**, argued once under
+  *Decisions needing review* and nowhere else. It decides whether the durable
+  `PendingIntent` option is cheap or expensive, so it gates the alternative to
+  the sensor entirely.
+- Does it end a snooze or *escalate* to a location check, as motion does today?
+  Ending directly is the whole point in a venue where location has nothing to
+  say — but it means one signal, unconfirmed, ends a snooze, which is a break
+  from §6.6's confirmation discipline everywhere else.
+- **What does the ending say it was?** `EndReason` has `DEPARTURE`,
+  `DURATION_CAP`, `MANUAL`, `DND_TURNED_OFF` and `LOST_CAPABILITY`, and no
+  motion case — so a motion ending would have to borrow one, and `DEPARTURE`
+  would tell a user who stood up to let someone past that they *left*.
+  `LOST_CAPABILITY` is the near miss and still wrong: it means Snoozemo could
+  no longer verify where the user is, whereas a motion ending is a positive
+  reading acted on. That is principle 2's failure
+  wearing the right-looking label, and it undercuts this entry's own argument,
+  which leans on the ending being explicable. A motion feature needs its own
+  reason and its own ended-notification copy before it can keep that promise
+  (Codex, PR #212) — and copy waits on the maintainer either way
+  (`AGENTS.md`, *Translations*).
+- Is it a per-snooze end condition the user picks (§4.4's sheet), or a global
+  behavior? A cinema and a walk in a park want opposite answers.
+- Thirty seconds is a guess. It wants a handset in an actual cinema.
 
 ## Deferred review findings (Codex, PR #206)
 
