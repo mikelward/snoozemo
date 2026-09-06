@@ -126,6 +126,29 @@ class SnoozeServicePresenceTest {
     }
 
     @Test
+    fun `a degradation forgets the distance, it does not just hide it`() {
+        // The screen already hides the readout outside FULL — but hiding is
+        // not forgetting (Codex, PR #210). A platform outage that clears
+        // inside the five-minute freshness window restores FULL on a
+        // level-only update carrying no fix, and a retained reading would
+        // reappear as if it were current: where the phone *was*, presented as
+        // where it is.
+        armWatched()
+        DepartureObservations.publish(
+            app.snoozemo.core.DepartureObservation(
+                distanceM = 200.0,
+                accuracyM = 10f,
+                radiusM = 150,
+                elapsedRealtimeMs = 0L,
+            ),
+        )
+
+        emit(PresenceUpdate(event = null, degradation = DegradationCause.NO_LOCATION_FIX))
+
+        assertNull(DepartureObservations.latest())
+    }
+
+    @Test
     fun `grace running records WIFI_GRACE through the real fixture's supportedModes`() {
         // The fixture's supportedModes() above never lists WIFI_GRACE — same
         // as the real GeofencePresenceMonitor — so this is what actually

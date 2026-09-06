@@ -199,6 +199,9 @@ internal class PresenceFeed(
             event = step.event,
             degradation = step.state.degradation,
             graceActive = step.state.graceDeadlineMs != null,
+            // Whatever the step measured, which is nothing unless a usable,
+            // non-stale fix produced it.
+            observation = step.observation,
         )
     }
 }

@@ -21,6 +21,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import app.snoozemo.PlayUpdateState
 import app.snoozemo.core.DegradationCause
+import app.snoozemo.core.DepartureObservation
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.TrackingMode
 import com.github.takahirom.roborazzi.captureRoboImage
@@ -329,6 +330,162 @@ class MainScreenScreenshotTest {
         // The same slot, not a second line — a screen showing both at once
         // would contradict itself.
         composeRule.onNodeWithText("Not snoozing").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a tracked snooze shows how far there is left to go`() {
+        capture("main-screen-snoozing-distance.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.FULL,
+                remaining = Duration.ofHours(3).plusMinutes(40),
+                degradation = null,
+                // 200 m out, 10 m of accuracy, a 150 m radius: 40 m of margin
+                // against a 50 m band, so 10 m still to go.
+                departure = DepartureObservation(
+                    distanceM = 200.0,
+                    accuracyM = 10f,
+                    radiusM = 150,
+                    elapsedRealtimeMs = 0L,
+                ),
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Snoozing until you leave").assertExists()
+        composeRule.onNodeWithText("200 m away · 10 m to go").assertExists()
+    }
+
+    @Test
+    fun `a fix far enough to end the snooze says it is confirming`() {
+        capture("main-screen-snoozing-confirming.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.FULL,
+                remaining = Duration.ofHours(3).plusMinutes(40),
+                degradation = null,
+                // Past the band on this fix, which is not yet a departure: a
+                // second qualifying fix thirty seconds later is what ends it,
+                // so the readout reports the wait rather than promising the end.
+                departure = DepartureObservation(
+                    distanceM = 400.0,
+                    accuracyM = 15f,
+                    radiusM = 150,
+                    elapsedRealtimeMs = 0L,
+                ),
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("400 m away · confirming").assertExists()
+        composeRule.onNodeWithText("400 m away · 0 m to go").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a reading exactly on the band still says there is a meter to go`() {
+        capture("main-screen-snoozing-on-the-band.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.FULL,
+                remaining = Duration.ofHours(3).plusMinutes(40),
+                degradation = null,
+                // Exactly 50 m of margin against a 50 m band. `qualifies` is a
+                // strict comparison, so this is *not* a departure — and a
+                // rounded `0 m to go` beside a snooze that has not ended would
+                // contradict the verdict the line is quoting.
+                departure = DepartureObservation(
+                    distanceM = 210.0,
+                    accuracyM = 10f,
+                    radiusM = 150,
+                    elapsedRealtimeMs = 0L,
+                ),
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("210 m away · 1 m to go").assertExists()
+        composeRule.onNodeWithText("210 m away · 0 m to go").assertDoesNotExist()
+        composeRule.onNodeWithText("210 m away · confirming").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a degraded snooze shows no distance, because it is measuring none`() {
+        capture("main-screen-wifi-only-no-distance.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.WIFI_ONLY,
+                remaining = Duration.ofHours(3).plusMinutes(40),
+                degradation = DegradationCause.NO_LOCATION_FIX,
+                // A reading left over from before tracking degraded. Showing it
+                // would explain a threshold that is no longer what ends this
+                // snooze.
+                departure = DepartureObservation(
+                    distanceM = 200.0,
+                    accuracyM = 10f,
+                    radiusM = 150,
+                    elapsedRealtimeMs = 0L,
+                ),
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("200 m away · 10 m to go").assertDoesNotExist()
     }
 
     @Test

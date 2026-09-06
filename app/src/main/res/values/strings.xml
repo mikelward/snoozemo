@@ -306,6 +306,17 @@
     -->
     <!-- TODO: translate -->
     <string name="main_snoozing_until_you_leave" tools:ignore="MissingTranslation">Snoozing until you leave</string>
+    <!-- TODO: translate -->
+    <!-- The departure test's own arithmetic, live: how far the last fix put the
+         phone from where the snooze started, and how much further a fix that
+         accurate would have to be before it counted as leaving. Meters only for
+         now; honoring the system's units is a TODO. -->
+    <string name="main_distance_to_go" tools:ignore="MissingTranslation">%1$d m away · %2$d m to go</string>
+    <!-- TODO: translate -->
+    <!-- Far enough that this fix counts, but a departure still needs a second
+         one 30 s later (SPEC.md 6.6) — so this says what is happening rather
+         than promising the snooze is over. -->
+    <string name="main_distance_confirming" tools:ignore="MissingTranslation">%1$d m away · confirming</string>
     <string name="arm">Snooze</string>
     <string name="release">End snooze</string>
     <string name="rule_failed">Do Not Disturb access is on, but Snoozemo could not create its rule</string>

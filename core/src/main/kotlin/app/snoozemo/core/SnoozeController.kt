@@ -94,6 +94,18 @@ class SnoozeController(
          * assumed away.
          */
         fun onZenFailure(failure: ZenFailure, whileArming: Boolean)
+
+        /**
+         * The departure test's arithmetic for the fix just considered, for
+         * anything drawing it live (`SPEC.md` §4.6).
+         *
+         * A readout, not a decision — so it is defaulted to nothing: a
+         * listener with no screen to draw on is a correct implementation of
+         * this interface, not one that forgot a case. Fires per fix, which is
+         * why nothing durable may hang off it: no notification repost, no
+         * disk write.
+         */
+        fun onDepartureObservation(observation: DepartureObservation) = Unit
     }
 
     var state: SnoozeState = SnoozeState.IDLE
@@ -488,6 +500,20 @@ class SnoozeController(
         // started.
         val moved = mode != snooze.mode || update.degradation != snooze.degradation
         if (moved) active = snooze.copy(mode = mode, degradation = update.degradation)
+
+        // Only under FULL, and at the source rather than cleared afterwards
+        // (Codex, PR #210). Nothing else is measuring a distance, so a reading
+        // published under a degraded mode is one somebody has to remember to
+        // invalidate before recovery can show it — and a fix that arrives
+        // while the mode stays degraded moves no transition to hang that
+        // invalidation on. Never publishing it is the version with nothing to
+        // forget.
+        //
+        // Outside the `moved` test above, and before the event: the readout is
+        // the arithmetic behind whatever verdict follows.
+        if (mode == TrackingMode.FULL) {
+            update.observation?.let { listener.onDepartureObservation(it) }
+        }
 
         val before = state
         update.event?.let { report(it) }
