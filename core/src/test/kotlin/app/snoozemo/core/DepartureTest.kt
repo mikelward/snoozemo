@@ -54,12 +54,19 @@ class DepartureTest {
         elapsedRealtimeMs = atSeconds * 1_000L,
     )
 
+    // Pinned rather than left to `DEFAULT_RADIUS_M`. Every trace below is a
+    // shape *relative to a boundary* and states its distances against this one,
+    // so following the product default would silently rewrite what the
+    // regression net asserts the next time that default moves — which is
+    // exactly what happened when it went 150 → 100. What the shipping default
+    // is, and what it costs, is asserted once in `defaultRadiusTest` instead.
     private val anchor = Anchor(
         lat = 0.0,
         lon = 0.0,
         fixAccuracyM = 20f,
         capturedAt = t0,
         ssid = "ExampleWifi",
+        radiusM = 150,
     )
 
     /** Replays a trace and returns every verdict, threading progress as the app does. */

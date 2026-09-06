@@ -187,7 +187,7 @@ data class DepartureStep(
  * conservative in the abstract:
  *
  * - **Never compare raw distance to radius.** Subtracting the fix's own accuracy
- *   first is what stops a 500 m-accuracy cell fix from "leaving" a 150 m radius
+ *   first is what stops a 500 m-accuracy cell fix from "leaving" a 100 m radius
  *   while the phone sits on a desk.
  * - **Hysteresis**, so a fix hovering on the boundary does not flap.
  * - **Two qualifying fixes ≥30 s apart**, which kills the GPS jump: a single

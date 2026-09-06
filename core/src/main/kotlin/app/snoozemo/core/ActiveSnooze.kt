@@ -32,7 +32,23 @@ data class Anchor(
             fixAccuracyM != null && fixAccuracyM <= MAX_ANCHOR_ACCURACY_M
 
     companion object {
-        const val DEFAULT_RADIUS_M: Int = 150
+        /**
+         * How big "here" is, in meters (maintainer, 2026-09-06: 150 → 100).
+         *
+         * Not a jitter setting — the hysteresis band, the accuracy subtraction
+         * and the two-fix confirmation (§6.6) are what absorb a wandering fix,
+         * and none of them move with this. What it decides is how far you can
+         * walk *inside* somewhere before Snoozemo calls it leaving, so the
+         * floor is a large building rather than a room: shrinking it much
+         * further ends a snooze while the user is still in the venue, which is
+         * principle 1's failure direction rather than principle 2's.
+         *
+         * A departure needs `distance - accuracy > radius + HYSTERESIS_M`, so
+         * the accuracy of the fix moves the real boundary more than this
+         * constant does: at 100 m a typical balanced-power fix departs somewhere
+         * around 170–210 m rather than at 100.
+         */
+        const val DEFAULT_RADIUS_M: Int = 100
 
         /** Discard coordinates vaguer than this when capturing an anchor. */
         const val MAX_ANCHOR_ACCURACY_M: Float = 200f
