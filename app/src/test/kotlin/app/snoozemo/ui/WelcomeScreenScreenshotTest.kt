@@ -63,6 +63,24 @@ class WelcomeScreenScreenshotTest {
         composeRule.onNodeWithText("Back").assertExists()
         composeRule.onNodeWithText("Next").assertExists()
         composeRule.onNodeWithText("Skip").assertDoesNotExist()
+        // The tile row is here too (maintainer, 2026-09-06): adding the tile is
+        // the product, so it is offered beside the line that says what the app
+        // is rather than only on card 3.
+        composeRule.onNodeWithText("Quick Settings tile").assertExists()
+        composeRule.onNodeWithText("Add").assertExists()
+    }
+
+    @Test
+    fun `card one drops the tile row once the tile is added`() {
+        // Both directions, because `card one says what the app is` asserts the
+        // row is present with the tile missing: without this pair either
+        // assertion would pass on a row that had simply stopped rendering.
+        capture { Flow(WelcomeCard.WHAT, tileAdded = true) }
+
+        composeRule.onNodeWithText("Quick Settings tile").assertDoesNotExist()
+        composeRule.onNodeWithText("Added").assertDoesNotExist()
+        // The card itself still stands: hiding the row must not hide the pitch.
+        composeRule.onNodeWithText("One tap.").assertExists()
     }
 
     @Test

@@ -300,7 +300,12 @@ fun WelcomeScreen(
                 )
             }
             when (card) {
-                WelcomeCard.WHAT -> WhatCard(tracksDeparture)
+                WelcomeCard.WHAT -> WhatCard(
+                    tracksDeparture = tracksDeparture,
+                    tileAdded = tileAdded,
+                    settingsFailure = settingsFailure,
+                    onAddTile = onAddTile,
+                )
                 WelcomeCard.ENDS -> EndsCard(
                     tracksDeparture = tracksDeparture,
                     notifications = notifications,
@@ -372,9 +377,28 @@ fun WelcomeScreen(
     }
 }
 
-/** Card 1: the product in one line, and the promise the rest of the app keeps. */
+/**
+ * Card 1: the product in one line, the promise the rest of the app keeps, and
+ * the one tap that turns it on.
+ *
+ * **The tile row is here as well as on [TileCard], not instead of it**
+ * (maintainer, 2026-09-06). Adding the tile is the whole product — `SPEC.md`
+ * §4.1's one tap from the shade — so the flow offers it in the same breath as
+ * saying what Snoozemo is, rather than three cards later where a user who
+ * leaves early never reaches it. It stays on card 3 too because the row hides
+ * itself once the tile is added, so the second offer is a real second chance
+ * for whoever passed on the first, not a repeat.
+ *
+ * The pitch still comes first within the card: a system dialog before the app
+ * has said what it is asks for something on behalf of nothing.
+ */
 @Composable
-private fun WhatCard(tracksDeparture: Boolean) {
+private fun WhatCard(
+    tracksDeparture: Boolean,
+    tileAdded: Boolean?,
+    settingsFailure: SetupRowId?,
+    onAddTile: () -> Unit,
+) {
     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         SnoozemoMark(size = 96.dp)
     }
@@ -384,6 +408,12 @@ private fun WhatCard(tracksDeparture: Boolean) {
         ),
     )
     CardBody(stringResource(R.string.welcome_what_promise))
+    PermissionRows.Tile(
+        tileAdded = tileAdded,
+        settingsFailure = settingsFailure,
+        onAction = onAddTile,
+        hideWhenSatisfied = true,
+    )
 }
 
 /**

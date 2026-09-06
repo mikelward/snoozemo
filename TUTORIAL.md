@@ -44,6 +44,18 @@ screen already has a reason attached.
   rates with type size; true centering would have them collide at the sizes
   where the row is tightest.
 
+- **The tile is offered on card 1 as well as its own card** (maintainer,
+  2026-09-06: "the add tile should probably be on the first card"). Adding the
+  tile is `SPEC.md` §4.1's one tap and the whole product, so the flow offers it
+  in the same breath as saying what Snoozemo is, rather than only on card 3
+  where a user who leaves early never reaches it. Three things make that cheap:
+  the row is the same `PermissionRows.Tile` card 3 draws, so there is no second
+  implementation and no new copy; `hideWhenSatisfied` drops it once the tile is
+  added, so card 3's offer becomes a second chance for whoever passed on the
+  first rather than a repeat; and card 1 still leads with the pitch, since a
+  system dialog raised before the app has said what it is asks for something on
+  behalf of nothing.
+
 - **No `Skip` on card 1** (maintainer, 2026-09-06) — the one card where the
   title row's action slot is empty. Offering to leave beside the one line that
   says what the app is invites skipping before there is anything to skip. D7 is

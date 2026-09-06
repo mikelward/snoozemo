@@ -477,7 +477,14 @@ Filters row `SettingsScreen` offers, absent until there is a rule to edit (maint
 2026-09-05); and, last, the crash-report and analytics consent (§12) on its
 own — the debug log is not mentioned, since a card whose job is one question about data leaving the
 phone is the wrong place for a sentence about a log that never does (maintainer, 2026-09-05). That
-last card is absent on `direct`, which ships neither SDK, so the flow is four cards there. Each card offers the grant for the thing it just introduced, drawn
+last card is absent on `direct`, which ships neither SDK, so the flow is four cards there.
+**The tile is offered on the first card as well as its own** (maintainer, 2026-09-06): adding it is
+§4.1's one tap and the whole product, so the flow offers it in the same breath as saying what
+Snoozemo is, rather than only three cards in where a user who leaves early never reaches it. It
+stays on the tile card too — the row hides itself once the tile is added, so the later offer is a
+second chance for whoever passed on the first rather than a repeat, and card 1 still leads with the
+pitch, since a system dialog raised before the app has said what it is asks for something on behalf
+of nothing. Each card offers the grant for the thing it just introduced, drawn
 as the same tri-state rows `PermissionsScreen` uses (§5.2), and `Next` never waits on one — the
 rows' own fail-open rule. `PermissionsScreen` then follows only when a permission is still missing,
 as the recap, and its once-only routing stays as the backstop for an install that skipped the

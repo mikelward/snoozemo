@@ -4422,6 +4422,22 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
+- **Guessed: the tile row goes *on* card 1 rather than card 1 becoming the tile
+  card** (autopilot, 2026-09-06). The maintainer asked for "a button to add the
+  quick settings tile during setup" and then "the add tile should probably be on
+  the first card?". The button already existed, on card 3, so the ask reduced to
+  placement, and "on the first card" has two readings: move the whole tile card
+  to the front, or put the tile row on the card that is already first. **Taken:
+  the second** — card 1 keeps the pitch and gains the row beneath it, card order
+  is unchanged, and card 3 keeps its own row. The reason is that a system dialog
+  raised before the app has said what it is asks for something on behalf of
+  nothing, and `hideWhenSatisfied` already makes the second offer a second
+  chance rather than a repeat. **The alternative** is reordering
+  `WelcomeCard.entries` so `TILE` leads, which reaches the button one card
+  sooner at the cost of that first frame. **Reversible**: the row is four lines
+  in `WhatCard` and the order is one enum; no copy was written either way, so
+  nothing is thrown away by switching.
+
 - **Open: whether `ACTIVITY_RECOGNITION` moves a Data Safety answer** (raised under
   autopilot from PR #212; put to the maintainer 2026-09-06 and **not yet answered** —
   recorded here on their instruction to "record open questions and drive to merge").
