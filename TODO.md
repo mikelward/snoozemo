@@ -5546,6 +5546,31 @@ the measured width allows and the title-over-condition split where it does not.
 largest font and display size, which is where the split actually fires — the
 recorded screenshots only show the default size.
 
+## Deferred review findings (Codex, PR #206)
+
+- [ ] **A refused telemetry opt-out is silent once the welcome flow is left.**
+  A user who had already opted in, replays the flow and taps `No thanks` has
+  their answer written on the crash-reporting worker; if that write is refused,
+  `CrashReportingStore` restores the previous value and `lastSaveRefused` goes
+  true — but `crashReportingSaveFailed` is rendered on `SettingsScreen` alone.
+  `MainScreen` draws its telemetry card only while the question is unanswered,
+  which this user is not, so reporting quietly resumes with nothing anywhere
+  saying the tap did not take. Principle 2's failure.
+
+  **Not introduced by this PR**: before it, the card recorded the answer and
+  stayed put, and `TelemetryCard` has never taken a failure line either — the
+  user read the same clean card, pressed `Done`, and landed on the same silent
+  `MainScreen`. What changed is when they leave, not what they are told.
+
+  Exiting only once the write succeeds is the wrong half of the fix and is
+  specifically unsafe here: that completion callback belongs to the instance
+  that made the tap, so a configuration change mid-write leaves the flow with
+  no exit at all — the failure `watchSaveOutcome` and the write counter exist
+  for (Codex, PR #113 and #166). The right half is to surface the failure where
+  the user actually lands, which needs a line of new user-facing copy and so
+  waits for the maintainer, alongside the same question for `SettingsScreen`'s
+  other save-failure lines: what clears it, and whether it offers a retry.
+
 ## Deferred review findings (Codex, PR #204)
 
 - **A capability other than Do Not Disturb access that is still unread when the
