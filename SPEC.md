@@ -484,8 +484,10 @@ as the recap, and its once-only routing stays as the backstop for an install tha
 flow; a user who allowed everything on the cards lands on `MainScreen`. A row whose permission is
 already granted is dropped from its card rather than shown with no action (maintainer,
 2026-09-05) — the recap still shows it, since stating what is in place is that screen's job. Every
-card carries the same three controls, `Back` / `Skip` / `Next`, so none of them moves between
-cards; `Back` runs the same decision the system gesture does. Once the flow is left, `MainScreen`
+card carries the same controls in the same places (maintainer, 2026-09-06): `Skip` in the
+top-right corner, and along the bottom `Back`, the progress dots, `Next` — so nothing moves
+between cards, and the two controls that step through the flow sit either side of the thing
+that says where in it you are. `Back` runs the same decision the system gesture does. Once the flow is left, `MainScreen`
 carries a dismissible hint pointing at the (?) icon, because a replay behind an icon is
 discoverable only by someone who already knows it is there. The flow is shown once, on
 a persisted flag, and replayable from a **(?) icon in `MainScreen`'s title row** — the person who

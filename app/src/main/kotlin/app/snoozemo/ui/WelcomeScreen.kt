@@ -147,11 +147,13 @@ fun welcomeExitNeedsRecap(
  * `Done` and back off card 1 all land in the same place, so no route through
  * this misses a missing permission and none gets stuck.
  *
- * **Three fixed controls on every card**: `Back`, `Skip`, `Next` (maintainer,
- * 2026-09-05), so none of them moves between cards. `Skip` is on card 1 too —
- * the same morning's decision to withhold it there was reversed, because a
- * control that appears from nowhere on card 2 costs more than advertising the
- * exit one screen earlier.
+ * **The same controls in the same places on every card** (maintainer,
+ * 2026-09-06): `Skip` in the top-right corner, and along the bottom `Back`, the
+ * progress dots, `Next`. Nothing moves between cards, so the thumb learns one
+ * place for each — and the two controls that step through the flow sit either
+ * side of the thing that says where in it you are. `Skip` is on card 1 too: the
+ * flow has always been leavable from there by back, so naming the exit costs
+ * nothing D7 was protecting.
  *
  * **The grants are the real rows, not a copy of them.** Each card embeds the
  * same [SetupRow] `PermissionsScreen` draws, so the observed-denial handling,
@@ -231,6 +233,20 @@ fun WelcomeScreen(
             .safeDrawingPadding()
             .padding(16.dp),
     ) {
+        // `Skip` sits in the top-right corner rather than in the bottom row
+        // (maintainer, 2026-09-06), which leaves that row to the two controls
+        // that move through the flow. Out of the scroll, like the row below,
+        // so growing type never carries the exit off the screen — and on every
+        // card, including the first: the flow has always been leavable from
+        // there by back, so advertising it costs nothing D7 was protecting.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            TextButton(onClick = onSkip) {
+                Text(stringResource(R.string.welcome_skip))
+            }
+        }
         // The body scrolls and the controls below do not. At the default font
         // and display size nothing scrolls at all; as those grow the body is
         // what gives, so `Next`, `Skip` and the dots stay reachable and no
@@ -292,36 +308,32 @@ fun WelcomeScreen(
             }
         }
         Spacer(Modifier.size(16.dp))
-        WelcomeDots(position = position, count = cards.size)
-        Spacer(Modifier.size(16.dp))
-        // Opposite ends rather than clustered (maintainer, 2026-09-05): leaving
-        // and continuing are different enough that they should not be two taps
-        // a thumb can confuse, and the forward action is the trailing one.
+        // Back, the dots, Next (maintainer, 2026-09-06): the row is the flow's
+        // own controls plus the place in it they move through, so where the
+        // user is reads between the two things that change it. `Skip` left this
+        // row for the top-right corner — it goes somewhere else entirely, and
+        // sitting between back and forward made it a third tap in the band the
+        // thumb rests on.
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Three fixed slots on every card — `Back` leading, `Skip`
-            // centered, `Next` trailing (maintainer, 2026-09-05) — so no
-            // control moves between cards and the thumb learns one place for
-            // each.
-            //
             // `Back` on card 1 leaves the flow, exactly as the system gesture
             // does, so the two never disagree.
             TextButton(onClick = onBack) {
                 Text(stringResource(R.string.welcome_back))
             }
-            // `Skip` is on card 1 too (maintainer, 2026-09-05, reversing the
-            // same morning's decision to withhold it). Withholding it kept the
-            // exit from being advertised beside the one line that says what
-            // the app is — but with a fixed three-slot row that costs a
-            // control appearing from nowhere on card 2, and the row's own
-            // stability is worth more. D7 was never at stake either way: the
-            // flow has always been leavable from card 1, by back.
-            TextButton(onClick = onSkip) {
-                Text(stringResource(R.string.welcome_skip))
-            }
+            // Weighted rather than centered in the row: the two buttons are
+            // different widths and grow at different rates with type size, so
+            // true centering would need the dots to overlap them at the sizes
+            // where the row is tightest. Centered in what the buttons leave is
+            // the arrangement that cannot collide.
+            WelcomeDots(
+                position = position,
+                count = cards.size,
+                modifier = Modifier.weight(1f),
+            )
             Button(onClick = if (last) onSkip else onNext) {
                 Text(
                     stringResource(
@@ -584,12 +596,10 @@ private fun RenderedAction(label: String) {
 
 /** The five progress dots. */
 @Composable
-private fun WelcomeDots(position: Int, count: Int) {
+private fun WelcomeDots(position: Int, count: Int, modifier: Modifier = Modifier) {
     val description = stringResource(R.string.welcome_progress, position + 1, count)
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .semantics { contentDescription = description },
+        modifier = modifier.semantics { contentDescription = description },
         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
     ) {
         repeat(count) { index ->

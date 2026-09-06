@@ -21,6 +21,7 @@ import app.snoozemo.core.SnoozeRinger
 import app.snoozemo.core.ZenRuleState
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -53,13 +54,36 @@ class WelcomeScreenScreenshotTest {
 
         composeRule.onNodeWithText("Silence your phone until you leave.").assertExists()
         composeRule.onNodeWithText("One tap.").assertExists()
-        // The bottom row is three fixed slots on every card, card 1 included
-        // (maintainer, 2026-09-05): Back, Skip, Next, so nothing arrives from
-        // nowhere on card 2.
+        // Every control is on card 1 too, so nothing arrives from nowhere on
+        // card 2 (maintainer, 2026-09-05).
         composeRule.onNodeWithText("Back").assertExists()
         composeRule.onNodeWithText("Skip").assertExists()
         composeRule.onNodeWithText("Next").assertExists()
-        composeRule.onNodeWithText("Next").assertExists()
+    }
+
+    @Test
+    fun `skip sits above the flow's own controls, which read back-dots-next`() {
+        // The layout the maintainer asked for on 2026-09-06: `Skip` in the
+        // top-right corner, and along the bottom `Back`, the progress dots and
+        // `Next` in that order — the two controls that step through the flow
+        // either side of the thing that says where in it you are.
+        //
+        // Asserted rather than left to the snapshot: a recorded image goes red
+        // for any pixel that moves, so it says nothing about which arrangement
+        // was intended, and re-recording is what an agent does to a red one.
+        capture { Flow(WelcomeCard.WHAT) }
+
+        val skip = composeRule.onNodeWithText("Skip").fetchSemanticsNode().positionInRoot
+        val back = composeRule.onNodeWithText("Back").fetchSemanticsNode().positionInRoot
+        val dots = composeRule.onNodeWithContentDescription("Card 1 of 5")
+            .fetchSemanticsNode().positionInRoot
+        val next = composeRule.onNodeWithText("Next").fetchSemanticsNode().positionInRoot
+
+        assertTrue("Skip belongs above the bottom row", skip.y < back.y)
+        assertTrue("Skip belongs at the trailing edge", skip.x > back.x)
+        assertTrue("Back leads the bottom row", back.x < dots.x)
+        assertTrue("Next trails it", dots.x < next.x)
+        assertTrue("the dots share the bottom row", dots.y > skip.y)
     }
 
     @Test
