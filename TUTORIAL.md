@@ -21,23 +21,32 @@ screen already has a reason attached.
   is fixed and nothing scrolls; as the sizes grow the illustration gives way to the
   text first, and only where the text still cannot fit — a small handset at Android's
   largest font and display scale, on the two densest cards — does the body scroll
-  vertically, with `Next`, `Skip` and the progress dots pinned below it. The text is
+  vertically, with `Skip` pinned above it and `Back`, the progress dots and `Next`
+  pinned below. The text is
   never truncated and no `Allow` is ever clipped off the bottom: with both "no
   scrolling" and "no truncation" held absolutely there is no valid overflow at those
   sizes (Codex, PR #193), and clipping a grant is the worse of the two. Verify at the
   largest display and font size Android offers before calling any card done.
-- **Three fixed slots on every card: `Back` leading, `Skip` centered, `Next`
-  trailing** (maintainer, 2026-09-05). Nothing moves between cards, so the thumb
-  learns one place for each. `Back` goes to the previous card and, off card 1,
-  out of the flow — the same lambda the system back gesture runs, so the control
-  and the gesture can never disagree.
+- **`Skip` in the top-right corner; `Back`, the progress dots and `Next` along
+  the bottom** (maintainer, 2026-09-06). Nothing moves between cards, so the
+  thumb learns one place for each. `Back` goes to the previous card and, off
+  card 1, out of the flow — the same lambda the system back gesture runs, so the
+  control and the gesture can never disagree.
 
-  This reverses the same morning's decision to withhold `Skip` on card 1, which
-  was that offering to leave beside the one line saying what the app is invites
-  skipping before there is anything to skip. Both readings are reasonable; a row
-  whose middle control appears from nowhere on card 2 was judged the worse of
-  the two. D7 was never at stake either way — the flow has always been leavable
-  from card 1, by back.
+  The bottom row is the flow's own two controls with the place in it read
+  between them. `Skip` is not one of those: it goes somewhere else entirely, and
+  in the middle of that row it was a third tap in the band the thumb rests on,
+  next to the one that moves forward. The corner is where a flow's exit is
+  looked for, and it is out of the scroll, so growing type never carries it off
+  the screen.
+
+  This replaces the same-week arrangement of `Back` / `Skip` / `Next` across the
+  bottom with the dots on their own line above — which in turn had reversed a
+  decision to withhold `Skip` on card 1 entirely, on the reasoning that offering
+  to leave beside the one line saying what the app is invites skipping before
+  there is anything to skip. `Skip` stays on card 1: D7 was never at stake, since
+  the flow has always been leavable from there by back, so the exit was already
+  available and only unnamed.
 
   `Skip` and the last card's `Next` both land in the same place:
   `PermissionsScreen` while a permission is still missing, `MainScreen` once nothing
@@ -406,11 +415,14 @@ flow.
   the body does not already say — the body's second sentence covers editing, so
   a title about editing only repeated it, where this one names what the first
   sentence is really promising: Snoozemo touches nothing else of yours.
-- ~~Whether `Skip` is visible on card 1.~~ **Decided (maintainer, 2026-09-05): no
-  `Skip` on card 1**, only from card 2 on. Offering to leave beside the one line
-  that says what the app is invites skipping before there is anything to skip.
-  D7 is untouched — back still exits card 1, so the way out exists; it is just
-  not advertised before that line has been read.
+- ~~Whether `Skip` is visible on card 1.~~ **Decided (maintainer, 2026-09-06):
+  yes, and in the top-right corner on every card.** The earlier answer the same
+  week was no `Skip` on card 1 — offering to leave beside the one line that says
+  what the app is invites skipping before there is anything to skip — reversed
+  first because a bottom-row control appearing from nowhere on card 2 costs
+  more, and settled once the exit moved out of that row altogether. D7 was
+  untouched throughout: back has always exited card 1, so the way out existed
+  either way; the question was only whether it was named.
 - ~~Whether the flow replays after an update that adds a card.~~ **Decided
   (maintainer, 2026-09-05): never automatically.** Anyone who skipped or finished
   it is done with it, and only the (?) icon replays it. So the seen-flag stays a
