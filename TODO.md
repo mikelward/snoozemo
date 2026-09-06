@@ -4422,6 +4422,23 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
+- [ ] **Consider moving the tile card after the rule card** (maintainer,
+  2026-09-06 — tried, then set aside as "too much going on here now"). The flow
+  is `WHAT → ENDS → TILE → RULE → TELEMETRY`, so the tile is offered on card 3,
+  before the Do Not Disturb grant on card 4. Adding the tile puts a control in
+  the shade the user can tap at any moment, including the moment after they add
+  it, and at that point the app may have been granted nothing: no Do Not Disturb
+  access means no rule, so the tap does nothing. `WHAT → ENDS → RULE → TILE →
+  TELEMETRY` would put every grant this flavor offers ahead of the tile.
+  **The change is small** — the enum order is the flow order and the dot count,
+  so it is one reorder plus the card numbers in comments, seven screenshot test
+  names, and the prose in `SPEC.md` §4.2 and `TUTORIAL.md`. No snapshot
+  re-records: the cards themselves are unchanged, only their positions.
+  **What it does not fix, and why it was not urgent**: `Skip`, `MainScreen`'s
+  own add-tile banner and an install predating the flow all reach a tile
+  another way, so the tile-tap gate is what actually holds this line — the
+  reorder only tidies the one path through the flow.
+
 - **Open: whether `ACTIVITY_RECOGNITION` moves a Data Safety answer** (raised under
   autopilot from PR #212; put to the maintainer 2026-09-06 and **not yet answered** —
   recorded here on their instruction to "record open questions and drive to merge").
