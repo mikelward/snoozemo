@@ -70,6 +70,14 @@ class TileTrampolineSheetTest {
         // the wrong reason.
         shadowOf(appContext.getSystemService(android.app.KeyguardManager::class.java))
             .setKeyguardLocked(false)
+        // Granted, because every case here fixtures an arm that *took* and an
+        // arm cannot take without it — the record on disk these tests write
+        // would never exist otherwise. Left at Robolectric's default the tap
+        // now opens the app instead (SPEC.md §4.1: a tap that cannot produce a
+        // snooze explains itself rather than doing nothing), which is a
+        // different branch than the one under test here.
+        shadowOf(appContext.getSystemService(android.app.NotificationManager::class.java))
+            .setNotificationPolicyAccessGranted(true)
     }
 
     @After

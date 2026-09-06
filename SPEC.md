@@ -375,6 +375,41 @@ obfuscation are here because the threshold requires them, not because they save 
 connected to a network, or in duration-only mode if not, and says so in the notification. Arming
 must never feel slow or refuse.
 
+**A tap that cannot produce a snooze opens the app instead of doing nothing** (maintainer,
+2026-09-06). Two capabilities are *required* rather than merely useful: Do Not Disturb access,
+without which there is no rule to turn on, and notifications, which is where every report the app
+has goes — the degraded-mode line, the ended-snooze card, `Couldn't snooze`. Missing either, the
+tap previously produced no snooze and, missing the second, no explanation either: nothing happened
+and nothing said why, which is principle 2's failure in its purest form. So the trampoline opens
+the setup screen, whose rows repair exactly what is missing — named explicitly rather than left
+to the app, which routes there on its own only for missing access, and to a main screen that
+carries no notification row at all.
+
+Four things bound it, because a gate that fires when it shouldn't is its own failure:
+- **It never delays or refuses the arm.** The check is off the *synchronous* path, on the posted
+  block that already carries the notification prompt and the record load, and it reads three
+  things rather than doing any work of its own (§6.9). What that does not buy is ordering: the
+  service start is a binder round trip and `onStartCommand` is posted from a binder thread, so
+  nothing puts the arm strictly ahead of this block — which is why the check reads one channel
+  off `NotificationManager` rather than constructing a `SnoozeNotifications`, whose `ensureChannels`
+  would put three channel creations on that same racing block.
+- **Required means "can do nothing at all", not "degraded".** No location falls back to
+  duration-only and says so; no calendar drops the calendar action (§4.3). Those are working
+  states, and routing on them would interrupt a snooze rather than explain one.
+- **Not where a prompt is the better answer.** An askable notification permission is met with the
+  system dialog — one tap, where a screen is a detour. Only a blocked one, or a switched-off
+  ongoing channel, leaves settings as the single live route.
+- **Not behind the keyguard**, and not on the way out. A screen started from the lock screen is not
+  seen now and surfaces later with no connection to the tap that caused it, which is worse than the
+  silence; and an `End now` tap is a user leaving, whom §7 says to get out of the way of.
+
+This is what holds the line rather than the order of the welcome cards, because the tile is
+reachable without the flow at all — `MainScreen`'s own add-tile banner, `SettingsScreen`, or an
+install that predates the flow — and because a permission granted once can be revoked in system
+settings or auto-revoked by Android for an unused app. A revocation therefore needs no record of
+its own: the recorded answer governs whether the user is *asked*, and the live capability governs
+what the app *does*.
+
 ### 4.2 The tile
 
 - **Icon:** a `Zz` glyph. Quick Settings icons are 24 dp single-color vector drawables, tinted by

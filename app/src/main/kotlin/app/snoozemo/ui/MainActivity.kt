@@ -90,6 +90,13 @@ import app.snoozemo.tile.R as TileR
 private const val TAG = "MainActivity"
 
 /** `onSaveInstanceState` keys for the navigation state a configuration change would otherwise lose. */
+/**
+ * Set by [app.snoozemo.snooze.TileTrampolineActivity] when a tile tap could not
+ * produce a snooze, to open `PermissionsScreen` rather than Main — the rows
+ * that repair it live there, and Main has none of them for notifications.
+ */
+internal const val EXTRA_OPEN_PERMISSIONS = "app.snoozemo.OPEN_PERMISSIONS"
+
 private const val KEY_SCREEN = "screen"
 private const val KEY_WELCOME_CARD = "welcomeCard"
 private const val KEY_PERMISSIONS_ORIGIN = "permissionsOrigin"
@@ -1013,6 +1020,28 @@ class MainActivity : ComponentActivity() {
             shouldOpenWelcome(seen = welcomeSeen, freshInstall = welcomeStore::freshInstall)
         ) {
             screen = Screen.WELCOME
+        }
+        // A tile tap that could not produce a snooze lands here, and it lands on
+        // the screen that repairs it rather than on Main (Codex, PR #215).
+        // `applyAccess` below routes only for missing Do Not Disturb access,
+        // and Main carries no notification row at all — so without this a tap
+        // blocked by notifications opened the app to the ordinary arm screen
+        // with nothing saying why, which is the silence the gate exists to end.
+        //
+        // Behind the welcome flow, not ahead of it: the cards are the fuller
+        // repair and are what a fresh install sees first (SPEC.md §4.2). Only
+        // on a fresh launch, so a rotation keeps whatever screen it was on
+        // rather than being thrown back here by the intent that started it.
+        //
+        // Spends the one-shot route, since this *is* that route arriving early:
+        // leaving it unspent would let the first access reading push a user who
+        // came back to Main straight onto this screen again.
+        if (savedInstanceState == null &&
+            screen == Screen.MAIN &&
+            intent?.getBooleanExtra(EXTRA_OPEN_PERMISSIONS, false) == true
+        ) {
+            routedToPermissionsOnce = true
+            openPermissions(Screen.MAIN)
         }
         // The same read, reused: the hint exists only for someone who has been
         // through the flow and not yet dismissed it.

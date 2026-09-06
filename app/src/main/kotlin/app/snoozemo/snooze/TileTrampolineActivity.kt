@@ -2,6 +2,7 @@ package app.snoozemo.snooze
 
 import android.Manifest
 import android.app.KeyguardManager
+import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager.PERMISSION_GRANTED
 import android.os.Bundle
@@ -29,8 +30,14 @@ import androidx.lifecycle.ViewModelProvider
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.EndCondition
 import app.snoozemo.core.EndReason
+import app.snoozemo.core.NotificationPermission
+import app.snoozemo.core.PolicyAccess
+import app.snoozemo.core.SnoozeDebugLog
+import app.snoozemo.core.tileTapNeedsSetup
 import app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE
+import app.snoozemo.ui.EXTRA_OPEN_PERMISSIONS
 import app.snoozemo.ui.EndConditionSheetContent
+import app.snoozemo.ui.MainActivity
 import app.snoozemo.ui.formatSheetTime
 import app.snoozemo.ui.SnoozemoTheme
 import java.time.Instant
@@ -169,8 +176,16 @@ class TileTrampolineActivity : ComponentActivity() {
             // not [decide] itself: the permission has just been answered, so
             // re-running its ask branch would put the dialog straight back up.
             val now = Instant.ofEpochMilli(System.currentTimeMillis())
-            val offering = offerableRecord(stillArming, now)
-            if (offering != null) showEndConditionSheet(offering, now) else finish()
+            // Re-asked after the answer, because granting notifications does
+            // not grant the other half: a user who has just allowed the prompt
+            // while Do Not Disturb access is still missing has a snooze that
+            // did not happen and now no dialog left to explain it.
+            val offering = if (stillArming && tapNeedsSetup()) null else offerableRecord(stillArming, now)
+            when {
+                stillArming && tapNeedsSetup() -> openApp()
+                offering != null -> showEndConditionSheet(offering, now)
+                else -> finish()
+            }
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -306,12 +321,19 @@ class TileTrampolineActivity : ComponentActivity() {
         // the app's way, and a permission dialog in front of that is the
         // opposite of "always available, always instant" (SPEC.md §7).
         val askFirst = arming && shouldAskForNotifications()
+        // A tap that cannot produce a snooze opens the app instead of leaving
+        // the user with nothing (SPEC.md §4.1). Only where a prompt is not the
+        // better answer: [shouldAskForNotifications] fixes an askable
+        // permission in one tap, and a screen would be a detour past it.
+        val needsSetup = arming && !askFirst && tapNeedsSetup()
         // Read once, and only where it can be used: both this and the record
         // load below are IPC or disk, and this path runs on the main thread.
-        val offering = if (askFirst) null else offerableRecord(arming, now)
+        val offering = if (askFirst || needsSetup) null else offerableRecord(arming, now)
         if (askFirst) {
             awaitingPermission = true
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else if (needsSetup) {
+            openApp()
         } else if (offering != null) {
             showEndConditionSheet(offering, now)
         } else {
@@ -748,6 +770,114 @@ class TileTrampolineActivity : ComponentActivity() {
             return false
         }
         return !getSystemService(KeyguardManager::class.java).isKeyguardLocked
+    }
+
+    /**
+     * Whether this tap landed on an app that can do nothing at all, so the user
+     * should be shown why rather than left with a tile that did nothing.
+     *
+     * The decision itself is [tileTapNeedsSetup], in `:core` where its cases are
+     * enumerated by a JVM test; everything here is reading the three inputs.
+     *
+     * **Skipped on the lock screen**, the same exclusion
+     * [shouldAskForNotifications] makes and for a stronger reason: a screen
+     * started from behind the keyguard is not seen now, and surfaces later with
+     * no connection to the tap that caused it — which is worse than the silent
+     * failure it was meant to explain. Arming locked is a supported case
+     * (§4.2), and there the ongoing notification is the only report available.
+     *
+     * Every read here is after the service start, so none of it is between the
+     * tap and the zen rule (§4.1, §6.9).
+     */
+    private fun tapNeedsSetup(): Boolean {
+        if (getSystemService(KeyguardManager::class.java).isKeyguardLocked) return false
+        val access = runCatching {
+            if (getSystemService(NotificationManager::class.java).isNotificationPolicyAccessGranted) {
+                PolicyAccess.GRANTED
+            } else {
+                PolicyAccess.DENIED
+            }
+        }.getOrElse {
+            // Unread, not missing: routing on a failed read would open the app
+            // over a question nothing answered.
+            Log.w(TAG, "Reading policy access failed; treating it as unread.", it)
+            null
+        }
+        val notifications = NotificationPermission.of(
+            granted = checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PERMISSION_GRANTED,
+            everDenied = promptStore.everDenied(),
+            rationale = shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS),
+        )
+        return tileTapNeedsSetup(
+            access = access,
+            notifications = notifications,
+            activeChannelEnabled = activeChannelEnabled(),
+        )
+    }
+
+    /**
+     * Whether the channel a *running* snooze reports on is switched on, read
+     * straight off [NotificationManager].
+     *
+     * Narrower than `SnoozeNotifications.canReachTheUser` on purpose, and the
+     * same narrowing `showEnded` needed for the ended channel (Codex, PR #212):
+     * the aggregate answers "can any of our surfaces reach them", which is the
+     * wrong question for a gate about the ongoing card. A user who silenced
+     * `snooze_ended` can still see a snooze running and end it from the shade,
+     * so routing them to a setup screen would nag about a capability they are
+     * not missing.
+     *
+     * Read here rather than through `SnoozeNotifications` because constructing
+     * one runs `ensureChannels()` — up to three `createNotificationChannel`
+     * binder calls — and this block races the arm rather than following it
+     * (see `dispatch`). Reading one channel is one call; creating three on the
+     * way past is work the tap never asked for.
+     *
+     * Null is *unread*, and two different things reach it. No manager is the
+     * obvious one. A channel that does not exist yet is the other, and it is
+     * deliberately not `false`: absent is not switched off. The service creates
+     * the channels as it starts, so a first-ever tap can read this before they
+     * exist, and sending that user to settings would point them at a row that
+     * is not there. The permission is what covers reachability until then.
+     */
+    private fun activeChannelEnabled(): Boolean? {
+        val channel = runCatching {
+            getSystemService(NotificationManager::class.java)
+                ?.getNotificationChannel(SnoozeNotifications.CHANNEL_ACTIVE)
+        }.getOrElse {
+            Log.w(TAG, "Reading the ongoing channel failed; treating it as unread.", it)
+            return null
+        } ?: return null
+        return channel.importance != NotificationManager.IMPORTANCE_NONE
+    }
+
+    /**
+     * Opens the setup screen, which carries the rows that repair whatever
+     * [tapNeedsSetup] found, and gets this transparent window out of the way.
+     *
+     * The destination is explicit rather than left to the app to work out
+     * (Codex, PR #215). `MainActivity` routes to it on its own only for missing
+     * Do Not Disturb access, and the main screen carries no notification row at
+     * all — so a plain launch answered a tap blocked by notifications with the
+     * ordinary arm screen and nothing saying why, which is the silence this
+     * gate exists to end.
+     */
+    private fun openApp() {
+        runCatching {
+            startActivity(
+                Intent(this, MainActivity::class.java)
+                    .putExtra(EXTRA_OPEN_PERMISSIONS, true)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            )
+        }.onFailure {
+            // Nothing else to try: the snooze has already been attempted and
+            // the report it would have made is exactly what is missing. Logged
+            // so a user who does have the debug log can see the tap was not
+            // ignored.
+            Log.e(TAG, "Could not open the app to repair a tile tap.", it)
+            SnoozeDebugLog.failure(it, "tile tap needed setup and the app would not open")
+        }
+        finish()
     }
 }
 
