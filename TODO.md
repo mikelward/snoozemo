@@ -3463,6 +3463,10 @@ which is the whole of what was tuned here.
       watching, since both are drawn over something else.
 - [ ] Does the gesture reach the end-condition sheet, which lives in its own activity and
       its own window?
+- [ ] Does it reach every other window too (maintainer, 2026-09-07): the background-location
+      rationale dialog, the licenses dialog, and the ringer dropdown? The menu is the one to
+      watch — three items is a small target for two fingers — and on both dialogs check that
+      a tap on the scrim still dismisses, since the pinch host sits above it.
 
 ### The calendar action
 
@@ -6171,33 +6175,6 @@ what sets it off.
   for the maintainer either way (`AGENTS.md`, *Translations*) — and a decision about
   whether a gesture's failure is worth interrupting whatever the user was doing for. The
   springing back is itself feedback that it did not take; what is missing is why.
-
-- [ ] **Whether a transient overlay should take the pinch, not just the size.** Every
-  popup window now re-establishes the chosen text size — the end-condition sheet, both
-  dialogs and the ringer menu (they had been drawing at the system size, which was the
-  actual bug). The *gesture* is installed on two of them: the sheet, which is a screen in
-  its own right, and the licenses dialog's body, which is a page of text to read. It is
-  not installed on the background-location rationale dialog or the ringer dropdown.
-
-  **The second finding in the windows mechanism** (Codex, PR #217: the sheet, then these),
-  so by `AGENTS.md` it is a design question rather than another instance. Two things make
-  it one:
-  - A dialog's window is **full-screen** — its scrim included — so while a dialog is up,
-    a pinch anywhere on the display belongs to that window. Hosting the gesture over the
-    whole window would put it in competition with the scrim's own tap-to-dismiss; hosting
-    it on the body alone (what the licenses dialog does) leaves the scrim inert.
-  - A two-finger pinch inside a three-item dropdown is not a gesture anyone makes, and
-    consuming events there costs the menu's own handling.
-
-  So the options are: leave it as it stands (the size everywhere, the gesture where there
-  is something to read); host the gesture on every overlay's body; or host it over the
-  whole dialog window and decide what that does to dismissal. `SPEC.md` §4.8 says
-  "anywhere in Snoozemo" and enumerates *screens*, so it does not settle this by itself.
-  `SheetFontSizeWindowTest` pins both halves as they stand, so a change here is deliberate.
-
-  Not urgent: a refused `commit()` means storage is failing, which is rare and rarely
-  quiet elsewhere. Recorded rather than guessed at, because the answer is a product
-  decision and the copy is the maintainer's.
 
 ## Deferred review findings (Codex, PR #206)
 

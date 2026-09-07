@@ -288,7 +288,7 @@ class SettingsScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("Text size").assertExists()
+        composeRule.onNodeWithText("Font size").assertExists()
         // The percentage is what tells the user where they are in the range —
         // the page itself is the rest of the preview.
         composeRule.onNodeWithText("125%").assertExists()

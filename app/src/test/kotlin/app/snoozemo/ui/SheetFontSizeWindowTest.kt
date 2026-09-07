@@ -3,7 +3,10 @@ package app.snoozemo.ui
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -116,12 +119,12 @@ class SheetFontSizeWindowTest {
 
     @Test
     fun `the text-only host resizes with the app but takes no gesture`() {
-        // The deliberate half of the split (Codex, PR #217): a dialog's title,
-        // its buttons and the ringer menu's options get the chosen size, but
-        // not a pinch host — a two-finger gesture inside a three-item menu is
-        // not a gesture anyone makes, and over a dialog it would compete with
-        // the scrim's own tap-to-dismiss. Pinned so the size half cannot be
-        // dropped and the gesture half cannot be added without a decision.
+        // `FontSizeWindow` is the size half alone, and stays that way now that
+        // every window takes the gesture too (maintainer, 2026-09-07): the
+        // pinch is hosted once per window, on the surface *above* these slots,
+        // so a dialog's title, body and buttons are spanned by one gesture.
+        // Nesting a second host inside a slot would apply the same zoom twice,
+        // which is what this pins against.
         textOnly(initial = 1.5f)
 
         assertEquals(1.5f, inWindow, 0.0001f)
@@ -136,6 +139,40 @@ class SheetFontSizeWindowTest {
         composeRule.runOnIdle {
             assertEquals(1.5f, fontSize.scale, 0.0001f)
             assertTrue(settled.toString(), settled.isEmpty())
+        }
+    }
+
+    @Test
+    fun `one host spans a dialog's slots`() {
+        // How every popup is wired since the gesture reached all of them
+        // (maintainer, 2026-09-07): `Modifier.pinchFontSizeHost()` on the
+        // surface, size-only slots inside it. The fingers go down in *different*
+        // slots, which is the point — hosted per slot instead, this gesture
+        // would not exist at all, and the rationale dialog's body is too small
+        // to hold two fingers comfortably on its own.
+        slottedSurface(initial = 1f)
+
+        touch(TOP_SLOT) {
+            down(0, Offset(CENTER_X - 50f, ROW_Y))
+            down(1, Offset(CENTER_X + 50f, ROW_Y + SLOT_HEIGHT))
+            // Spends the slop. The fingers stay one slot apart throughout, so
+            // the second one is hit-tested into the slot below and the gesture
+            // only exists because the host above both of them sees it.
+            slotSpreadTo(240f)
+        }
+        touch(TOP_SLOT) { slotSpreadTo(340f) }
+        touch(TOP_SLOT) {
+            up(0)
+            up(1)
+        }
+
+        composeRule.runOnIdle {
+            assertTrue(fontSize.scale.toString(), fontSize.scale > 1f)
+            // Once, not once per slot: a second host inside one of them would
+            // have taken the same events and written its own value too.
+            assertEquals(settled.toString(), 1, settled.size)
+            assertEquals(fontSize.scale, settled.single(), 0.0001f)
+            assertEquals(fontSize.scale, inWindow, 0.0001f)
         }
     }
 
@@ -225,9 +262,59 @@ class SheetFontSizeWindowTest {
         composeRule.waitForIdle()
     }
 
-    private fun touch(block: androidx.compose.ui.test.TouchInjectionScope.() -> Unit) {
-        composeRule.onNodeWithTag(TAG).performTouchInput(block)
+    /**
+     * A dialog's shape: one pinch host on the surface, size-only slots inside.
+     */
+    private fun slottedSurface(initial: Float) {
+        fontSize = FontSizeState(
+            initial = FontSizeSettings(scale = initial),
+            onScaleSettled = { settled += it },
+            onPinchEnabledChange = {},
+        )
+        composeRule.setContent {
+            val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+            val platform = androidx.compose.ui.unit.Density(
+                androidx.compose.ui.platform.LocalContext.current.resources.displayMetrics.density,
+                configuration.fontScale,
+            )
+            androidx.compose.runtime.CompositionLocalProvider(
+                LocalFontSizeState provides fontSize,
+                LocalDensity provides platform,
+            ) {
+                androidx.compose.foundation.layout.Column(
+                    modifier = Modifier.fillMaxSize().pinchFontSizeHost(),
+                ) {
+                    FontSizeWindow {
+                        inWindow = LocalDensity.current.fontScale
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(SLOT_HEIGHT_DP.dp)
+                                .testTag(TOP_SLOT),
+                        )
+                    }
+                    FontSizeWindow {
+                        Box(Modifier.fillMaxSize().testTag(BOTTOM_SLOT))
+                    }
+                }
+            }
+        }
         composeRule.waitForIdle()
+    }
+
+    private fun touch(
+        tag: String = TAG,
+        block: androidx.compose.ui.test.TouchInjectionScope.() -> Unit,
+    ) {
+        composeRule.onNodeWithTag(tag).performTouchInput(block)
+        composeRule.waitForIdle()
+    }
+
+    /** [spreadTo], but keeping the second finger in the slot below the first. */
+    private fun androidx.compose.ui.test.TouchInjectionScope.slotSpreadTo(width: Float) {
+        updatePointerTo(0, Offset(CENTER_X - width / 2f, ROW_Y))
+        updatePointerTo(1, Offset(CENTER_X + width / 2f, ROW_Y + SLOT_HEIGHT))
+        move()
     }
 
     private fun androidx.compose.ui.test.TouchInjectionScope.spreadTo(spread: Float) {
@@ -238,7 +325,13 @@ class SheetFontSizeWindowTest {
 
     private companion object {
         const val TAG = "window-pinch-host"
+        const val TOP_SLOT = "window-slot-top"
+        const val BOTTOM_SLOT = "window-slot-bottom"
         const val CENTER_X = 500f
         const val ROW_Y = 500f
+
+        /** Tall enough that the second finger lands in the slot below. */
+        const val SLOT_HEIGHT_DP = 200
+        const val SLOT_HEIGHT = 100f
     }
 }

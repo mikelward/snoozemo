@@ -1324,8 +1324,13 @@ class MainActivity : ComponentActivity() {
                         // Each slot is wrapped: a dialog is its own window, so
                         // the theme's scaled density does not reach it and the
                         // text would come out at the system size whatever the
-                        // user chose (Codex, PR #217).
+                        // user chose (Codex, PR #217). The pinch does not cross
+                        // that boundary either, so the dialog hosts its own —
+                        // on the surface, so one gesture spans title, body and
+                        // buttons, and above the scrim, which owes a tap its
+                        // dismissal (maintainer, 2026-09-07).
                         AlertDialog(
+                            modifier = Modifier.pinchFontSizeHost(),
                             onDismissRequest = { showBackgroundLocationRationale = false },
                             title = {
                                 FontSizeWindow {
