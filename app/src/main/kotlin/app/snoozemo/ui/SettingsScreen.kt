@@ -291,12 +291,16 @@ internal fun SettingsScreen(
         // Same row shape and position as the sibling Simmo repo's Settings foot.
         // Padded, unlike a bare Text row, so the tap target clears Android's
         // 48dp minimum rather than sitting at the titleMedium text's own
-        // ~24dp height.
+        // ~24dp height. The 16dp inset is the cards' own inner padding
+        // (maintainer, 2026-09-07): the rows above are cards whose text starts
+        // 16dp inside them, so a foot with none started a notch to their left
+        // and read as a second, misaligned column. Inside the `clickable`, so
+        // the row still takes a tap edge to edge.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(onClick = onOpenPrivacyPolicy)
-                .padding(vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -311,7 +315,7 @@ internal fun SettingsScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(onClick = onOpenLicenses)
-                .padding(vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -320,11 +324,13 @@ internal fun SettingsScreen(
                 modifier = Modifier.weight(1f),
             )
         }
-        // At the very foot of the page, same format as the sibling Simmo repo.
+        // At the very foot of the page, same format as the sibling Simmo repo,
+        // and on the same 16dp text column as everything above it.
         Text(
             text = stringResource(R.string.settings_version, versionName),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp),
         )
     }
 }
