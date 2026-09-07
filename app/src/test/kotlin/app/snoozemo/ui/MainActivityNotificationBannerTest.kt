@@ -83,6 +83,11 @@ class MainActivityNotificationBannerTest {
         // throws.
         shadowOf(manager).setNotificationsEnabled(true)
         val activity = launch()
+        // Again after the launch, not just in `setUp`: the activity's own start
+        // can arm a fresh warm-up, and joining only the one that existed before
+        // it left this case racing a channel being recreated a moment after it
+        // was deleted (seen once in a full-suite run, never alone).
+        SnoozeNotifications.awaitWarmForTest()
         manager.deleteNotificationChannel(SnoozeNotifications.CHANNEL_ACTIVE)
         activity.refreshNotificationsForTest()
 
