@@ -56,6 +56,15 @@ class WelcomeScreenScreenshotTest {
 
         composeRule.onNodeWithText("Silence your phone until you leave.").assertExists()
         composeRule.onNodeWithText("One tap.").assertExists()
+        // The picture card 1 leads with (maintainer, 2026-09-07). Asserted by
+        // its description rather than by the tile labels, because that is the
+        // whole of what a screen reader gets: the panel is one image, and four
+        // labels read out in a row say nothing about what it is for.
+        composeRule
+            .onNodeWithContentDescription(
+                "Quick Settings, with Snoozemo's tile ringed among the others",
+            )
+            .assertExists()
         // No `Skip` here (maintainer, 2026-09-06): offering to leave beside the
         // one line that says what the app is invites skipping before there is
         // anything to skip. D7 is untouched — back still exits card 1, so the

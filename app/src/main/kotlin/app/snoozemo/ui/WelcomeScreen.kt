@@ -375,9 +375,11 @@ fun WelcomeScreen(
 /** Card 1: the product in one line, and the promise the rest of the app keeps. */
 @Composable
 private fun WhatCard(tracksDeparture: Boolean) {
-    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        SnoozemoMark(size = 96.dp)
-    }
+    // The shade rather than the app icon (maintainer, 2026-09-07): card 1 says
+    // what Snoozemo is, and what it is is a tile you tap. A logo says only that
+    // the app has one; the panel shows the user the thing they are about to go
+    // looking for, next to three tiles they already know.
+    QuickSettingsMock()
     CardBody(
         stringResource(
             if (tracksDeparture) R.string.welcome_what_body else R.string.welcome_what_body_timer_only,
