@@ -70,7 +70,9 @@ internal class AnchorWifiTracker(private val anchorSsid: String) {
      * is still the first real transition.
      *
      * [readSucceeded] false is a refused read, which fails open to a loss
-     * like every other unanswerable question here (D7).
+     * like every other unanswerable question here (D7) — and carries
+     * `observed = false`, since failing open is not the same claim as having
+     * looked and found nothing.
      */
     fun onSeedRead(
         readSucceeded: Boolean,
@@ -80,16 +82,91 @@ internal class AnchorWifiTracker(private val anchorSsid: String) {
         if (readSucceeded && anyWifiConnected) {
             PresenceSignal.AnchorWifiPresentUnconfirmed(atElapsedRealtimeMs)
         } else {
-            onWifiSsid(null, atElapsedRealtimeMs)
+            // A read that succeeded and found *no Wi-Fi at all* has settled the
+            // anchor's association on its own, and it is the only path here
+            // that can: it reads the whole connected set in one go, so there
+            // is no second network whose report could still be pending. A
+            // refused read has established nothing and only fails open, so it
+            // may not claim an observation however identical the signal looks.
+            report(
+                null,
+                atElapsedRealtimeMs,
+                evidence = if (readSucceeded) LossEvidence.COMPLETE_VIEW else LossEvidence.NONE,
+            )
         }
 
-    fun onWifiSsid(raw: String?, atElapsedRealtimeMs: Long): PresenceSignal? {
+    fun onWifiSsid(raw: String?, atElapsedRealtimeMs: Long): PresenceSignal? =
+        report(
+            raw,
+            atElapsedRealtimeMs,
+            // A redacted name means the location grant has gone, so the
+            // callback saw nothing it is allowed to report on.
+            evidence = if (AnchorCapture.isRedactedSsid(raw)) {
+                LossEvidence.NONE
+            } else {
+                LossEvidence.TRANSITION_ONLY
+            },
+        )
+
+    /**
+     * How much a loss reported through [report] is entitled to claim.
+     *
+     * Fail-open behavior does not vary with this — every value still reports
+     * the loss (D7). What varies is whether the signal may say the network was
+     * *seen* to go, which is what a future shorter departure bar would gate on
+     * (`TODO.md`).
+     */
+    private enum class LossEvidence {
+        /**
+         * Settles the anchor's association on its own, whatever was believed
+         * before: the seed read finding no Wi-Fi at all.
+         */
+        COMPLETE_VIEW,
+
+        /**
+         * Settles it only as a *transition* away from a known association
+         * (Codex, PR #222).
+         *
+         * The callback's picture of the connected set is built one network at
+         * a time, and their initial reports arrive in no guaranteed order. On
+         * a device with concurrent Wi-Fi connections a non-anchor network can
+         * report first, leaving the anchor's own network not yet in
+         * [PlatformWifiWatch]'s map — so an absence read at that instant is an
+         * incomplete snapshot, not a disappearance. The same shape as PR #77's
+         * finding, one level up: there it produced a false *loss*, here it
+         * would produce a false claim to have *watched* one.
+         *
+         * Requiring a known prior association is what tells them apart, and it
+         * errs the safe way: a watch that starts away from the anchor reports
+         * its loss exactly as before, and only declines to call it observed.
+         */
+        TRANSITION_ONLY,
+
+        /** Settles nothing. The loss is the fail-open answer, and says so. */
+        NONE,
+    }
+
+    /**
+     * The one place a transition — and its provenance — is decided.
+     */
+    private fun report(
+        raw: String?,
+        atElapsedRealtimeMs: Long,
+        evidence: LossEvidence,
+    ): PresenceSignal? {
         val now = AnchorCapture.sanitizeSsid(raw) == anchorSsid
         val was = associated
         associated = now
         return when {
             now && was != true -> PresenceSignal.AnchorWifiAssociated(atElapsedRealtimeMs)
-            !now && was != false -> PresenceSignal.AnchorWifiLost(atElapsedRealtimeMs)
+            !now && was != false -> PresenceSignal.AnchorWifiLost(
+                atElapsedRealtimeMs,
+                observed = when (evidence) {
+                    LossEvidence.COMPLETE_VIEW -> true
+                    LossEvidence.TRANSITION_ONLY -> was == true
+                    LossEvidence.NONE -> false
+                },
+            )
             else -> null
         }
     }

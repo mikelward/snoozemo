@@ -27,8 +27,13 @@ class AnchorWifiTrackerTest {
     fun `a watch started away from the anchor says so immediately`() {
         // The fail-open first report: a restore hours after a departure must
         // not sit resting on the arm-time association.
+        //
+        // Reported, but not as an observation. The callback builds its picture
+        // of the connected set one network at a time, so an absence in the
+        // *first* report may be a snapshot that has not finished arriving
+        // (Codex, PR #222) — the escalation is unchanged either way.
         assertEquals(
-            PresenceSignal.AnchorWifiLost(2_000),
+            PresenceSignal.AnchorWifiLost(2_000, observed = false),
             tracker.onWifiSsid(null, 2_000),
         )
     }
@@ -46,7 +51,7 @@ class AnchorWifiTrackerTest {
         tracker.onWifiSsid("\"ExampleWifi\"", 1_000)
 
         assertEquals(
-            PresenceSignal.AnchorWifiLost(2_000),
+            PresenceSignal.AnchorWifiLost(2_000, observed = true),
             tracker.onWifiSsid("\"OtherWifi\"", 2_000),
         )
     }
@@ -60,7 +65,8 @@ class AnchorWifiTrackerTest {
         tracker.onWifiSsid("\"ExampleWifi\"", 1_000)
 
         assertEquals(
-            PresenceSignal.AnchorWifiLost(2_000),
+            "and it is not an observation: the platform withheld the name",
+            PresenceSignal.AnchorWifiLost(2_000, observed = false),
             tracker.onWifiSsid("<unknown ssid>", 2_000),
         )
     }
@@ -81,7 +87,7 @@ class AnchorWifiTrackerTest {
         tracker.onWifiSsid("\"ExampleWifi\"", 1_000)
         assertEquals(
             "the redacted read reports the loss",
-            PresenceSignal.AnchorWifiLost(2_000),
+            PresenceSignal.AnchorWifiLost(2_000, observed = false),
             tracker.onWifiSsid("<unknown ssid>", 2_000),
         )
 
@@ -93,8 +99,43 @@ class AnchorWifiTrackerTest {
         // A watch rebuilt on restoration starts one of these, whose first
         // report is a transition by definition — so the same departure speaks.
         assertEquals(
-            PresenceSignal.AnchorWifiLost(4_000),
+            PresenceSignal.AnchorWifiLost(4_000, observed = false),
             AnchorWifiTracker("ExampleWifi").onWifiSsid(null, 4_000),
+        )
+    }
+
+    @Test
+    fun `an incomplete callback snapshot is a loss but not an observation`() {
+        // The dual-STA case (Codex, PR #222). Two Wi-Fi networks are connected
+        // and their initial reports arrive in no guaranteed order, so the
+        // non-anchor one can land first — at which instant the anchor's
+        // network is simply not in the map yet. That is an unfinished snapshot,
+        // not a disappearance, and the same shape as PR #77's finding one level
+        // up: there it produced a false loss, here it would produce a false
+        // claim to have watched one.
+        assertEquals(
+            "the loss is still reported — fail-open is unchanged",
+            PresenceSignal.AnchorWifiLost(1_000, observed = false),
+            tracker.onWifiSsid("\"OtherWifi\"", 1_000),
+        )
+
+        // And the anchor's own report, arriving second, corrects it.
+        assertEquals(
+            PresenceSignal.AnchorWifiAssociated(2_000),
+            tracker.onWifiSsid("\"ExampleWifi\"", 2_000),
+        )
+    }
+
+    @Test
+    fun `leaving a known association is what counts as observed`() {
+        // The case the flag exists for: the anchor was associated, and now it
+        // is not. Nothing about this reading is a partial view — the tracker
+        // was told the anchor was there, and has now been told it is gone.
+        tracker.onWifiSsid("\"ExampleWifi\"", 1_000)
+
+        assertEquals(
+            PresenceSignal.AnchorWifiLost(2_000, observed = true),
+            tracker.onWifiSsid(null, 2_000),
         )
     }
 
@@ -121,15 +162,22 @@ class AnchorWifiTrackerTest {
         // with no matching network never dispatches, so nothing else would
         // ever say this.
         assertEquals(
-            PresenceSignal.AnchorWifiLost(1_000),
+            "and it is a real observation: nothing connected means nothing associated",
+            PresenceSignal.AnchorWifiLost(1_000, observed = true),
             tracker.onSeedRead(readSucceeded = true, anyWifiConnected = false, 1_000),
         )
     }
 
     @Test
     fun `a refused seed read fails open to a loss`() {
+        // Fails open like every unanswerable question here (D7) — and says so.
+        // The signal is identical to the observation above apart from
+        // `observed`, which is the whole reason that flag exists: three
+        // refusing paths and two real determinations used to arrive as the
+        // same value, and a departure bar keyed on the wrong one fired inside
+        // a venue the phone was still connected to.
         assertEquals(
-            PresenceSignal.AnchorWifiLost(1_000),
+            PresenceSignal.AnchorWifiLost(1_000, observed = false),
             tracker.onSeedRead(readSucceeded = false, anyWifiConnected = false, 1_000),
         )
     }
@@ -160,8 +208,11 @@ class AnchorWifiTrackerTest {
             tracker.onSeedRead(readSucceeded = true, anyWifiConnected = true, 1_000),
         )
 
+        // Not an observation, and for the reason the seed signal exists: it
+        // deliberately leaves the association unknown, so this first callback
+        // could still be a partial view of a multi-network device.
         assertEquals(
-            PresenceSignal.AnchorWifiLost(2_000),
+            PresenceSignal.AnchorWifiLost(2_000, observed = false),
             tracker.onWifiSsid("\"OtherWifi\"", 2_000),
         )
     }
@@ -169,7 +220,7 @@ class AnchorWifiTrackerTest {
     @Test
     fun `a seed read loss is not repeated by the callback that confirms it`() {
         assertEquals(
-            PresenceSignal.AnchorWifiLost(1_000),
+            PresenceSignal.AnchorWifiLost(1_000, observed = true),
             tracker.onSeedRead(readSucceeded = true, anyWifiConnected = false, 1_000),
         )
 
