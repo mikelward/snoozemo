@@ -131,9 +131,37 @@ internal fun FontSizeWindow(content: @Composable () -> Unit) {
 }
 
 /**
- * [FontSizeWindow] plus the pinch, for a whole surface in its own window — the
- * end-condition sheet, which is a screen in its own right and where "pinch
- * anywhere in Snoozemo" would otherwise be a promise the app breaks.
+ * The pinch, for a surface in one of those windows.
+ *
+ * "Two fingers anywhere in Snoozemo" is what the setting promises, so every
+ * window the app opens takes the gesture — the sheet, both dialogs, the ringer
+ * menu (maintainer, 2026-09-07). Each window needs its own host: a pointer
+ * handler no more crosses the boundary than a density does.
+ *
+ * Apply it to the surface *containing* the text rather than inside it, so one
+ * pinch spans a dialog's title, body and buttons instead of dying at the edge
+ * of whichever slot it started in. It handles the Initial pass, so it reaches
+ * the surface ahead of anything inside it and consumes nothing until the
+ * fingers have actually spread — see [pinchFontSize].
+ *
+ * Never nest two of these: both would see the same events and apply the same
+ * zoom twice. No-op outside [SnoozemoTheme].
+ */
+@Composable
+internal fun Modifier.pinchFontSizeHost(): Modifier {
+    val state = LocalFontSizeState.current ?: return this
+    return pinchFontSize(
+        enabled = { state.pinchEnabled },
+        scale = { state.scale },
+        onStart = state::startGesture,
+        onPreview = state::preview,
+        onSettled = state::commit,
+    )
+}
+
+/**
+ * [FontSizeWindow] plus [pinchFontSizeHost], for a whole surface in its own
+ * window — the end-condition sheet, which is a screen in its own right.
  *
  * The gesture is hosted outside the scaled density for the reason
  * [SnoozemoTheme] is: a density change restarts a pointer handler, so a
@@ -141,20 +169,7 @@ internal fun FontSizeWindow(content: @Composable () -> Unit) {
  */
 @Composable
 internal fun FontSizePinchWindow(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    val state = LocalFontSizeState.current
-    if (state == null) {
-        Box(modifier) { content() }
-        return
-    }
-    Box(
-        modifier = modifier.pinchFontSize(
-            enabled = { state.pinchEnabled },
-            scale = { state.scale },
-            onStart = state::startGesture,
-            onPreview = state::preview,
-            onSettled = state::commit,
-        ),
-    ) {
+    Box(modifier = modifier.pinchFontSizeHost()) {
         FontSizeWindow(content)
     }
 }
@@ -909,11 +924,16 @@ internal fun SnoozeRingerRow(
                         modifier = Modifier.clearAndSetSemantics {},
                     )
                 }
-                DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                DropdownMenu(
+                    expanded = open,
+                    onDismissRequest = { open = false },
                     // A menu is a window of its own, so the chosen size has to
                     // be re-provided here too (Codex, PR #217) — otherwise the
                     // options read at the system size while the row that opened
-                    // them does not.
+                    // them does not — and the pinch has to be re-hosted here for
+                    // the same reason (maintainer, 2026-09-07).
+                    modifier = Modifier.pinchFontSizeHost(),
+                ) {
                     FontSizeWindow {
                         // Loudest first, matching the volume panel's own order
                         // and `SnoozeRinger`'s declaration.

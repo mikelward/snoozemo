@@ -1371,8 +1371,13 @@ Two ways to change it, both moving the same value:
 
 - **The Settings slider**, which resizes the page as it is dragged — the settings screen is its own
   preview — and persists once on release.
-- **A two-finger pinch anywhere in Snoozemo** — every screen, the welcome flow and the tile's
-  end-condition sheet included — tracking the fingers as they move and persisting where they stop.
+- **A two-finger pinch anywhere in Snoozemo** — every screen, the welcome flow, the tile's
+  end-condition sheet, both dialogs and the ringer menu included — tracking the fingers as they
+  move and persisting where they stop. *Anywhere* is meant literally (maintainer, 2026-09-07):
+  each popup the app opens is a window of its own that neither the chosen size nor a gesture
+  reaches on its own, so every one of them re-establishes both. A dialog hosts the pinch on its
+  surface rather than over its whole window, so one gesture spans title, body and buttons while a
+  tap on the scrim still dismisses it.
 
 The gesture is **continuous, not stepped**: the text lands wherever the fingers put it, and the
 slider is continuous for the same reason — a stepped slider beside a continuous pinch would round

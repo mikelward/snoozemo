@@ -186,8 +186,12 @@ internal fun LibraryDetailsDialog(
     // Each slot is wrapped: a dialog is its own window, so the theme's scaled
     // density does not reach it and the text would come out at the system size
     // whatever the user chose (Codex, PR #217). This dialog is the one where
-    // that shows most — it is a wall of license text.
+    // that shows most — it is a wall of license text. The pinch is hosted on
+    // the surface rather than on the body alone, so one gesture spans the whole
+    // dialog (maintainer, 2026-09-07); above the scrim, which owes a tap its
+    // dismissal.
     AlertDialog(
+        modifier = Modifier.pinchFontSizeHost(),
         onDismissRequest = onDismiss,
         confirmButton = {
             FontSizeWindow {
@@ -195,13 +199,8 @@ internal fun LibraryDetailsDialog(
             }
         },
         title = { FontSizeWindow { Text(library.name) } },
-        // The body takes the pinch as well as the size (Codex, PR #217): it is
-        // the one overlay in the app that is a page of text to read, so
-        // enlarging it in place is the thing a user would actually reach for.
-        // Hosted on the body rather than over the dialog's whole window, whose
-        // scrim owes a tap its dismissal.
         text = {
-            FontSizePinchWindow {
+            FontSizeWindow {
             Column(
                 modifier = Modifier
                     .heightIn(max = 360.dp)
