@@ -83,10 +83,20 @@ class MainActivityNotificationBannerTest {
         // throws.
         shadowOf(manager).setNotificationsEnabled(true)
         val activity = launch()
-        // Again after the launch, not just in `setUp`: the activity's own start
-        // can arm a fresh warm-up, and joining only the one that existed before
-        // it left this case racing a channel being recreated a moment after it
-        // was deleted (seen once in a full-suite run, never alone).
+        // Declare creation done FIRST, then join, then delete. The order is the
+        // whole fix and it is not interchangeable:
+        //
+        // - Flag first, so any warm-up armed from here on short-circuits in
+        //   `ensureChannels` and can never recreate what this deletes.
+        // - Join second, so a warm-up that was *already past* that check when
+        //   the flag was set has finished creating before the delete runs.
+        //
+        // Joining first and flagging second — which is what this did — leaves
+        // the window between the two: a warm-up armed there reads the flag
+        // while it is still false, and puts the channel back under the
+        // assertion. That is why joining twice was not enough either; a join
+        // can only wait for the warm-ups that exist when it is called.
+        SnoozeNotifications.markChannelsCreatedForTest()
         SnoozeNotifications.awaitWarmForTest()
         manager.deleteNotificationChannel(SnoozeNotifications.CHANNEL_ACTIVE)
         activity.refreshNotificationsForTest()
