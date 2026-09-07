@@ -1201,6 +1201,52 @@ the point is that every other line of the app is worthless if it isn't true.
       first occurrence of every unrepeatable failure was the one nobody captured. Recorded in
       `SPEC.md` §4.6 with the reasoning.
 - [ ] Departure latency instrumented against ground truth, on-device (hardware item 2).
+- [ ] **Decide whether the departure bar should relax once a Wi-Fi anchor's network is gone.**
+      Attempted in PR #222 and **withdrawn there**, not because the product idea is wrong but
+      because the codebase has no signal that means what it needs. The idea: the anchor's network
+      going is itself evidence of leaving, which would let the bar drop from 100 m to ~25 m. What
+      that is worth in ground covered is not 75 m by arithmetic — a check that starts after the
+      phone has already cleared both thresholds gains nothing, and 30 s between fixes makes the
+      outcome jump rather than slide — so "ends nearer 120 m than 200 m" is the hoped-for case
+      rather than a prediction, and something the traces have to confirm. The maintainer approved
+      those numbers; what failed was every attempt to answer "is the network actually gone?".
+      - **The tempting premise is false, and it is what caused the bug both times.** "While
+        associated no fix is taken, so the departure radius cannot matter until the network goes"
+        holds only while nothing is checking: `Presence.duty` returns `ACTIVE` for
+        `PresencePhase.CHECKING` **before** it consults `atAnchorWifi`, deliberately, so a geofence
+        exit that contradicts a stale association still gets the fix that settles it (§6.3). So the
+        departure radius is live while associated, and any future attempt has to say what happens
+        on that path rather than assume it cannot arise.
+      - Keyed on `Anchor.ssid`: wrong, because a geofence exit escalates *while still associated*
+        (deliberately, so a stale association cannot hide a real departure), so the short bar fired
+        at ~100 m inside a venue the phone was still connected to (Codex, PR #222).
+      - Keyed on `PresenceState.atAnchorWifi`: also wrong. `AnchorWifiLost` is fail-open by design
+        and has at least three synthetic sources that are not disconnections — a refused watch
+        registration, a refused initial state read, and the redaction placeholder returned under a
+        dead or downgraded location grant. Each sets `atAnchorWifi` false while the phone may still
+        be on the network, so the same ~100 m false departure returns by another route.
+      - What it needs is **provenance on the loss signal** — an observed disconnection told apart
+        from "cannot tell" — across `PlatformWifiWatch`, `AnchorWifiTracker` and the grant path.
+        That is a change to the machinery principles 1 and 2 govern, so it is a maintainer decision
+        rather than an implementation detail. Note the safe direction: gating the *relaxed* bar on a
+        real observation can only ever leave the old, more conservative boundary in place, so it
+        does not risk a snooze that never ends.
+      - Independently: **the confirmation gap cannot be shortened without wiring the burst
+        cadence** (separate item below), and — *if* a departure radius distinct from `radiusM` is
+        reintroduced — that field would need adding to `ActiveSnoozeStore`'s hand-written schema,
+        or an explicitly-set value is reconstructed from its default after process death. No such
+        field exists today; `radiusM` itself already round-trips through `KEY_RADIUS` (Codex,
+        PR #222).
+      - `SPEC.md` §6.6 carries what the 200 m walk was actually made of, which is what makes this
+        worth revisiting rather than guessing at again.
+- [ ] **Pace the checking burst at the anchor's confirmation gap before shortening it.** The engine
+      accepts two qualifying fixes `CONFIRMATION_GAP` apart, but on `play` the burst asks for one
+      every `CheckingCadence.CONFIRM_SPACING_MS` — a hard-coded 30 s — so a shorter *accepted* gap
+      is inert on its own, and a first attempt at one was withdrawn from PR #222 rather than
+      shipped as a latency win that never happens (Codex, PR #222). The cadence is constructed per
+      snooze, inside `start()`'s `callbackFlow` along with `CheckingFixes`, so this is passing the
+      anchor's gap into it rather than any lifecycle change. Cover it end to end rather than as a
+      model property.
 - [ ] **Decide whether a check should spend a higher-accuracy fix.** The confirming burst asks for
       no better a fix than the resting probe does — both take the platform default — so the accuracy
       term in `SPEC.md` §6.6's decomposition is whatever the platform felt like giving — one of
