@@ -22,7 +22,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -908,7 +907,13 @@ internal fun SnoozeRingerRow(
                 }
             }
             Box {
-                OutlinedButton(
+                // Filled, like every other button in the app, rather than
+                // outlined (maintainer, 2026-09-07): an outline on the row's
+                // own `surfaceVariant` card read as a label rather than
+                // something to press, and the one control on the settings
+                // screen that opens a menu is the one that most needs to look
+                // pressable.
+                Button(
                     onClick = { open = true },
                     // 40dp is the button's own height; this clears Android's
                     // 48dp minimum target without a fixed height that would
