@@ -23,8 +23,40 @@ sealed interface PresenceSignal {
     /** Associated with the anchor's SSID: strong evidence of presence (D4). */
     data class AnchorWifiAssociated(override val atElapsedRealtimeMs: Long) : PresenceSignal
 
-    /** The anchor's SSID went away. Weak evidence of leaving — escalates only (D4). */
-    data class AnchorWifiLost(override val atElapsedRealtimeMs: Long) : PresenceSignal
+    /**
+     * The anchor's SSID went away. Weak evidence of leaving — escalates only (D4).
+     *
+     * [observed] separates the two very different reasons this arrives, which
+     * the type used to collapse into one. A loss is **fail-open**: every
+     * question the Wi-Fi watch cannot answer is answered "gone", because a
+     * suppressor nothing can vouch for holding a snooze quiet is the
+     * direction D7 forbids. That is right and it stays — but it means most of
+     * the paths reaching here never saw a network go anywhere.
+     *
+     * Three are the platform declining to answer: a watch registration that
+     * would not register, an initial state read that was refused, and the
+     * redaction placeholder an SSID read returns once the location grant is
+     * dead or downgraded. Two are real determinations: a callback reporting
+     * the anchor's network absent, and a successful seed read finding no
+     * Wi-Fi at all — with nothing connected, nothing is associated to the
+     * anchor.
+     *
+     * **Nothing branches on this yet, deliberately.** It exists because the
+     * shorter departure bar for a Wi-Fi anchor needs it, and was withdrawn
+     * three times without it: each attempt keyed on a signal that could not
+     * tell the two apart, so the short bar fired inside a venue the phone was
+     * still connected to (`TODO.md`). Whether to reintroduce that bar is the
+     * maintainer's call; until then this reaches the debug log, which is
+     * where the field traces that decision needs are read.
+     *
+     * Defaults to false so the claim has to be made on purpose. A caller that
+     * has not thought about provenance must not be believed, and false is the
+     * answer that leaves every existing boundary exactly where it is.
+     */
+    data class AnchorWifiLost(
+        override val atElapsedRealtimeMs: Long,
+        val observed: Boolean = false,
+    ) : PresenceSignal
 
     /**
      * Wi-Fi is connected, but the watch cannot yet say *which* network

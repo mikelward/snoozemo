@@ -74,7 +74,7 @@ internal class PlatformWifiWatch(
 
         private fun deliverCurrent() {
             val raw = currentAssociationSsid()
-            tracker.onWifiSsid(raw, readElapsedRealtimeMs())?.let(onSignal)
+            tracker.onWifiSsid(raw, readElapsedRealtimeMs())?.let(::emit)
             // **After the tracker, not before** (Codex, PR #165). Reporting
             // first looks better — the grace deadline is never armed rather
             // than armed and canceled — but it puts the caller's whole
@@ -115,7 +115,12 @@ internal class PlatformWifiWatch(
             registered = true
         }.onFailure {
             SnoozeDebugLog.failure(it, "Wi-Fi watch registration refused; treating as loss")
-            onSignal(PresenceSignal.AnchorWifiLost(readElapsedRealtimeMs()))
+            // `observed = false` explicitly, though it is also the default: a
+            // watch that never registered has looked at nothing, so this is
+            // the fail-open answer rather than a network seen going away.
+            // Straight to `emit` rather than through the tracker, because
+            // there is no async callback coming that its state could serve.
+            emit(PresenceSignal.AnchorWifiLost(readElapsedRealtimeMs(), observed = false))
         }
         if (registered) {
             // A registration with no matching network dispatches nothing —
@@ -163,8 +168,42 @@ internal class PlatformWifiWatch(
                 readSucceeded = read.isSuccess,
                 anyWifiConnected = read.getOrDefault(false),
                 atElapsedRealtimeMs = readElapsedRealtimeMs(),
-            )?.let(onSignal)
+            )?.let(::emit)
         }
+    }
+
+    /**
+     * Every signal leaves through here, so a loss records *why* it is a loss.
+     *
+     * A loss is fail-open (D7), which makes "the anchor's network went away"
+     * and "nothing could answer, so assume it did" arrive as the same signal
+     * — and the three refusing paths all log their own failure while the two
+     * real determinations logged nothing at all, so the log could not tell
+     * them apart either. Two lines rather than one is what lets a bug report
+     * say which kind of loss ended a snooze, which is what the field traces
+     * `TODO.md` asks for are read to answer.
+     *
+     * A boolean and no network name: the SSID never leaves [AnchorWifiTracker]
+     * (AGENTS.md, *Privacy*).
+     */
+    private fun emit(signal: PresenceSignal) {
+        if (signal is PresenceSignal.AnchorWifiLost) {
+            SnoozeDebugLog.event(
+                if (signal.observed) {
+                    // "Confirmed absent" rather than "seen to go" (Codex,
+                    // PR #222). Both observed paths establish that the anchor
+                    // is not connected, but only one of them watched it
+                    // happen: a seed read on a watch that starts with the
+                    // phone already off Wi-Fi confirms an absence it never saw
+                    // begin. Wording it as a transition would put a claim in
+                    // the trace that the code did not make.
+                    "anchor Wi-Fi lost: absence confirmed"
+                } else {
+                    "anchor Wi-Fi lost: could not tell, failing open to gone"
+                },
+            )
+        }
+        onSignal(signal)
     }
 
     /**

@@ -285,7 +285,7 @@ explainable, Snoozemo keeps a short technical log of what its machinery did.
 **What it records**: each step a snooze moves through and why, the reason a snooze ended,
 that the time-limit alarm was set and that it fired, when Do Not Disturb access got in the
 way, how far from the anchor a location fix said you were **in meters** and how accurate
-that fix claimed to be, whether the anchor's Wi-Fi was still connected as a yes or no,
+that fix claimed to be, whether the anchor's Wi-Fi was still connected as a yes or no — and, when the answer is no, whether Snoozemo confirmed the network was absent or simply could not tell and assumed the worst, which are very different reasons for a snooze to end —
 whether your phone's location setting was switched off and when it came back on,
 whether the ringer was turned down for a snooze and to which of the phone's three
 settings — ring, vibrate or silent — along with the one it was put back to afterwards, and

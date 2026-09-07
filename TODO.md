@@ -1225,12 +1225,17 @@ the point is that every other line of the app is worthless if it isn't true.
         registration, a refused initial state read, and the redaction placeholder returned under a
         dead or downgraded location grant. Each sets `atAnchorWifi` false while the phone may still
         be on the network, so the same ~100 m false departure returns by another route.
-      - What it needs is **provenance on the loss signal** — an observed disconnection told apart
-        from "cannot tell" — across `PlatformWifiWatch`, `AnchorWifiTracker` and the grant path.
-        That is a change to the machinery principles 1 and 2 govern, so it is a maintainer decision
-        rather than an implementation detail. Note the safe direction: gating the *relaxed* bar on a
-        real observation can only ever leave the old, more conservative boundary in place, so it
-        does not risk a snooze that never ends.
+      - What it needed was **provenance on the loss signal** — an observed disconnection told apart
+        from "cannot tell" — and that now exists (maintainer, 2026-09-07):
+        `PresenceSignal.AnchorWifiLost` carries `observed`, decided in one place in
+        `AnchorWifiTracker.report`. True only for the two real determinations — a callback reporting
+        the anchor's network absent, and a successful seed read finding no Wi-Fi at all — and false
+        for all three refusals: a registration that would not register, a refused seed read, and the
+        redaction placeholder under a dead or downgraded grant. It defaults to false so a claim has
+        to be made deliberately. **Nothing branches on it yet**; reintroducing the shorter bar on top
+        of it is still open, and still the maintainer's call. Note the safe direction: gating the
+        *relaxed* bar on a real observation can only ever leave the old, more conservative boundary
+        in place, so it does not risk a snooze that never ends.
       - Independently: **the confirmation gap cannot be shortened without wiring the burst
         cadence** (separate item below), and — *if* a departure radius distinct from `radiusM` is
         reintroduced — that field would need adding to `ActiveSnoozeStore`'s hand-written schema,
