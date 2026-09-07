@@ -1201,7 +1201,11 @@ the point is that every other line of the app is worthless if it isn't true.
       first occurrence of every unrepeatable failure was the one nobody captured. Recorded in
       `SPEC.md` §4.6 with the reasoning.
 - [ ] Departure latency instrumented against ground truth, on-device (hardware item 2).
-- [ ] **Decide whether the departure bar should relax once a Wi-Fi anchor's network is gone.**
+- [x] **Decide whether the departure bar should relax once a Wi-Fi anchor's network is gone.**
+      Decided yes and built, gated on `AnchorWifiLost.observed` (maintainer, 2026-09-07):
+      `Anchor.WIFI_LOST_RADIUS_M` is 25 m, applied per-step by `Presence.effectiveAnchor` and
+      cleared by the next association. `SPEC.md` §6.6 carries the decision. The history below is
+      kept because it is what makes the gate's shape non-obvious.
       Attempted in PR #222 and **withdrawn there**, not because the product idea is wrong but
       because the codebase has no signal that means what it needs. The idea: the anchor's network
       going is itself evidence of leaving, which would let the bar drop from 100 m to ~25 m. What
@@ -1232,10 +1236,11 @@ the point is that every other line of the app is worthless if it isn't true.
         the anchor's network absent, and a successful seed read finding no Wi-Fi at all — and false
         for all three refusals: a registration that would not register, a refused seed read, and the
         redaction placeholder under a dead or downgraded grant. It defaults to false so a claim has
-        to be made deliberately. **Nothing branches on it yet**; reintroducing the shorter bar on top
-        of it is still open, and still the maintainer's call. Note the safe direction: gating the
-        *relaxed* bar on a real observation can only ever leave the old, more conservative boundary
-        in place, so it does not risk a snooze that never ends.
+        to be made deliberately — and since the shorter bar now gates on it, a producer that leaves
+        the default keeps the full venue radius on its path rather than merely losing a diagnostic.
+        That is the safe direction: gating the *relaxed* bar on a real observation can only ever
+        leave the old, more conservative boundary in place, so it does not risk a snooze that never
+        ends.
       - Independently: **the confirmation gap cannot be shortened without wiring the burst
         cadence** (separate item below), and — *if* a departure radius distinct from `radiusM` is
         reintroduced — that field would need adding to `ActiveSnoozeStore`'s hand-written schema,
@@ -1244,6 +1249,22 @@ the point is that every other line of the app is worthless if it isn't true.
         PR #222).
       - `SPEC.md` §6.6 carries what the 200 m walk was actually made of, which is what makes this
         worth revisiting rather than guessing at again.
+- [ ] **Handle a Wi-Fi dropout that outlasts the confirmation gap, at the far end of a large site.**
+      The one case the `observed` gate does *not* catch, deferred deliberately (maintainer,
+      2026-09-07) rather than blocking the relaxed bar on it. A router that drops for more than the
+      30 s confirmation gap produces a **genuine** observed loss; if the phone is far enough out
+      inside the venue — ~120 m against a 22 m-uncertainty fix clears the relaxed bar's ~97 m —
+      two fixes confirm and the snooze ends although nobody left. Rejoining *within* the gap is
+      already handled: the association clears `anchorWifiObservedGone` and de-escalates, so the
+      venue radius is back before the next fix is measured.
+      - It resolves in principle 1's direction, which is why it is a follow-up: a snooze that ends
+        early is a small annoyance, where one that never ends is the product failing.
+      - Options, none costed yet: require the loss to persist for a dwell before relaxing (spends
+        the speed the change was for); require corroboration from a second source before the
+        relaxed bar applies (a geofence exit, or motion); or keep the relaxed bar only while the
+        anchor's network is also absent from a fresh scan. Measure first — how often a real router
+        drops for 30 s is exactly what the handset traces would show, and the answer decides
+        whether this needs solving at all.
 - [ ] **Pace the checking burst at the anchor's confirmation gap before shortening it.** The engine
       accepts two qualifying fixes `CONFIRMATION_GAP` apart, but on `play` the burst asks for one
       every `CheckingCadence.CONFIRM_SPACING_MS` — a hard-coded 30 s — so a shorter *accepted* gap
@@ -4552,6 +4573,65 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   wording change indistinguishable in the trace. Reversible either way — nothing here
   is persisted, and the early settle would only shorten a window this already renders
   correctly.
+
+- [ ] **The relaxed departure radius needs a maintainer's decision before it merges**
+  (autopilot, 2026-09-07, PR #224). Seven correctness findings landed on this one
+  mechanism in a row, and three of them were bugs introduced by the fix for the one
+  before:
+
+  1. the observation survived a location-access outage, so a fix on restore was measured
+     against 25 m on a phone that may have rejoined unobserved;
+  2. withdrawing it on the outage was defeated by producer ordering — the Play monitor
+     calls `latchIfGrantGone()` *before* `deliver(signal)`, so the loss behind it re-set
+     the flag;
+  3. withdrawing it left the confirmation run earned under the narrow bar standing, so a
+     later fix clearing the restored bar departed on one qualifying reading;
+  4. clearing that run unconditionally threw one away for free whenever the bar had never
+     been relaxed — a phone flicking access on and off could restart it against the cap,
+     which is principle 1's direction;
+  5. clearing it whenever the flag is true is still wrong, because the flag does not
+     prove the run was earned at 25 m: a geofence exit while associated opens a
+     full-radius run *before* the loss sets the flag;
+  6. the same staleness reaches the *screen*, not just the decision — a rejoin restores
+     the venue radius and clears the run, but publishes no replacement observation, so
+     the cached readout computed at 25 m keeps saying `confirming` for up to
+     `DepartureObservation.FRESH_FOR_MS` (5 min) about a confirmation that was canceled;
+  7. and the relaxed radius is handed to `Departure.consider`, which uses it for
+     **presence confirmation as well as departure** — `confirmsPresence` is
+     `distance + uncertainty <= radius`, so at 25 m against a 20 m anchor and a 20 m fix
+     the uncertainty alone is 28 m and `STILL_HERE` is **unreachable at any distance**.
+     A router dropout with the phone stationary then produces `INCONCLUSIVE` readings
+     until three of them degrade tracking to Wi-Fi-only, arm grace, and end the snooze on
+     a phone that never moved. That is principle 1's failure, and the worst of the seven.
+
+  **Finding 7 is the one that decides this**, and it is not a bug in a keep-or-discard
+  rule: the gate moves *one* number that two different boundaries read. Shrinking the
+  departure bar is the whole intent; shrinking the presence bar makes "I am still here"
+  unprovable. Any version of this feature has to relax the departure half **only**.
+
+  **The root cause is structural, not a sequence of oversights.** The effective radius
+  can change in the middle of a two-fix confirmation, and neither `DepartureProgress` nor
+  the published `DepartureObservation` records which radius it was measured against — so
+  every rule about when to keep, discard or re-publish is inferred from adjacent state.
+  The sixth finding is the tell that this is not only a decision-path problem: the same
+  staleness surfaces on the screen, through a different consumer, for the same reason.
+  Two shapes would delete the class rather than the instance:
+
+  - **Give the run its radius.** `DepartureProgress` carries the radius it was opened
+    against, and a run is discarded only when the effective radius has widened past it.
+    Exact, and it makes every future radius change safe automatically. Costs a field on
+    the decision path's state. **Does not on its own fix finding 7** — that needs the
+    relaxation split out of the anchor and applied to the departure half alone, so
+    `confirmsPresence` keeps the venue radius.
+  - **Freeze the radius for the length of a run.** The relaxation applies only when no
+    run is open, so a confirmation is always measured against one radius. Smaller, but it
+    delays the relaxation by up to one confirmation gap.
+
+  Not guessed under autopilot: this is the gate that decides when a snooze ends early, it
+  is on the decision path, and AGENTS.md makes a design change the maintainer's call —
+  which a seventh finding in the same mechanism certainly is. **A third option is to drop the gate**
+  and keep the departure bar at one number; #225 does not depend on it.
+
 
 - [ ] **A posted ongoing card can go stale while a snooze is still starting, and that
   is accepted rather than fixed** (autopilot, 2026-09-07, on the fifth Codex finding in

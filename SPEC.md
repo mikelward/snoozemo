@@ -2487,6 +2487,50 @@ for measuring against an origin the app never actually knew to the old precision
 narrow band is a sharp anchor, not a smaller subtraction. `DefaultRadiusTest` asserts both halves so
 the next person to move either number sees it as well as the benefit.
 
+**The bar relaxes to 25 m once the anchor's network has been *observed* gone** (maintainer,
+2026-09-07). The network going is itself evidence of leaving, so the venue floor that keeps the
+radius at 100 m has already been paid for by other means: the question stops being "might they
+still be inside?" and becomes "how far have they got?". `Anchor.WIFI_LOST_RADIUS_M` is that value,
+applied per-step rather than written back to the stored anchor, so nothing about the record changes
+and a rejoin restores the venue radius by clearing one flag.
+
+**What gates it is provenance, not the suppressor.** Only `AnchorWifiLost(observed = true)` relaxes
+anything. A loss is fail-open (D7), so most reports of one never saw a network go anywhere — a
+refused registration, a refused seed read, the redaction placeholder under a dead grant, a callback
+snapshot still filling in — and every one of those keeps the full radius. Keying on `!atAnchorWifi`
+instead is what fired the short bar ~100 m *inside* a venue the phone was still connected to, twice;
+a geofence exit escalates while associated on purpose (§6.3), so the radius is live on that path and
+must not be relaxed by it. The relaxation also never *widens*: an anchor already smaller than 25 m
+keeps its own.
+
+**It is not a 75 m saving.** The hysteresis and the reading's uncertainty are still subtracted, so a
+fix with ~22 m of uncertainty needs about 97 m of reported separation rather than ~172 m — twice,
+thirty seconds apart. What that is worth in ground actually covered depends on when the check
+started, exactly as the paragraphs above say; "ends nearer 120 m than 200 m" is the hoped-for case,
+not a prediction.
+
+**The dropout case is open** (`TODO.md`). A router that drops for longer than the confirmation gap
+while the phone is at the far end of a large site produces a genuine, observed loss at a distance
+that clears the relaxed bar — so `observed` does not catch it, and the snooze ends although nobody
+left. Rejoining inside the gap is already handled: the association clears the flag and de-escalates.
+This resolves in principle 1's direction (a snooze that ends is a small annoyance) rather than
+principle 2's, which is why it is a follow-up rather than a blocker.
+
+**A location-access outage is the same shape and is *not* left open**, because the app causes it
+rather than the router. Without location access the SSID is redacted, so the Wi-Fi watch is torn
+down and cannot see a rejoin — and on restore the checking resumes before the watch is rebuilt, so
+a fix could be measured against the relaxed radius on a phone already back on the network. So the
+outage withdraws the observation, exactly as it withdraws the grace deadline: the relaxation rests
+on watching, and the watching has stopped. A loss reported *during* an outage cannot establish it
+either, so the rule is one invariant — **the observation stands only while location access is
+held** — rather than a withdrawal that a producer's ordering could undo. It is earned back the
+moment the rebuilt watch observes a real loss, and losing it only ever restores the conservative
+radius. Withdrawing it also discards the confirmation run earned under the shorter bar, since that
+bar has just widened — but **only** when there was a relaxation to withdraw: on a snooze that never
+relaxed the radius nothing has gone stale, and throwing the run away there would let a phone
+flicking location access on and off restart it against the cap, which is principle 1's failure
+rather than a cautious one.
+
 Anchor with no location fix at all (arming indoors with no signal): Wi-Fi-only mode. Losing the
 anchor SSID escalates, but with no location to confirm with, resolve after a 5-minute grace period
 in which Wi-Fi does not return — then end (D7, fail open).

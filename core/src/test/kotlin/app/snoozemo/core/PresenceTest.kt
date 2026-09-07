@@ -83,7 +83,13 @@ class PresenceTest {
     private fun associated(atSeconds: Long) =
         PresenceSignal.AnchorWifiAssociated(atSeconds * 1_000L)
 
-    private fun wifiLost(atSeconds: Long) = PresenceSignal.AnchorWifiLost(atSeconds * 1_000L)
+    /**
+     * A reported loss. Defaults to **not** observed, like the signal itself, so
+     * every case that does not say otherwise is the fail-open kind and measures
+     * against the full venue radius.
+     */
+    private fun wifiLost(atSeconds: Long, observed: Boolean = false) =
+        PresenceSignal.AnchorWifiLost(atSeconds * 1_000L, observed = observed)
 
     private fun motion(atSeconds: Long) = PresenceSignal.SignificantMotion(atSeconds * 1_000L)
 
@@ -124,6 +130,17 @@ class PresenceTest {
 
     /** A reading well outside the radius, accuracy already allowed for. */
     private fun outside(atSeconds: Long) = arrived(northM = 400.0, accuracyM = 20f, atSeconds)
+
+    /**
+     * 110 m out with a sharp fix: past the relaxed 25 m bar and nowhere near
+     * the 100 m one, so it is the reading that tells the two radii apart.
+     *
+     * Against a 20 m anchor the uncertainty is ~22 m, so the margin is ~63 m
+     * at the relaxed radius — clear of the 50 m band — and ~-12 m at the
+     * venue radius, which is not evidence of anything.
+     */
+    private fun justOutsideAVenue(atSeconds: Long) =
+        arrived(northM = 110.0, accuracyM = 10f, atSeconds)
 
     @Test
     fun `sitting on the anchor's wifi does no location work at all`() {
@@ -1437,5 +1454,257 @@ class PresenceTest {
 
         assertNull(state.graceDeadlineMs)
         assertTrue(state.locationAccessLost)
+    }
+
+    @Test
+    fun `an observed Wi-Fi loss shortens the departure bar`() {
+        // The network going is itself evidence of leaving, so the venue floor
+        // that keeps the radius at 100 m has been paid for by other means and
+        // the question becomes how far the phone has got (`TODO.md`; maintainer,
+        // 2026-09-07). 110 m clears the relaxed bar and would say nothing at
+        // the venue one.
+        val (events, _) = replay(
+            tracked,
+            signals = arrayOf(
+                associated(0),
+                wifiLost(60, observed = true),
+                justOutsideAVenue(90),
+                justOutsideAVenue(130),
+            ),
+        )
+
+        assertEquals(PresenceEvent.Departed, events.last())
+    }
+
+    @Test
+    fun `a location-access outage withdraws the shortened bar`() {
+        // The watch that earned the relaxation is the first casualty of an
+        // access outage: FLAG_INCLUDE_LOCATION_INFO redacts, so the Wi-Fi
+        // watch is torn down and nothing can see a rejoin while access is
+        // gone. Leaving the observation latched through that was a real hole —
+        // `ResumeChecking` runs before `RebuildWifiWatch`, so a fix arriving in
+        // between would be measured against 25 m on a phone that may have
+        // rejoined the network unobserved (Codex, PR #224).
+        //
+        // Same 110 m that departs in the test above; here it says nothing,
+        // because the venue radius is back.
+        val (events, state) = replay(
+            tracked,
+            signals = arrayOf(
+                associated(0),
+                wifiLost(60, observed = true),
+                accessLost(70),
+                accessRestored(80),
+                justOutsideAVenue(90),
+                justOutsideAVenue(130),
+            ),
+        )
+
+        assertFalse("the observation did not survive the outage", state.anchorWifiObservedGone)
+        assertNotEquals(PresenceEvent.Departed, events.last())
+    }
+
+    @Test
+    fun `the outage also discards progress earned under the shorter bar`() {
+        // Withdrawing the observation *widens* the radius, so a fix that
+        // qualified at 25 m may not qualify at 100 m. Leaving its progress
+        // standing meant one fix clearing the restored bar thirty seconds
+        // later confirmed against it and departed on a single real qualifying
+        // reading (Codex, PR #224) — the two-fix rule defeated by a threshold
+        // change between the two.
+        //
+        // The general invariant, which `associated` already observed and this
+        // path did not: whenever the effective radius widens, progress
+        // measured against the narrower one is stale.
+        // 110 m qualifies at 25 m and not at 100 m; `outside` (400 m) clears
+        // both. So the second fix is the *only* one that ever met the restored
+        // bar, and confirming it against the first is confirming against a
+        // reading the restored radius rejects.
+        val (events, _) = replay(
+            tracked,
+            signals = arrayOf(
+                associated(0),
+                wifiLost(60, observed = true),
+                justOutsideAVenue(90),
+                accessLost(100),
+                accessRestored(110),
+                outside(130),
+            ),
+        )
+
+        assertNotEquals(
+            "one fix met the restored bar; two are required",
+            PresenceEvent.Departed,
+            events.last(),
+        )
+
+        // And the two-fix rule still works on the restored radius, so this is
+        // a discarded run rather than a disabled test.
+        val (confirmed, _) = replay(
+            tracked,
+            signals = arrayOf(
+                associated(0),
+                wifiLost(60, observed = true),
+                justOutsideAVenue(90),
+                accessLost(100),
+                accessRestored(110),
+                outside(130),
+                outside(170),
+            ),
+        )
+
+        assertEquals(PresenceEvent.Departed, confirmed.last())
+    }
+
+    @Test
+    fun `an outage with no relaxation to withdraw keeps the run`() {
+        // The other direction, and the one that fails toward a snooze that
+        // never ends (Codex, PR #224). Clearing the run unconditionally threw
+        // away a confirmation for free whenever the bar had never been
+        // relaxed — the radius does not move, so nothing about the earlier fix
+        // went stale — and a phone flicking location access on and off could
+        // restart the run indefinitely against the cap.
+        //
+        // A fail-open loss, so `anchorWifiObservedGone` stays false throughout
+        // and the venue radius is in force for both fixes.
+        val (events, _) = replay(
+            tracked,
+            signals = arrayOf(
+                associated(0),
+                wifiLost(60),
+                outside(90),
+                accessLost(100),
+                accessRestored(110),
+                outside(130),
+            ),
+        )
+
+        assertEquals(PresenceEvent.Departed, events.last())
+    }
+
+    @Test
+    fun `an observed loss arriving behind the outage cannot claim it`() {
+        // The producer ordering that defeated withdrawing the flag on the
+        // outage alone: the Play monitor calls `latchIfGrantGone()` *before*
+        // `deliver(signal)`, so a grant going at the same moment as a real
+        // Wi-Fi loss delivers `LocationAccessLost` first — clearing the flag —
+        // and the observed loss behind it set it straight back (Codex,
+        // PR #224). Refused at the writer instead, so the order does not
+        // matter: with access gone the SSID is redacted and nothing could have
+        // watched a network go.
+        val (events, state) = replay(
+            tracked,
+            signals = arrayOf(
+                associated(0),
+                accessLost(60),
+                wifiLost(60, observed = true),
+                accessRestored(70),
+                justOutsideAVenue(90),
+                justOutsideAVenue(130),
+            ),
+        )
+
+        assertFalse("a loss during an outage is not an observation", state.anchorWifiObservedGone)
+        assertNotEquals(PresenceEvent.Departed, events.last())
+    }
+
+    @Test
+    fun `a fresh observed loss after the outage earns it back`() {
+        // Withdrawn, not disabled: the rebuilt watch re-establishes the
+        // relaxation as soon as it observes a real loss, so the outage costs
+        // walking distance once rather than for the rest of the snooze.
+        val (events, _) = replay(
+            tracked,
+            signals = arrayOf(
+                associated(0),
+                wifiLost(60, observed = true),
+                accessLost(70),
+                accessRestored(80),
+                associated(85),
+                wifiLost(88, observed = true),
+                justOutsideAVenue(90),
+                justOutsideAVenue(130),
+            ),
+        )
+
+        assertEquals(PresenceEvent.Departed, events.last())
+    }
+
+    @Test
+    fun `a loss nobody could confirm leaves the venue radius alone`() {
+        // The whole point of the gate. A refused registration, a refused seed
+        // read, a redacted SSID under a dead grant and a half-arrived callback
+        // snapshot all report a loss without having seen a network go — and
+        // two earlier attempts at this relaxation fired the short bar ~100 m
+        // inside a venue the phone was still connected to.
+        val (events, _) = replay(
+            tracked,
+            signals = arrayOf(
+                associated(0),
+                wifiLost(60),
+                justOutsideAVenue(90),
+                justOutsideAVenue(130),
+            ),
+        )
+
+        assertEquals(listOf(PresenceEvent.ProbablyLeft, null, null), events.drop(1))
+    }
+
+    @Test
+    fun `a geofence exit while associated does not shorten it either`() {
+        // The path that killed the first attempt: an exit escalates *while
+        // still associated*, deliberately, so a stale association cannot hide
+        // a real departure (§6.3). Nothing about that says the network is gone.
+        val (events, _) = replay(
+            tracked,
+            signals = arrayOf(
+                associated(0),
+                geofenceExit(60),
+                justOutsideAVenue(90),
+                justOutsideAVenue(130),
+            ),
+        )
+
+        assertTrue(events.none { it == PresenceEvent.Departed })
+    }
+
+    @Test
+    fun `rejoining the network puts the venue radius back`() {
+        // A dropout is not a departure. The association is what makes the
+        // earlier observation stale, so the bar returns to the venue radius
+        // before the next fix is measured against it.
+        val (events, state) = replay(
+            tracked,
+            signals = arrayOf(
+                associated(0),
+                wifiLost(60, observed = true),
+                associated(90),
+                justOutsideAVenue(120),
+                justOutsideAVenue(160),
+            ),
+        )
+
+        assertFalse("the observation is stale once the network is back", state.anchorWifiObservedGone)
+        assertTrue(events.none { it == PresenceEvent.Departed })
+    }
+
+    @Test
+    fun `the relaxed bar never widens a radius the user made smaller`() {
+        // It can only tighten. An anchor already inside the relaxed value keeps
+        // its own, so a deliberately tiny "here" is not quietly enlarged to 25 m
+        // by a Wi-Fi loss.
+        val tight = tracked.copy(radiusM = 10)
+        val (events, _) = replay(
+            tight,
+            signals = arrayOf(
+                associated(0),
+                wifiLost(60, observed = true),
+                // 90 m clears 10 m + the band, but not 25 m + the band.
+                arrived(northM = 90.0, accuracyM = 10f, 90),
+                arrived(northM = 90.0, accuracyM = 10f, 130),
+            ),
+        )
+
+        assertEquals(PresenceEvent.Departed, events.last())
     }
 }
