@@ -25,15 +25,23 @@ const val MIN_FONT_SCALE = 0.8f
 const val MAX_FONT_SCALE = 1.6f
 
 /**
- * The size Snoozemo starts at: the system's own.
+ * The size Snoozemo starts at: a notch above the system's own (maintainer,
+ * 2026-09-07).
  *
- * Unlike the sibling Simmo repo, which starts a notch above because its screens
- * are read mid-call against a deadline, Snoozemo's are read at leisure — the
- * tile is the surface that matters and it isn't ours to size. So the app looks
- * like the rest of the system until the user says otherwise, and the setting is
- * an adjustment rather than a correction.
+ * This started at the system's size, on the argument that Snoozemo's screens
+ * are read at leisure and so should look like the rest of the system until the
+ * user says otherwise. Reversed after seeing it: the screens this app actually
+ * shows are short — a card, a row of settings, a sheet with three choices —
+ * with room to spare on any modern phone, so matching the system left that
+ * space unused and the text smaller than it needed to be. A notch up costs
+ * nothing on a screen that was never full, and the setting is still an
+ * adjustment either way: a user who wants the system's exact size drags to
+ * 100%, and it is stored like any other choice.
+ *
+ * Only the *starting* point moves. Anything already stored is read back
+ * unchanged, so a user who chose their own size — 100% included — keeps it.
  */
-const val DEFAULT_FONT_SCALE = 1f
+const val DEFAULT_FONT_SCALE = 1.15f
 
 /** The settings that decide how Snoozemo's text is sized, read as one value. */
 data class FontSizeSettings(
