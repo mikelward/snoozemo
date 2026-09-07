@@ -1290,6 +1290,33 @@ class SnoozeNotifications(private val context: Context) {
             betweenReadAndPost = {}
         }
 
+        /**
+         * Test-only: declares the channels already created, so nothing will
+         * create them again.
+         *
+         * For a test that has to assert a channel is *absent*. Deleting one is
+         * not enough on its own: `Application.onCreate` warms the channels on
+         * its own thread, an activity launch can arm a fresh warm-up, and
+         * [awaitWarmForTest] can only join the warm-up that exists when it is
+         * called — so a recreation landing a moment after the delete puts the
+         * channel back under the assertion. Joining narrows that race without
+         * closing it, and it has been lost twice.
+         *
+         * Setting the flag closes it instead of racing it: [ensureChannels]
+         * returns immediately, so no warm-up armed afterwards can recreate
+         * anything. Ordering made explicit rather than waited on
+         * (`AGENTS.md`, *Testing expectations*).
+         *
+         * **Call this before [awaitWarmForTest], not after.** The flag stops
+         * warm-ups that have not yet reached the check; the join is what
+         * clears one already past it. Flagging second leaves exactly the
+         * window the flag exists to close, and the test goes back to losing
+         * the race intermittently.
+         */
+        internal fun markChannelsCreatedForTest() {
+            channelsCreated = true
+        }
+
         /** Test-only: whether [reapplyDndBypassOnce] has marked itself done. */
         internal fun bypassReapplyAttemptedForTest(): Boolean = bypassReapplyAttempted
 
