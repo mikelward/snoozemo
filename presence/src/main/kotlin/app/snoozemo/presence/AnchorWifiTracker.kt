@@ -112,9 +112,14 @@ internal class AnchorWifiTracker(private val anchorSsid: String) {
      * How much a loss reported through [report] is entitled to claim.
      *
      * Fail-open behavior does not vary with this — every value still reports
-     * the loss (D7). What varies is whether the signal may say the network was
-     * *seen* to go, which is what a future shorter departure bar would gate on
-     * (`TODO.md`).
+     * the loss (D7). What varies is whether the signal may say the anchor's
+     * absence was actually established, and that is **behavior-controlling**:
+     * it is what unlocks the shorter departure bar,
+     * [app.snoozemo.core.Anchor.WIFI_LOST_RADIUS_M]. A value chosen too
+     * generously here shortens the bar on a path that never saw a network go,
+     * which is the false departure two earlier attempts produced; too
+     * conservatively, and the snooze simply keeps the full venue radius, which
+     * is the safe direction.
      */
     private enum class LossEvidence {
         /**

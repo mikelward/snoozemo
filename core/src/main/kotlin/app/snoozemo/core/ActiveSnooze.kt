@@ -62,6 +62,33 @@ data class Anchor(
          */
         const val DEFAULT_RADIUS_M: Int = 100
 
+        /**
+         * How big "here" is once the anchor's network has been **observed**
+         * gone, in meters (maintainer, 2026-09-07: 100 → 25 on that path).
+         *
+         * The network going is itself evidence of leaving, so the venue floor
+         * that keeps [DEFAULT_RADIUS_M] large no longer has to be paid for:
+         * the question has stopped being "might they still be inside?" and
+         * become "how far have they got?".
+         *
+         * **Only ever reached from `AnchorWifiLost(observed = true)`**, which
+         * is the whole reason this is safe to have. A loss is fail-open, so
+         * most of the paths that report one never saw a network go anywhere —
+         * a refused registration, a refused seed read, the redaction
+         * placeholder under a dead grant, or a callback snapshot that has not
+         * finished arriving. Every one of those keeps the full radius. Two
+         * earlier attempts at this relaxation keyed on signals that could not
+         * tell those apart and fired the short bar ~100 m inside a venue the
+         * phone was still connected to (`TODO.md`).
+         *
+         * It never *widens* a radius: an anchor already smaller than this
+         * keeps its own. And it is not a floor on ground covered — the
+         * hysteresis and the fix's uncertainty are still subtracted, so a
+         * 22 m-uncertainty fix still needs about 97 m of reported separation,
+         * twice, thirty seconds apart.
+         */
+        const val WIFI_LOST_RADIUS_M: Int = 25
+
         /** Discard coordinates vaguer than this when capturing an anchor. */
         const val MAX_ANCHOR_ACCURACY_M: Float = 200f
     }

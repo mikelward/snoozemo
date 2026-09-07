@@ -41,13 +41,18 @@ sealed interface PresenceSignal {
      * Wi-Fi at all — with nothing connected, nothing is associated to the
      * anchor.
      *
-     * **Nothing branches on this yet, deliberately.** It exists because the
-     * shorter departure bar for a Wi-Fi anchor needs it, and was withdrawn
-     * three times without it: each attempt keyed on a signal that could not
-     * tell the two apart, so the short bar fired inside a venue the phone was
-     * still connected to (`TODO.md`). Whether to reintroduce that bar is the
-     * maintainer's call; until then this reaches the debug log, which is
-     * where the field traces that decision needs are read.
+     * **This is behavior-controlling.** `observed = true` is what unlocks the
+     * relaxed departure radius, [Anchor.WIFI_LOST_RADIUS_M], through
+     * [PresenceState.anchorWifiObservedGone] — so a producer that leaves the
+     * default silently keeps the full venue radius on its path rather than
+     * merely losing a diagnostic. That is the safe direction, and deliberate,
+     * but it is a choice worth making on purpose.
+     *
+     * The bar was withdrawn three times before this flag existed: each attempt
+     * keyed on a signal that could not tell an observation from a fail-open
+     * report, so the short bar fired inside a venue the phone was still
+     * connected to (`TODO.md`). It also reaches the debug log, which is where
+     * the field traces are read.
      *
      * Defaults to false so the claim has to be made on purpose. A caller that
      * has not thought about provenance must not be believed, and false is the
@@ -228,6 +233,54 @@ data class PresenceState(
     val phase: PresencePhase = PresencePhase.RESTING,
     /** Whether the phone is currently associated with the anchor's SSID (D4's suppressor). */
     val atAnchorWifi: Boolean = false,
+    /**
+     * Whether the anchor's network has been **observed** gone — not merely
+     * reported lost — since the last time it was associated.
+     *
+     * What [Anchor.WIFI_LOST_RADIUS_M] is gated on, and deliberately *not*
+     * `!atAnchorWifi`: a loss is fail-open, so `atAnchorWifi` goes false for a
+     * refused registration, a refused seed read, a redacted SSID under a dead
+     * grant, or a callback snapshot still filling in — none of which saw a
+     * network go anywhere. Keying the shorter bar on the negation of the
+     * suppressor is exactly the bug this flag exists to avoid (`TODO.md`).
+     *
+     * **Not persisted, and that is the safe direction.** A restored monitor
+     * starts false and measures against the full radius until something
+     * establishes the absence again — which the rebuilt watch's own seed read
+     * does immediately when there is no Wi-Fi at all. Losing it can only make
+     * the app more conservative, never less.
+     *
+     * **True only while location access is held**, and that is one invariant
+     * rather than two rules. A fresh association clears it because the network
+     * is back. A [PresenceSignal.LocationAccessLost] clears it because the
+     * *watch* is gone — the SSID is redacted without location access, so
+     * nothing can see a rejoin while the outage lasts, and a fix arriving on
+     * restore would otherwise be measured against 25 m on a phone already back
+     * on its own network. And a loss reported *during* an outage never sets it,
+     * because nothing in that window witnessed anything.
+     *
+     * The last of those is what makes it order-independent, and it was needed:
+     * the Play monitor calls `latchIfGrantGone()` before delivering the loss,
+     * so a grant going at the same instant cleared the flag and had it set
+     * straight back by the loss behind it (Codex, PR #224). Enforced where the
+     * flag is written rather than at each producer.
+     *
+     * **Every path that clears this from `true` also clears
+     * [PresenceState.progress]**, and that is the general rule rather than a
+     * habit: doing so *widens* the effective radius, so a fix that qualified
+     * under the narrower one may not qualify under the restored one, and
+     * confirming a later fix against it would depart on one real qualifying
+     * reading where two are required.
+     *
+     * Both halves of that are load-bearing, and they fail in opposite
+     * directions. Setting it needs no equivalent, because relaxing the radius
+     * can only keep a qualifying fix qualifying. And clearing it when it was
+     * already false must **not** touch the run: the radius has not moved, so
+     * nothing went stale, and discarding a confirmation for free lets a phone
+     * flicking location access on and off restart the run until the cap —
+     * principle 1's failure, where the other is merely conservative.
+     */
+    val anchorWifiObservedGone: Boolean = false,
     /** The departure test's confirmation window, carried across fixes. */
     val progress: DepartureProgress = DepartureProgress.NONE,
     /**
@@ -505,7 +558,7 @@ object Presence {
                 if (isStale(state, signal.atElapsedRealtimeMs)) {
                     step(state, null, anchor)
                 } else {
-                    wifiLost(state, signal.atElapsedRealtimeMs, anchor)
+                    wifiLost(state, signal.atElapsedRealtimeMs, anchor, signal.observed)
                 }
             is PresenceSignal.GeofenceExit -> escalate(state, signal.atElapsedRealtimeMs, anchor)
             is PresenceSignal.SignificantMotion ->
@@ -576,6 +629,42 @@ object Presence {
             graceDeadlineMs = null,
             confirmationDeferralUsed = false,
             awaitingAssociationConfirmation = false,
+            // The relaxed departure bar rests on having *watched* the anchor's
+            // network go, and that watch is the first casualty of an access
+            // outage: `FLAG_INCLUDE_LOCATION_INFO` redacts, so the watch is
+            // torn down and nothing can see a rejoin while access is gone. Its
+            // premise is withdrawn for the same reason the deadline above is,
+            // and leaving it latched was a real hole — `ResumeChecking` runs
+            // before `RebuildWifiWatch`, so a fix arriving in between would be
+            // measured against 25 m on a phone that may have rejoined the
+            // network unobserved (Codex, PR #224).
+            //
+            // Safe in the direction that matters: clearing it can only restore
+            // the *venue* radius, which is the conservative bar. The rebuilt
+            // watch earns the relaxation back the moment it observes a real
+            // loss, and its own first report cannot claim one — that is not a
+            // transition from a known association.
+            anchorWifiObservedGone = false,
+            // **And the progress earned under it, when there was any to
+            // withdraw** — the same reason `associated` clears it. Withdrawing
+            // the observation *widens* the radius, so a fix that qualified at
+            // 25 m may not qualify at 100 m, and a later fix that does clear
+            // the restored bar would confirm against it: a departure on one
+            // real qualifying reading where the rule requires two (Codex,
+            // PR #224).
+            //
+            // The invariant is the general one: **whenever the effective
+            // radius widens, progress measured against the narrower one is
+            // stale.** So this is conditional on the flag having been set, and
+            // both halves of that matter. Setting it needs no equivalent,
+            // because relaxing the radius can only keep a qualifying fix
+            // qualifying. And clearing unconditionally was worse than doing
+            // nothing: on a snooze that never relaxed the bar the radius does
+            // not move, so discarding the run threw away a confirmation for
+            // free — and a phone flicking location access on and off could
+            // restart it indefinitely, which is principle 1's failure rather
+            // than a conservative one (Codex, PR #224).
+            progress = if (state.anchorWifiObservedGone) DepartureProgress.NONE else state.progress,
         )
         // No event: nothing about presence changed, and the degradation this
         // reflects is reported by the monitor's own platform level.
@@ -631,6 +720,14 @@ object Presence {
         val next = state.copy(
             phase = PresencePhase.RESTING,
             atAnchorWifi = true,
+            // The association is what makes an earlier observed loss stale: the
+            // network is back, so it is no longer evidence of having left, and
+            // the shorter bar it unlocked goes with it: a rejoin after a
+            // dropout puts the venue radius back before the next fix is
+            // measured against it. One of the two things that clear the flag —
+            // the other is a location-access outage, which takes away the watch
+            // that earned it (see `locationAccessLost`).
+            anchorWifiObservedGone = false,
             progress = DepartureProgress.NONE,
             uselessObservations = 0,
             // The degradation deliberately survives this (Codex, PR #33). Every
@@ -674,10 +771,31 @@ object Presence {
         return step(next, if (settlesACheck) PresenceEvent.StillHere else null, anchor)
     }
 
-    private fun wifiLost(state: PresenceState, atMs: Long, anchor: Anchor): PresenceStep {
+    private fun wifiLost(
+        state: PresenceState,
+        atMs: Long,
+        anchor: Anchor,
+        observed: Boolean,
+    ): PresenceStep {
         val next = state.copy(
             phase = PresencePhase.CHECKING,
             atAnchorWifi = false,
+            // Latched rather than assigned, so one observed loss is not undone
+            // by a later fail-open repeat arriving behind it.
+            //
+            // **And never set while location access is gone**, because then
+            // `observed` cannot mean what the relaxed bar needs it to. Without
+            // access the SSID is redacted and the watch is torn down, so no
+            // report from that window witnessed anything — and withdrawing the
+            // flag on the outage alone was not enough: the Play monitor calls
+            // `latchIfGrantGone()` *before* `deliver(signal)`, so a grant that
+            // goes at the same moment as a genuine loss clears the flag and
+            // then has it set straight back by the loss behind it (Codex,
+            // PR #224). Refusing here makes the invariant hold whatever order
+            // the producer delivers in, at the one place the flag is written,
+            // rather than needing two sites to agree.
+            anchorWifiObservedGone =
+                state.anchorWifiObservedGone || (observed && !state.locationAccessLost),
             wifiLostAtMs = atMs,
             graceDeadlineMs = state.graceDeadlineMs ?: graceFrom(atMs, state, anchor),
             checkingSinceMs = state.checkingSinceMs ?: atMs,
@@ -715,6 +833,34 @@ object Presence {
         return step(next, escalationEvent(state), anchor)
     }
 
+    /**
+     * The anchor a fix is actually measured against (`SPEC.md` §6.6).
+     *
+     * The same anchor, with a smaller radius once the network has been seen to
+     * go: [Anchor.WIFI_LOST_RADIUS_M]. The relaxation is deliberately a
+     * property of *this step's state* rather than of the stored anchor —
+     * nothing is written back, so a rejoin restores the venue radius by
+     * clearing one flag, and a restored monitor starts from the conservative
+     * value.
+     *
+     * Three conditions, each load-bearing:
+     * - the loss was **observed** ([PresenceState.anchorWifiObservedGone]), so
+     *   the fail-open reports that never saw a network go keep the full radius;
+     * - the anchor **has** a network to lose, since an anchor with no SSID can
+     *   never have produced that evidence;
+     * - and the stored radius is **larger** than the relaxed one, so this can
+     *   only ever tighten a boundary, never widen one a user chose.
+     */
+    private fun effectiveAnchor(state: PresenceState, anchor: Anchor): Anchor =
+        if (state.anchorWifiObservedGone &&
+            anchor.ssid != null &&
+            anchor.radiusM > Anchor.WIFI_LOST_RADIUS_M
+        ) {
+            anchor.copy(radiusM = Anchor.WIFI_LOST_RADIUS_M)
+        } else {
+            anchor
+        }
+
     private fun fixArrived(state: PresenceState, fix: Fix, anchor: Anchor): PresenceStep {
         // Deliberately does **not** clear `locationAccessLost` (Codex, PR
         // #150). A reading can be cached or queued from before the
@@ -732,11 +878,14 @@ object Presence {
 
         if (isStale(state, fix.elapsedRealtimeMs)) return staleFix(state, fix, anchor)
 
-        val outcome = Departure.consider(fix, anchor, state.progress)
+        // Both the verdict and the readout measure against the *effective*
+        // anchor, so the number on screen is the one the snooze will end on.
+        val measuredAgainst = effectiveAnchor(state, anchor)
+        val outcome = Departure.consider(fix, measuredAgainst, state.progress)
         // The same fix, against the same anchor, on the same step that acts on
         // it — so a screen drawing this is quoting the engine rather than
         // re-deriving a number that could disagree with it.
-        val observation = Departure.observe(fix, anchor)
+        val observation = Departure.observe(fix, measuredAgainst)
         val accepted = state.copy(latestEvidenceMs = fix.elapsedRealtimeMs)
         // SPEC.md §6.1's "evidence of health must be newer than the failure it
         // claims is over", applied on this path too. It used to live only in
