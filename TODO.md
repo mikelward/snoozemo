@@ -4443,6 +4443,48 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
+- [ ] **A posted ongoing card can go stale while a snooze is still starting, and that
+  is accepted rather than fixed** (autopilot, 2026-09-07, on the fifth Codex finding in
+  this mechanism, PR #221). The card is a posted object, not a reader: once
+  `armWithCap` posts it saying `Checking where you are`, the record's expiry cannot
+  reach it. If the process dies inside the ~10 s capture window, the card keeps saying
+  it until the next service wake — `SnoozeController.restore` reposts from the
+  now-resolved record, and `SnoozeBackstop` guarantees a wake within
+  `PERIOD_MINUTES` (30), usually much sooner. So it is a wrong label, bounded and
+  self-healing; the countdown, `End now`, `+30 min`, the cap alarm and the backstop are
+  all unaffected.
+
+  Accepted because the alternatives cost more than the residual. Arming a ~10 s alarm
+  at post time to repost the card would put a wakeup on **every** arm against SPEC §9's
+  battery budget, to correct a rare cosmetic staleness. Keeping the settling state off
+  the notification entirely would revert the second finding: the card would say
+  `Timer only` for the whole capture on every arm, which is the common case this PR
+  exists to fix. And the residual is strictly narrower than what it replaces — a wrong
+  label in a rare window, instead of a wrong label in the ordinary one.
+
+  **This is the fifth finding in one mechanism**, so the question underneath it is the
+  maintainer's, not autopilot's: a transient, liveness-dependent fact
+  (`TrackingMode.SETTLING`) is being expressed in a durable field that several
+  independent surfaces read and one of them *snapshots*. The expiry now added covers
+  every reader; nothing covers a snapshot. If that representation is wrong, say so and
+  it moves — the alternative shapes are a separate in-memory signal the service pushes,
+  or not surfacing the state on the notification at all. Reversible: the mode member,
+  its window, and one string.
+
+  Two further findings sit inside the same question rather than beside it. The screen
+  and the tile both *cache* what they read (`MainActivity.activeSnooze`,
+  `SnoozeTileService`'s `TileSnapshot`), so an expiry passing afterwards changes nothing
+  until something re-reads — the same residual as the posted card, one layer out. And
+  the window itself is a heuristic: `startedAt` is stamped before the record is saved
+  and the capture started, so it has to cover the arm path's latency as well as the
+  ceiling, and a forward wall-clock adjustment ages it faster than the runner's
+  monotonic timer. It is deliberately generous for that reason — expiring late costs a
+  dead record believed a few seconds longer, expiring early contradicts a capture that
+  is still running. Deriving the expiry from the runner's actual deadline in a monotonic
+  frame would remove the guesswork; having the surfaces re-derive rather than hold the
+  value would remove the caching gap. Both are the same decision as the one above, so
+  they wait for it.
+
 - [ ] **The settling line says `Checking where you are`, not the `Waiting for location`
   that was asked for** (autopilot, 2026-09-07, on a Codex finding in PR #221). The
   original wording is false in a case that is not rare: with fine location denied or
