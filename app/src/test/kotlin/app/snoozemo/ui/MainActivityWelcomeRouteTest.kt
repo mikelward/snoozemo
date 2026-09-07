@@ -200,8 +200,11 @@ class MainActivityWelcomeRouteTest {
     fun `the flow is shown once per install`() {
         val first = Robolectric.buildActivity(MainActivity::class.java).setup()
         assertEquals(Screen.WELCOME, first.get().screen)
-        // Leaving is what marks it, and `Skip` and the last card both do that.
-        WelcomeStore(context).markSeen()
+        // Left the way the app leaves it — `Skip` and the last card both run
+        // this — rather than by writing the flag directly: leaving also forgets
+        // the card the flow was on, and a test that sets only half of that left
+        // a breadcrumb no real exit would have (Codex, PR #220).
+        first.get().leaveWelcomeForTest()
         first.pause().stop().destroy()
 
         val second = Robolectric.buildActivity(MainActivity::class.java).setup().get()

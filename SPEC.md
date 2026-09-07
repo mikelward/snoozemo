@@ -558,7 +558,15 @@ through the flow sit either side of the thing that says where in it you are. `Ba
 same decision the system gesture does, and still exits card 1, so D7's way out is there
 whether or not it is advertised. Once the flow is left, `MainScreen`
 carries a dismissible hint pointing at the (?) icon, because a replay behind an icon is
-discoverable only by someone who already knows it is there. The flow is shown once, on
+discoverable only by someone who already knows it is there. **A tile tap that cannot snooze resumes the flow rather than restarting it**
+(maintainer, 2026-09-07). Such a tap opens the app (§4.1), and inside the flow that used to mean a
+second activity whose own gate reopened the cards at the first one, over the half-finished copy —
+the user got no snooze and lost everything they had answered. The running instance takes the tap
+now, and a tap arriving after the process is gone rebuilds the flow at the card it was left on,
+which is remembered until the flow is left — **including a replay**, which is neither unseen nor a
+fresh install, so the remembered card is what reopens it rather than the first-run gate. The tap is not silent either (principle 2): the card it
+lands back on carries a line saying it could not snooze yet. Outside the flow the tap still lands
+on the recap, which is where the repair is. The flow is shown once, on
 a persisted flag, and replayable from a **(?) icon in `MainScreen`'s title row** — the person who
 needs it again is on the home screen wondering what to do, not in Settings. The shape is decided; the words
 are not: nothing is a string resource until the maintainer has seen the copy (`AGENTS.md`,

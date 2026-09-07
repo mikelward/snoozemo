@@ -59,6 +59,33 @@ class WelcomeStore(context: Context) {
     fun seen(): Boolean = prefs.getBoolean(KEY_SEEN, false)
 
     /**
+     * The card the flow was left on, so a tile tap part-way through it comes
+     * back to where the user was rather than to the start (maintainer,
+     * 2026-09-07).
+     *
+     * Saved instance state already covers a rotation, and a live activity
+     * covers a tap that reaches it — but a tap can arrive minutes later, after
+     * the process is gone, and then the flow is rebuilt from nothing. Null when
+     * the flow has never been entered or has been left; the name of a
+     * `WelcomeCard` otherwise, resolved by the caller so a card removed in a
+     * later build reads as "no memory" rather than as a crash.
+     */
+    fun lastCard(): String? = prefs.getString(KEY_CARD, null)
+
+    /** Remembers [card] as the one the flow is on. */
+    fun rememberCard(card: String) {
+        // `apply`, not `commit`: this is a breadcrumb, and the cost of losing
+        // the last one to a kill is starting the flow one card earlier — worth
+        // less than a disk write in front of the card's own frame.
+        prefs.edit().putString(KEY_CARD, card).apply()
+    }
+
+    /** Forgets it, once the flow has been left. */
+    fun forgetCard() {
+        prefs.edit().remove(KEY_CARD).apply()
+    }
+
+    /**
      * Whether the hint pointing at the help icon has been dismissed.
      *
      * Its own flag rather than a second meaning for [seen]: the hint exists
@@ -121,5 +148,6 @@ class WelcomeStore(context: Context) {
         const val FILE_NAME = "welcome"
         const val KEY_SEEN = "seen"
         const val KEY_HINT_DISMISSED = "replayHintDismissed"
+        const val KEY_CARD = "welcomeCard"
     }
 }

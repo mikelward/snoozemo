@@ -35,6 +35,7 @@ import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.tileTapNeedsSetup
 import app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE
+import app.snoozemo.ui.EXTRA_BLOCKED_TAP_ID
 import app.snoozemo.ui.EXTRA_OPEN_PERMISSIONS
 import app.snoozemo.ui.EndConditionSheetContent
 import app.snoozemo.ui.MainActivity
@@ -43,6 +44,7 @@ import app.snoozemo.ui.SnoozemoTheme
 import java.time.Instant
 import java.time.ZoneId
 import java.util.Date
+import java.util.UUID
 
 private const val TAG = "TileTrampoline"
 
@@ -832,6 +834,16 @@ class TileTrampolineActivity : ComponentActivity() {
             startActivity(
                 Intent(this, MainActivity::class.java)
                     .putExtra(EXTRA_OPEN_PERMISSIONS, true)
+                    // An identity for *this* tap (Codex, PR #220). The extra
+                    // sticks to the activity's launch intent, so Android
+                    // re-delivers it verbatim when it rebuilds a task whose
+                    // process it killed — and the app, inferring "is this a new
+                    // tap?" from whether it had a saved bundle or a live
+                    // `ViewModel`, kept getting that question wrong in one
+                    // direction or the other. A tap that says which tap it is
+                    // can be consumed exactly once, whatever the platform does
+                    // with the intent afterwards.
+                    .putExtra(EXTRA_BLOCKED_TAP_ID, UUID.randomUUID().toString())
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             )
         }.onFailure {
