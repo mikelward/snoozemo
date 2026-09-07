@@ -2465,6 +2465,56 @@ duration cap, hours later, for a user who left the building five minutes in. So 
 starts when location gives up rather than only when it never started, and it is called off the
 moment either signal answers again.
 
+**The bar is a threshold in reported coordinates; everything else is uncertainty and latency**
+(2026-09-07).
+A departure needs `distance - accuracy > radius + HYSTERESIS_M`, where `distance` separates two
+*reported* points — the stored anchor and the current fix. So 150 m is the threshold on the
+**accuracy-adjusted margin**, not on the separation itself: a 10 m fix needs more than 160 m of
+reported separation, a 40 m fix more than 190 m.
+
+The ground someone actually covers before that is crossed is a separate quantity the app never
+measures, and the two differ in **either** direction. The confirmation gap does not move the
+crossing — the first qualifying fix has already cleared the threshold — but it delays the verdict,
+and admits whatever ground is covered before the second fix confirms it; a margin past
+`UNAMBIGUOUS_MARGIN_M` skips it entirely. The anchor may sit off where the phone really was — its error is subtracted nowhere, and
+its reported accuracy is a 68% confidence estimate rather than a cap, so the true offset can be
+larger still — which moves the crossing either way, or not at all. Measured against a 100 m
+anchor, one walk came to about 200 m; what the same threshold produces on the next walk is not
+fixed by it.
+
+**The contributors are not a closed list**, and writing them as one got three of them wrong in a
+row. The ones known to matter: the departing fix's own accuracy; the ground covered during the
+confirmation gap; **the anchor's own accuracy** — a reported 68% confidence radius, not a known
+error, accepted up to `MAX_ANCHOR_ACCURACY_M` and subtracted from nothing, so a vague capture *may*
+have put the origin the whole walk is measured against further out than the bar is worth, in an
+unknown direction, or may have been exact; and the delay before the first confirming fix is even requested — a
+geofence-escalated check can start after the phone is already past the bar (§6.10), and so can one
+waiting on a Wi-Fi loss, since an SSID's coverage can reach further than the bar and `onLost` is
+not instant.
+
+**The radius is the venue-size lever**, and moving it moves the *threshold* one for one. Whether
+that carries through to ground covered depends on the trace: on a check that starts before the
+boundary and takes fixes often enough to catch the crossing, roughly yes; on one that starts late
+enough that the first fix already clears both the old threshold and the new, the change is worth
+nothing, and 30 s between fixes makes the outcome jump rather than slide either way.
+
+What stops another 50 m coming off is not arithmetic but the floor the trim above already names —
+a smaller "here" ends a snooze while the user is still inside a large venue, which is principle 1's
+direction.
+
+It is not the only *decision* in the total, and saying so would hide the others: `HYSTERESIS_M`,
+the confirmation gap and the request cadence are all chosen numbers with their own reasons, and
+each of them is tunable. What separates them from the rest of the list is what they answer to —
+a product judgment, rather than how good a reading the platform happened to return. **The
+measurement half is unmeasured**, which is why nothing here ranks the levers against each other:
+that ordering is what the handset traces in `TODO.md` are for.
+
+**The confirming burst asks for no better a fix than the resting probe does.** Both take whatever
+the platform returns by default, so the accuracy term above is whatever the platform felt like
+giving. Whether a check should spend a better fix — where someone is waiting on the answer and the
+phone is already awake doing active location work — is open, and tracked in `TODO.md` rather than
+settled here.
+
 **A dead location grant calls grace off rather than running it** (landed 2026-08-30). The grace
 period is a bet that Wi-Fi's silence means something, and under a missing location grant it does
 not: reading an SSID needs `ACCESS_FINE_LOCATION` too, and a background read without it comes back
