@@ -555,11 +555,13 @@ private fun SnoozeStatus(
 /**
  * The departure test's own arithmetic, in a sentence (`SPEC.md` §4.6).
  *
- * **Distance and how much further, not distance and a fixed edge.** The test
- * subtracts each fix's accuracy before comparing, so the meters still to go are
- * a property of *this* reading rather than of the anchor — a vague fix genuinely
- * needs more distance than a sharp one, and naming the nominal edge would
- * promise a departure the current fix could not deliver.
+ * **Distance, how sure of it, and how much further — not distance and a fixed
+ * edge.** The test subtracts the combined uncertainty before comparing, so the
+ * meters still to go are a property of *this* reading rather than of the anchor
+ * — a vague fix genuinely needs more distance than a sharp one, and naming the
+ * nominal edge would promise a departure the current fix could not deliver. The
+ * `±` is that same combined figure: both endpoints' accuracies in quadrature,
+ * since the anchor is a reported point too ([Departure.uncertaintyM]).
  *
  * **In whichever units the phone is set to.** The distance and its unit are
  * formatted together and interpolated as one placeholder, so there is one pair
@@ -572,14 +574,20 @@ private fun SnoozeStatus(
 private fun departureText(observation: DepartureObservation): String {
     val unit = rememberDistanceUnit()
     val away = distanceText(unit, unit.away(observation.distanceM))
+    // The two confidence radii combined, which is what the test thresholds —
+    // so the readout quotes the decision rather than describing one term of
+    // it. A single figure on purpose: the components are diagnostic, and the
+    // card is the tightest copy surface in the app.
+    val uncertain = distanceText(unit, unit.uncertainty(observation.uncertaintyM))
     return if (observation.qualifies) {
         // Far enough on this fix, but a departure still needs a second one
         // thirty seconds later, so this reports the wait rather than the end.
-        stringResource(R.string.main_distance_confirming, away)
+        stringResource(R.string.main_distance_confirming, away, uncertain)
     } else {
         stringResource(
             R.string.main_distance_to_go,
             away,
+            uncertain,
             distanceText(unit, unit.toGo(observation.remainingM)),
         )
     }

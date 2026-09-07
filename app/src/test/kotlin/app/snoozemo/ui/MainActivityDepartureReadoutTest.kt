@@ -37,6 +37,7 @@ class MainActivityDepartureReadoutTest {
     private fun observation(distanceM: Double) = DepartureObservation(
         distanceM = distanceM,
         accuracyM = 10f,
+        anchorAccuracyM = 20f,
         radiusM = 150,
         elapsedRealtimeMs = 0L,
     )

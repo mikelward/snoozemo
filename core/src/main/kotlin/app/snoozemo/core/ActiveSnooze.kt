@@ -35,7 +35,7 @@ data class Anchor(
         /**
          * How big "here" is, in meters (maintainer, 2026-09-06: 150 → 100).
          *
-         * Not a jitter setting — the hysteresis band, the accuracy subtraction
+         * Not a jitter setting — the hysteresis band, the uncertainty subtraction
          * and the two-fix confirmation (§6.6) are what absorb a wandering fix,
          * and none of them move with this. What it decides is how far you can
          * walk *inside* somewhere before Snoozemo calls it leaving, so the
@@ -43,10 +43,12 @@ data class Anchor(
          * further ends a snooze while the user is still in the venue, which is
          * principle 1's failure direction rather than principle 2's.
          *
-         * A departure needs `distance - accuracy > radius + HYSTERESIS_M`, so
-         * at 100 m the threshold is 150 m on the **accuracy-adjusted margin**,
-         * not on the separation between the stored anchor and the fix: a 10 m
-         * fix needs more than 160 m of that separation. Moving this constant
+         * A departure needs `distance - uncertainty > radius + HYSTERESIS_M`,
+         * where the uncertainty is *both* endpoints' accuracies in quadrature
+         * — the anchor is a reported point too. So at 100 m the threshold is
+         * 150 m on the **uncertainty-adjusted margin**, not on the separation
+         * between the stored anchor and the fix: a 10 m fix against a 20 m
+         * anchor needs more than 172 m of that separation. Moving this constant
          * moves the threshold one for one.
          *
          * It is not a floor on ground actually covered, and how the two relate

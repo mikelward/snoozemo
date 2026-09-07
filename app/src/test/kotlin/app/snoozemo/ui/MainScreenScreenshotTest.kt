@@ -537,11 +537,13 @@ class MainScreenScreenshotTest {
                 trackingMode = TrackingMode.FULL,
                 remaining = Duration.ofHours(3).plusMinutes(40),
                 degradation = null,
-                // 200 m out, 10 m of accuracy, a 150 m radius: 40 m of margin
-                // against a 50 m band, so 10 m still to go.
+                // 200 m out against a 150 m radius, with 10 m of fix accuracy
+                // and a 20 m anchor: ~22 m of combined uncertainty, ~28 m of
+                // margin against a 50 m band, so ~23 m still to go.
                 departure = DepartureObservation(
                     distanceM = 200.0,
                     accuracyM = 10f,
+                    anchorAccuracyM = 20f,
                     radiusM = 150,
                     elapsedRealtimeMs = 0L,
                 ),
@@ -561,7 +563,7 @@ class MainScreenScreenshotTest {
         }
 
         composeRule.onNodeWithText("Snoozing until you leave").assertExists()
-        composeRule.onNodeWithText("200 m away · 10 m to go").assertExists()
+        composeRule.onNodeWithText("200 m away ±22 m · 23 m to go").assertExists()
     }
 
     // Pinned to a metric locale: the readout follows the phone's own
@@ -586,6 +588,7 @@ class MainScreenScreenshotTest {
                 departure = DepartureObservation(
                     distanceM = 400.0,
                     accuracyM = 15f,
+                    anchorAccuracyM = 20f,
                     radiusM = 150,
                     elapsedRealtimeMs = 0L,
                 ),
@@ -604,8 +607,8 @@ class MainScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("400 m away · confirming").assertExists()
-        composeRule.onNodeWithText("400 m away · 0 m to go").assertDoesNotExist()
+        composeRule.onNodeWithText("400 m away ±25 m · confirming").assertExists()
+        composeRule.onNodeWithText("400 m away ±25 m · 0 m to go").assertDoesNotExist()
     }
 
     // Pinned to a metric locale: the readout follows the phone's own
@@ -628,9 +631,14 @@ class MainScreenScreenshotTest {
                 // strict comparison, so this is *not* a departure — and a
                 // rounded `0 m to go` beside a snooze that has not ended would
                 // contradict the verdict the line is quoting.
+                //
+                // 15 m and 20 m combine to exactly 25 m, which is what keeps the
+                // margin exactly on the band rather than a floating-point hair
+                // either side of it.
                 departure = DepartureObservation(
-                    distanceM = 210.0,
-                    accuracyM = 10f,
+                    distanceM = 225.0,
+                    accuracyM = 15f,
+                    anchorAccuracyM = 20f,
                     radiusM = 150,
                     elapsedRealtimeMs = 0L,
                 ),
@@ -649,9 +657,9 @@ class MainScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("210 m away · 1 m to go").assertExists()
-        composeRule.onNodeWithText("210 m away · 0 m to go").assertDoesNotExist()
-        composeRule.onNodeWithText("210 m away · confirming").assertDoesNotExist()
+        composeRule.onNodeWithText("225 m away ±25 m · 1 m to go").assertExists()
+        composeRule.onNodeWithText("225 m away ±25 m · 0 m to go").assertDoesNotExist()
+        composeRule.onNodeWithText("225 m away ±25 m · confirming").assertDoesNotExist()
     }
 
     @Config(qualifiers = "+en-rUS")
@@ -667,10 +675,12 @@ class MainScreenScreenshotTest {
                 remaining = Duration.ofHours(3).plusMinutes(40),
                 degradation = null,
                 // The same reading as the metric case above: 200 m out with 10 m
-                // of accuracy against a 150 m radius, so 10 m still to go.
+                // of fix accuracy and a 20 m anchor against a 150 m radius, so
+                // ~23 m still to go.
                 departure = DepartureObservation(
                     distanceM = 200.0,
                     accuracyM = 10f,
+                    anchorAccuracyM = 20f,
                     radiusM = 150,
                     elapsedRealtimeMs = 0L,
                 ),
@@ -690,8 +700,8 @@ class MainScreenScreenshotTest {
         }
 
         // 200 m is 656.17 ft; 10 m still to go rounds up to 33 ft.
-        composeRule.onNodeWithText("656 ft away · 33 ft to go").assertExists()
-        composeRule.onNodeWithText("200 m away · 10 m to go").assertDoesNotExist()
+        composeRule.onNodeWithText("656 ft away ±73 ft · 74 ft to go").assertExists()
+        composeRule.onNodeWithText("200 m away ±22 m · 23 m to go").assertDoesNotExist()
     }
 
     @Test
@@ -711,6 +721,7 @@ class MainScreenScreenshotTest {
                 departure = DepartureObservation(
                     distanceM = 200.0,
                     accuracyM = 10f,
+                    anchorAccuracyM = 20f,
                     radiusM = 150,
                     elapsedRealtimeMs = 0L,
                 ),
@@ -729,7 +740,7 @@ class MainScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("200 m away · 10 m to go").assertDoesNotExist()
+        composeRule.onNodeWithText("200 m away ±22 m · 23 m to go").assertDoesNotExist()
     }
 
     @Test

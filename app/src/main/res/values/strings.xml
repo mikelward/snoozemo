@@ -342,15 +342,17 @@
     <string name="distance_feet" tools:ignore="MissingTranslation">%1$d ft</string>
     <!-- TODO: translate -->
     <!-- The departure test's own arithmetic, live: how far the last fix put the
-         phone from where the snooze started, and how much further a fix that
-         accurate would have to be before it counted as leaving. Both values
-         arrive already formatted with their unit. -->
-    <string name="main_distance_to_go" tools:ignore="MissingTranslation">%1$s away · %2$s to go</string>
+         phone from where the snooze started, how uncertain that separation is,
+         and how much further a fix this accurate would have to be before it
+         counted as leaving. All three values arrive already formatted with
+         their unit. The uncertainty is the anchor's and this fix's confidence
+         radii combined, which is the quantity the test itself thresholds. -->
+    <string name="main_distance_to_go" tools:ignore="MissingTranslation">%1$s away ±%2$s · %3$s to go</string>
     <!-- TODO: translate -->
     <!-- Far enough that this fix counts, but a departure still needs a second
          one 30 s later (SPEC.md 6.6) — so this says what is happening rather
          than promising the snooze is over. -->
-    <string name="main_distance_confirming" tools:ignore="MissingTranslation">%1$s away · confirming</string>
+    <string name="main_distance_confirming" tools:ignore="MissingTranslation">%1$s away ±%2$s · confirming</string>
     <string name="arm">Snooze</string>
     <string name="release">End snooze</string>
     <string name="rule_failed">Do Not Disturb access is on, but Snoozemo could not create its rule</string>

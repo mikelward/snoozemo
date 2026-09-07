@@ -138,6 +138,7 @@ class SnoozeServicePresenceTest {
             app.snoozemo.core.DepartureObservation(
                 distanceM = 200.0,
                 accuracyM = 10f,
+                anchorAccuracyM = 20f,
                 radiusM = 150,
                 elapsedRealtimeMs = 0L,
             ),
