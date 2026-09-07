@@ -561,6 +561,20 @@
     <!-- Card 1. The product in one line, then the promise the rest keeps: a
          snooze always ends. -->
     <!-- TODO: translate -->
+    <!--
+      The mock Quick Settings panel on card 1 (SPEC.md §4.2). The three
+      familiar tiles are named as the system names them, so the picture reads
+      as the shade the user already knows.
+    -->
+    <!-- TODO: translate -->
+    <string name="welcome_quick_settings_wifi" tools:ignore="MissingTranslation">Wi-Fi</string>
+    <!-- TODO: translate -->
+    <string name="welcome_quick_settings_bluetooth" tools:ignore="MissingTranslation">Bluetooth</string>
+    <!-- TODO: translate -->
+    <string name="welcome_quick_settings_airplane" tools:ignore="MissingTranslation">Airplane</string>
+    <!-- Read instead of the four tile labels, which alone say nothing. -->
+    <!-- TODO: translate -->
+    <string name="welcome_quick_settings_mock_description" tools:ignore="MissingTranslation">Quick Settings, with Snoozemo\'s tile ringed among the others</string>
     <string name="welcome_what_title" tools:ignore="MissingTranslation">Snoozemo</string>
     <!-- TODO: translate -->
     <string name="welcome_what_body" tools:ignore="MissingTranslation">Silence your phone until you leave.</string>

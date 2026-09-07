@@ -529,7 +529,13 @@ yet built — `TODO.md` Phase 6, sketched with its copy in `TUTORIAL.md`). The r
 install lands on `PermissionsScreen` — put three permission rows in front of someone who had not
 yet been told what the app is for or how it is used, and the tile, which is the whole product, is
 invisible until someone adds it. So a short run of fixed cards comes first, each one idea: what the
-app is; how a snooze ends, shown on a render of the ongoing notification (§4.3), the one surface
+app is — led by **a mock Quick Settings panel with Snoozemo's tile ringed among Wi-Fi,
+Bluetooth and airplane mode** (maintainer, 2026-09-07), because what the app *is* is a tile you
+tap, and a user who has never seen it has no idea what a Quick Settings tile is called or where
+it lives; the panel is drawn rather than screenshotted, so it follows the app's theme and text
+size instead of rotting with a platform release, and the ring is what marks Snoozemo's tile
+rather than a different tile style, which would teach the user to look for something the shade
+will never show them; how a snooze ends, shown on a render of the ongoing notification (§4.3), the one surface
 that carries every way it can — departure, a chosen time, `End now` — so the end sheet (§4.4) needs
 neither a card nor a switch in the flow (maintainer, 2026-09-05); the tile; the one Do Not Disturb
 rule and the ringer choice (§5.9) — plus, since that card calls the rule the user's, the same
