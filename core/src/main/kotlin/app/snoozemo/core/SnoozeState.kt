@@ -1,5 +1,7 @@
 package app.snoozemo.core
 
+import java.time.Duration
+
 /**
  * The states of SPEC.md §4.1. The controller that drives these transitions lands
  * in Phase 1; this is the vocabulary the rest of the app is written against.
@@ -116,7 +118,33 @@ enum class TrackingMode {
     WIFI_GRACE,
 
     /** Neither signal is available. Only the duration cap will end this snooze. */
-    DURATION_ONLY;
+    DURATION_ONLY,
+
+    /**
+     * The anchor has not been captured yet — the arm is still looking
+     * (maintainer, 2026-09-07, from a device log).
+     *
+     * **Not a capability tier, and deliberately last.** [honest] walks the
+     * others by ordinal as a ladder from most to least capable; this sits below
+     * the end of it so nothing can ever step onto it, and [honest] returns it
+     * untouched rather than walking *off* the end. It is the absence of a
+     * claim, not a worse one.
+     *
+     * It exists because the record is written before the anchor is
+     * (SPEC.md §4.1: arming must never wait on a fix), and for the ~10 s the
+     * fix takes the mode had to say *something*. Saying [DURATION_ONLY] meant
+     * both the main screen and the ongoing notification told the user their
+     * snooze was a timer — on snoozes that went on to track perfectly. A mode
+     * on a record that is still arming is the absence of a decision, so it now
+     * says so, and both surfaces render it as such because both read this one
+     * field.
+     *
+     * **Never survives a process.** [SnoozeController.restore] resolves it to
+     * whatever the stored anchor actually supports: a capture that was in
+     * flight when the process died is not still running, and a snooze that came
+     * back claiming to be looking would look for ever.
+     */
+    SETTLING;
 
     companion object {
         /**
@@ -132,5 +160,61 @@ enum class TrackingMode {
             anchor.ssid != null -> WIFI_ONLY
             else -> DURATION_ONLY
         }
+
+        /**
+         * How long a stored [SETTLING] can still mean a capture is running.
+         *
+         * A capture cannot outlive its own ceiling: by then it has either
+         * delivered an anchor — which replaces the mode — or been settled by
+         * the ceiling itself. So a [SETTLING] older than this was written by a
+         * process that has since died mid-capture, and the honest reading is
+         * that nothing is watching (Codex, PR #221).
+         *
+         * The window exists because the value is **liveness-dependent but
+         * durable**: it says "a capture is running", and it outlives the
+         * process running it. Readers cold-read the record straight off disk —
+         * the main screen through [ActiveSnoozeStore], the tile out of the
+         * preferences file — and none of them can see whether the service is
+         * alive. Rather than give each one a liveness signal to consult,
+         * [SETTLING] carries its own expiry, derived from `startedAt`, which
+         * every reader already has.
+         *
+         * **Generous on purpose, and by a wide margin.** `startedAt` is stamped
+         * before the record is saved, the notification posted, the tile
+         * refreshed and the backstop scheduled — the runner's own ceiling only
+         * starts ticking after all of that — so the window has to cover the arm
+         * path's latency as well as the capture, and a forward wall-clock
+         * adjustment ages it faster than the runner's monotonic timer besides
+         * (Codex, PR #221).
+         *
+         * The two errors are not symmetric, which is what settles the size.
+         * Expiring **early** contradicts a capture that is genuinely still
+         * running: the screen and the tile would say `Timer only` while the
+         * notification still says the opposite, which is the exact failure
+         * this whole change exists to remove. Expiring **late** only means a
+         * record left by a dead process is believed a few seconds longer —
+         * the same bounded, self-healing residual already accepted for the
+         * posted card. So the margin is sized to be comfortably longer than
+         * any arm, not tight to the ceiling.
+         *
+         * Deriving it from the runner's actual deadline in a monotonic frame
+         * would remove the guesswork, and it is part of the design question
+         * recorded in `TODO.md` rather than settled here.
+         */
+        val SETTLING_VALID_FOR: Duration = AnchorCapture.CEILING.plusSeconds(30)
+
+        /**
+         * Whether a stored [SETTLING] written at [startedAtMillis] still
+         * stands as of [nowMillis].
+         *
+         * Anything outside the window reads as dead, **including a negative
+         * age**: a backwards clock change puts `now` before `startedAt`, and
+         * the safe direction is to stop claiming a capture is running rather
+         * than to keep claiming it for the length of the shift. Degrading here
+         * costs a truthful `Timer only` a few seconds early; the other
+         * direction is the app saying it is still checking when nothing is.
+         */
+        fun settlingStillStands(startedAtMillis: Long, nowMillis: Long): Boolean =
+            (nowMillis - startedAtMillis) in 0..SETTLING_VALID_FOR.toMillis()
     }
 }

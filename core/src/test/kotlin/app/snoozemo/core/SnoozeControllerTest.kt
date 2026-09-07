@@ -117,16 +117,107 @@ class SnoozeControllerTest {
 
     /** The common case: arm, then the anchor lands within the ceiling. */
     private fun armFully(anchor: Anchor = this.anchor): Boolean {
-        val began = controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        val began = controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
         controller.onAnchorCaptured(anchor)
         return began
+    }
+
+    @Test
+    fun `a build that can never track says timer from the start`() {
+        // `direct` until Phase 7 (SPEC.md §3.4): its monitor watches nothing,
+        // so the answer is already the cap and there is nothing to wait to
+        // find out. Saying "checking where you are" for the capture window on
+        // every arm of that flavor is a claim it can never make good (Codex,
+        // PR #221). The absence of a decision is only honest while a decision
+        // is coming.
+        controller.beginArming(
+            ActiveSnooze.capExpiryFor(now),
+            readClock(),
+            canTrackDeparture = false,
+        )
+
+        assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
+    }
+
+    @Test
+    fun `an arm in flight reports no mode at all, not a timer`() {
+        // The bug this exists to stop, from a device log (maintainer,
+        // 2026-09-07): the record is written before the anchor, and calling
+        // that DURATION_ONLY made the main screen *and* the ongoing
+        // notification tell the user their snooze was a timer for the ~10 s the
+        // fix took — on a snooze that went on to track perfectly.
+        //
+        // Asserted on the controller rather than on a rendered string, because
+        // the first attempt at this fix passed a flag straight into the
+        // composable and so never exercised the production path at all
+        // (Codex, PR #221).
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
+
+        assertEquals(TrackingMode.SETTLING, controller.active?.mode)
+    }
+
+    @Test
+    fun `the anchor landing replaces it with a real mode`() {
+        // The other half: SETTLING is a window, not a resting state. Without
+        // this the assertion above would pass on a controller that never
+        // settled on anything.
+        armFully()
+
+        assertEquals(TrackingMode.FULL, controller.active?.mode)
+    }
+
+    @Test
+    fun `a capture that finds nothing settles on the cap, not on waiting`() {
+        // The failure case has to leave the window too, and it is the one the
+        // record alone cannot distinguish from mid-capture — which is why the
+        // state lives in the mode rather than being inferred.
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
+        controller.onAnchorCaptured(Anchor(capturedAt = now))
+
+        assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
+    }
+
+    @Test
+    fun `a snooze restored mid-capture does not come back still waiting`() {
+        // A capture in flight when the process died is not still running, so a
+        // restored record claiming to be looking would look for ever — the
+        // screen and the notification would both say "Waiting for location"
+        // until the cap fired.
+        val interrupted = ActiveSnooze(
+            anchor = Anchor(capturedAt = now),
+            startedAt = now,
+            capExpiresAt = ActiveSnooze.capExpiryFor(now),
+            mode = TrackingMode.SETTLING,
+            lifecycle = SnoozeLifecycle.ARMED,
+        )
+
+        controller.restore(interrupted)
+
+        assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
+    }
+
+    @Test
+    fun `a restore keeps a captured anchor's own mode`() {
+        // The other direction, so the resolution above cannot quietly flatten
+        // every restored snooze to the cap.
+        val running = ActiveSnooze(
+            anchor = anchor,
+            startedAt = now,
+            capExpiresAt = ActiveSnooze.capExpiryFor(now),
+            mode = TrackingMode.FULL,
+            lifecycle = SnoozeLifecycle.ARMED,
+        )
+
+        controller.restore(running)
+
+        assertEquals(TrackingMode.FULL, controller.active?.mode)
     }
 
     @Test
     fun `the rule goes on at the tap, before any anchor exists`() {
         // The phone must be quiet from the tap, not from the fix (SPEC.md §4.1):
         // anchor capture takes up to 10 s and DND cannot wait for it.
-        assertTrue(controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock()))
+        assertTrue(controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true))
 
         assertEquals(SnoozeState.ARMING, controller.state)
         assertEquals(listOf(true to ZenTrigger.USER_ACTION), zen.calls)
@@ -165,7 +256,7 @@ class SnoozeControllerTest {
         // So the status broadcast and the read-back are answered against this
         // snooze's rule rather than whatever the app holds later (SPEC.md
         // §5.8) — recorded the moment the rule goes on, with `armed`.
-        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
 
         assertEquals("fake-rule-id", controller.active?.ruleId)
     }
@@ -194,7 +285,7 @@ class SnoozeControllerTest {
         // and a tile tap arriving before the retry would be read back as that
         // ending rather than the user's (Codex, PR #197). The controller says
         // which of the two an ending is; the listener decides what to store.
-        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
 
         controller.end(EndReason.MANUAL)
 
@@ -204,7 +295,7 @@ class SnoozeControllerTest {
 
     @Test
     fun `an ending the app decided on records its reason instead`() {
-        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
 
         controller.end(EndReason.DEPARTURE)
 
@@ -221,7 +312,7 @@ class SnoozeControllerTest {
         // restore take that rather than asking again.
         zen.outcome = ZenOutcome.Applied("the-rule-that-went-on")
 
-        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
         assertEquals("the-rule-that-went-on", controller.active?.ruleId)
 
         controller.restore(controller.active!!.copy(ruleId = "an-earlier-rule"))
@@ -229,16 +320,22 @@ class SnoozeControllerTest {
     }
 
     @Test
-    fun `a snooze that is still arming is honestly duration-only`() {
-        // Nothing is captured yet, so nothing can detect a departure yet.
-        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+    fun `a snooze that is still arming claims no mode at all`() {
+        // This asserted DURATION_ONLY until 2026-09-07, on the reasoning that
+        // nothing is captured yet so nothing can detect a departure yet. True,
+        // but it is the absence of a decision rather than the weakest one, and
+        // rendering it as one told users their snooze was a timer for the ~10 s
+        // the fix took — see `an arm in flight reports no mode at all` above
+        // for the device log that found it. The mode now says "not yet", and
+        // both surfaces render that rather than a capability claim.
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
 
-        assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
+        assertEquals(TrackingMode.SETTLING, controller.active?.mode)
     }
 
     @Test
     fun `the anchor landing completes the arm without touching the rule again`() {
-        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
 
         controller.onAnchorCaptured(anchor)
 
@@ -250,7 +347,7 @@ class SnoozeControllerTest {
     @Test
     fun `no fix within the ceiling still arms, degraded, and says so`() {
         // Arming must never feel slow or refuse (SPEC.md §4.1).
-        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
 
         controller.onAnchorCaptured(Anchor(capturedAt = start, ssid = "ExampleWifi"))
 
@@ -266,7 +363,7 @@ class SnoozeControllerTest {
 
     @Test
     fun `no fix and no Wi-Fi arms as a timer, and says that too`() {
-        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
 
         controller.onAnchorCaptured(Anchor(capturedAt = start))
 
@@ -279,7 +376,7 @@ class SnoozeControllerTest {
         // A mode is a claim about what is watching, not about what was written
         // down: machinery that watches nothing arms duration-only however
         // complete the captured anchor is (SPEC.md §8.1, §6.1).
-        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
 
         controller.onAnchorCaptured(anchor, setOf(TrackingMode.DURATION_ONLY))
 
@@ -302,7 +399,7 @@ class SnoozeControllerTest {
         // The geofence monitor has no Wi-Fi watch, so a fenced anchor that
         // loses location degrades straight to a timer — WIFI_ONLY there would
         // promise a fallback watch that does not exist (Codex, PR #73).
-        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
         controller.onAnchorCaptured(
             anchor,
             setOf(TrackingMode.FULL, TrackingMode.DURATION_ONLY),
@@ -320,7 +417,7 @@ class SnoozeControllerTest {
         // FIXES_TOO_VAGUE map to one mode and mean completely different things
         // to a user. A mode-only test for "did anything change" would leave
         // the notification saying the first reason while the second is true.
-        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
         controller.onAnchorCaptured(anchor, setOf(TrackingMode.FULL, TrackingMode.DURATION_ONLY))
         controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX))
         val afterFirst = listener.tracking.size
@@ -340,7 +437,7 @@ class SnoozeControllerTest {
         // A snooze that recovered must not keep explaining a degradation it no
         // longer has — the record is what a restore reposts the notification
         // from.
-        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
         controller.onAnchorCaptured(anchor, setOf(TrackingMode.FULL, TrackingMode.DURATION_ONLY))
         controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX))
         assertEquals(DegradationCause.NO_LOCATION_FIX, controller.active?.degradation)
@@ -356,7 +453,7 @@ class SnoozeControllerTest {
         // The first harmless-looking report would otherwise undo the arm's
         // honesty: a null degradation reads as "the anchor's full capability",
         // which nothing may claim while the machinery watches less.
-        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
         controller.onAnchorCaptured(anchor, setOf(TrackingMode.DURATION_ONLY))
 
         controller.onPresenceUpdate(update(degradation = null))
@@ -388,7 +485,7 @@ class SnoozeControllerTest {
         // The other direction of the same honesty: machinery offering FULL
         // cannot lend an anchor coordinates it never captured, and with the
         // Wi-Fi mode unwatched, an SSID-only anchor lands on the timer.
-        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
 
         controller.onAnchorCaptured(
             Anchor(capturedAt = start, ssid = "ExampleWifi"),
@@ -400,7 +497,7 @@ class SnoozeControllerTest {
 
     @Test
     fun `a fix arriving after the snooze ended does not resurrect it`() {
-        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
         controller.end(EndReason.MANUAL)
 
         controller.onAnchorCaptured(anchor)
@@ -415,7 +512,7 @@ class SnoozeControllerTest {
         // lie to the user, and the failure has to be visible.
         zen.outcome = ZenOutcome.NotApplied(ZenFailure.RULE_DISABLED)
 
-        assertFalse(controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock()))
+        assertFalse(controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true))
 
         assertEquals(SnoozeState.IDLE, controller.state)
         assertNull(controller.active)
@@ -429,7 +526,7 @@ class SnoozeControllerTest {
         // never completed, so a process death in it — then the user turning Do
         // Not Disturb off — had the next wake-up "finish" an already-finished
         // arm and silence the phone again (Codex, PR #36).
-        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
 
         assertEquals(SnoozeLifecycle.ARMED, controller.active?.lifecycle)
     }
@@ -472,7 +569,7 @@ class SnoozeControllerTest {
     fun `only the endings the user caused are reported as user actions`() {
         for (reason in EndReason.entries) {
             val fresh = SnoozeController(FakeZen().also { zen -> pending = zen }, readClock, Recorder())
-            fresh.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+            fresh.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
             fresh.onAnchorCaptured(anchor)
             fresh.end(reason)
             val expected = when (reason) {
@@ -507,7 +604,7 @@ class SnoozeControllerTest {
 
     @Test
     fun `the cap fires even when nothing else has`() {
-        controller.beginArming(ActiveSnooze.capExpiryFor(now, Duration.ofHours(1)), readClock())
+        controller.beginArming(ActiveSnooze.capExpiryFor(now, Duration.ofHours(1)), readClock(), canTrackDeparture = true)
         controller.onAnchorCaptured(anchor)
 
         now = start.plus(Duration.ofMinutes(59))
@@ -525,7 +622,7 @@ class SnoozeControllerTest {
     fun `an early or repeated cap alarm cannot end a snooze before its time`() {
         // Alarms fire late, early, and twice; the controller re-checks rather
         // than trusting the caller.
-        controller.beginArming(ActiveSnooze.capExpiryFor(now, Duration.ofHours(2)), readClock())
+        controller.beginArming(ActiveSnooze.capExpiryFor(now, Duration.ofHours(2)), readClock(), canTrackDeparture = true)
         controller.onAnchorCaptured(anchor)
 
         controller.onCapCheck()
@@ -536,7 +633,7 @@ class SnoozeControllerTest {
 
     @Test
     fun `a cap longer than the backstop is clamped`() {
-        controller.beginArming(ActiveSnooze.capExpiryFor(now, Duration.ofDays(7)), readClock())
+        controller.beginArming(ActiveSnooze.capExpiryFor(now, Duration.ofDays(7)), readClock(), canTrackDeparture = true)
 
         assertEquals(start.plus(ActiveSnooze.MAX_CAP), controller.active?.capExpiresAt)
     }
@@ -549,7 +646,7 @@ class SnoozeControllerTest {
         // expired, and be spent — leaving no duration exit at all.
         val capExpiresAt = start.plus(Duration.ofHours(3)).plusMillis(7)
 
-        controller.beginArming(capExpiresAt, readClock())
+        controller.beginArming(capExpiresAt, readClock(), canTrackDeparture = true)
 
         assertEquals(capExpiresAt, controller.active?.capExpiresAt)
     }
@@ -668,7 +765,7 @@ class SnoozeControllerTest {
         // is the same watch as WIFI_ONLY reporting a worse answer, not a
         // capability of its own, so `honest()` must not walk it all the way
         // down to DURATION_ONLY for that reason alone.
-        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
         controller.onAnchorCaptured(
             Anchor(capturedAt = start, ssid = "ExampleWifi"),
             setOf(TrackingMode.WIFI_ONLY, TrackingMode.DURATION_ONLY),
@@ -1054,7 +1151,7 @@ class SnoozeControllerTest {
         for (failure in ZenFailure.entries.filter { it.nothingLeftToRelease }) {
             val zen = FakeZen()
             val controller = SnoozeController(zen, readClock, Recorder())
-            controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock())
+            controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
 
             zen.outcome = ZenOutcome.NotApplied(failure)
             controller.end(EndReason.DURATION_CAP)
@@ -1379,6 +1476,7 @@ class SnoozeControllerTest {
         controller.beginArming(
             ActiveSnooze.capExpiryFor(now, Duration.ofHours(4)),
             readClock(),
+            canTrackDeparture = true,
         )
         controller.onAnchorCaptured(anchor)
         val running = controller.active!!
@@ -1441,7 +1539,7 @@ class SnoozeControllerTest {
         // only the wall reading moves, which is what a clock change is.
         wall = start.minus(Duration.ofHours(3))
 
-        controller.beginArming(capExpiresAt, atArm)
+        controller.beginArming(capExpiresAt, atArm, canTrackDeparture = true)
 
         // Eight hours of real time later — when the alarm actually fires — the
         // cap must be due, however far the wall clock was moved.

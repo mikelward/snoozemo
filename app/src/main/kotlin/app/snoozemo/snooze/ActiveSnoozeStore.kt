@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.Anchor
+import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.RecordOrigin
@@ -29,7 +30,18 @@ import java.time.Instant
  * few, and a hand-written schema here is easier to migrate than a serializer's
  * output when `Anchor` grows saved-place fields.
  */
-class ActiveSnoozeStore(context: Context) {
+class ActiveSnoozeStore(
+    context: Context,
+    /**
+     * Wall-clock now, injected so the one time-dependent read here is
+     * testable: whether a stored [TrackingMode.SETTLING] has outlived the
+     * capture that wrote it (see [loadMode]). Everything else this class does
+     * is serialization. Real elapsed time in a test is what the repo's testing
+     * rules forbid, and it is also how the arm-path tests, which run on a
+     * fixed 2026 instant, would read every record they wrote as ancient.
+     */
+    private val nowMillis: () -> Long = System::currentTimeMillis,
+) {
 
     private val context = context.applicationContext
 
@@ -115,18 +127,10 @@ class ActiveSnoozeStore(context: Context) {
         if (startedAt == 0L || capExpiresAt == 0L) return null
 
         return ActiveSnooze(
-            anchor = Anchor(
-                lat = prefs.getDoubleOrNull(KEY_LAT),
-                lon = prefs.getDoubleOrNull(KEY_LON),
-                fixAccuracyM = prefs.getFloatOrNull(KEY_ACCURACY),
-                capturedAt = Instant.ofEpochMilli(prefs.getLong(KEY_CAPTURED_AT, startedAt)),
-                ssid = prefs.getString(KEY_SSID, null),
-                bssid = prefs.getString(KEY_BSSID, null),
-                radiusM = prefs.getInt(KEY_RADIUS, Anchor.DEFAULT_RADIUS_M),
-            ),
+            anchor = anchorOf(startedAt),
             startedAt = Instant.ofEpochMilli(startedAt),
             capExpiresAt = Instant.ofEpochMilli(capExpiresAt),
-            mode = loadMode(),
+            mode = loadMode(startedAt),
             degradation = loadDegradation(),
             lifecycle = state().lifecycle,
             placeName = prefs.getString(KEY_PLACE, ActiveSnooze.DEFAULT_PLACE_NAME)
@@ -202,7 +206,44 @@ class ActiveSnoozeStore(context: Context) {
         }
     }
 
-    private fun loadMode(): TrackingMode {
+    /**
+     * The stored mode, with a stale [TrackingMode.SETTLING] resolved away.
+     *
+     * `SETTLING` says a capture is running, and a capture dies with its
+     * process — but the record it wrote does not. Every cold reader of this
+     * store, the main screen included, would otherwise show `Checking where
+     * you are` over a capture killed mid-window, until a service wake happened
+     * to correct it. Resolved here rather than only in
+     * `SnoozeController.restore`, because the screen never calls restore: it
+     * loads the record straight from this store (Codex, PR #221).
+     *
+     * Resolved to what the stored anchor supports, which for a capture that
+     * died before delivering anything is duration-only — true, since nothing
+     * was ever registered to watch: `startPresence` runs after the anchor
+     * lands. The backstop alarm armed before capture is what re-arms it.
+     */
+    private fun loadMode(startedAtMillis: Long): TrackingMode {
+        val stored = storedMode()
+        if (stored != TrackingMode.SETTLING) return stored
+        if (TrackingMode.settlingStillStands(startedAtMillis, nowMillis())) {
+            return stored
+        }
+        Log.w(TAG, "The snooze record still claims a capture is running; it outlived its process.")
+        SnoozeDebugLog.event("stale capture claim on the record; resolved from the stored anchor")
+        return TrackingMode.from(anchorOf(startedAtMillis))
+    }
+
+    private fun anchorOf(startedAtMillis: Long): Anchor = Anchor(
+        lat = prefs.getDoubleOrNull(KEY_LAT),
+        lon = prefs.getDoubleOrNull(KEY_LON),
+        fixAccuracyM = prefs.getFloatOrNull(KEY_ACCURACY),
+        capturedAt = Instant.ofEpochMilli(prefs.getLong(KEY_CAPTURED_AT, startedAtMillis)),
+        ssid = prefs.getString(KEY_SSID, null),
+        bssid = prefs.getString(KEY_BSSID, null),
+        radiusM = prefs.getInt(KEY_RADIUS, Anchor.DEFAULT_RADIUS_M),
+    )
+
+    private fun storedMode(): TrackingMode {
         val stored = try {
             prefs.getString(KEY_MODE, null)
         } catch (e: ClassCastException) {

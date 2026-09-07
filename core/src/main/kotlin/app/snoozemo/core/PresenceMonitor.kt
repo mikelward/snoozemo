@@ -88,6 +88,23 @@ interface PresenceMonitor {
      * supported mode.
      */
     fun supportedModes(anchor: Anchor): Set<TrackingMode>
+
+    /**
+     * Whether this build can end a snooze by departure **at all**, for any
+     * anchor capture could produce.
+     *
+     * [supportedModes] cannot answer this: it is asked of a *particular*
+     * anchor, and at arm time there is no anchor yet — the whole point of the
+     * capture window. This is the build's own ceiling, and the arm path needs
+     * it to know whether anything is actually pending while it waits.
+     *
+     * The `direct` flavor answers false until Phase 7's monitor lands
+     * (SPEC.md §3.4): it watches nothing, so a snooze there is a timer from
+     * the moment it is armed and there is nothing to wait to find out. Saying
+     * "checking where you are" on a build that will never check is principle
+     * 2's failure — the app doing the wrong thing quietly (Codex, PR #221).
+     */
+    val canTrackDeparture: Boolean
 }
 
 /**

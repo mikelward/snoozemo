@@ -1781,6 +1781,13 @@ class GeofencePresenceMonitor(
         add(TrackingMode.DURATION_ONLY)
     }
 
+    /**
+     * Yes — which anchor capture delivers decides *how well*, and that is
+     * [supportedModes]' question. This one is only whether waiting to find out
+     * is honest at all on this build.
+     */
+    override val canTrackDeparture: Boolean = true
+
     companion object {
         /** The one fence this app ever registers (one snooze, one place). */
         internal const val GEOFENCE_ID = "snoozemo-anchor"

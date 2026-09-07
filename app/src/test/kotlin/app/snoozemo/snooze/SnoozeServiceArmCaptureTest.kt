@@ -50,6 +50,25 @@ class SnoozeServiceArmCaptureTest {
         ActiveSnoozeStore(appContext).clear()
     }
 
+    /**
+     * The mode on disk, read against the test's own clock.
+     *
+     * `SETTLING` on a record expires against wall-clock now — a capture cannot
+     * outlive its ceiling, so a stored one that has is a capture killed with
+     * its process (Codex, PR #221). These tests run on a fixed instant, so the
+     * default real clock would read every record they write as ancient and
+     * resolve the claim away before the assertion saw it.
+     */
+    private fun storedMode(): TrackingMode? =
+        ActiveSnoozeStore(appContext) { TestSnoozeService.testReading.wallMillis }.load()?.mode
+
+    /** The body line of the ongoing card currently in the shade. */
+    private fun ongoingBody(): String? =
+        shadowOf(appContext.getSystemService(NotificationManager::class.java))
+            .allNotifications
+            .last { shadowOf(it).contentTitle?.toString() == stringOf(R.string.ongoing_title) }
+            .let { shadowOf(it).contentText?.toString() }
+
     private fun sameInstance(service: TestSnoozeService, action: String, startId: Int) {
         service.onStartCommand(
             Intent(appContext, TestSnoozeService::class.java).setAction(action),
@@ -82,7 +101,63 @@ class SnoozeServiceArmCaptureTest {
         // The user is not kept waiting on the ceiling: the ongoing
         // notification is up while the anchor is still being captured.
         assertTrue(shadeShows(stringOf(R.string.ongoing_title)))
-        assertEquals(TrackingMode.DURATION_ONLY, ActiveSnoozeStore(appContext).load()?.mode)
+        // And it does not yet claim a mode. The record used to read
+        // DURATION_ONLY here, which the card rendered as "timer only" —
+        // a capability report about a capture that had not finished
+        // (maintainer, 2026-09-07, from a device log).
+        assertEquals(TrackingMode.SETTLING, storedMode())
+    }
+
+    @Test
+    fun `the ongoing card says it is still checking, not that it is a timer`() {
+        // The half the first version of this fix missed entirely: `armWithCap`
+        // posts this card *before* it starts the capture, so the notification
+        // carried "Timer only" for the whole ~10 s window exactly as the
+        // screen did (Codex, PR #221). Asserted on the card's own text
+        // rather than on the record, because a mode the notification never
+        // reads is a mode that fixes nothing.
+        startService(SnoozeService.ACTION_ARM)
+
+        assertEquals(stringOf(R.string.ongoing_settling), ongoingBody())
+    }
+
+    @Test
+    fun `the ongoing card names the real mode once the anchor lands`() {
+        startService(SnoozeService.ACTION_ARM)
+
+        TestSnoozeService.captureRequests.single().invoke(captured)
+
+        // And it does not stay on the settling copy: a card that never stops
+        // saying "checking" is the same wrong claim, held for ever instead of
+        // ten seconds.
+        assertEquals(stringOf(R.string.ongoing_ends_when_you_leave), ongoingBody())
+    }
+
+    @Test
+    fun `a capture that finds nothing settles the card on the timer`() {
+        startService(SnoozeService.ACTION_ARM)
+
+        TestSnoozeService.captureRequests.single().invoke(
+            Anchor(lat = null, lon = null, fixAccuracyM = null, capturedAt = now),
+        )
+
+        // "Timer only" is still the right answer when it is true. This is the
+        // assertion that stops the fix from being "never say timer only".
+        assertEquals(stringOf(R.string.ongoing_timer_only), ongoingBody())
+    }
+
+    @Test
+    fun `a build that can never track posts the timer card from the start`() {
+        // The `direct` flavor's whole life until Phase 7. Driven through the
+        // service so the flavor's answer really reaches the card, rather than
+        // being asserted on the controller alone — the omission that let the
+        // first version of this fix ship a no-op (Codex, PR #221).
+        TestSnoozeService.presence.canTrackDeparture = false
+
+        startService(SnoozeService.ACTION_ARM)
+
+        assertEquals(stringOf(R.string.ongoing_timer_only), ongoingBody())
+        assertEquals(TrackingMode.DURATION_ONLY, storedMode())
     }
 
     @Test
@@ -139,8 +214,9 @@ class SnoozeServiceArmCaptureTest {
 
         TestSnoozeService.captureRequests.first().invoke(captured)
 
-        val record = ActiveSnoozeStore(appContext).load()
-        assertNull(record?.anchor?.ssid)
-        assertEquals(TrackingMode.DURATION_ONLY, record?.mode)
+        assertNull(ActiveSnoozeStore(appContext).load()?.anchor?.ssid)
+        // Still SETTLING: the new snooze's own capture is the one that
+        // gets to answer for it, and that has not landed.
+        assertEquals(TrackingMode.SETTLING, storedMode())
     }
 }

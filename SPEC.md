@@ -375,6 +375,53 @@ obfuscation are here because the threshold requires them, not because they save 
 connected to a network, or in duration-only mode if not, and says so in the notification. Arming
 must never feel slow or refuse.
 
+**While it is still capturing, the app says so rather than naming a mode** (maintainer,
+2026-09-07, from a device log). The record is written before the anchor exists, so its mode read
+duration-only for however long the fix took — and both the main screen and the ongoing
+notification rendered that as `Timer only` on a snooze that went on to track perfectly with a
+geofence. The notification is not exempt: it is posted as part of arming, before the capture is
+even started, so it carried the same wrong claim for the same ten seconds. A mode on an arming
+record is not a decision, it is the absence of one, so **the record carries that absence as a
+mode of its own** and every surface reads it as `Checking where you are`. Putting it there rather
+than in a second signal is what makes them agree: they render one field, so there is no way for
+one to be fixed and the others not. **The copy names no sensor**, because the record does not
+know which half is outstanding: with location denied or services off the capture records "no fix"
+at once and waits on Wi-Fi or the ceiling, so `Waiting for location` would spend ten seconds
+claiming to await a permission the user had refused — the same failure one level down. The Quick
+Settings tile makes no claim at all in this window, showing its countdown without the `Timer only`
+qualifier: the qualifier *is* the claim, and the shade would otherwise contradict the notification
+directly below it.
+
+**It never survives a process, and it says so itself rather than relying on a reader to ask.** A
+capture dies with its process; the record it wrote does not, so a stored `Checking where you are`
+can outlive the capture that meant it — and the readers that would show it are exactly the ones
+that cannot tell, since the main screen and the tile both read the record cold, off disk, with no
+view of whether the service is alive. So the state carries its own expiry, measured from the
+record's start: past it the record can only have been written by a process that has since died,
+and every reader resolves it to what the stored anchor supports — duration-only for a capture
+that delivered nothing, which is the truth, since nothing is registered to watch until an anchor
+lands.
+
+**The window is a deliberately generous heuristic, not the capture's real deadline** — the
+capture ceiling plus half a minute. The record's start is stamped before the record is saved and
+before capture is even begun, so the window has to cover the arm path as well as the capture, and
+a forward clock adjustment ages it faster than the capture's own monotonic timer. The two errors
+are not symmetric, which is what sizes it: expiring **early** contradicts a capture that is still
+running, which is the failure this whole design exists to remove, while expiring **late** only
+means a record left by a dead process is believed a few seconds longer, and the next service wake
+corrects it. Deriving the expiry from the capture's actual deadline would remove the guesswork and
+is an open question rather than a settled decision (`TODO.md`).
+
+**And it is only entered where something is actually pending.** On a build that cannot end a
+snooze by departure at all — `direct` until Phase 7 (§3.4) — the answer is the cap from the
+moment the tile is tapped, so an arm there says `Timer only` immediately rather than spending the
+capture window claiming to check something it will never check. The build's own ceiling is a
+different question from what a captured anchor supports, and the monitor answers both. The backstop alarm armed before capture is what re-arms it. Giving each reader a
+liveness signal to consult was the alternative, and it is the design that produced the bug three
+times: a new reader is one that forgot to ask. This is the same
+unread-versus-missing distinction the required-capability banners make (§4.2) — reporting a
+not-yet-known value as a settled one is the failure in both places.
+
 **A tap that cannot produce a snooze opens the app instead of doing nothing** (maintainer,
 2026-09-06). Two capabilities are *required* rather than merely useful: Do Not Disturb access,
 without which there is no rule to turn on, and notifications, which is where every report the app

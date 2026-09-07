@@ -253,7 +253,10 @@ class AnchorCaptureRunner(context: Context) {
 
     private companion object {
         /** The arming ceiling of SPEC.md §4.1: degrade rather than block. */
-        const val CEILING_MS = 10_000L
+        // The number itself is `AnchorCapture.CEILING`, in :core beside the
+        // pure capture it belongs to: `TrackingMode.SETTLING_VALID_FOR` is
+        // derived from it, and a second copy here would drift.
+        val CEILING_MS = AnchorCapture.CEILING.toMillis()
 
         /** How often to retry a fix the accuracy gate rejected. */
         const val FIX_INTERVAL_MS = 1_000L

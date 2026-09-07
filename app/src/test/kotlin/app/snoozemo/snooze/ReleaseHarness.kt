@@ -140,6 +140,13 @@ internal class FakePresenceMonitor : PresenceMonitor {
         if (anchor.ssid != null) add(TrackingMode.WIFI_ONLY)
         add(TrackingMode.DURATION_ONLY)
     }
+
+    /**
+     * Settable, so a test can be the `direct` flavor without a second fake.
+     * True by default, matching the geofence monitor these fixtures stand in
+     * for.
+     */
+    override var canTrackDeparture: Boolean = true
 }
 
 /**
