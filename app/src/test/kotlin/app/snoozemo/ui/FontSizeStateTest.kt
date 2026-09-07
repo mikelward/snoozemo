@@ -1,5 +1,6 @@
 package app.snoozemo.ui
 
+import app.snoozemo.core.DEFAULT_FONT_SCALE
 import app.snoozemo.core.FontSizeSettings
 import app.snoozemo.core.MAX_FONT_SCALE
 import org.junit.Assert.assertEquals
@@ -77,7 +78,7 @@ class FontSizeStateTest {
 
         state.onPersisted(FontSizeSettings(scale = 0.9f, pinchEnabled = false))
 
-        assertEquals(1f, state.scale, 0.0001f)
+        assertEquals(DEFAULT_FONT_SCALE, state.scale, 0.0001f)
         assertTrue(state.pinchEnabled)
     }
 

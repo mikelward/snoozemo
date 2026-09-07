@@ -2,6 +2,7 @@ package app.snoozemo.ui
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import app.snoozemo.core.DEFAULT_FONT_SCALE
 import app.snoozemo.core.FontSizeSettings
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -167,6 +168,7 @@ class FontSizeSettingTest {
     }
 
     private companion object {
-        const val DEFAULT_STORED = 1f
+        /** Whatever the app starts at, so a changed default is not a test edit. */
+        val DEFAULT_STORED = DEFAULT_FONT_SCALE
     }
 }

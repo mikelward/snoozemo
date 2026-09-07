@@ -1362,10 +1362,15 @@ is the page's own guarantee rather than a side effect of how the list happens to
 Snoozemo's own text can be sized from Settings. The setting is a **multiplier applied on top of
 the system font scale**, not a replacement for it: a user who has already enlarged text system-wide
 keeps that, and this only says how much bigger or smaller Snoozemo should be than everything else.
-80%–160%, **continuous**, **defaulting to the system's own size** — unlike the sibling Simmo repo,
-which starts a notch above because its screens are read mid-call against a deadline, Snoozemo's are
-read at leisure and the surface that matters is the tile, which is not ours to size. Only text
-scales; paddings, icons, and touch targets keep the layout the 4dp grid describes.
+80%–160%, **continuous**, **defaulting a notch above the system's own size** (115%). It defaulted to
+the system's size at first, on the argument that Snoozemo's screens are read at leisure and should
+look like the rest of the system until the user says otherwise; reversed on seeing it (maintainer,
+2026-09-07), because this app's screens are short — a card, a row of settings, a sheet with three
+choices — and matching the system left space unused and the text smaller than it needed to be. The
+setting is still an adjustment rather than a correction: 100% is one drag away and is stored like
+any other choice, and only the starting point moved, so a size already chosen is read back
+unchanged. Only text scales; paddings, icons, and touch targets keep the layout the 4dp grid
+describes.
 
 Two ways to change it, both moving the same value:
 
