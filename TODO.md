@@ -1201,6 +1201,33 @@ the point is that every other line of the app is worthless if it isn't true.
       first occurrence of every unrepeatable failure was the one nobody captured. Recorded in
       `SPEC.md` §4.6 with the reasoning.
 - [ ] Departure latency instrumented against ground truth, on-device (hardware item 2).
+- [ ] **Decide whether a check should spend a higher-accuracy fix.** The confirming burst asks for
+      no better a fix than the resting probe does — both take the platform default — so the accuracy
+      term in `SPEC.md` §6.6's decomposition is whatever the platform felt like giving — one of
+      several possible reasons the distance walked differs between walks, alongside the anchor's own
+      capture error, the wake-up latency before a check starts, and the ground covered during the
+      confirmation gap. Which of them actually dominates is what the traces are for. A check is the phase where the phone is already
+      awake doing active location work and someone is waiting on the answer — but **do not read
+      that as a bound on the cost**: `CheckingCadence.onFixDelivered` resets the backoff, so fixes
+      that keep arriving and keep coming back inconclusive hold the 30 s cadence with no decay,
+      and `CHECKING` persists until something resolves it or the duration cap fires hours later. A
+      higher-accuracy request would therefore need an attempt or time bound of its own, and what
+      it costs over a long check is part of what the traces have to establish rather than
+      something to assume. **How big a lever it is, is equally unknown**: accuracy is
+      subtracted one for one, so if the delivered fixes are routinely vague, a better request
+      moves the boundary further than any threshold change would — and if they are already sharp
+      it moves almost nothing. Don't rank it against the radius before measuring, in either
+      direction. Needs the latency instrumentation above to size it honestly: measure
+      the accuracies actually delivered during a check before deciding, since the case for spending
+      more rests entirely on how bad the default ones are. Record the **anchor's** accuracy in the
+      same traces — it is a reported 68% confidence radius rather than a known error, accepted up to
+      `MAX_ANCHOR_ACCURACY_M` and subtracted from nothing, so a vague capture *may* have put the
+      origin every later distance is measured from somewhere off where the phone really was — and
+      further off than that radius roughly a third of the time, since it is a confidence estimate
+      and not a cap — and a walk-to-walk
+      difference blamed on the departing fix may belong to the capture instead. Which is why it
+      needs measuring rather than assuming: the reported radius estimates the error, it neither
+      reports nor caps it. Open in `SPEC.md` §6.6.
 - [ ] **Submit the background-location declaration** as soon as there is a working
       departure to film. Longest-lead item and the largest project risk (`SPEC.md` §3.5);
       it runs in parallel with Phases 4–5 rather than blocking them.

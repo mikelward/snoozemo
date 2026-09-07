@@ -44,9 +44,19 @@ data class Anchor(
          * principle 1's failure direction rather than principle 2's.
          *
          * A departure needs `distance - accuracy > radius + HYSTERESIS_M`, so
-         * the accuracy of the fix moves the real boundary more than this
-         * constant does: at 100 m a typical balanced-power fix departs somewhere
-         * around 170–210 m rather than at 100.
+         * at 100 m the threshold is 150 m on the **accuracy-adjusted margin**,
+         * not on the separation between the stored anchor and the fix: a 10 m
+         * fix needs more than 160 m of that separation. Moving this constant
+         * moves the threshold one for one.
+         *
+         * It is not a floor on ground actually covered, and how the two relate
+         * is unmeasured: §6.6 lists what is known to contribute, warns that
+         * the list is not closed, and does not rank the terms, because no
+         * handset traces exist to rank them with. Don't add a ranking here
+         * either — this is the **venue-size lever**, which is what it is for,
+         * and not the only decision in the total, since the hysteresis and the
+         * confirmation gap are chosen numbers too. What stops another 50 m
+         * coming off is the venue floor above, not the arithmetic.
          */
         const val DEFAULT_RADIUS_M: Int = 100
 
