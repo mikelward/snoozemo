@@ -566,7 +566,13 @@ now, and a tap arriving after the process is gone rebuilds the flow at the card 
 which is remembered until the flow is left — **including a replay**, which is neither unseen nor a
 fresh install, so the remembered card is what reopens it rather than the first-run gate. The tap is not silent either (principle 2): the card it
 lands back on carries a line saying it could not snooze yet. Outside the flow the tap still lands
-on the recap, which is where the repair is. The flow is shown once, on
+on the recap, which is where the repair is. **The cross-process half is kept deliberately**
+(maintainer, 2026-09-07), after review found edge after edge in it: resuming across process death
+means reconstructing, from a breadcrumb and the ids of the two intents Android can redeliver, state
+the platform itself owns. The alternative is to resume only while the process is alive — the launch
+mode and the new-intent hand-off, none of the persistence — which deletes that class of edge along
+with the case it exists for: a user whose process died mid-tutorial would be sent to the recap
+instead. Kept for now, revisit if the mechanism keeps producing them. The flow is shown once, on
 a persisted flag, and replayable from a **(?) icon in `MainScreen`'s title row** — the person who
 needs it again is on the home screen wondering what to do, not in Settings. The shape is decided; the words
 are not: nothing is a string resource until the maintainer has seen the copy (`AGENTS.md`,
