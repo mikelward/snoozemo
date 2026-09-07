@@ -4484,6 +4484,18 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   `PermissionsScreen`, not a system settings page, so a merged banner changes what is
   said and not where it goes.
 
+- [ ] **Approved, waiting on the rest of the flow to be translated**:
+  `welcome_quick_settings_mock_description` ("Quick Settings, with Snoozemo's tile
+  ringed among the others" — the panel's accessibility label, read instead of the
+  four tile labels) and `welcome_tile_tap_blocked` ("That tap couldn't snooze yet —
+  finish setup first."), both signed off by the maintainer on 2026-09-07. They keep
+  their `tools:ignore="MissingTranslation"` and `TODO: translate` markers only
+  because the welcome flow's own copy is still unsettled, so fanning out five
+  strings would leave one card in two languages; they go to the locales with the
+  rest of the flow. The three mock tile labels (`welcome_quick_settings_wifi`,
+  `_bluetooth`, `_airplane`) ride along — they are the system's own names for those
+  tiles (`WLAN`, `Bluetooth`, `Flugmodus` in German).
+
 - [ ] **New copy awaiting approval before translation**: `notifications_banner_title`
   ("Notifications needed"), written to match `dnd_banner_title`'s shape. Carries
   `tools:ignore="MissingTranslation"` and a `TODO: translate` comment until the wording
