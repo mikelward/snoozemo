@@ -6,6 +6,7 @@ import android.content.Context
 import app.snoozemo.snooze.SnoozeNotifications
 import app.snoozemo.snooze.WelcomeStore
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -98,6 +99,22 @@ class MainActivityNotificationBannerTest {
         // can only wait for the warm-ups that exist when it is called.
         SnoozeNotifications.markChannelsCreatedForTest()
         SnoozeNotifications.awaitWarmForTest()
+        // And the *other* creator, which the flag above cannot stop: launching
+        // the activity with policy access granted starts
+        // `ensureRuleInBackground`, whose thread calls `reapplyDndBypass()` —
+        // and that goes straight to `createChannels()` by design, since its
+        // whole job is to re-issue channels the once-per-process guard would
+        // otherwise skip. So a channel deleted here was being recreated a
+        // moment later, and this test failed roughly one CI run in three with
+        // `UnExecutedRunnablesException` attached and nothing else to go on.
+        // `lastRuleCheck` is the seam that thread was already given for
+        // exactly this; joining it is explicit ordering rather than a sleep.
+        val ruleCheck = activity.lastRuleCheck
+        // Asserted, not just joined: if that thread ever stops running here the
+        // join silently becomes a no-op and this test quietly goes back to
+        // racing a recreation — the false pass this suite's rules warn about.
+        assertNotNull("nothing to join: the recreating thread never started", ruleCheck)
+        ruleCheck?.join()
         manager.deleteNotificationChannel(SnoozeNotifications.CHANNEL_ACTIVE)
         activity.refreshNotificationsForTest()
 
