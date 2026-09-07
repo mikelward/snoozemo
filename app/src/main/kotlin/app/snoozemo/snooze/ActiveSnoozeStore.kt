@@ -207,13 +207,13 @@ class ActiveSnoozeStore(
     }
 
     /**
-     * The stored mode, with a stale [TrackingMode.SETTLING] resolved away.
+     * The stored mode, with a stale settling value resolved away.
      *
-     * `SETTLING` says a capture is running, and a capture dies with its
+     * A settling mode says a capture is running, and a capture dies with its
      * process — but the record it wrote does not. Every cold reader of this
-     * store, the main screen included, would otherwise show `Checking where
-     * you are` over a capture killed mid-window, until a service wake happened
-     * to correct it. Resolved here rather than only in
+     * store, the main screen included, would otherwise sit on `Waiting for
+     * location` (or `Waiting for Wi-Fi`) over a capture killed mid-window,
+     * until a service wake happened to correct it. Resolved here rather than only in
      * `SnoozeController.restore`, because the screen never calls restore: it
      * loads the record straight from this store (Codex, PR #221).
      *
@@ -224,7 +224,7 @@ class ActiveSnoozeStore(
      */
     private fun loadMode(startedAtMillis: Long): TrackingMode {
         val stored = storedMode()
-        if (stored != TrackingMode.SETTLING) return stored
+        if (!stored.isSettling) return stored
         if (TrackingMode.settlingStillStands(startedAtMillis, nowMillis())) {
             return stored
         }

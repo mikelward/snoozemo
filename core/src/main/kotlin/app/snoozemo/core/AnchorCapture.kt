@@ -59,6 +59,23 @@ class AnchorCapture(private val capturedAt: Instant) {
         get() = !finished && !fixAnswered
 
     /**
+     * Whether the Wi-Fi half is still open. Together with [awaitingFix] this
+     * is what the arm is actually still waiting for, which is what the
+     * settling copy names (SPEC.md §4.2).
+     *
+     * Asked rather than reported, deliberately. The first version of that copy
+     * keyed on a *cause* — the platform half telling the controller that
+     * location could not answer — and a cause names only the failures somebody
+     * enumerated: a fix that simply **arrived** first left the record saying
+     * "Waiting for location" with the location half already closed, which is
+     * the same wrong claim the split existed to remove, in the other direction
+     * (Codex, PR #225). These two booleans cannot go stale that way, because
+     * every path that settles a half sets one of them.
+     */
+    val awaitingWifi: Boolean
+        get() = !finished && !wifiAnswered
+
+    /**
      * A Wi-Fi read arrived, raw from the platform: [rawSsid] possibly quoted,
      * either field possibly a redaction placeholder. Settles the Wi-Fi half
      * only when the SSID is real — the SSID is the anchor (SPEC.md §6.2), so a

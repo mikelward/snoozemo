@@ -163,9 +163,11 @@ internal class TestSnoozeService : SnoozeService() {
 
     override fun beginAnchorCapture(
         capturedAt: Instant,
+        onAwaitingWifiOnly: () -> Unit,
         onCaptured: (Anchor) -> Unit,
     ): AutoCloseable {
         captureRequests += onCaptured
+        captureAwaitingWifiReports += onAwaitingWifiOnly
         return AutoCloseable { captureClosed++ }
     }
 
@@ -200,6 +202,13 @@ internal class TestSnoozeService : SnoozeService() {
          */
         var captureRequests = mutableListOf<(Anchor) -> Unit>()
 
+        /**
+         * The capture's other callback: what it calls when location cannot
+         * answer at all, held separately so a test can fire it without also
+         * landing an anchor and ending the arm.
+         */
+        var captureAwaitingWifiReports = mutableListOf<() -> Unit>()
+
         /** How many captures were closed — by an exit, or by a replacement. */
         var captureClosed: Int = 0
 
@@ -216,6 +225,7 @@ internal class TestSnoozeService : SnoozeService() {
         fun reset(now: Instant) {
             zen = RefusingZen()
             captureRequests = mutableListOf()
+            captureAwaitingWifiReports = mutableListOf()
             captureClosed = 0
             repairPokes = 0
             grantPokes = 0

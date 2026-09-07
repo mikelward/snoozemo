@@ -145,7 +145,7 @@ class SnoozeController(
         // last entry, so `ordinal + 1` is out of bounds. Returned untouched
         // because it makes no capability claim to lower — the anchor has not
         // arrived, so there is nothing yet to be honest or dishonest about.
-        if (mode == TrackingMode.SETTLING) return mode
+        if (mode.isSettling) return mode
         var candidate = mode
         while (candidate != TrackingMode.DURATION_ONLY && !isSupported(candidate)) {
             candidate = TrackingMode.entries[candidate.ordinal + 1]
@@ -272,6 +272,36 @@ class SnoozeController(
                 false
             }
         }
+    }
+
+    /**
+     * The capture's location half has closed — a fix arrived, or nothing is
+     * coming — and only the Wi-Fi read is still outstanding.
+     *
+     * Narrow on purpose. It changes one thing: which of the two settling modes
+     * the surfaces render, so the line reads "Waiting for Wi-Fi" rather than
+     * "Waiting for location" while the only outstanding half is the Wi-Fi read.
+     * It makes no capability claim — the anchor still has not landed, and
+     * [onAnchorCaptured] is what decides what this snooze can actually watch.
+     * In particular a fix having *arrived* does not promise `FULL`: it still
+     * has to clear the accuracy gate, and the Wi-Fi half still has to answer.
+     *
+     * Reported by the machinery rather than read here, because what is
+     * outstanding is the capture's own state and nothing else holds it — and
+     * because the calls that would establish it from this side
+     * (`checkSelfPermission`, `isLocationEnabled`) are exactly the kind of work
+     * the arm path may not do between the tap and the zen rule (SPEC.md §4.1).
+     *
+     * A no-op unless a snooze is arming and still claims [TrackingMode.SETTLING]
+     * — a late report against an anchor that has already landed must not drag a
+     * settled mode back to a settling one.
+     */
+    fun onAwaitingWifiWhileArming() {
+        val snooze = active ?: return
+        if (snooze.mode != TrackingMode.SETTLING) return
+        val updated = snooze.copy(mode = TrackingMode.SETTLING_AWAITING_WIFI)
+        active = updated
+        listener.onStateChanged(state, updated, null)
     }
 
     /**
@@ -626,7 +656,7 @@ class SnoozeController(
         // looking — it would look for ever. What the stored anchor supports is
         // the honest answer, and for an anchor that never arrived that is the
         // cap alone.
-        val settled = if (snooze.mode == TrackingMode.SETTLING) {
+        val settled = if (snooze.mode.isSettling) {
             TrackingMode.from(snooze.anchor)
         } else {
             snooze.mode

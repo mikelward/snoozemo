@@ -521,9 +521,12 @@ private fun SnoozeStatus(
         TrackingMode.WIFI_ONLY -> stringResource(R.string.ongoing_wifi_only)
         TrackingMode.WIFI_GRACE -> stringResource(R.string.ongoing_wifi_grace)
         TrackingMode.DURATION_ONLY -> stringResource(R.string.ongoing_timer_only)
-        // The anchor has not landed yet, so there is no mode to report. Same
-        // string the ongoing notification uses, since both read this one field.
+        // The anchor has not landed yet, so there is no mode to report — only
+        // what is still being waited on. Same strings the ongoing notification
+        // uses, since both read this one field.
         TrackingMode.SETTLING -> stringResource(R.string.ongoing_settling)
+        TrackingMode.SETTLING_AWAITING_WIFI ->
+            stringResource(R.string.ongoing_settling_awaiting_wifi)
     }
     // Same two modes the notification appends to, for the same reasons: FULL
     // carries no cause by construction, and WIFI_GRACE already names the thing
@@ -534,7 +537,8 @@ private fun SnoozeStatus(
         // SETTLING carries no cause for the same reason FULL doesn't: nothing
         // has degraded, and an arming record can still hold the previous
         // snooze's cause.
-        TrackingMode.FULL, TrackingMode.WIFI_GRACE, TrackingMode.SETTLING -> null
+        TrackingMode.FULL, TrackingMode.WIFI_GRACE,
+        TrackingMode.SETTLING, TrackingMode.SETTLING_AWAITING_WIFI -> null
     }
     StatusBlock(
         headline = stringResource(R.string.ongoing_title),

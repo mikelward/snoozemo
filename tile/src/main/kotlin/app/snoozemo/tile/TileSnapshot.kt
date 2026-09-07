@@ -100,9 +100,9 @@ internal data class TileSnapshot(
          * renderings — dropping the qualifier is not silence, it is the
          * tracked-looking one (Codex, PR #221).
          *
-         * [TrackingMode.SETTLING] is the one case where dropping it is right,
-         * because something genuinely is pending. Nothing is pending for a
-         * value nobody can read.
+         * A settling mode is the one case where dropping it is right, because
+         * something genuinely is pending. Nothing is pending for a value nobody
+         * can read.
          */
         internal fun claimsTimerOnly(
             stored: String?,
@@ -116,7 +116,7 @@ internal data class TileSnapshot(
                 // The anchor has not landed *yet*. Not "nothing is watching" —
                 // the absence of an answer, so the shade shows the countdown
                 // without a qualifier rather than guessing at one. The ongoing
-                // notification beside it says `Checking where you are`; saying
+                // notification beside it names what it is waiting on; saying
                 // `Timer only` here would be the contradictory pair this change
                 // exists to remove.
                 //
@@ -128,7 +128,12 @@ internal data class TileSnapshot(
                 // to feel instant. So the window does the telling instead —
                 // and past it nothing is watching, which is exactly what the
                 // qualifier says (Codex, PR #221).
-                TrackingMode.SETTLING ->
+                //
+                // Both settling values read the same here. Which half the arm
+                // is still waiting on decides the *notification's* wording, not
+                // whether anything is pending — and pending is the only
+                // question the shade is asking.
+                TrackingMode.SETTLING, TrackingMode.SETTLING_AWAITING_WIFI ->
                     !TrackingMode.settlingStillStands(startedAtMillis, nowMillis)
                 null -> true
             }
