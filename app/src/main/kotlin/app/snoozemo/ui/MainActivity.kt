@@ -99,10 +99,30 @@ private const val TAG = "MainActivity"
  */
 internal const val EXTRA_OPEN_PERMISSIONS = "app.snoozemo.OPEN_PERMISSIONS"
 
+/**
+ * Which blocked tile tap an [EXTRA_OPEN_PERMISSIONS] intent is (Codex, PR #220).
+ *
+ * The extra sticks to the activity's launch intent, so Android hands the same
+ * one back when it rebuilds a task whose process it killed. Three findings came
+ * out of inferring "is this a new tap?" from ambient signals instead — a null
+ * bundle called a restored task a rotation, and the recreation marker that
+ * replaced it called a *stale* intent a fresh tap, sending a user who had long
+ * since left the flow back to the recap with no tap behind it. An id is the
+ * answer the platform cannot muddle: the last one handled is saved with the
+ * screen, and a tap is acted on exactly once.
+ */
+internal const val EXTRA_BLOCKED_TAP_ID = "app.snoozemo.BLOCKED_TAP_ID"
+
 private const val KEY_SCREEN = "screen"
 private const val KEY_WELCOME_CARD = "welcomeCard"
 private const val KEY_PERMISSIONS_ORIGIN = "permissionsOrigin"
 private const val KEY_ROUTED_TO_PERMISSIONS_ONCE = "routedToPermissionsOnce"
+private const val KEY_WELCOME_TAP_BLOCKED = "welcomeTapBlocked"
+private const val KEY_FIRST_TAP_ID = "firstBlockedTapId"
+private const val KEY_LAST_TAP_ID = "lastBlockedTapId"
+
+/** Stands in for an intent carrying no id — an older build's. */
+private const val NO_TAP_ID = ""
 private const val KEY_SHEET_COMMITTING = "sheetCommitting"
 private const val KEY_SHEET_REQUEST_ID = "sheetRequestId"
 private const val KEY_SHEET_OFFERED_FOR = "sheetOfferedFor"
@@ -155,6 +175,17 @@ class MainActivity : ComponentActivity() {
      */
     internal var welcomeCard by mutableStateOf(WelcomeCard.WHAT)
 
+    /**
+     * Whether a tile tap reached the app because it could not snooze, while the
+     * welcome flow was still open (maintainer, 2026-09-07).
+     *
+     * The tap has to say something: it produced no snooze, and the flow it
+     * lands back in looks exactly as it did before, so silence here reads as
+     * the tile being broken. Cleared when the flow is left, since the recap
+     * then carries the same news in its own rows.
+     */
+    internal var welcomeTapBlocked by mutableStateOf(false)
+
     /** Records that the flow has been seen, so a fresh install gets it once. */
     private lateinit var welcomeStore: WelcomeStore
 
@@ -168,6 +199,27 @@ class MainActivity : ComponentActivity() {
      * into the interstitial out from under whatever they were doing.
      */
     private var routedToPermissionsOnce = false
+
+    /**
+     * The two blocked taps that can still come back — see
+     * [EXTRA_BLOCKED_TAP_ID].
+     *
+     * Exactly two, because exactly two intents exist to be redelivered: this
+     * activity's **launch** intent, which never changes, and its **current**
+     * one, which `setIntent` replaces. A tap in between is held by nothing and
+     * can never arrive again.
+     *
+     * Remembering only the newest let the launch intent come back and route the
+     * user to the recap with no tap behind it; a capped list of the newest few
+     * had the same hole one step further out, since the entry it aged out first
+     * was the launch intent — the one entry that must never be dropped (Codex,
+     * PR #220). Naming the two is bounded by construction rather than by a cap.
+     */
+    private var firstTapId: String? = null
+    private var lastTapId: String? = null
+
+    /** Whether [firstTapId] has been set — the id itself may legitimately be null. */
+    private var tookATap = false
 
     private lateinit var zen: ZenController
 
@@ -1000,6 +1052,16 @@ class MainActivity : ComponentActivity() {
             screen = Screen.entries.firstOrNull { s -> s.name == it.getString(KEY_SCREEN) } ?: screen
             welcomeCard = WelcomeCard.entries
                 .firstOrNull { c -> c.name == it.getString(KEY_WELCOME_CARD) } ?: welcomeCard
+            // With the card, not with the launch intent (Codex, PR #220): a
+            // recreation restores from this bundle and skips the intent gate
+            // entirely, so a flag left out of it takes the tap's only
+            // explanation away and the card comes back looking untouched.
+            welcomeTapBlocked = it.getBoolean(KEY_WELCOME_TAP_BLOCKED, welcomeTapBlocked)
+            if (it.containsKey(KEY_FIRST_TAP_ID)) {
+                tookATap = true
+                firstTapId = it.getString(KEY_FIRST_TAP_ID).takeUnless { id -> id == NO_TAP_ID }
+                lastTapId = it.getString(KEY_LAST_TAP_ID).takeUnless { id -> id == NO_TAP_ID }
+            }
             permissionsOrigin =
                 Screen.entries.firstOrNull { s -> s.name == it.getString(KEY_PERMISSIONS_ORIGIN) }
                     ?: permissionsOrigin
@@ -1028,10 +1090,41 @@ class MainActivity : ComponentActivity() {
         // restored on top of it: a rotation mid-flow keeps its own card, and a
         // process death on Settings comes back to Settings.
         val welcomeSeen = welcomeStore.seen()
+        // Two questions, two answers, from one read (Codex, PR #220). *Whether*
+        // a run of the flow is still open is the breadcrumb existing at all —
+        // it is written on entry and forgotten on the way out. *Where* to
+        // resume is that name resolved against the cards this build shows, and
+        // it can come back null on its own: a replay left on the telemetry card
+        // and reopened by a build that omits it is still a replay in progress,
+        // and answering both questions with the validated card closed the gate
+        // on it. Unresolvable means "start the flow over", never "there is no
+        // flow".
+        val rememberedName = welcomeStore.lastCard()
+        val rememberedCard = rememberedWelcomeCard(
+            name = rememberedName,
+            cards = welcomeCards(collectsTelemetry = CrashReporting.isAvailable(this)),
+        )
         if (savedInstanceState == null &&
-            shouldOpenWelcome(seen = welcomeSeen, freshInstall = welcomeStore::freshInstall)
+            shouldOpenWelcome(
+                seen = welcomeSeen,
+                freshInstall = welcomeStore::freshInstall,
+                inProgress = rememberedName != null,
+            )
         ) {
             screen = Screen.WELCOME
+            // Where the flow was left, if it was left part-way (maintainer,
+            // 2026-09-07). A tile tap that cannot snooze opens the app, and it
+            // can arrive long after the process is gone — rebuilt from nothing,
+            // the flow used to start again at card 1, throwing away everything
+            // the user had already answered.
+            //
+            // Card 1 is remembered on entry as well, like the replay's is
+            // (Codex, PR #220): remembering only from the first `Next` left a
+            // first-run user who backgrounded the flow on card 1 with no
+            // breadcrumb at all, and an app update landing before the killed
+            // process came back flipped `freshInstall` to false — onboarding
+            // then never appeared again.
+            showWelcomeCard(rememberedCard ?: welcomeCard)
         }
         // A tile tap that could not produce a snooze lands here, and it lands on
         // the screen that repairs it rather than on Main (Codex, PR #215).
@@ -1042,19 +1135,12 @@ class MainActivity : ComponentActivity() {
         //
         // Behind the welcome flow, not ahead of it: the cards are the fuller
         // repair and are what a fresh install sees first (SPEC.md §4.2). Only
-        // on a fresh launch, so a rotation keeps whatever screen it was on
-        // rather than being thrown back here by the intent that started it.
-        //
-        // Spends the one-shot route, since this *is* that route arriving early:
-        // leaving it unspent would let the first access reading push a user who
-        // came back to Main straight onto this screen again.
-        if (savedInstanceState == null &&
-            screen == Screen.MAIN &&
-            intent?.getBooleanExtra(EXTRA_OPEN_PERMISSIONS, false) == true
-        ) {
-            routedToPermissionsOnce = true
-            openPermissions(Screen.MAIN)
-        }
+        // Acted on once per tap, whatever the platform did with the intent in
+        // between (Codex, PR #220): a rotation and a task Android rebuilt after
+        // killing its process both hand back the same launch intent, and only
+        // the tap's own id can tell those from a genuinely new tap. See
+        // [EXTRA_BLOCKED_TAP_ID].
+        intent?.let(::takeBlockedTileTapFrom)
         // The same read, reused: the hint exists only for someone who has been
         // through the flow and not yet dismissed it.
         showReplayHint = welcomeSeen && !welcomeStore.replayHintDismissed()
@@ -1083,7 +1169,7 @@ class MainActivity : ComponentActivity() {
                             // disagree about where back goes.
                             val goBack = {
                                 val at = cards.indexOf(welcomeCard)
-                                if (at > 0) welcomeCard = cards[at - 1] else leaveWelcome()
+                                if (at > 0) showWelcomeCard(cards[at - 1]) else leaveWelcome()
                             }
                             BackHandler(onBack = goBack)
                             WelcomeScreen(
@@ -1104,6 +1190,7 @@ class MainActivity : ComponentActivity() {
                                 filtersRuleId = filtersRuleId,
                                 settingsFailure = settingsFailure,
                                 crashPending = crashPending,
+                                tapBlocked = welcomeTapBlocked,
                                 shareFailed = shareFailed,
                                 dismissFailed = dismissFailed,
                                 sharing = sharing,
@@ -1119,7 +1206,9 @@ class MainActivity : ComponentActivity() {
                                 onAnswerTelemetry = ::answerTelemetryAndFinish,
                                 onNext = {
                                     val at = cards.indexOf(welcomeCard)
-                                    if (at >= 0 && at < cards.lastIndex) welcomeCard = cards[at + 1]
+                                    if (at >= 0 && at < cards.lastIndex) {
+                                        showWelcomeCard(cards[at + 1])
+                                    }
                                 },
                                 onSkip = ::leaveWelcome,
                                 onBack = goBack,
@@ -1163,7 +1252,12 @@ class MainActivity : ComponentActivity() {
                             // install, and clearing it would make the next
                             // cold start show the cards again unasked.
                             onOpenWelcome = {
-                                welcomeCard = WelcomeCard.WHAT
+                                // Remembered from the first card, not from the
+                                // first `Next` (Codex, PR #220): a replay is
+                                // neither a fresh install nor unseen, so this
+                                // marker is the only thing that can bring a
+                                // blocked tile tap back to it.
+                                showWelcomeCard(WelcomeCard.WHAT)
                                 screen = Screen.WELCOME
                             },
                             onAddTile = ::addTile,
@@ -1370,6 +1464,11 @@ class MainActivity : ComponentActivity() {
         outState.putString(KEY_WELCOME_CARD, welcomeCard.name)
         outState.putString(KEY_PERMISSIONS_ORIGIN, permissionsOrigin.name)
         outState.putBoolean(KEY_ROUTED_TO_PERMISSIONS_ONCE, routedToPermissionsOnce)
+        outState.putBoolean(KEY_WELCOME_TAP_BLOCKED, welcomeTapBlocked)
+        if (tookATap) {
+            outState.putString(KEY_FIRST_TAP_ID, firstTapId ?: NO_TAP_ID)
+            outState.putString(KEY_LAST_TAP_ID, lastTapId ?: NO_TAP_ID)
+        }
         // The sheet survives a rotation, chosen time and all: stepping to a
         // time is the only work the user has done there, and dropping it would
         // leave them on the default cap having answered.
@@ -3263,8 +3362,69 @@ class MainActivity : ComponentActivity() {
      */
     internal fun routedToPermissionsOnceForTest() = routedToPermissionsOnce
 
+    /**
+     * A tile tap that could not snooze, arriving on a running instance
+     * (maintainer, 2026-09-07).
+     *
+     * `MainActivity` is `singleTask` for this: without it the tap built a
+     * *second* instance, whose own welcome gate reopened the flow at card 1
+     * over the half-finished one — a user part-way through the cards tapped the
+     * tile and was sent back to the beginning, with no snooze and nothing
+     * saying why.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // So a later rotation restores from the intent that is actually current
+        // rather than the one this activity was created with.
+        setIntent(intent)
+        takeBlockedTileTapFrom(intent)
+    }
+
+    /**
+     * Acts on [intent] if it carries a blocked tile tap this activity has not
+     * already taken — see [EXTRA_BLOCKED_TAP_ID].
+     *
+     * An intent with no id at all is taken once and then remembered as
+     * `null`-handled, so an older build's intent still cannot repeat.
+     */
+    private fun takeBlockedTileTapFrom(intent: Intent) {
+        if (!intent.getBooleanExtra(EXTRA_OPEN_PERMISSIONS, false)) return
+        val id = intent.getStringExtra(EXTRA_BLOCKED_TAP_ID)
+        if (tookATap && (id == firstTapId || id == lastTapId)) return
+        if (!tookATap) firstTapId = id
+        tookATap = true
+        lastTapId = id
+        takeBlockedTileTap()
+    }
+
+    /**
+     * Where a blocked tile tap lands: the recap outside the flow, the current
+     * card inside it, and something said either way.
+     */
+    private fun takeBlockedTileTap() {
+        if (screen == Screen.WELCOME) {
+            welcomeTapBlocked = true
+            return
+        }
+        // Spends the one-shot route, since this *is* that route arriving early:
+        // leaving it unspent would let the first access reading push a user who
+        // came back to Main straight onto this screen again.
+        routedToPermissionsOnce = true
+        openPermissions(Screen.MAIN)
+    }
+
+    /** Moves the flow to [card] and remembers it for a relaunch. */
+    private fun showWelcomeCard(card: WelcomeCard) {
+        welcomeCard = card
+        welcomeStore.rememberCard(card.name)
+    }
+
     private fun leaveWelcome() {
         welcomeStore.markSeen()
+        // Nothing left to resume: the next tile tap that cannot snooze belongs
+        // on the recap, not back inside a flow the user has finished with.
+        welcomeStore.forgetCard()
+        welcomeTapBlocked = false
         // Shown from here on: the user has just seen the cards, which is the
         // one moment "you can get these back" means anything (maintainer,
         // 2026-09-05). A replay from the icon re-enters this path and leaves

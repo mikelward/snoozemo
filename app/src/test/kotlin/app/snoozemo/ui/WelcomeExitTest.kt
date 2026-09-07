@@ -6,6 +6,7 @@ import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -109,6 +110,34 @@ class WelcomeExitTest {
     fun `having seen it wins either way`() {
         assertFalse(shouldOpenWelcome(seen = true, freshInstall = { true }))
         assertFalse(shouldOpenWelcome(seen = true, freshInstall = { false }))
+        // Unless a run of the flow is still open (Codex, PR #220): a replay is
+        // seen and not fresh, and without this a blocked tile tap during one
+        // landed on the recap instead of the card the user was on.
+        assertTrue(shouldOpenWelcome(seen = true, freshInstall = { false }, inProgress = true))
+    }
+
+    @Test
+    fun `a remembered card resolves only against the cards this build shows`() {
+        val withTelemetry = welcomeCards(collectsTelemetry = true)
+        val without = welcomeCards(collectsTelemetry = false)
+
+        assertEquals(
+            WelcomeCard.TILE,
+            rememberedWelcomeCard(WelcomeCard.TILE.name, without),
+        )
+        // Codex, PR #220: `direct`, and `play` with no crash reporter, drop the
+        // telemetry card — a breadcrumb naming it used to come back as a card
+        // the flow does not contain, where `Next` did nothing and the dots read
+        // card 1 while a fifth card was on screen.
+        assertEquals(
+            WelcomeCard.TELEMETRY,
+            rememberedWelcomeCard(WelcomeCard.TELEMETRY.name, withTelemetry),
+        )
+        assertNull(rememberedWelcomeCard(WelcomeCard.TELEMETRY.name, without))
+        // The same answer for a card a later build removed, and for no memory
+        // at all — which is the point of one function for both.
+        assertNull(rememberedWelcomeCard("A_CARD_THAT_WAS_REMOVED", without))
+        assertNull(rememberedWelcomeCard(null, without))
     }
 
     /** Everything granted and read, so each test names only what it changes. */

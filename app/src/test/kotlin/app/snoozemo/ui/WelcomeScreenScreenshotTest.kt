@@ -119,6 +119,19 @@ class WelcomeScreenScreenshotTest {
     }
 
     @Test
+    fun `a tile tap that could not snooze says so on the card it lands back on`() {
+        // The flow resumes rather than restarting (maintainer, 2026-09-07), so
+        // the only thing that tells the user their tap did nothing is this
+        // line — the card behind it is exactly the one they were already on.
+        capture("welcome-tap-blocked.png") {
+            Flow(WelcomeCard.TILE, tapBlocked = true)
+        }
+
+        composeRule.onNodeWithText("That tap couldn't snooze yet — finish setup first.")
+            .assertExists()
+    }
+
+    @Test
     fun `card two reads the endings off the notification render`() {
         capture("welcome-ends.png") { Flow(WelcomeCard.ENDS) }
 
@@ -324,6 +337,7 @@ class WelcomeScreenScreenshotTest {
         ruleState: ZenRuleState? = null,
         filtersRuleId: String? = null,
         crashPending: Boolean = false,
+        tapBlocked: Boolean = false,
         notifications: NotificationPermission = NotificationPermission.ASKABLE,
         notificationsReachTheUser: Boolean = false,
         location: LocationPermission = LocationPermission.ASKABLE,
@@ -341,6 +355,7 @@ class WelcomeScreenScreenshotTest {
             ruleState = ruleState,
             filtersRuleId = filtersRuleId,
             crashPending = crashPending,
+            tapBlocked = tapBlocked,
             settingsFailure = settingsFailure,
             notifications = notifications,
             notificationsReachTheUser = notificationsReachTheUser,

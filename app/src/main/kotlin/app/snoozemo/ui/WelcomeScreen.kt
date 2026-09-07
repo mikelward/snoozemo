@@ -92,7 +92,40 @@ fun welcomeCards(collectsTelemetry: Boolean): List<WelcomeCard> =
  * which is every launch after the first (Codex, PR #204). Short-circuiting is
  * the answer, and a lambda is what makes forgetting it impossible.
  */
-fun shouldOpenWelcome(seen: Boolean, freshInstall: () -> Boolean): Boolean = !seen && freshInstall()
+/**
+ * The card a remembered name resolves to, or null for no usable memory
+ * (Codex, PR #220).
+ *
+ * Resolved against **the cards this build shows**, not against every enum
+ * entry: a `direct` build, or a `play` one with no crash reporter, drops the
+ * telemetry card, and a breadcrumb naming it came back as a card the flow does
+ * not contain — `cards.indexOf` returned -1, so `Next` did nothing and the dots
+ * read card 1 while a fifth card was on screen. A name this build cannot place
+ * is no different from one a later build removed, and both mean the same thing:
+ * start the flow over.
+ *
+ * One function for both the gate and the seed, so a name that cannot be shown
+ * can never be the thing that opens the flow either.
+ */
+fun rememberedWelcomeCard(name: String?, cards: List<WelcomeCard>): WelcomeCard? =
+    name?.let { remembered -> cards.firstOrNull { it.name == remembered } }
+
+fun shouldOpenWelcome(
+    seen: Boolean,
+    freshInstall: () -> Boolean,
+    /**
+     * Whether a run of the flow was left part-way and can be picked up
+     * (Codex, PR #220) — the card `WelcomeStore` remembers, which is forgotten
+     * the moment the flow is left.
+     *
+     * It outranks both of the others because a **replay** is neither: `seen` is
+     * true by then and the install is not fresh, so a blocked tile tap arriving
+     * after a replay's process had gone opened the recap instead of the cards
+     * the user was part-way through — the resume this change promises, not kept
+     * in the one case where the flow is entered deliberately.
+     */
+    inProgress: Boolean = false,
+): Boolean = inProgress || (!seen && freshInstall())
 
 /**
  * Whether leaving the flow should land on the permissions recap rather than the
@@ -207,6 +240,13 @@ fun WelcomeScreen(
      * silent until the user finished onboarding (Codex, PR #204).
      */
     crashPending: Boolean = false,
+    /**
+     * Whether a tile tap arrived here because it could not snooze (maintainer,
+     * 2026-09-07). Shown on whichever card the flow is on: the tap produced
+     * nothing and the flow looks unchanged, so saying nothing reads as the tile
+     * being broken (principle 2).
+     */
+    tapBlocked: Boolean = false,
     shareFailed: Boolean = false,
     dismissFailed: Boolean = false,
     sharing: Boolean = false,
@@ -297,6 +337,19 @@ fun WelcomeScreen(
                     shareFailed = shareFailed,
                     dismissFailed = dismissFailed,
                     sharing = sharing,
+                )
+            }
+            // Above the card and below the crash banner, so it sits with the
+            // other things that are true of the whole flow rather than of one
+            // card. It names no permission: the card the user is on offers the
+            // grant for the thing it introduces, and the recap on the way out
+            // carries whatever is still missing.
+            if (tapBlocked) {
+                Text(
+                    text = stringResource(R.string.welcome_tile_tap_blocked),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(bottom = 8.dp),
                 )
             }
             when (card) {
