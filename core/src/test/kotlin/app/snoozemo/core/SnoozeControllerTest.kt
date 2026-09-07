@@ -167,6 +167,66 @@ class SnoozeControllerTest {
     }
 
     @Test
+    fun `an arm that cannot use location says which half it is still waiting on`() {
+        // The mode split, on the production path. With location denied or
+        // switched off the capture answers its fix half at once with nothing,
+        // so the arm is genuinely waiting only on the Wi-Fi read — and saying
+        // "Waiting for location" through that window points the user at a
+        // permission that is not what is outstanding (maintainer, 2026-09-07).
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
+
+        controller.onAwaitingWifiWhileArming()
+
+        assertEquals(TrackingMode.SETTLING_AWAITING_WIFI, controller.active?.mode)
+    }
+
+    @Test
+    fun `it is still an arm in flight, not a claim about what can be watched`() {
+        // The narrowness is the point: the report changes the wording and
+        // nothing else, so the anchor landing decides the real mode exactly as
+        // it would have. Without this the report could quietly settle a snooze
+        // that Wi-Fi was about to make trackable.
+        controller.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
+        controller.onAwaitingWifiWhileArming()
+
+        controller.onAnchorCaptured(Anchor(capturedAt = now, ssid = "ExampleWifi"))
+
+        assertEquals(TrackingMode.WIFI_ONLY, controller.active?.mode)
+    }
+
+    @Test
+    fun `a late report cannot drag a settled snooze back to waiting`() {
+        // The capture and the controller are not synchronized, so a report can
+        // arrive after the anchor has landed. Acting on it would put a settled
+        // snooze back into a window that has closed — the screen would say it
+        // was waiting for a capture that already finished.
+        armFully()
+
+        controller.onAwaitingWifiWhileArming()
+
+        assertEquals(TrackingMode.FULL, controller.active?.mode)
+    }
+
+    @Test
+    fun `a snooze restored while waiting on Wi-Fi does not come back waiting`() {
+        // Both settling values are windows, and a capture in flight when the
+        // process died is not still running — so this resolves at restore
+        // exactly like SETTLING. Named separately because a check written
+        // against one value is how the second gets missed.
+        val interrupted = ActiveSnooze(
+            anchor = Anchor(capturedAt = now),
+            startedAt = now,
+            capExpiresAt = ActiveSnooze.capExpiryFor(now),
+            mode = TrackingMode.SETTLING_AWAITING_WIFI,
+            lifecycle = SnoozeLifecycle.ARMED,
+        )
+
+        controller.restore(interrupted)
+
+        assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
+    }
+
+    @Test
     fun `a capture that finds nothing settles on the cap, not on waiting`() {
         // The failure case has to leave the window too, and it is the one the
         // record alone cannot distinguish from mid-capture — which is why the

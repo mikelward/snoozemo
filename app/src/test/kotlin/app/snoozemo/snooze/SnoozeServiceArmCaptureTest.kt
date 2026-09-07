@@ -122,6 +122,30 @@ class SnoozeServiceArmCaptureTest {
     }
 
     @Test
+    fun `the card names Wi-Fi once the location half has closed`() {
+        // The whole seam, end to end: the runner reports that only the Wi-Fi
+        // read is left, the service hands it to the controller, and the card
+        // the user is looking at changes to name the half actually
+        // outstanding. Asserted on the card's text rather than the record, for
+        // the reason the test above gives — a mode the notification never
+        // reads fixes nothing.
+        //
+        // The report says nothing about *how* that half closed: a fix that
+        // arrived and a fix that never could both reach here, which is what
+        // stops the copy from naming a sensor that has already answered
+        // (Codex, PR #225).
+        startService(SnoozeService.ACTION_ARM)
+        assertEquals(stringOf(R.string.ongoing_settling), ongoingBody())
+
+        TestSnoozeService.captureAwaitingWifiReports.single().invoke()
+
+        assertEquals(stringOf(R.string.ongoing_settling_awaiting_wifi), ongoingBody())
+        // Still arming: the report says which half is left, not that the
+        // capture is over. Wi-Fi may yet make this a tracked snooze.
+        assertEquals(TrackingMode.SETTLING_AWAITING_WIFI, storedMode())
+    }
+
+    @Test
     fun `the ongoing card names the real mode once the anchor lands`() {
         startService(SnoozeService.ACTION_ARM)
 

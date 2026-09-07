@@ -19,7 +19,7 @@ import org.robolectric.annotation.Config
  *
  * The main screen loads through this store and never through
  * `SnoozeController.restore`, so resolving `SETTLING` only inside the
- * controller left the screen saying `Checking where you are` over a capture
+ * controller left the screen saying it was still waiting, over a capture
  * that had died with its process (Codex, PR #221). Robolectric rather than a
  * fake, for the reason the sibling store tests give: an in-memory double would
  * pass while nothing reached disk, and surviving the write is the mechanism.
@@ -34,11 +34,12 @@ class ActiveSnoozeStoreSettlingTest {
     private fun arming(
         startedAt: Instant,
         anchor: Anchor = Anchor(capturedAt = startedAt),
+        mode: TrackingMode = TrackingMode.SETTLING,
     ) = ActiveSnooze(
         anchor = anchor,
         startedAt = startedAt,
         capExpiresAt = startedAt.plus(Duration.ofHours(4)),
-        mode = TrackingMode.SETTLING,
+        mode = mode,
     )
 
     @Test
@@ -77,6 +78,36 @@ class ActiveSnoozeStoreSettlingTest {
         ActiveSnoozeStore(context).arm(arming(startedAt, captured))
 
         assertEquals(TrackingMode.FULL, ActiveSnoozeStore(context).load()?.mode)
+    }
+
+    @Test
+    fun `the no-location settling value survives the write like its sibling`() {
+        // It round-trips as a mode because it *is* one — the reason the split
+        // is a second enum value rather than a flag beside it. A flag would
+        // have needed its own key here, and a reader that forgot it would show
+        // the wrong half.
+        val startedAt = Instant.now().minusMillis(500)
+        ActiveSnoozeStore(context).arm(
+            arming(startedAt, mode = TrackingMode.SETTLING_AWAITING_WIFI),
+        )
+
+        assertEquals(
+            TrackingMode.SETTLING_AWAITING_WIFI,
+            ActiveSnoozeStore(context).load()?.mode,
+        )
+    }
+
+    @Test
+    fun `it expires the same way, since it is the same window`() {
+        // The half a check written against one value would miss: both settling
+        // modes claim a capture is running, and both die with the process that
+        // made the claim.
+        val startedAt = Instant.now().minus(Duration.ofMinutes(5))
+        ActiveSnoozeStore(context).arm(
+            arming(startedAt, mode = TrackingMode.SETTLING_AWAITING_WIFI),
+        )
+
+        assertEquals(TrackingMode.DURATION_ONLY, ActiveSnoozeStore(context).load()?.mode)
     }
 
     @Test

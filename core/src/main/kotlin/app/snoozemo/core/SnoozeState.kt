@@ -144,7 +144,56 @@ enum class TrackingMode {
      * flight when the process died is not still running, and a snooze that came
      * back claiming to be looking would look for ever.
      */
-    SETTLING;
+    SETTLING,
+
+    /**
+     * The same arm, once the **location half has closed and only the Wi-Fi
+     * read is left** (maintainer, 2026-09-07).
+     *
+     * A second settling value rather than a flag, because the mode is the one
+     * field both surfaces already read, and it already round-trips through the
+     * record — so the decision is made once, where the fact is known, instead
+     * of being re-derived in two places from state neither of them holds.
+     *
+     * It exists for the copy. [SETTLING] renders as "Waiting for location",
+     * which is honest only while a fix is genuinely outstanding; this renders
+     * as "Waiting for Wi-Fi", which is what is actually happening — the capture
+     * is reading which network the phone is on.
+     *
+     * **Named for what is outstanding, not for what went wrong**, and that is
+     * the whole design. The first version of this was `SETTLING_WITHOUT_LOCATION`,
+     * set when the capture reported that location *could not* answer — denied,
+     * services off, no provider. A cause covers only the failures somebody
+     * enumerated, and the case it missed was the ordinary one: a fix that
+     * simply **arrives** first (the seeded last-known one usually does) also
+     * closes that half, and the record then sat on "Waiting for location" with
+     * the location half already answered — the same wrong claim the split
+     * existed to remove, pointing the other way (Codex, PR #225). Asking
+     * `AnchorCapture` what is still pending cannot go stale that way, because
+     * every path that answers a half sets the flag this reads.
+     *
+     * True for exactly the window it is shown. The capture finishes the moment
+     * **both** halves have answered, so once the Wi-Fi read lands the mode
+     * leaves settling altogether.
+     *
+     * Off the ladder and never surviving a process, exactly like [SETTLING] —
+     * see [isSettling], which is what every site comparing against a settling
+     * mode should use rather than naming one of them.
+     */
+    SETTLING_AWAITING_WIFI,
+    ;
+
+    /**
+     * Whether this is one of the two settling values — the arm still looking,
+     * whatever it is still looking *with*.
+     *
+     * Every site that cares about "the anchor has not landed yet" wants this
+     * rather than a comparison against one value: the ladder walk, the
+     * restore-time resolution, and the record's staleness window all apply to
+     * both, and naming one of them is how the second gets missed.
+     */
+    val isSettling: Boolean
+        get() = this == SETTLING || this == SETTLING_AWAITING_WIFI
 
     companion object {
         /**

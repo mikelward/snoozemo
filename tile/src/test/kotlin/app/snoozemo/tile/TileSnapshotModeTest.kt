@@ -131,6 +131,10 @@ class TileSnapshotModeTest {
             TrackingMode.WIFI_GRACE,
             TrackingMode.DURATION_ONLY,
             TrackingMode.SETTLING,
+            // Decided: identical to SETTLING here. Which half the arm is still
+            // waiting on picks the notification's wording, where the shade only
+            // asks whether anything is pending at all.
+            TrackingMode.SETTLING_AWAITING_WIFI,
         )
         assertTrue(
             "a TrackingMode member has no decision about the tile's subtitle: " +

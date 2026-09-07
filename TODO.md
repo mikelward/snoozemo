@@ -4521,10 +4521,42 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
+- [ ] **The settling copy is keyed on which capture half is still outstanding, not on
+  which one failed** (autopilot, 2026-09-07, on the second finding in this mechanism —
+  Codex, PR #225). The first version had `AnchorCaptureRunner` report that location
+  *could not* answer (denied, services off, no provider) and set
+  `SETTLING_WITHOUT_LOCATION` from that. A cause covers only the failures somebody
+  enumerated, and it missed the ordinary case: `startLocation` seeds with the last known
+  fix synchronously, so on most arms the location half closes first and the record then
+  sat on `Waiting for location` with that half already answered — the same wrong claim
+  the split existed to remove, pointing the other way. Replaced with
+  `AnchorCapture.awaitingWifi` beside the existing `awaitingFix`, reported from
+  `settle()`, which every path answering a half already goes through; the mode is now
+  `SETTLING_AWAITING_WIFI`. AGENTS.md says a second finding in one mechanism is evidence
+  about the design and that the design call is the maintainer's, so this is flagged
+  rather than assumed. Reversible: one enum value, one callback, and the two booleans it
+  reads. The alternative was to also report on a *successful* fix, keeping the
+  cause-based shape — smaller as a diff, but it leaves the same class open for whatever
+  way a half closes next.
+
+
+- [ ] **An arm with neither location nor Wi-Fi still sits on `Waiting for Wi-Fi` for the
+  full ceiling** (autopilot, 2026-09-07). The capture answers its location half at once
+  and then waits out `AnchorCapture.CEILING` (10 s) for a Wi-Fi read that is not coming
+  either, so the one case where the app could settle in well under a second is the case
+  it holds longest — and it holds it under a line naming a sensor that cannot answer.
+  Decided to leave it out of the copy change rather than fold it in: the copy split is
+  one string and one enum value, where an early settle changes when `completeIfReady`
+  fires, which is arm-path timing and wants its own before/after on a handset. The
+  alternative was one PR doing both, which would have made a timing regression and a
+  wording change indistinguishable in the trace. Reversible either way — nothing here
+  is persisted, and the early settle would only shorten a window this already renders
+  correctly.
+
 - [ ] **A posted ongoing card can go stale while a snooze is still starting, and that
   is accepted rather than fixed** (autopilot, 2026-09-07, on the fifth Codex finding in
   this mechanism, PR #221). The card is a posted object, not a reader: once
-  `armWithCap` posts it saying `Checking where you are`, the record's expiry cannot
+  `armWithCap` posts it saying the arm is still settling, the record's expiry cannot
   reach it. If the process dies inside the ~10 s capture window, the card keeps saying
   it until the next service wake — `SnoozeController.restore` reposts from the
   now-resolved record, and `SnoozeBackstop` guarantees a wake within
@@ -4563,20 +4595,22 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   value would remove the caching gap. Both are the same decision as the one above, so
   they wait for it.
 
-- [ ] **The settling line says `Checking where you are`, not the `Waiting for location`
-  that was asked for** (autopilot, 2026-09-07, on a Codex finding in PR #221). The
-  original wording is false in a case that is not rare: with fine location denied or
-  location services off, `AnchorCaptureRunner.startLocation` records "no fix"
-  immediately and the capture then waits on Wi-Fi or the ceiling — up to ten seconds of
-  the app claiming to await a permission the user has refused. The generic form is true
-  of whichever half is still outstanding, and of neither. The alternative was to encode
-  which half is pending and word each case, which is more state and more copy for a
-  distinction the user cannot act on. Reversible: one string, `ongoing_settling`, read by
-  the screen and the notification and by nothing else, still carrying its deferral markers
-  and untranslated — so changing it back, or to a third wording, costs one line and no
-  locale work. The maintainer's own phrasing was "'Waiting for location' or something",
-  so the intent is met; the words are theirs to settle.
-
+- [x] **The settling line names the sensor, in two wordings rather than one**
+  (maintainer, 2026-09-07). `Checking where you are` was chosen when there was one
+  settling value covering both cases, because the record did not know which half was
+  outstanding: with fine location denied or location services off,
+  `AnchorCaptureRunner.startLocation` records "no fix" immediately and the capture then
+  waits on Wi-Fi or the ceiling — up to ten seconds of `Waiting for location` claiming to
+  await a permission the user has refused. The maintainer's read was that the generic
+  form hedges a distinction the app does in fact know, and reads vaguer than the truth.
+  Resolved by splitting the mode and having the capture report **which half is still
+  outstanding** — `AnchorCapture.awaitingWifi` beside the existing `awaitingFix`,
+  reported from `AnchorCaptureRunner.settle()` into
+  `SnoozeController.onAwaitingWifiWhileArming` — so `Waiting for location` and
+  `Waiting for Wi-Fi` are each true for exactly the window they are shown. Outstanding
+  rather than *failed*, which the first version got wrong: see the decision entry above
+  for why a cause-based report missed the ordinary case. Both strings still carry their
+  deferral markers and are untranslated.
 - [ ] **The main screen states a missing notification permission but does not prompt for
   it** (Codex, PR #216 — the banner was added there, the prompt was not). Its `Allow`
   routes to `PermissionsScreen`, whose notifications row shows the runtime dialog for an
