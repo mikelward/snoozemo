@@ -3,6 +3,7 @@ package app.snoozemo.tile
 import android.content.Context
 import android.os.SystemClock
 import app.snoozemo.core.ClockReading
+import app.snoozemo.core.TrackingMode
 import java.time.Duration
 
 /**
@@ -15,7 +16,12 @@ import java.time.Duration
 internal data class TileSnapshot(
     val snoozing: Boolean,
     val capExpiresAtMillis: Long,
-    val tracked: Boolean,
+    /**
+     * Whether to qualify the countdown as timer-only — false both when the
+     * snooze *is* tracked and when the tile has no business claiming either
+     * way yet. See [claimsTimerOnly].
+     */
+    val timerOnly: Boolean,
     /**
      * The clock offset the record was written under, or null if it carries
      * none — see `ActiveSnooze.bootReference`.
@@ -30,7 +36,7 @@ internal data class TileSnapshot(
 
     fun subtitle(context: Context): String? = when {
         !snoozing -> null
-        !tracked -> context.getString(R.string.tile_timer_only, remaining(context))
+        timerOnly -> context.getString(R.string.tile_timer_only, remaining(context))
         else -> remaining(context)
     }
 
@@ -71,6 +77,62 @@ internal data class TileSnapshot(
     }
 
     companion object {
+
+        /**
+         * Whether the stored mode is a settled claim that nothing is watching.
+         *
+         * Parsed to the enum and decided by an exhaustive `when` rather than
+         * compared to the string `"FULL"`, which is how the tile came to
+         * report `Timer only` for a mode that means the opposite. The mode is
+         * persisted as text, so the compiler cannot see this reader from
+         * [TrackingMode]'s declaration: a member added there used to reach the
+         * shade as a silent misreading, while the screen and the notification
+         * — which switch on the enum — failed to compile until they were
+         * taught. Parsing first puts this reader under the same rule, so the
+         * next member is a build error here too (Codex, PR #221).
+         *
+         * A missing or unrecognized value degrades to timer-only, matching
+         * `ActiveSnoozeStore`'s own fallback for the same input — a record
+         * written before the mode was stored, or by a newer build than this
+         * tile. Reading it as "no claim" was wrong twice over: the store
+         * already answers `DURATION_ONLY`, so the app and the shade would
+         * contradict each other over one record, and the tile has only two
+         * renderings — dropping the qualifier is not silence, it is the
+         * tracked-looking one (Codex, PR #221).
+         *
+         * [TrackingMode.SETTLING] is the one case where dropping it is right,
+         * because something genuinely is pending. Nothing is pending for a
+         * value nobody can read.
+         */
+        internal fun claimsTimerOnly(
+            stored: String?,
+            startedAtMillis: Long,
+            nowMillis: Long,
+        ): Boolean =
+            when (TrackingMode.entries.firstOrNull { it.name == stored }) {
+                TrackingMode.DURATION_ONLY -> true
+                // Watched, by something, so the countdown stands unqualified.
+                TrackingMode.FULL, TrackingMode.WIFI_ONLY, TrackingMode.WIFI_GRACE -> false
+                // The anchor has not landed *yet*. Not "nothing is watching" —
+                // the absence of an answer, so the shade shows the countdown
+                // without a qualifier rather than guessing at one. The ongoing
+                // notification beside it says `Checking where you are`; saying
+                // `Timer only` here would be the contradictory pair this change
+                // exists to remove.
+                //
+                // Unless the claim has outlived the capture that wrote it. A
+                // capture dies with its process and the record does not, and
+                // this reader is the one that cannot tell: it reads the
+                // preferences file directly, deliberately, because binding a
+                // service to paint the shade would put IPC on the path that has
+                // to feel instant. So the window does the telling instead —
+                // and past it nothing is watching, which is exactly what the
+                // qualifier says (Codex, PR #221).
+                TrackingMode.SETTLING ->
+                    !TrackingMode.settlingStillStands(startedAtMillis, nowMillis)
+                null -> true
+            }
+
         fun read(context: Context): TileSnapshot {
             val prefs = context.getSharedPreferences("active_snooze", Context.MODE_PRIVATE)
             val capExpiresAt = prefs.getLong("cap_expires_at", 0L)
@@ -81,7 +143,11 @@ internal data class TileSnapshot(
             return TileSnapshot(
                 snoozing = capExpiresAt != 0L && !released,
                 capExpiresAtMillis = capExpiresAt,
-                tracked = prefs.getString("mode", null) == "FULL",
+                timerOnly = claimsTimerOnly(
+                    stored = prefs.getString("mode", null),
+                    startedAtMillis = prefs.getLong("started_at", 0L),
+                    nowMillis = System.currentTimeMillis(),
+                ),
                 bootReference = if (prefs.contains("boot_reference")) {
                     prefs.getLong("boot_reference", 0L)
                 } else {

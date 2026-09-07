@@ -4443,6 +4443,20 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
+- [ ] **The settling line says `Checking where you are`, not the `Waiting for location`
+  that was asked for** (autopilot, 2026-09-07, on a Codex finding in PR #221). The
+  original wording is false in a case that is not rare: with fine location denied or
+  location services off, `AnchorCaptureRunner.startLocation` records "no fix"
+  immediately and the capture then waits on Wi-Fi or the ceiling — up to ten seconds of
+  the app claiming to await a permission the user has refused. The generic form is true
+  of whichever half is still outstanding, and of neither. The alternative was to encode
+  which half is pending and word each case, which is more state and more copy for a
+  distinction the user cannot act on. Reversible: one string, `ongoing_settling`, read by
+  the screen and the notification and by nothing else, still carrying its deferral markers
+  and untranslated — so changing it back, or to a third wording, costs one line and no
+  locale work. The maintainer's own phrasing was "'Waiting for location' or something",
+  so the intent is met; the words are theirs to settle.
+
 - [ ] **The main screen states a missing notification permission but does not prompt for
   it** (Codex, PR #216 — the banner was added there, the prompt was not). Its `Allow`
   routes to `PermissionsScreen`, whose notifications row shows the runtime dialog for an

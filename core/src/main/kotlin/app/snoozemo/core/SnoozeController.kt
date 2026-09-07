@@ -141,6 +141,11 @@ class SnoozeController(
      * the failure this file was written to stop hiding.
      */
     private fun honest(mode: TrackingMode): TrackingMode {
+        // Not on the ladder, and walking it would step off the end: it is the
+        // last entry, so `ordinal + 1` is out of bounds. Returned untouched
+        // because it makes no capability claim to lower — the anchor has not
+        // arrived, so there is nothing yet to be honest or dishonest about.
+        if (mode == TrackingMode.SETTLING) return mode
         var candidate = mode
         while (candidate != TrackingMode.DURATION_ONLY && !isSupported(candidate)) {
             candidate = TrackingMode.entries[candidate.ordinal + 1]
@@ -174,6 +179,18 @@ class SnoozeController(
         capExpiresAt: Instant,
         at: ClockReading,
         placeName: String = ActiveSnooze.DEFAULT_PLACE_NAME,
+        /**
+         * [PresenceMonitor.canTrackDeparture] for the build this is running
+         * on — whether waiting for the anchor could produce anything better
+         * than the cap.
+         *
+         * Stated by the caller rather than derived here, for the same reason
+         * `supported` is on [onAnchorCaptured]: what the machinery can watch
+         * is the machinery's fact, not the controller's. No default, so a
+         * flavor that grows a monitor has to answer rather than inherit an
+         * assumption (Codex, PR #221).
+         */
+        canTrackDeparture: Boolean,
     ): Boolean {
         // The caller's reading, not a fresh one. The deadline and the alarm were
         // both derived from it, and the record's offset has to describe the same
@@ -202,7 +219,20 @@ class SnoozeController(
             // belongs where the duration is chosen ([ActiveSnooze.capExpiryFor]),
             // not here, precisely so it cannot move the two apart.
             capExpiresAt = capExpiresAt,
-            mode = TrackingMode.DURATION_ONLY,
+            // Not DURATION_ONLY: nothing has been captured, so this is the
+            // absence of a mode rather than the weakest one. Calling it a timer
+            // here is what made both the screen and the ongoing notification
+            // describe a snooze that went on to track perfectly as a timer, for
+            // the whole ~10 s the fix took (maintainer, 2026-09-07).
+            //
+            // Unless nothing is pending. Where the build cannot end a snooze by
+            // departure at all — `direct` until Phase 7 — the answer is already
+            // the cap, and there is nothing to wait to find out: saying
+            // "checking where you are" for the capture window on every arm of
+            // that flavor would be a claim it can never make good (Codex,
+            // PR #221). The absence of a decision is only honest while a
+            // decision is actually coming.
+            mode = if (canTrackDeparture) TrackingMode.SETTLING else TrackingMode.DURATION_ONLY,
             placeName = placeName,
         )
 
@@ -591,7 +621,18 @@ class SnoozeController(
         // The record's own claim is lowered too: it was written under some
         // machinery, but not provably this one — an app update can change
         // what is watched between the write and this read.
-        val restored = snooze.copy(mode = honest(snooze.mode))
+        // A capture that was in flight when the process died is not still
+        // running, so a restored record must not come back claiming to be
+        // looking — it would look for ever. What the stored anchor supports is
+        // the honest answer, and for an anchor that never arrived that is the
+        // cap alone.
+        val settled = if (snooze.mode == TrackingMode.SETTLING) {
+            TrackingMode.from(snooze.anchor)
+        } else {
+            snooze.mode
+        }
+        // The record's own claim is lowered too, as below.
+        val restored = snooze.copy(mode = honest(settled))
         active = restored
 
         // The clock first, before the rule. A record whose cap passed while the

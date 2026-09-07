@@ -1,5 +1,6 @@
 package app.snoozemo.core
 
+import java.time.Duration
 import java.time.Instant
 
 /**
@@ -127,6 +128,19 @@ class AnchorCapture(private val capturedAt: Instant) {
     }
 
     companion object {
+        /**
+         * How long arming will wait for the anchor before settling with
+         * whatever arrived (SPEC.md §4.1).
+         *
+         * Here rather than beside the platform timer that enforces it, because
+         * two things now depend on the same number: the runner that posts the
+         * timeout, and [TrackingMode.SETTLING_VALID_FOR], which decides when a
+         * stored "still capturing" has outlived the capture that wrote it. Two
+         * copies of it would drift into a window that either expires a live
+         * capture or believes a dead one.
+         */
+        val CEILING: Duration = Duration.ofSeconds(10)
+
         /**
          * `WifiManager.UNKNOWN_SSID`, by value: what `WifiInfo.getSSID()`
          * returns when location access is not allowed (SPEC.md §6.4). The

@@ -34,4 +34,11 @@ class DurationOnlyPresenceMonitor : PresenceMonitor {
     /** Watching nothing supports nothing: every snooze is honestly a timer. */
     override fun supportedModes(anchor: Anchor): Set<TrackingMode> =
         setOf(TrackingMode.DURATION_ONLY)
+
+    /**
+     * Never, so an arm here does not spend the capture window saying it is
+     * checking where you are: there is nothing to find out, and the answer is
+     * already "a timer".
+     */
+    override val canTrackDeparture: Boolean = false
 }

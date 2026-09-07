@@ -314,6 +314,25 @@
     -->
     <!-- TODO: translate -->
     <string name="main_snoozing_until_you_leave" tools:ignore="MissingTranslation">Snoozing until you leave</string>
+    <!--
+      Shown in place of the mode line while the arm is still capturing its
+      anchor, by the main screen and the ongoing notification alike. Not a
+      degraded state and not a mode: the record read DURATION_ONLY for the
+      ~10 s the fix takes, and calling that "Timer only" described a snooze
+      that went on to track perfectly (maintainer, 2026-09-07, from a device
+      log).
+
+      Names no sensor, deliberately. "Waiting for location" was the first
+      wording and it is false in a case that is not rare: with fine location
+      denied or location services off, the capture records "no fix" at once
+      and then waits on Wi-Fi or the ceiling — so the app would spend ten
+      seconds claiming to await a permission the user has refused (Codex,
+      PR #221). A Wi-Fi SSID and a coordinate both answer "where are you",
+      so the generic form is true of whichever half is still outstanding,
+      and of neither. Four words rather than three buys that.
+    -->
+    <!-- TODO: translate -->
+    <string name="ongoing_settling" tools:ignore="MissingTranslation">Checking where you are</string>
     <!-- TODO: translate -->
     <!-- The distance itself, with its unit, so the sentences below take one
          placeholder rather than needing a metric and an imperial copy of each.

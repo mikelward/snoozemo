@@ -379,6 +379,11 @@ class SnoozeNotifications(private val context: Context) {
             // the instant that stops being true (SPEC.md §6.6).
             TrackingMode.WIFI_GRACE -> context.getString(R.string.ongoing_wifi_grace)
             TrackingMode.DURATION_ONLY -> context.getString(R.string.ongoing_timer_only)
+            // The anchor has not landed yet, so there is no mode to report —
+            // and this card is posted before capture starts (`armWithCap`),
+            // which is how it came to say `Timer only` for the whole window on
+            // snoozes that went on to track perfectly (Codex, PR #221).
+            TrackingMode.SETTLING -> context.getString(R.string.ongoing_settling)
         }
         // Appended only where a reason adds something. FULL carries no cause
         // by construction (`SnoozeController.modeFor` maps a null degradation
@@ -392,7 +397,10 @@ class SnoozeNotifications(private val context: Context) {
                 reasonFor(snooze.degradation)?.let {
                     context.getString(R.string.ongoing_degraded_reason, body, it)
                 } ?: body
-            TrackingMode.FULL, TrackingMode.WIFI_GRACE -> body
+            // SETTLING carries no cause for the same reason FULL doesn't:
+            // nothing has degraded, and an arming record can still hold the
+            // previous snooze's cause.
+            TrackingMode.FULL, TrackingMode.WIFI_GRACE, TrackingMode.SETTLING -> body
         }
         // A second, independent clause, and independent on purpose: the mode
         // above says whether the snooze will end correctly, and this says

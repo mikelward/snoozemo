@@ -1315,7 +1315,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * `finally` rather than each `return` remembering to clear it.
      */
     private fun armWithCap(capExpiresAt: Instant, at: ClockReading) {
-        val armed = controller.beginArming(capExpiresAt, at)
+        val armed = controller.beginArming(
+            capExpiresAt,
+            at,
+            canTrackDeparture = presenceMonitor.canTrackDeparture,
+        )
         if (!armed) {
             // No `reapplyDndBypassOnce()` call here, deliberately — it was
             // tried both unconditionally and then only in this branch, and

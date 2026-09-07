@@ -1760,6 +1760,72 @@ class MainScreenScreenshotTest {
         composeRule.onNodeWithContentDescription("Settings").assertIsDisplayed()
     }
 
+    @Test
+    fun `an arming snooze says it is waiting, not that it is a timer`() {
+        // The case from a device log (maintainer, 2026-09-07). The mode the
+        // record actually carries while the arm is in flight — asserted here on
+        // the rendering only; that the arm really produces it is
+        // `SnoozeControllerTest`'s job, because the first version of this fix
+        // tested the rendering alone and shipped a no-op (Codex, PR #221).
+        capture("main-screen-arming-waiting.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.SETTLING,
+                remaining = Duration.ofHours(8),
+                degradation = null,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Checking where you are").assertExists()
+        composeRule.onNodeWithText("Timer only").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a settled timer-only snooze still says so`() {
+        // The direction that stops the fix swallowing a real degraded mode:
+        // once the arm has settled, a timer is a timer and says why.
+        capture("main-screen-settled-timer-only.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.DURATION_ONLY,
+                remaining = Duration.ofHours(8),
+                degradation = DegradationCause.LOCATION_PERMISSION_GONE,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Waiting for location").assertDoesNotExist()
+    }
+
     /**
      * Renders [content] the way `MainActivity` does and records it under
      * [name] when a name is given.
