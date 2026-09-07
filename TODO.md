@@ -5901,9 +5901,10 @@ recorded screenshots only show the default size.
 
 ## Main screen: the departure readout (maintainer, 2026-09-06) — built
 
-Built: under a `FULL`-mode snooze, `200 m away · 10 m to go` (or `... · confirming`
-once a fix has cleared the band), taken from the engine's own step rather than
-re-derived. `SPEC.md` §4.2 carries the decision, §12 the privacy argument, and
+Built: under a `FULL`-mode snooze, `200 m away ±22 m · 23 m to go` (or
+`... · confirming` once a fix has cleared the band), taken from the engine's own
+step rather than re-derived. The `±` is the combined uncertainty the test
+thresholds — both endpoints' accuracies, not just the current fix's. `SPEC.md` §4.2 carries the decision, §12 the privacy argument, and
 `docs/PRIVACY.md` the user-facing sentence. The radius it measures against came
 in from 150 m to 100 m at the same time (`SPEC.md` §6.6, `DefaultRadiusTest`).
 What is left open:
@@ -5911,14 +5912,24 @@ What is left open:
 - [x] **Honor the system's units.** Done: `LocaleData.getMeasurementSystem`
       picks meters or feet, and the value is formatted with its unit into a
       single placeholder, so one pair of sentences covers both.
-- [ ] **Is whole-unit rounding right, in either system?** Both forms round to
+- [ ] **Is whole-unit rounding right, in either system?** Every form rounds to
       whole units, which is what the meters-only version shipped with rather
-      than a decision anyone made. Neither is meaningful below a fix's own
-      accuracy — ±10 m is a *good* reading — so `656 ft away · 33 ft to go`
-      claims a precision nothing behind it has. A coarser step in both (5 m /
-      25 ft, say) would read more honestly; it wants a handset before choosing,
-      since it trades honesty against looking like the number has stopped
-      moving.
+      than a decision anyone made. None of them is meaningful below a fix's own
+      accuracy — ±10 m is a *good* reading — so `656 ft away ±73 ft · 74 ft to go`
+      (`MainScreenScreenshotTest`, a 10 m fix against a 20 m anchor) claims a
+      precision nothing behind it has, and does so beside a `±` that says
+      outright it does not have it.
+
+      Charging the anchor made that line self-contradicting in a way worth
+      fixing whatever is decided about the step: the `±` and the meters-to-go
+      are **the same 22.36 m** here, and they render three feet apart because
+      `uncertainty` rounds to nearest (73) while `toGo` ceils (74). Each
+      rounding is right on its own — a `±` that rounded up would overstate the
+      vagueness, and a to-go that rounded down would say you had arrived a
+      step early — so the collision is an argument for a coarser step rather
+      than for changing either rule: at 25 ft both read 75. A coarser step in
+      both would read more honestly; it wants a handset before choosing, since
+      it trades honesty against looking like the number has stopped moving.
 - [ ] **Does a visible threshold imply a settable one?** (maintainer, 2026-09-06:
       "maybe it implies we need to add a distance threshold or something".) Showing
       how far there is left to go invites the next question — *why that far?* — and
@@ -5929,11 +5940,16 @@ What is left open:
       one coarse choice at arm time. Wants a real handset first — whether 100 m
       feels right is not a thing to decide from a screenshot. Going much *below*
       it is not a constant change at all: `STILL_HERE` needs
-      `distance + accuracy <= radius`, so at 50 m any fix vaguer than 50 m could
-      never confirm presence even standing on the anchor, and balanced-power
-      fixes are routinely 20–60 m — the degraded mode would become the normal
-      one. A smaller radius needs a different presence signal (the anchor's
-      Wi-Fi association, already captured) rather than a smaller number.
+      `distance + uncertainty <= radius`, where the uncertainty is both
+      endpoints' accuracies in quadrature — so at 50 m, against a 20 m anchor,
+      any fix vaguer than ~46 m could never confirm presence even standing on
+      the anchor, and balanced-power fixes are routinely 20–60 m: the degraded
+      mode would become the normal one. Charging the anchor too makes this
+      worse in a way a fix-only reading hid, and adds a floor of its own — an
+      anchor captured vaguer than the radius can never confirm presence at any
+      distance, however sharp the fix. A smaller radius needs a different
+      presence signal (the anchor's Wi-Fi association, already captured)
+      rather than a smaller number.
 - [ ] **Still owed a device.** Whether a number that moves every 90 s reads as
       informative or as fidgety, and whether the line survives the largest font
       size beside the countdown.

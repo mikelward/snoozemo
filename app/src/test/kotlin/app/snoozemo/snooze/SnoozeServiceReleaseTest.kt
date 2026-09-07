@@ -155,6 +155,7 @@ class SnoozeServiceReleaseTest {
             app.snoozemo.core.DepartureObservation(
                 distanceM = 200.0,
                 accuracyM = 10f,
+                anchorAccuracyM = 20f,
                 radiusM = 150,
                 elapsedRealtimeMs = 0L,
             ),
@@ -177,6 +178,7 @@ class SnoozeServiceReleaseTest {
             app.snoozemo.core.DepartureObservation(
                 distanceM = 400.0,
                 accuracyM = 15f,
+                anchorAccuracyM = 20f,
                 radiusM = 150,
                 elapsedRealtimeMs = 0L,
             ),

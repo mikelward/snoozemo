@@ -668,6 +668,7 @@ class SnoozeControllerTest {
     private fun observation(distanceM: Double) = DepartureObservation(
         distanceM = distanceM,
         accuracyM = 10f,
+        anchorAccuracyM = 10f,
         radiusM = 150,
         elapsedRealtimeMs = 0L,
     )

@@ -337,10 +337,61 @@ class DepartureTest {
         // Sitting right on the radius. Without the band this alternates between
         // qualifying and not as accuracy wobbles by a meter.
         val onTheEdge = fix(northM = 160.0, accuracyM = 5f, atSeconds = 0)
-        val pastTheBand = fix(northM = 220.0, accuracyM = 5f, atSeconds = 0)
+        val pastTheBand = fix(northM = 225.0, accuracyM = 5f, atSeconds = 0)
 
-        assertFalse("155 m of margin is inside the band", Departure.qualifies(onTheEdge, anchor))
+        assertFalse("a negative margin is nowhere near the band", Departure.qualifies(onTheEdge, anchor))
         assertTrue(Departure.qualifies(pastTheBand, anchor))
+    }
+
+    @Test
+    fun `the anchor's own accuracy counts against the bar`() {
+        // The origin is a reported point too. The same fix, at the same place,
+        // against a sharp capture and a vague one: the vague anchor genuinely
+        // knows less about where the phone started, so it needs more separation
+        // before "outside" means anything. Subtracting only the fix's accuracy
+        // treated a 150 m capture as if it were exact.
+        val sharpAnchor = anchor.copy(fixAccuracyM = 5f)
+        val vagueAnchor = anchor.copy(fixAccuracyM = 150f)
+        val sameFix = fix(northM = 230.0, accuracyM = 10f, atSeconds = 0)
+
+        assertTrue(Departure.qualifies(sameFix, sharpAnchor))
+        assertFalse("a 150 m capture has not established this", Departure.qualifies(sameFix, vagueAnchor))
+    }
+
+    @Test
+    fun `the two accuracies combine in quadrature, not by adding`() {
+        // Independent errors combine as the root of the sum of squares. Adding
+        // them would be a higher-confidence bound arrived at by accident — 35 m
+        // where the real 68% figure is 25 — and paid for in walking distance.
+        assertEquals(25.0, Departure.uncertaintyM(15f, 20f), 0.0001)
+
+        // A distance that clears the quadrature bar but not the added one, so
+        // the choice between them is what this fix's verdict turns on.
+        val anchor25 = anchor.copy(fixAccuracyM = 20f)
+        val between = fix(northM = 227.0, accuracyM = 15f, atSeconds = 0)
+
+        assertTrue(
+            "227 m clears the 225 m quadrature bar — and would not clear the 235 m added one",
+            Departure.qualifies(between, anchor25),
+        )
+        assertFalse(
+            "224 m is short of it, so the bar is where the arithmetic says",
+            Departure.qualifies(fix(northM = 224.0, accuracyM = 15f, atSeconds = 0), anchor25),
+        )
+    }
+
+    @Test
+    fun `presence is confirmed against the same combined uncertainty`() {
+        // The mirror, and it moves the same way: counting the anchor narrows
+        // the confidently-inside zone, because the app never knew where the
+        // origin was to the old precision either.
+        val nearAnchor = fix(northM = 120.0, accuracyM = 10f, atSeconds = 0)
+
+        assertTrue(Departure.confirmsPresence(nearAnchor, anchor.copy(fixAccuracyM = 5f)))
+        assertFalse(
+            "a 40 m capture cannot vouch for the same reading",
+            Departure.confirmsPresence(nearAnchor, anchor.copy(fixAccuracyM = 40f)),
+        )
     }
 
     @Test

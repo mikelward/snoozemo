@@ -106,11 +106,12 @@ data class DepartureProgress(
  * The departure test's arithmetic for one fix, without the position it came
  * from (`SPEC.md` §4.6).
  *
- * The same three numbers the debug log already records — distance from the
- * anchor, the fix's own accuracy, and the radius they are compared against —
- * carried live rather than read back afterward. What makes it safe to show is
- * what makes it safe to log: a distance locates nobody, where a coordinate
- * locates exactly one place.
+ * The same numbers the debug log already records — distance from the anchor,
+ * both accuracies (this fix's and the anchor's, which is why [uncertaintyM]
+ * can be derived here), and the radius they are compared against — carried
+ * live rather than read back afterward. What makes them safe to show is what
+ * makes them safe to log: a distance and a precision locate nobody, where a
+ * coordinate locates exactly one place.
  *
  * Built by [Departure.observe] so the readout and the verdict cannot drift
  * apart: both are computed from the same fix by the same functions, so a screen
@@ -122,6 +123,14 @@ data class DepartureObservation(
     val distanceM: Double,
     /** The fix's own 68%-confidence radius, in meters. */
     val accuracyM: Float,
+    /**
+     * The **anchor's** 68%-confidence radius, in meters, as reported by the
+     * fix that captured it.
+     *
+     * Carried because the origin every distance is measured from is itself a
+     * reported point, not a known one — see [Departure.uncertaintyM].
+     */
+    val anchorAccuracyM: Float,
     /** The anchor's radius, in meters — what [distanceM] is measured against. */
     val radiusM: Int,
     /** Elapsed realtime of the fix, so a stale reading can be told from a fresh one. */
@@ -133,17 +142,28 @@ data class DepartureObservation(
      *
      * Negative means the fix does not establish being outside at all.
      */
-    val marginM: Double get() = distanceM - accuracyM - radiusM
+    val marginM: Double get() = distanceM - uncertaintyM - radiusM
+
+    /**
+     * How far the *separation* itself could be wrong, in meters — the two
+     * confidence radii combined ([Departure.uncertaintyM]).
+     *
+     * The one number a readout should show, and the reason it is derived here
+     * rather than formatted from [accuracyM]: it is the quantity the test
+     * thresholds, so a screen quoting it cannot drift from the verdict.
+     */
+    val uncertaintyM: Double get() = Departure.uncertaintyM(accuracyM, anchorAccuracyM)
 
     /**
      * Meters still to go before a fix this accurate could qualify, or zero once
      * one already does.
      *
      * The honest form of "how far left", and the reason it is derived rather
-     * than a plain `radius - distance`: the test subtracts the fix's accuracy
+     * than a plain `radius - distance`: the test subtracts [uncertaintyM]
      * before comparing, so a vague reading genuinely needs more distance than a
-     * sharp one. Reporting the nominal edge would promise a departure that this
-     * fix could not deliver.
+     * sharp one — and so does a sharp reading against a vague anchor, since
+     * both endpoints count. Reporting the nominal edge would promise a
+     * departure that this fix could not deliver.
      */
     val remainingM: Double get() = (Departure.HYSTERESIS_M - marginM).coerceAtLeast(0.0)
 
@@ -186,9 +206,11 @@ data class DepartureStep(
  * The rules exist to reject specific real-world failures rather than to be
  * conservative in the abstract:
  *
- * - **Never compare raw distance to radius.** Subtracting the fix's own accuracy
- *   first is what stops a 500 m-accuracy cell fix from "leaving" a 100 m radius
- *   while the phone sits on a desk.
+ * - **Never compare raw distance to radius.** Subtracting the reading's own
+ *   uncertainty first is what stops a 500 m-accuracy cell fix from "leaving" a
+ *   100 m radius while the phone sits on a desk. Both endpoints count: the
+ *   anchor is a reported point too, so [uncertaintyM] combines its accuracy
+ *   with the fix's rather than treating the origin as exact.
  * - **Hysteresis**, so a fix hovering on the boundary does not flap.
  * - **Two qualifying fixes ≥30 s apart**, which kills the GPS jump: a single
  *   wild fix cannot end a snooze, because the next one a moment later disagrees.
@@ -251,6 +273,45 @@ object Departure {
     }
 
     /**
+     * The two 68%-confidence radii combined, in meters — how far the
+     * *separation* between anchor and fix could be wrong.
+     *
+     * **Both terms, because both points are reported rather than known.** The
+     * fix's accuracy was always subtracted; the anchor's never was, so the
+     * origin every distance is measured from was treated as exact while being
+     * accepted at up to [Anchor.MAX_ANCHOR_ACCURACY_M]. A capture that vague
+     * can put the origin further from the phone than the whole departure bar,
+     * and nothing downstream could see it (maintainer, 2026-09-07).
+     *
+     * **In quadrature, not added.** Two independent errors combine as the root
+     * of the sum of squares, and two fixes minutes-to-hours apart are close
+     * enough to independent for that to be the honest combination. Adding them
+     * would be a *higher*-confidence bound obtained by accident rather than by
+     * choice — 100 m where the real 68% figure is 71 — which buys caution the
+     * app never decided to buy and pays for it in walking distance.
+     *
+     * These are confidence radii and not caps, so this bounds nothing
+     * absolutely: the true separation lies outside it a third of the time or
+     * so, on each fix. The two-fix confirmation is what turns that into a
+     * decision worth making, not this number.
+     */
+    fun uncertaintyM(fixAccuracyM: Float, anchorAccuracyM: Float): Double =
+        sqrt(
+            fixAccuracyM.toDouble() * fixAccuracyM.toDouble() +
+                anchorAccuracyM.toDouble() * anchorAccuracyM.toDouble(),
+        )
+
+    /**
+     * The same, for a fix and the anchor it is measured against. Null for
+     * exactly the case [distanceM] is null for.
+     */
+    fun uncertaintyM(fix: Fix, anchor: Anchor): Double? {
+        if (!anchor.hasUsableFix) return null
+        val anchorAccuracy = anchor.fixAccuracyM ?: return null
+        return uncertaintyM(fix.accuracyM, anchorAccuracy)
+    }
+
+    /**
      * How far past the anchor's edge this fix can be trusted to be, in meters.
      *
      * Negative or zero means the fix does not establish being outside at all.
@@ -261,10 +322,11 @@ object Departure {
      */
     fun marginM(fix: Fix, anchor: Anchor): Double? {
         val distance = distanceM(fix, anchor) ?: return null
-        return distance - fix.accuracyM - anchor.radiusM
+        val uncertainty = uncertaintyM(fix, anchor) ?: return null
+        return distance - uncertainty - anchor.radiusM
     }
 
-    /** Whether this fix is evidence of being outside, accuracy already deducted. */
+    /** Whether this fix is evidence of being outside, uncertainty already deducted. */
     fun qualifies(fix: Fix, anchor: Anchor): Boolean {
         val margin = marginM(fix, anchor) ?: return false
         return margin > HYSTERESIS_M
@@ -282,7 +344,8 @@ object Departure {
      */
     fun confirmsPresence(fix: Fix, anchor: Anchor): Boolean {
         val distance = distanceM(fix, anchor) ?: return false
-        return distance + fix.accuracyM <= anchor.radiusM
+        val uncertainty = uncertaintyM(fix, anchor) ?: return false
+        return distance + uncertainty <= anchor.radiusM
     }
 
     /**
@@ -296,9 +359,11 @@ object Departure {
      */
     fun observe(fix: Fix, anchor: Anchor): DepartureObservation? {
         val distance = distanceM(fix, anchor) ?: return null
+        val anchorAccuracy = anchor.fixAccuracyM ?: return null
         return DepartureObservation(
             distanceM = distance,
             accuracyM = fix.accuracyM,
+            anchorAccuracyM = anchorAccuracy,
             radiusM = anchor.radiusM,
             elapsedRealtimeMs = fix.elapsedRealtimeMs,
         )

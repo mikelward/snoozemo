@@ -55,14 +55,15 @@ class DepartureObservationTest {
 
     @Test
     fun `the meters to go are what this fix still needs, accuracy included`() {
-        // 200 m out, 10 m of accuracy, a 150 m radius: 40 m of margin against a
-        // 50 m band, so 10 m still to go. A vaguer fix at the same distance
+        // 200 m out against a 150 m radius and a 20 m anchor. A 10 m fix
+        // combines to ~22 m of uncertainty, leaving ~28 m of margin against a
+        // 50 m band, so ~22 m still to go. A vaguer fix at the same distance
         // needs more, which is the whole reason the readout is per-fix.
         val sharp = Departure.observe(fix(northM = 200.0, accuracyM = 10f), anchor)!!
         val vague = Departure.observe(fix(northM = 200.0, accuracyM = 40f), anchor)!!
 
-        assertEquals(10.0, sharp.remainingM, 1.0)
-        assertEquals(40.0, vague.remainingM, 1.0)
+        assertEquals(22.4, sharp.remainingM, 1.0)
+        assertEquals(44.7, vague.remainingM, 1.0)
         assertFalse(sharp.qualifies)
         assertFalse(vague.qualifies)
     }

@@ -741,18 +741,22 @@ the wrong direction to be wrong in.
 
 **A tracked snooze shows how far there is left to go** (landed 2026-09-06). Under the full
 tracking mode, and only there, a line under the status block reports the departure test's own
-arithmetic for the last fix: `200 m away · 10 m to go`, or `400 m away · confirming` once a fix
-has cleared the band and the second one is what remains. It exists because the threshold is
+arithmetic for the last fix: `200 m away ±22 m · 23 m to go`, or `400 m away ±25 m · confirming`
+once a fix has cleared the band and the second one is what remains. The `±` is the combined
+uncertainty the test itself thresholds (§6.6) — both endpoints' accuracies, not just this fix's. It exists because the threshold is
 otherwise invisible. "Ends when you leave" does not say how far leaving is, so a user standing
 in the garden, or one watching a snooze survive a walk to the corner shop, has no way to tell a
 working app from a broken one — which is principle 2's failure, arrived at by omission rather
 than by silence. It is also the only way to *see* the mechanism work without walking out of
 range, which makes it the honest demonstration a screen recording can be made from.
 
-**Distance and how much further, not distance and a fixed edge.** The test subtracts each fix's
-accuracy before comparing (§6.6), so the meters still to go belong to *this reading* rather than
-to the anchor: a vague fix genuinely needs more distance than a sharp one, and naming the nominal
-radius would promise a departure the current fix could not deliver. Three consequences follow, and
+**Distance and how much further, not distance and a fixed edge.** The test subtracts the
+combined uncertainty before comparing (§6.6), so the meters still to go belong to *this reading*
+rather than to the anchor: a vague fix genuinely needs more distance than a sharp one, and naming
+the nominal radius would promise a departure the current fix could not deliver. One `±` figure
+rather than two, on purpose — the anchor's half is fixed for the whole snooze while the fix's
+moves every reading, so the split is diagnostic where the total is what the threshold is against,
+and this is the tightest copy surface in the app. Three consequences follow, and
 each is the safe direction. The number is the engine's own, taken from the step that acted on the
 fix rather than re-derived — two numbers that could disagree is worse than one. A reading a step
 *refused* to act on carries none: a stale fix's presence half is discarded (§6.1), so showing its
@@ -1240,9 +1244,15 @@ happened:
 - Every state transition (§4.1) with its reason, and the `EndReason` a snooze ended on.
 - Which of the three wake-up sources fired (§6.10) — geofence exit, Wi-Fi loss, periodic backstop —
   and, for each, what the departure test concluded.
-- The departure test's arithmetic: **distance from the anchor in meters, the fix's accuracy in
-  meters**, whether the accuracy gate passed, and which confirmation rule matched (§6.6). This is
-  the diagnostic value; the position is not.
+- The departure test's arithmetic: **distance from the anchor in meters, both accuracies in
+  meters, whether the accuracy gate passed, and which confirmation rule matched** (§6.6). Both
+  accuracies, because since the anchor's entered the arithmetic (§6.6) the same fix at the same
+  distance is a departure against a sharp capture and inconclusive against a vague one — a record
+  naming only the fix's cannot reconstruct the decision it exists to explain. They arrive from
+  different places and neither needs repeating: the fix's accuracy rides its own departure line,
+  and the anchor's is in the snooze summary `logSummary()` renders on every transition, where it
+  is constant for the whole snooze. An accuracy is a precision, not a place: this is the
+  diagnostic value, and the position is not.
 - Whether the anchor SSID was associated — the boolean, never the SSID.
 - Tracking-mode changes and their cause (§8.1), so a snooze that quietly degraded to duration-only
   is visible after the fact.
@@ -2420,23 +2430,27 @@ back to `LocationManager` with `PROVIDER_FUSED` on API 31+, or `NETWORK_PROVIDER
 ### 6.6 The departure test
 
 Never compare raw distance to radius; a 500 m-accuracy cell fix "outside" a 100 m radius means
-nothing. Gate on accuracy:
+nothing. Gate on how wrong the separation could be — **both** endpoints are reported points, so both
+accuracies count (see *Both endpoints are reported* below):
 
 ```kotlin
+fun uncertainty(fix: Location, a: Anchor): Double =
+    hypot(fix.accuracy, a.fixAccuracyM)                     // quadrature, not a sum
+
 fun isOutside(fix: Location, a: Anchor): Boolean {
     val d = haversine(fix, a)
-    return d - fix.accuracy > a.radiusM + HYSTERESIS_M      // HYSTERESIS_M = 50
+    return d - uncertainty(fix, a) > a.radiusM + HYSTERESIS_M   // HYSTERESIS_M = 50
 }
 ```
 
 Then require **confirmation**: two consecutive qualifying fixes at least 30 s apart, *or* one fix
-where `d - accuracy > radiusM + 500`. The first rule kills GPS-jump false positives; the second
+where `d - uncertainty > radiusM + 500`. The first rule kills GPS-jump false positives; the second
 means that when you are unambiguously a kilometer away, the phone comes back immediately rather than
 making you wait out a debounce.
 
 **The radius is 100 m, moved in from 150** (maintainer, 2026-09-06). It is not a jitter setting:
-the hysteresis band, the accuracy subtraction and the two-fix confirmation above are what absorb a
-wandering fix, and none of them move with it. What it decides is how far you can walk *inside*
+the hysteresis band, the uncertainty subtraction and the two-fix confirmation above are what absorb
+a wandering fix, and none of them move with it. What it decides is how far you can walk *inside*
 somewhere before this counts as leaving, so the floor is a large building rather than a room —
 shrinking it much further ends a snooze while the user is still in the venue, which is principle 1's
 failure direction rather than principle 2's. It was moved in because the departure was further out
@@ -2444,13 +2458,27 @@ than users expect, and because the on-screen readout (§4.2) made that distance 
 time.
 
 **What it costs is the confidently-inside zone, and that is a real trade rather than a free win.**
-`STILL_HERE` needs `d + accuracy <= radiusM`, so with a 10 m fix a phone reads as comfortably inside
-up to 90 m rather than 140 m. The ambiguous band between "inside" and "outside" is the same width as
-before — `2 × accuracy + HYSTERESIS_M` — it simply sits closer in, so a phone parked 120 m from where
-it armed now produces inconclusive readings where it used to produce confident ones. Three of those
-in a row degrade tracking to Wi-Fi-only (§8.1), which lands on exactly the large-venue case this app
-is aimed at: a different floor, the far end of a site. `DefaultRadiusTest` asserts both halves so the
-next person to move this number sees the bill as well as the benefit.
+`STILL_HERE` needs `d + uncertainty <= radiusM`. **Two separate changes have narrowed it, and they
+are worth keeping apart** (Codex, PR #223):
+
+| | confidently inside, 10 m fix | ambiguous band |
+|---|---|---|
+| 150 m radius, fix accuracy only | up to 140 m | 70 m (`2 × 10 + 50`) |
+| 100 m radius, fix accuracy only | up to 90 m | 70 m — same width, moved in |
+| 100 m radius, combined uncertainty (20 m anchor) | up to ~77 m | ~95 m (`2 × 22.4 + 50`) |
+
+The **radius** move (2026-09-06) slid the band inward without changing its width, because both edges
+shifted by the same amount. Charging the **anchor's** accuracy is different in kind: the band is
+`2 × uncertainty + HYSTERESIS_M`, so a larger uncertainty makes it genuinely *wider* as well as
+moving its inner edge in — ~95 m against a 20 m anchor, and wider still against a vaguer one. So a
+phone parked 120 m from where it armed produces inconclusive readings where it used to produce
+confident ones, and a bigger span of distances now resolves neither way.
+
+Three inconclusive readings in a row degrade tracking to Wi-Fi-only (§8.1), which lands on exactly
+the large-venue case this app is aimed at: a different floor, the far end of a site. That is the bill
+for measuring against an origin the app never actually knew to the old precision — the way to a
+narrow band is a sharp anchor, not a smaller subtraction. `DefaultRadiusTest` asserts both halves so
+the next person to move either number sees it as well as the benefit.
 
 Anchor with no location fix at all (arming indoors with no signal): Wi-Fi-only mode. Losing the
 anchor SSID escalates, but with no location to confirm with, resolve after a 5-minute grace period
@@ -2467,27 +2495,53 @@ moment either signal answers again.
 
 **The bar is a threshold in reported coordinates; everything else is uncertainty and latency**
 (2026-09-07).
-A departure needs `distance - accuracy > radius + HYSTERESIS_M`, where `distance` separates two
-*reported* points — the stored anchor and the current fix. So 150 m is the threshold on the
-**accuracy-adjusted margin**, not on the separation itself: a 10 m fix needs more than 160 m of
-reported separation, a 40 m fix more than 190 m.
+A departure needs `distance - uncertainty > radius + HYSTERESIS_M`, where `distance` separates two
+*reported* points — the stored anchor and the current fix — and `uncertainty` is how wrong that
+separation could be. So 150 m is the threshold on the **uncertainty-adjusted margin**, not on the
+separation itself.
+
+**Both endpoints are reported, so both accuracies count** (maintainer, 2026-09-07). The fix's
+accuracy was always subtracted; the anchor's never was, which treated the origin every distance is
+measured from as exact while accepting it at up to `MAX_ANCHOR_ACCURACY_M`. A capture that vague can
+put the origin further from the phone than the whole bar is worth, with nothing downstream able to
+see it. They combine **in quadrature** — `√(anchorAccuracy² + fixAccuracy²)` — because two fixes
+minutes-to-hours apart are close enough to independent for that to be the honest combination, where
+adding them would be a higher-confidence bound arrived at by accident and paid for in walking
+distance. Against a 20 m anchor a 10 m fix now needs more than 172 m of reported separation and a
+40 m fix more than 195 m; against a sharp anchor the change is a few meters, and against a vague one
+it is large — which is the point, since that is the case the old form was silently wrong about. The
+way to a shorter bar is a sharper anchor, not a smaller subtraction.
+
+`HYSTERESIS_M` stays at 50 through this change, deliberately: it is anti-flap rather than geometry,
+and moving both at once would leave the handset traces unable to say which one moved the walk.
+
+The mirror test for presence moves the same way — `distance + uncertainty <= radius` — so counting
+the anchor narrows the confidently-inside zone too. That is the honest reading of a vague capture
+rather than a regression; the app never knew where the origin was to the old precision.
+
+**The same number is what the screen shows.** `DepartureObservation.uncertaintyM` is the value the
+test thresholds, rendered as `212 m away ±34 m`, so the readout quotes the decision instead of
+describing one term of it. One figure rather than two on purpose: the components are diagnostic —
+the anchor's is fixed for the whole snooze while the fix's moves every reading — and the card is
+the tightest copy surface in the app.
 
 The ground someone actually covers before that is crossed is a separate quantity the app never
 measures, and the two differ in **either** direction. The confirmation gap does not move the
 crossing — the first qualifying fix has already cleared the threshold — but it delays the verdict,
 and admits whatever ground is covered before the second fix confirms it; a margin past
-`UNAMBIGUOUS_MARGIN_M` skips it entirely. The anchor may sit off where the phone really was — its error is subtracted nowhere, and
-its reported accuracy is a 68% confidence estimate rather than a cap, so the true offset can be
-larger still — which moves the crossing either way, or not at all. Measured against a 100 m
-anchor, one walk came to about 200 m; what the same threshold produces on the next walk is not
-fixed by it.
+`UNAMBIGUOUS_MARGIN_M` skips it entirely. The anchor may sit off where the phone really was — its
+error is now charged against the bar, but its reported accuracy is a 68% confidence estimate rather
+than a cap, so the true offset can be larger still — which moves the crossing either way, or not at
+all. Measured against a 100 m anchor, one walk came to about 200 m; what the same threshold produces
+on the next walk is not fixed by it.
 
 **The contributors are not a closed list**, and writing them as one got three of them wrong in a
 row. The ones known to matter: the departing fix's own accuracy; the ground covered during the
 confirmation gap; **the anchor's own accuracy** — a reported 68% confidence radius, not a known
-error, accepted up to `MAX_ANCHOR_ACCURACY_M` and subtracted from nothing, so a vague capture *may*
-have put the origin the whole walk is measured against further out than the bar is worth, in an
-unknown direction, or may have been exact; and the delay before the first confirming fix is even requested — a
+error, accepted up to `MAX_ANCHOR_ACCURACY_M`; it is now subtracted alongside the fix's, which
+prices it into the bar but does not make it known, so a vague capture *may* still have put the
+origin the whole walk is measured against further out than that radius, in an unknown direction, or
+may have been exact; and the delay before the first confirming fix is even requested — a
 geofence-escalated check can start after the phone is already past the bar (§6.10), and so can one
 waiting on a Wi-Fi loss, since an SSID's coverage can reach further than the bar and `onLost` is
 not instant.

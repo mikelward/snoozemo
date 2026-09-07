@@ -47,6 +47,19 @@ enum class DistanceUnit {
      */
     fun toGo(meters: Double): Int = ceil(fromMeters(meters)).toInt().coerceAtLeast(1)
 
+    /**
+     * How uncertain to report the separation as — nearest whole unit, never
+     * below one.
+     *
+     * Nearest rather than rounded up, because this is not a bound being
+     * defended like [toGo]; it is a description of how sharp the reading is,
+     * and inflating it would misdescribe a good fix. The floor exists because
+     * `±0 m` claims a precision no location provider has, and a sub-meter
+     * value at the foot scale would otherwise print exactly that.
+     */
+    fun uncertainty(meters: Double): Int =
+        fromMeters(meters).roundToInt().coerceAtLeast(1)
+
     companion object {
         /** The international foot, exactly. */
         const val METERS_PER_FOOT: Double = 0.3048
