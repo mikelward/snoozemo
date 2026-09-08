@@ -46,7 +46,6 @@ class SnoozeNotificationsDistanceTest {
         appContext.getSystemService(AudioManager::class.java).ringerMode =
             AudioManager.RINGER_MODE_NORMAL
         DepartureObservations.clear()
-        AnchorWifi.clear()
     }
 
     @Test
@@ -111,9 +110,20 @@ class SnoozeNotificationsDistanceTest {
         // §6.7), so no reading arrives and the row would go quiet at the
         // freshness window with nothing to say why. The blank is the bug this
         // answers: the snooze is working exactly as intended at that moment.
-        AnchorWifi.set(true)
+        assertEquals(
+            stringOf(R.string.ongoing_distance_wifi),
+            subText(TrackingMode.FULL, atAnchorWifi = true),
+        )
+    }
 
-        assertEquals(stringOf(R.string.ongoing_distance_wifi), subText(TrackingMode.FULL))
+    @Test
+    fun `with no service running the row says nothing about the network`() {
+        // The level is the controller's, read through the running service's
+        // seam (maintainer, 2026-09-08), so a card posted by any other
+        // instance has nobody to ask. Quiet is the right answer there: it
+        // genuinely cannot know, and the alternative — a process-wide copy —
+        // is the shape that produced four bugs of one kind on PR #229.
+        assertNull(subTextWithNoHost(TrackingMode.FULL))
     }
 
     @Test
@@ -123,9 +133,11 @@ class SnoozeNotificationsDistanceTest {
         // — it is what ends the uncertainty, where the number is only counting
         // toward a threshold nothing is measuring any more.
         publish(distanceM = 60.0)
-        AnchorWifi.set(true)
 
-        assertEquals(stringOf(R.string.ongoing_distance_wifi), subText(TrackingMode.FULL))
+        assertEquals(
+            stringOf(R.string.ongoing_distance_wifi),
+            subText(TrackingMode.FULL, atAnchorWifi = true),
+        )
     }
 
     @Test
@@ -138,20 +150,21 @@ class SnoozeNotificationsDistanceTest {
         // question the engine is in the middle of distrusting, and hides a
         // departure one fix from ending the snooze.
         publish(distanceM = 400.0)
-        AnchorWifi.set(true)
 
-        assertEquals(stringOf(R.string.ongoing_distance_leaving), subText(TrackingMode.FULL))
+        assertEquals(
+            stringOf(R.string.ongoing_distance_leaving),
+            subText(TrackingMode.FULL, atAnchorWifi = true),
+        )
     }
 
     @Test
     @Config(qualifiers = "en-rGB")
     fun `leaving the network hands the row back to the distance`() {
-        // The level is restated on every update and reported on its edges, so
-        // the row has to come back rather than latch — a stuck `Wi-Fi` would
-        // hide the departure it is meant to explain the run-up to.
+        // The row has to come back rather than latch — a stuck `Wi-Fi` would
+        // hide the departure it is meant to explain the run-up to. Each card
+        // asks the controller as it is built, so this is the same card built
+        // once the level has gone.
         publish(distanceM = 60.0)
-        AnchorWifi.set(true)
-        AnchorWifi.set(false)
 
         assertEquals(
             appContext.getString(R.string.distance_meters, 109),
@@ -177,10 +190,8 @@ class SnoozeNotificationsDistanceTest {
         // answers "how much further" — a question `WIFI_ONLY` is not measuring
         // an answer to at all. Saying `Wi-Fi` in both places would state the
         // same fact twice and crowd out the countdown.
-        AnchorWifi.set(true)
-
-        assertNull(subText(TrackingMode.WIFI_ONLY))
-        assertNull(subText(TrackingMode.DURATION_ONLY))
+        assertNull(subText(TrackingMode.WIFI_ONLY, atAnchorWifi = true))
+        assertNull(subText(TrackingMode.DURATION_ONLY, atAnchorWifi = true))
     }
 
     @Test
@@ -212,12 +223,38 @@ class SnoozeNotificationsDistanceTest {
         ),
     )
 
-    /** The top row of the ongoing card as posted for [mode]. */
-    private fun subText(mode: TrackingMode): String? {
-        SnoozeNotifications(appContext).showOngoing(snoozeFixture(now).copy(mode = mode))
+    /**
+     * The top row of the ongoing card as posted for [mode], with a host
+     * standing in for the running service and reporting [atAnchorWifi].
+     */
+    private fun subText(mode: TrackingMode, atAnchorWifi: Boolean = false): String? =
+        subTextOf(mode, host(atAnchorWifi))
+
+    /** The same, with no service installed at all. */
+    private fun subTextWithNoHost(mode: TrackingMode): String? = subTextOf(mode, host = null)
+
+    private fun subTextOf(
+        mode: TrackingMode,
+        host: SnoozeNotifications.OngoingForegroundHost?,
+    ): String? {
+        SnoozeNotifications(appContext)
+            .apply { ongoingForegroundHost = host }
+            .showOngoing(snoozeFixture(now).copy(mode = mode))
         val manager = appContext.getSystemService(NotificationManager::class.java)
         val posted = shadowOf(manager).allNotifications
             .last { shadowOf(it).contentTitle?.toString() == stringOf(R.string.ongoing_title) }
         return posted.extras.getCharSequence(android.app.Notification.EXTRA_SUB_TEXT)?.toString()
+    }
+
+    /**
+     * A host that answers the level and nothing else: `promote` declines, so
+     * the card is posted the ordinary way and this file keeps testing the row
+     * rather than the foreground service.
+     */
+    private fun host(atAnchorWifi: Boolean) = object : SnoozeNotifications.OngoingForegroundHost {
+        override fun promote(notification: android.app.Notification) = false
+        override fun demote() = Unit
+        override fun watchIsUnprotected() = false
+        override fun atAnchorWifi() = atAnchorWifi
     }
 }

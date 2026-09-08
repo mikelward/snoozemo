@@ -89,6 +89,19 @@ class SnoozeNotifications(private val context: Context) {
          * service may well be holding one.
          */
         fun watchIsUnprotected(): Boolean
+
+        /**
+         * Whether the anchor's own network is associated, straight from the
+         * controller (`SPEC.md` §4.6).
+         *
+         * **Asked rather than mirrored** (maintainer, 2026-09-08). A
+         * process-wide copy of this level produced four bugs of one shape, all
+         * of them the copy outliving what reported it; the controller is the
+         * only thing that knows, so it is the only thing asked. Absent where
+         * no service is running, and the row goes quiet there rather than
+         * guessing — a card posted with no live service genuinely cannot say.
+         */
+        fun atAnchorWifi(): Boolean
     }
 
     init {
@@ -382,13 +395,16 @@ class SnoozeNotifications(private val context: Context) {
         // post below must not build a card from a newer answer than the one it
         // is correcting.
         val unprotected = ongoingForegroundHost?.watchIsUnprotected() == true
+        // And this one, for the same reason and through the same seam: the
+        // controller is asked once so both posts describe the same moment.
+        val atAnchorWifi = ongoingForegroundHost?.atAnchorWifi() == true
         // Once, for the same reason: the follow-up post below must not build a
         // card from a newer reading than the one it is correcting, or the two
         // posts would differ in a second way nobody asked about.
         val departure = DepartureObservations.latest()
         betweenReadAndPost()
         val posted = postOngoing(
-            buildOngoing(snooze, builtWith, ringerShortfall, silent, departure, unprotected),
+            buildOngoing(snooze, builtWith, ringerShortfall, silent, departure, unprotected, atAnchorWifi),
             onlyIfGeneration,
         )
         // The cache is read above but written under the lock this post takes,
@@ -408,7 +424,7 @@ class SnoozeNotifications(private val context: Context) {
             if (settled != builtWith) {
                 betweenReadAndPost()
                 postOngoing(
-                    buildOngoing(snooze, settled, ringerShortfall, silent, departure, unprotected),
+                    buildOngoing(snooze, settled, ringerShortfall, silent, departure, unprotected, atAnchorWifi),
                     onlyIfGeneration = posted,
                 )
             }
@@ -477,7 +493,11 @@ class SnoozeNotifications(private val context: Context) {
      * reading, and a value captured earlier would age against a check that
      * thinks it is current.
      */
-    private fun distanceSubText(snooze: ActiveSnooze, departure: DepartureObservation?): String? {
+    private fun distanceSubText(
+        snooze: ActiveSnooze,
+        departure: DepartureObservation?,
+        atAnchorWifi: Boolean,
+    ): String? {
         if (snooze.mode != TrackingMode.FULL) return null
         val reading = departure?.takeIf { it.isFresh(SnoozeClock.read().uptimeMillis) }
         // Ahead of the network, and only this case is (Codex, PR #229). A
@@ -489,7 +509,7 @@ class SnoozeNotifications(private val context: Context) {
         // the engine is in the middle of distrusting, and would hide a
         // departure that is one fix from ending the snooze.
         if (reading?.qualifies == true) return context.getString(R.string.ongoing_distance_leaving)
-        if (AnchorWifi.associated()) return context.getString(R.string.ongoing_distance_wifi)
+        if (atAnchorWifi) return context.getString(R.string.ongoing_distance_wifi)
         if (reading == null) return null
         val unit = distanceUnitFor(context.resources.configuration)
         return distanceText(context, unit, unit.toGo(reading.remainingM))
@@ -521,6 +541,7 @@ class SnoozeNotifications(private val context: Context) {
         silent: Boolean,
         departure: DepartureObservation?,
         unprotected: Boolean,
+        atAnchorWifi: Boolean,
     ): android.app.Notification {
         val body = when (snooze.mode) {
             TrackingMode.FULL -> context.getString(R.string.ongoing_ends_when_you_leave)
@@ -594,7 +615,7 @@ class SnoozeNotifications(private val context: Context) {
             // (maintainer, 2026-09-08). Null leaves the row as it was, which is
             // the honest rendering of "no reading yet" — an empty string would
             // reserve space for a number that is not coming.
-            .setSubText(distanceSubText(snooze, departure))
+            .setSubText(distanceSubText(snooze, departure, atAnchorWifi))
             .setOngoing(true)
             // This card is reposted on every ARMED/CHECKING transition, which
             // includes presence evidence flip-flopping (ProbablyLeft then
