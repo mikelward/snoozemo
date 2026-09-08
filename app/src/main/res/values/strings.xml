@@ -371,7 +371,8 @@
       arithmetic (distance away, the combined ±, the meters to go) stays on the
       main screen, which has room for the sentence.
     -->
-    <string name="ongoing_distance_confirming" tools:ignore="MissingTranslation">Confirming</string>
+    <!-- TODO: translate -->
+    <string name="ongoing_distance_leaving" tools:ignore="MissingTranslation">Leaving?</string>
     <!-- TODO: translate -->
     <string name="ongoing_distance_wifi" tools:ignore="MissingTranslation">Wi-Fi</string>
     <string name="main_distance_to_go" tools:ignore="MissingTranslation">%1$s away ±%2$s · %3$s to go</string>
