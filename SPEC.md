@@ -830,12 +830,20 @@ units, which is the precision the meters-only version shipped with rather than a
 neither is meaningful below a fix's own accuracy, and the line is replaced only when a fix arrives,
 ninety seconds apart at the fastest.
 
-**Nowhere but the screen.** It is never written to disk, never posted to the notification, and
-never counted as news: fixes arrive every 90 s while a departure is being tested (§6.7), so a
-notification reposting per fix is exactly the flapping the restated-level design exists to
-prevent. It lives in memory for as long as the process does, which means a snooze that outlives a
+**In memory only — and, since 2026-09-08, no longer only on the screen.** It is never written to
+disk, and it lives in memory for as long as the process does, which means a snooze that outlives a
 process death comes back with no number until the next fix — the truth, rather than a stale one.
 See §12 for why a distance is a different kind of value from a position.
+
+What reversed is *where it may be shown*. This read "nowhere but the screen", on the grounds that
+fixes arrive every 90 s while a departure is being tested (§6.7), so a notification reposting per
+fix would be exactly the flapping the restated-level design exists to prevent. The maintainer asked
+for it on the card anyway, and the objection turned out to be answerable rather than fundamental:
+`setOnlyAlertOnce` makes every repost after the first silent, so one costs a builder and a binder
+call and never sounds, vibrates or re-sorts the shade. The flapping that design guards against is
+*alerting* flapping, and this is not that. The other half of the original decision stands
+unchanged — the reading is still never counted as news: no event, no transition, no tracking
+report. §4.6 carries what the card shows and when it is reposted.
 
 **The active tile inverts, and that is the platform's doing, not ours.** A Quick Settings tile
 cannot specify a background: the system draws it from `Tile.state`, so `STATE_ACTIVE` while a
