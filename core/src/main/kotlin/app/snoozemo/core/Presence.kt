@@ -737,6 +737,13 @@ object Presence {
         // it — so a screen drawing this is quoting the engine rather than
         // re-deriving a number that could disagree with it.
         val observation = Departure.observe(fix, anchor)
+        // The one place both halves of the decision exist at once, which is why
+        // the line is written from here rather than handed out to be written
+        // elsewhere (SPEC.md §4.6, and `SnoozeDebugLog`'s own reason for living
+        // in `:core`). A listener sees the observation without the verdict and
+        // only under `FULL`, so a log fed from there would fall silent for
+        // exactly the snooze that degraded — the one a reader opens the log for.
+        observation?.let { SnoozeDebugLog.event("%s", it.logSummary(outcome.verdict, outcome.rule)) }
         val accepted = state.copy(latestEvidenceMs = fix.elapsedRealtimeMs)
         // SPEC.md §6.1's "evidence of health must be newer than the failure it
         // claims is over", applied on this path too. It used to live only in

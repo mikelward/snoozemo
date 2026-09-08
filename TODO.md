@@ -7400,3 +7400,51 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
       the selectors for as long as any pre-rename publish is still reachable
       by the walk, then dropping the old one — the same staged-rename shape
       used for the `gate` → `lanes` check. Caught by Codex on PR #133.
+
+## An anchor as vague as the radius can never confirm presence (field log, 2026-09-08)
+
+Found reading a field debug log from a `play` build: a snooze armed, captured an
+anchor at 100 m accuracy, and degraded to duration-only with `FIXES_TOO_VAGUE`
+after three confirming fixes.
+
+**The cause is arithmetic, and the reported cause is a misnomer.**
+`Departure.confirmsPresence` needs `distance + uncertainty <= radius`, where the
+uncertainty is both endpoints' accuracies in quadrature. Once the anchor's own
+accuracy reaches the radius, that term alone is at least the radius, so no fix of
+any precision — including a hypothetical exact one — can confirm presence. Every
+reading is then `INCONCLUSIVE`, three of them trip
+`DEGRADED_AFTER_USELESS_OBSERVATIONS`, and the card says `weak location signal`
+about fixes that may have been excellent. `qualifies` is reachable but only at
+around 250-290 m of separation, so the snooze cannot end on departure either.
+
+**Two gates disagree.** `AnchorCapture` accepts anything up to
+`Anchor.MAX_ANCHOR_ACCURACY_M` (200 m) and `Anchor.hasUsableFix` then calls it
+trackable, so the arm reports `FULL` and the ongoing card promises departure
+tracking. Anything at or above `DEFAULT_RADIUS_M` (100 m) is guaranteed to
+degrade within a couple of checking cycles. The band between them is a mode the
+app advertises and cannot deliver.
+
+Not fixed here; this branch only added the departure line to the log
+(`SnoozeDebugLog`, `DepartureObservation.logSummary`) so the next capture of this
+shape shows the fix accuracies rather than leaving them to be inferred. Options,
+for the maintainer:
+
+- [ ] **Tighten `MAX_ANCHOR_ACCURACY_M` below the radius**, so a vague capture
+      reports Wi-Fi-only at arm time (SPEC.md §8.4 already describes that mode)
+      instead of promising `FULL` and failing 90 seconds later. Smallest change;
+      costs departure tracking for anyone whose arm-time fix is poor, which on
+      this evidence is anyone indoors on a cold start.
+- [ ] **Widen the effective radius by the anchor's own accuracy**, so the test
+      stays coherent at any capture quality. Keeps tracking at the cost of a
+      larger "here" exactly where the app is least sure where "here" is — which
+      is arguably the honest trade, and arguably principle 1's failure
+      direction.
+- [ ] **Re-anchor on the first better fix that arrives while presence still
+      holds.** Fixes the underlying problem — the 10 s arming ceiling (§4.1)
+      takes whatever the fused provider has, and indoors from cold that is a
+      network fix — without slowing the tap. Largest change, and it needs the
+      instrumentation above to say whether a better fix actually turns up: in
+      the log that prompted this, a later checking window got no fix at all.
+
+`SPEC.md` §6.6 already warns that its list of contributing terms is not closed
+and does not rank them; this is a case where two of them multiply.

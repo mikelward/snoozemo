@@ -3,6 +3,7 @@ package app.snoozemo.core
 import com.mikelward.androidlog.DebugLog
 import com.mikelward.androidlog.SafeLogValue
 import com.mikelward.androidlog.safe
+import kotlin.math.roundToLong
 
 /**
  * The on-device debug log's recording half (SPEC.md §4.6): a bounded in-memory
@@ -88,3 +89,69 @@ fun ActiveSnooze.logSummary(): SafeLogValue {
     val ssid = if (anchor.ssid != null) "ssid captured" else "no ssid"
     return safe("snooze(started=$startedAt capAt=$capExpiresAt mode=$mode anchor[$ssid, $fix])")
 }
+
+/**
+ * The one sanctioned way to put a departure test in the log (SPEC.md §4.6).
+ *
+ * §4.6 has always asked for this line — "distance from the anchor in meters,
+ * both accuracies in meters, whether the accuracy gate passed, and which
+ * confirmation rule matched" — and nothing wrote it. [Departure.observe]
+ * computed the arithmetic on every fix and it reached the ongoing card and
+ * nowhere else, so a snooze that degraded could be read back as *that* it
+ * degraded and never as *why*: `FIXES_TOO_VAGUE` names the fixes, and a fix
+ * of any precision earns that cause once the anchor's own accuracy reaches
+ * the radius, because [Departure.confirmsPresence] is then unreachable. The
+ * log said "the fixes were vague" without carrying the one number that could
+ * agree or disagree.
+ *
+ * [DepartureObservation.uncertaintyM] and [DepartureObservation.marginM] carry
+ * the derived halves rather than leaving a reader to recompute them, because
+ * the recomputation is where a reader would go wrong: the margin is what §6.6
+ * thresholds, and it subtracts *both* endpoints' accuracies in quadrature. The
+ * anchor's accuracy is not repeated here — §4.6 puts it in [logSummary], where
+ * it is constant for the whole snooze — but it is what the difference between
+ * [DepartureObservation.accuracyM] and the uncertainty is made of, so a line
+ * whose uncertainty dwarfs its accuracy is naming a vague anchor out loud.
+ *
+ * [rule] names which of §6.6's two routes to a departure this fix took, since
+ * the verdict alone collapses them and §4.6 asks for the matched rule. Null
+ * for every other verdict, which names its own.
+ *
+ * The floor is the same one [logSummary] holds and for the same reason: a
+ * distance and a precision locate nobody, a coordinate locates one place. So
+ * this is [safe] — fit to leave the device inside a report the user chose to
+ * share — and the position it was computed from is not here to render.
+ */
+fun DepartureObservation.logSummary(
+    verdict: DepartureVerdict,
+    rule: DepartureRule? = null,
+): SafeLogValue {
+    val matched = if (rule != null) " rule=$rule" else ""
+    return safe(
+        "departure(distance=${meters(distanceM)} accuracy=${accuracyM}m " +
+            "uncertainty=${meters(uncertaintyM)} margin=${meters(marginM)} " +
+            "radius=${radiusM}m verdict=$verdict$matched)",
+    )
+}
+
+/**
+ * One of the line's derived distances, rounded — or `unknown` where there is no
+ * number to round.
+ *
+ * `roundToLong` throws on a NaN, and every value here is arithmetic over a
+ * platform reading: a mock or faulty provider can set a `Location` coordinate
+ * or accuracy to NaN, `BurstPlatform` accepts it because `hasAccuracy()` is
+ * true, and the haversine then carries the NaN through. Before this line
+ * existed the engine handled that fix safely — every comparison against a NaN
+ * is false, so it fell out as [DepartureVerdict.INCONCLUSIVE] and counted
+ * toward degradation. A throw from the *log* would have turned that into an
+ * exception on the fix path, which is principle 1's failure: a snooze left
+ * armed with nothing running to end it (Codex, PR #233).
+ *
+ * `unknown` rather than a substituted zero, because a zero here is a claim —
+ * "the phone is at the anchor" — and the reading it would be made of said
+ * nothing at all. A line reading `distance=unknown` is itself the diagnostic
+ * that a provider handed over a fix with no arithmetic in it.
+ */
+private fun meters(value: Double): String =
+    if (value.isFinite()) "${value.roundToLong()}m" else "unknown"
