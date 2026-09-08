@@ -497,6 +497,43 @@ the point is that every other line of the app is worthless if it isn't true.
       has since landed (below), closing the recovery half, and so has the §6.7 significant-motion
       trigger — with the resting cadence it pairs with now settled as the backstop's on `play`
       (`SPEC.md` §6.7), so that item is closed too.
+      - [ ] **The departure-arithmetic, Wi-Fi-association and geofence-timing log records**
+        — the piece the Phase 3 debug-log item deferred here, found undelivered by the
+        PR #232 audit (Codex, PR #232). **Not the wake-up *source*, which is recorded**
+        for all three (`geofence exit observed`, `PlatformWifiWatch`'s two loss lines, the
+        backstop's resting-probe line); naming the whole source half as missing was a
+        drafting error here and would send a contributor to duplicate existing logs.
+        `docs/PRIVACY.md` already tells the user the log records "how far from the anchor
+        a location fix said you were in meters and how accurate that fix claimed to be",
+        and the debug-log item's own opening sentence said the same — but no accuracy or
+        distance is written anywhere in the tree and `Presence.kt` has no log calls at all.
+        So the user-facing promise is live and undelivered, which is why this is
+        unconditional work rather than something a field trace decides. What it owes: the
+        exit's platform crossing time against its delivery time — and **whether that
+        crossing time existed at all**, which is the part a naive subtraction gets wrong
+        (Codex, PR #232). `GeofenceTransitionReceiver` reads
+        `triggeringLocation.elapsedRealtimeNanos` where the platform offers one and falls
+        back to `SystemClock.elapsedRealtime()` where it does not, so subtracting delivery
+        from that value reports **≈0 lag for exactly the events that carried no timing**,
+        clearing case (2) on the evidence it most lacks. Record the absence as an absence; for **every delivered fix the
+        departure test considers** — the resting probe's as well as the burst's,
+        since `settleSanity` feeds the same `FixArrived` — its accuracy and the
+        distance the test measured **plus the verdict** — whether the accuracy gate
+        passed and which confirmation rule matched, which is the half of `SPEC.md`
+        §4.6's promise that explains *why* a fix did or did not end the snooze, and
+        the half a literal reading of "accuracy and distance" would drop; **the
+        anchor Wi-Fi turning present**, which nothing records today (loss already
+        is, with its provenance — `PlatformWifiWatch.emit` writes "absence
+        confirmed" or "could not tell, failing open to gone" — but re-association
+        is silent, so a trace cannot say whether the suppressor was holding);
+        and
+        **the wait preceding each
+        request, recorded where the request is scheduled or issued** — `CheckingFixes.settle`
+        calls `cadence.onFixDelivered()` before `scheduleNext()`, so a spacing read at
+        delivery always says 30 s and erases the five-minute backoff it exists to show.
+        All of it is inside the §4.6 floor already, so no policy question and no widening
+        of `docs/PRIVACY.md`. See the departure-latency entry for what each number
+        diagnoses.
       - [x] **The engine above the interface**: `Presence`, a pure state machine in `:core` over
         (state, signal, anchor). Owns escalation and de-escalation, the §6.7 duty cycle, the
         degraded-tracking report, and the §6.6 grace period. Landed with `PresenceTest` (37),
@@ -1172,9 +1209,17 @@ the point is that every other line of the app is worthless if it isn't true.
 - [x] **The on-device debug log** (`SPEC.md` §4.6), landing here rather than later because this is
       the phase that needs it: hardware item 2 asks for every geofence callback measured against a
       ground-truth departure over a week of ordinary use, and there is no way to collect that by
-      watching a phone. Records state transitions and their reasons, which wake-up source fired, the
-      departure test's distance and accuracy arithmetic, tracking-mode changes, cap arming and
-      firing, and permission state. On by default with a setting to turn it off (maintainer,
+      watching a phone. **Designed** to record state transitions and their reasons, which wake-up
+      source fired, the departure test's distance and accuracy arithmetic, tracking-mode changes,
+      cap arming and firing, and permission state — of which **three specific records are not
+      written yet**: the departure arithmetic, the anchor Wi-Fi turning *present*, and the
+      geofence exit's platform timing (Codex, PR #232; tracked as an unchecked sub-item under the
+      `PresenceMonitor` entry above, and `docs/PRIVACY.md` describes the arithmetic to the user as
+      if it existed). **Which source fired is recorded** for all three — `geofence exit observed`,
+      `PlatformWifiWatch`'s two loss lines, and the backstop's resting-probe line — so a draft
+      here that called the whole wake-up-source half unwritten was itself wrong, and would have
+      sent the next contributor to duplicate logging that exists. This sentence used to state
+      every record as fact, which is what let an undelivered promise read as landed. On by default with a setting to turn it off (maintainer,
       2026-08-11), on-device, the current run plus a few recent ones, rotated at start, in
       `cacheDir`. The floor is what the app writes and needs a test of its own: **no raw
       coordinates, no full SSID/BSSID, no user-typed place name** ever reach it — with the one
@@ -1190,6 +1235,10 @@ the point is that every other line of the app is worthless if it isn't true.
       elsewhere, deliberately:
       - **The wake-up-source and departure-arithmetic records** go in with the monitors that
         produce them (the `GeofencePresenceMonitor` item above) — the log API is ready for them.
+        **Still outstanding as of 2026-09-08**, and now an explicit unchecked sub-item there
+        rather than a sentence pointing at an item that never named them (Codex, PR #232).
+        Note that this item's opening sentence, and `docs/PRIVACY.md`, both describe these
+        records as if they existed: the docs are ahead of the code until that sub-item lands.
       - **The settings row** that turns it off — **landed** (2026-08-22) with the maintainer's
         copy, the toggle/install race serialized onto one worker, only a persisted choice
         applied (both deferred from Codex's PR #62 review), and a failed save said under the
@@ -1264,16 +1313,23 @@ the point is that every other line of the app is worthless if it isn't true.
       and `CHECKING` persists until something resolves it or the duration cap fires hours later. A
       higher-accuracy request would therefore need an attempt or time bound of its own, and what
       it costs over a long check is part of what the traces have to establish rather than
-      something to assume. **How big a lever it is, is equally unknown**: accuracy is
-      subtracted one for one, so if the delivered fixes are routinely vague, a better request
-      moves the boundary further than any threshold change would — and if they are already sharp
-      it moves almost nothing. Don't rank it against the radius before measuring, in either
-      direction. Needs the latency instrumentation above to size it honestly: measure
+      something to assume. **How big a lever it is, is equally unknown**, and it now depends on
+      the anchor as much as on the fix (Codex, PR #232): this bullet said "accuracy is subtracted
+      one for one", which was true while only the fix's accuracy was subtracted and stopped being
+      true when the anchor's joined it on 2026-09-07. `Departure.uncertaintyM` combines them in
+      quadrature, so a sharper fix moves the boundary by less than the accuracy it gained, scaled
+      by how far the fix dominates the anchor — against a 100 m anchor, halving a 100 m fix to
+      50 m moves it about 29 m rather than 50, and against a vaguer anchor still less. So a better
+      request may move the boundary further than any threshold change would, or almost nothing,
+      and which of those it is cannot be read off the fix alone. Don't rank it against the radius
+      before measuring, in either direction. Needs the latency instrumentation above to size it honestly: measure
       the accuracies actually delivered during a check before deciding, since the case for spending
       more rests entirely on how bad the default ones are. Record the **anchor's** accuracy in the
       same traces — it is a reported 68% confidence radius rather than a known error, accepted up to
-      `MAX_ANCHOR_ACCURACY_M` and subtracted from nothing, so a vague capture *may* have put the
-      origin every later distance is measured from somewhere off where the phone really was — and
+      `MAX_ANCHOR_ACCURACY_M`, and since 2026-09-07 it is subtracted too, in quadrature with the
+      fix's (this bullet used to say "subtracted from nothing", which the change retired), so a
+      vague capture *may* have put the origin every later distance is measured from somewhere off
+      where the phone really was — and
       further off than that radius roughly a third of the time, since it is a confidence estimate
       and not a cap — and a walk-to-walk
       difference blamed on the departing fix may belong to the capture instead. Which is why it
@@ -4543,6 +4599,19 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
+- [ ] **Whether a checked item may defer pieces to another item** — specifically the Phase 3
+  debug-log entry, which is `[x]` while two of the records it describes (the wake-up-source and
+  departure-arithmetic halves) are unwritten and tracked as an unchecked sub-item under the
+  `PresenceMonitor` entry. Codex asked twice on PR #232 to uncheck the parent; autopilot decided
+  to **leave it checked** and instead fix the prose, so the item now says which halves are
+  designed-but-unwritten rather than asserting all of them as fact. The reasoning: that item's own
+  scope — recorder, sinks, rotation, the floor test, the settings row — did land, and unchecking
+  says the debug log does not exist, which is a fresh false claim of the same kind as the one being
+  fixed. The alternative is to treat `[x]` as "nothing deferred from here is outstanding", which is
+  a stricter and equally defensible convention. **Reversible for one character**, and the prose
+  carries the gap either way, so nothing is hidden while this sits here. Asked in chat 2026-09-08
+  and left unanswered while the maintainer was mid-Play-listing; recorded rather than re-asked.
+
 - [ ] **The wording of the refused-foreground-service clause** (maintainer, 2026-09-08: *"ship
   with your wording for now and record a to-do for me to decide later"*). The ongoing card reads
   `Ends when you leave — tracking may pause` when `startForeground` is refused, from
@@ -4567,48 +4636,237 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 - [ ] **Departures are noticed too late, and it is latency rather than the
   threshold** (maintainer, 2026-09-08: over 500 m on a morning walk, then still
-  snoozing five bus stops later). The first reading looked like a threshold
-  problem. The bus ride settles that it is not: at roughly 8 m/s the whole
-  arithmetic bar — radius, the 50 m hysteresis, a typical fix's combined
-  uncertainty, ~200 m in total — is **about 25 seconds** of travel, and five
-  stops is minutes. Nearly all of the delay is therefore time in which nothing
-  looked, not a bar set too high, and **the shelved #224 would not have helped**:
-  it shortens the bar, which is the term that barely matters here.
+  snoozing five bus stops later).
 
-  Where the time plausibly goes, in order of suspicion:
+  **Rewritten whole on 2026-09-08** rather than appended to. Three findings on
+  one PR were all the same shape — a corrected paragraph added below a stale one
+  that still asserted the opposite (Codex, PR #232) — so the entry is restated as
+  one current account instead of a running argument. What was decided and
+  retired is kept, because a reversal belongs here with its reason; what is
+  simply wrong is gone rather than annotated.
 
-  1. **Significant motion did not fire.** `TYPE_SIGNIFICANT_MOTION` is tuned to
-     detect a *change* in the user's motion state, and sitting still on a smooth
-     bus with the phone pocketed is close to its designed reject case. The
-     trigger re-arms itself correctly after each firing (`MotionTrigger.onFired`),
-     so this is the sensor's own character rather than a bug in the wiring.
-  2. **The geofence exit was late.** Nothing calls `setNotificationResponsiveness`,
-     so registration takes Play Services' default batching, which trades exit
-     latency for power and is worse under Doze. Crossing a boundary at bus speed
-     is the case this *should* win, so if it did not, it is the thing to fix.
+  **The observation.** At roughly 8 m/s the whole arithmetic bar — radius, the
+  50 m hysteresis, a typical fix's combined uncertainty, ~200 m in total — is
+  **about 25 seconds** of travel, and five stops is minutes. Nearly all of the
+  delay is therefore time spent **not learning anything** — either nothing looked,
+  or something looked and got nothing usable back (Codex, PR #232: an earlier
+  draft said only "nothing looked", which quietly pointed the whole diagnosis at
+  the resting cadence and contradicted case (5) below, where a check runs for
+  minutes on requests that answer nothing). It is not a bar set too high, and **the
+  shelved #224 would not have helped**: it shortens the bar, the one term that
+  barely matters here.
+
+  **Where the time can go.** Five shapes, and they are told apart by *when the
+  first look happened* and *what happened inside it*:
+
+  1. **Significant motion did not fire — and that is a suspect, not the sensor
+     behaving as designed** (Codex, PR #232, correcting an earlier draft here that
+     called a bus close to the sensor's reject case). The platform contract this
+     file quotes in the motion-trigger section says the opposite: a significant
+     motion is "a motion that might lead to a change in the user's location; for
+     example walking, biking, or **sitting in a moving car**". A bus ride is the
+     intended *positive* case. `MotionTrigger.onFired` re-arms correctly, so a
+     missing event is a wiring, delivery, or device-behavior question — the
+     background restriction that section warns about, a manufacturer that never
+     delivers the trigger to a backgrounded app, or the registration not being
+     live at all — and it stays on the list until the log says which.
+
+     **Read one case out first, though: the trigger is deliberately not armed
+     while the phone is on the anchor's Wi-Fi** (Codex, PR #232). `Presence.duty`
+     returns `LocationDuty.NONE` when `atAnchorWifi`, and
+     `GeofencePresenceMonitor` arms the sensor only for `SANITY`
+     (`motionTrigger?.reconcile(duty == LocationDuty.SANITY)`), so a ride that
+     began still associated legitimately contains no motion event until the
+     Wi-Fi-loss callback arrives. That is the suppressor working as designed
+     (D4), not a sensor fault, and it means a silent trace is only evidence
+     about the sensor once the log shows the association had already gone.
+
+     **What is suppressed is the location duty and the motion trigger — not the
+     fence** (Codex, PR #232, correcting a draft of this paragraph that said
+     nothing else was running). `registerFence()` installs the geofence with
+     `Geofence.NEVER_EXPIRE` and it stays registered until the monitor is torn
+     down, and `Presence.escalate` lets an exit escalate to `CHECKING` **even
+     while the anchor's Wi-Fi is associated**, deliberately: "the two subsystems
+     disagreeing is exactly when a fix is worth taking". So an associated ride
+     with no motion event does not rule the fence out — case (2) stays live
+     alongside case (3).
+  2. **The geofence exit arrived late.** Mechanism unknown, and **nothing in the
+     app is known to control it** — see the retired change below, which assumed a
+     tunable that turns out to point the other way.
   3. **Wi-Fi loss** only helps where the anchor has an SSID and the phone was on
      it — informative by its absence as much as its presence.
-  4. Failing all three, the resting **`SANITY` poll at ~10 minutes** is the
-     backstop, and at bus speed ten minutes is kilometers on its own. It fits the
-     observation almost exactly.
+  4. **Nothing looked until the resting probe.** On `play` the resting cadence is
+     the §6.10 backstop's — `SnoozeBackstop.PERIOD_MINUTES` is 30 with a matching
+     initial delay, and `SPEC.md` §6.7 assigns it per flavor. **~30 minutes**, not
+     the ~10 that `LocationDuty.SANITY`'s flavor-less KDoc describes (that is
+     `direct`'s Phase 7 shape). At bus speed half an hour is kilometers, which
+     fits the observation almost exactly.
+  5. **The check itself dragged.** Escalation prompt, confirmation slow:
+     `CheckingCadence` drops to `BACKOFF_SPACING_MS` — **five minutes** — after
+     `BACKOFF_AFTER` (3) consecutive requests that answer nothing, so a departure
+     can sit unconfirmed at five-minute intervals while the phone is awake and
+     trying. The confirming burst also asks for no better a fix than the resting
+     probe does; the open Phase 3 item on spending a higher-accuracy fix tracks
+     that. **How big a lever that is depends on the anchor as well as the fix**
+     (Codex, PR #232, correcting "accuracy is subtracted one for one" here — a
+     phrase that predates the anchor's accuracy entering the arithmetic).
+     `Departure.uncertaintyM` combines the two in quadrature, so a sharper fix
+     moves the boundary by less than the accuracy it gained, scaled by how far
+     the fix dominates the anchor: against a 100 m anchor, halving a 100 m fix to
+     50 m moves it about 29 m, not 50. Where the anchor is the vaguer of the two,
+     sharpening the fix barely helps at all — so this is a lever to size from the
+     recorded accuracies, not to rank against a threshold change in advance.
 
-  **Approved, to be built as its own PR** (maintainer, 2026-09-08): set the
-  geofence's responsiveness explicitly; take a fix immediately on escalation
-  rather than waiting out a 90 s `ACTIVE` cycle, and consider shortening that
-  interval while `CHECKING`; and confirm the "one fix unambiguously beyond the
-  radius ends it" path is actually reachable, since at these distances the first
-  fix should end the snooze outright rather than waiting for a second.
+  **~~Approved, to be built as its own PR~~ — SUPERSEDED, do not build**
+  (approved by the maintainer 2026-09-08; retired the same day by the
+  verification below). It read: set the geofence's responsiveness explicitly;
+  take a fix immediately on escalation rather than waiting out a 90 s `ACTIVE`
+  cycle, and consider shortening that interval while `CHECKING`; and confirm the
+  "one fix unambiguously beyond the radius ends it" path is reachable. Kept
+  struck rather than deleted — `TODO.md` is what an agent reads to pick up work,
+  and an instruction standing beside its replacement is one a future contributor
+  will follow. **There is nothing to build in this entry.** What is open is the
+  decision at the end of it.
 
-  **The log decides the order.** `SnoozeDebugLog` timestamps which source fired
-  and the result of each departure test, so one ride with the log on says whether
-  the delay was before the first look or between the two fixes — which is the
-  difference between fixing (2) and fixing the cadence. The maintainer is pulling
-  the log from the bus session. Every change above is justified independently, so
-  none of them waits on it; what waits is knowing which one mattered.
+  **Verified before building, and none of the three was work** (autopilot,
+  2026-09-08):
 
-  Battery is the counterweight and is stated where each change lands: shortening
-  `SANITY` is the one that would genuinely cost (`SPEC.md` §9), which is why it is
-  not on the approved list.
+  1. **Responsiveness points the other way.** Android's geofencing guide is
+     explicit that a *higher* value is the power saving and the latency cost —
+     "Set the notification responsiveness to a higher value. Doing so improves
+     power consumption by increasing the latency of geofence alerts" — and that
+     lower values buy no guarantee: "Setting lower values doesn't necessarily
+     mean that users are notified within that time period." The tunable exists to
+     make exits *later*; the Play Services reference documents the default as
+     `0`, the fastest, so setting `0` explicitly changes nothing. **Not fully
+     verified**: `developers.google.com` is unreachable from the sandbox
+     (connection refused, where `developer.android.com` answers 200), so the `0`
+     is the documented value rather than read first-hand. The *direction* is
+     first-hand, and the direction is what decides there is nothing to do.
+  2. **The fix on escalation is already immediate, on `play`.**
+     `CheckingFixes.start()` calls `requestOnce()` synchronously, and the spacing
+     after it is `CheckingCadence.CONFIRM_SPACING_MS`, 30 s. The "90 s `ACTIVE`
+     cycle" is `LocationDuty.ACTIVE`'s **§6.5 continuous request**, which belongs
+     to `direct`'s Phase 7 foreground service and has never run on `play`.
+     Shortening the spacing, on the other hand, **is** available — an earlier
+     draft here said it was not, on the reasoning that those 30 s *are* §6.6's
+     `CONFIRMATION_GAP` (Codex, PR #232). They are not the same thing.
+     `CheckingCadence.CONFIRM_SPACING_MS` is chosen so that consecutive
+     *delivered* fixes satisfy the gap by construction, but the gap itself is
+     enforced in `Departure.consider`, which measures from the **first
+     qualifying** fix and keeps that window's original start across further
+     qualifying fixes arriving inside it. So a fix taken sooner cannot collapse
+     two observations into one: it returns `AWAITING_CONFIRMATION` and
+     confirmation still waits out the full 30 s. What a shorter spacing buys is
+     reaching the *first* qualifying fix sooner when the early ones are vague,
+     and landing the second one near the 30 s boundary instead of a whole slot
+     past it. What it costs is request rate, which is why it belongs with the
+     other checking-path levers below rather than in this list.
+  3. **The unambiguous single-fix ending is reachable, from any fix.**
+     `Departure.consider` tests `isUnambiguous` first and returns `DEPARTED` with
+     no confirmation, and `Presence.fixArrived` runs `consider` on every fix
+     regardless of phase — so a **resting** probe ends the snooze outright at
+     >500 m past the bar, without escalating first.
+
+  **What the log can and cannot settle.** On the happy path `SnoozeDebugLog`
+  carries *which source fired and when* — `geofence exit observed`, `checking:
+  taking confirming fixes`, `backstop: taking one resting fix` — plus the failure
+  lines. So it answers the first and most valuable question, **was the first look
+  a backstop probe half an hour in, or a geofence exit?**, which settles (4)
+  against the rest and is the single most likely explanation of the ride.
+
+  It cannot settle (2) or (5), and that is worth knowing before reading it:
+
+  - **The fence's delivery lag is not recorded.** `GeofenceTransitionReceiver`
+    reads the platform's crossing time from `triggeringLocation` and passes it
+    into the engine, but logs nothing on the happy path — the only line is
+    `geofence exit observed`, written when the *monitor* takes it. Crossing
+    versus delivery is invisible, which is exactly what (2) needs.
+  - **Nothing inside a check is recorded except its failures.** `CheckingFixes`
+    logs the burst starting and requests that answered nothing; a *delivered* fix
+    is not logged, and **no accuracy is logged anywhere in the tree**. So neither
+    the delivered accuracies nor a cadence that had fallen to five minutes
+    appears — the two numbers (5) turns on.
+
+  **So: read the log for (4) first — and instrument regardless** (Codex, PR #232,
+  correcting a draft that made the instrumentation conditional on the ride *not*
+  being (4)). It is not conditional, for a reason bigger than this ride:
+  **`docs/PRIVACY.md` already tells the user the log records "how far from the
+  anchor a location fix said you were in meters and how accurate that fix claimed
+  to be", and it does not.** The Phase 3 debug-log item says the same in its
+  opening sentence and then defers the arithmetic records to the monitor item
+  below it, where nothing names them. So the promise is live, undelivered, and
+  invisible — a user hands over a log expecting numbers that were never written.
+  That is unfinished work whatever the bus log says; the entry above only decides
+  which lever to pull afterward. Tracked as its own item under the Phase 3
+  `PresenceMonitor` entry.
+
+  What to record:
+
+  - **On the exit**, the platform's crossing time against the delivery time —
+    `GeofenceTransitionReceiver` already reads the former from
+    `triggeringLocation`, so this is a subtraction, not a new source.
+  - **Per delivered fix the departure test considers** — not just the checking
+    burst's (Codex, PR #232). `CheckingFixes.settleSanity` sends the resting
+    probe's fix through the same `PresenceSignal.FixArrived`, so scoping this to
+    the burst would omit the arithmetic on exactly the path case (4) exercises,
+    which is the one the bus ride most likely took. Its accuracy and the distance
+    the test measured — and **the conclusion, not only the inputs**: whether the
+    accuracy gate passed and which confirmation rule matched, which is what
+    `SPEC.md` §4.6 actually promises ("distance from the anchor in meters, both
+    accuracies in meters, whether the accuracy gate passed, and which confirmation
+    rule matched") and what says *why* a fix did or did not end the snooze. The
+    anchor's accuracy needs no repeating per line — `logSummary()` already renders
+    it on every transition and it is constant for the snooze.
+  - **The wait that preceded each request, recorded where the request is
+    scheduled or issued — not at delivery** (Codex, PR #232). `CheckingFixes.settle`
+    calls `cadence.onFixDelivered()` *before* `scheduleNext()`, so by the time a
+    delivered fix is in hand the cadence has already reset to 30 s: a line saying
+    "current spacing" at that point reads 30 s even for the fix that arrived after
+    a five-minute wait, which is precisely the signature (5) turns on and would be
+    erased by logging it a few lines too late.
+
+  **All of it sits inside the privacy floor already** (`AGENTS.md` names "distance
+  from the anchor in meters and fix accuracy" as the sanctioned diagnostic value,
+  and a timestamp delta is not a position), so this is a logging change rather
+  than a policy question — and `docs/PRIVACY.md` needs no widening either, since
+  it is what has been describing these records all along.
+
+  **The levers, once the log says which shape it was.** They are not
+  interchangeable — each fixes a signature the others cannot touch:
+
+  - **(4) the resting path** — shorten `SANITY` while armed. This is the one that
+    genuinely costs battery (`SPEC.md` §9), and the reason it was excluded from
+    the approved list.
+  - **(5) the checking path** — shorten the normal 30 s request spacing, bound or
+    shorten the five-minute backoff, and the open higher-accuracy-fix item. The
+    spacing is a real option and not a confirmation-weakening one, for the reason
+    given in verification item 2 above. Cheap-looking and **not actually bounded**
+    (Codex, PR #232, correcting an earlier draft of this bullet that called it
+    bounded by a check's own length). A check is not a short burst by
+    construction: `CheckingCadence.onFixDelivered` resets the backoff, so fixes
+    that keep arriving and keep coming back inconclusive hold the 30 s cadence
+    with no decay, and `CHECKING` persists until something resolves it or the
+    duration cap fires hours later. **So anything here that asks more often or
+    asks for more needs an attempt or time bound of its own** — the Phase 3
+    higher-accuracy item already says exactly that, and it is the safeguard this
+    bullet must not let a reader skip. What is true is only that the phone is
+    already awake and someone is waiting, so the *marginal* cost per request is
+    lower than a resting wake's; the total is not smaller by default.
+  - **(2) the fence** — no lever known, now that responsiveness is out.
+
+  **The open decision, for the maintainer.** Whether to reopen the resting
+  cadence. Read §6.7 first: it is not an oversight that `play` rests at the
+  backstop's cadence. The 2026-08-30 call weighed a repeating alarm at roughly 6
+  wakes an hour against the backstop's 2, over a snooze that can run eight hours,
+  and chose the backstop — so shortening this reopens that decision rather than
+  filling a gap in it. What has changed is that PR #230's foreground service
+  keeps the process alive for a *watched* snooze, which is the premise that
+  reasoning turned on ("the process is reclaimed within about a minute of each
+  wake, so an in-process timer would almost never fire"). An in-process resting
+  timer may now be viable where it was not — cheaper than the alarm that was
+  priced and declined, and worth pricing before assuming the choice is still
+  between half an hour and a battery bill.
 
 - [ ] **Round the displayed distance by its own confidence** (maintainer,
   2026-09-08). `355 ft to go` beside a `±60 ft` is four significant figures of
