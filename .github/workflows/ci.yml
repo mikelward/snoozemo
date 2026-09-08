@@ -459,12 +459,32 @@ jobs:
             done
             printf '%s\n' "$out"
           }
-          prove Play \
+          # The base grant's expectation carries its trailing `;` on purpose:
+          # the diagnostics are joined with "; ", and without it this fixed
+          # string is a prefix of the `_LOCATION` line below and would pass
+          # while the base rule was gone (Codex, PR #230, twice now).
+          play=$(prove Play \
             "declares com.google.android.gms.permission.AD_ID" \
-            "declares android.permission.FOREGROUND_SERVICE_LOCATION" \
+            "declares android.permission.FOREGROUND_SERVICE_DATA_SYNC" \
             "does not declare android.permission.ACCESS_BACKGROUND_LOCATION" \
+            "does not declare android.permission.FOREGROUND_SERVICE;" \
+            "does not declare android.permission.FOREGROUND_SERVICE_LOCATION" \
             "declares android.permission.INTERNET only up to SDK 34" \
-            'service app.snoozemo.snooze.SnoozeService declares foregroundServiceType="location"' > /dev/null
+            'service app.snoozemo.snooze.SnoozeService declares foregroundServiceType="dataSync"' \
+            'does not declare foregroundServiceType="location" on app.snoozemo.snooze.SnoozeService')
+          # The negative half: the *allowed* type must not be reported as one
+          # that was declared and refused. Matched on the positive diagnostic's
+          # own shape — `service <name> declares …` — and not on the bare
+          # attribute, because the required-missing line above contains that
+          # same substring and would make this fire on a correct run (Codex,
+          # PR #230). The accepting case proper is proven by
+          # `verifyPlayReleaseManifest` passing on the real merged manifest
+          # above, which ships both the permission and the type.
+          if echo "$play" | grep -qE 'service [^ ]+ declares foregroundServiceType="location"'; then
+            echo "$play"
+            echo "::error::The play release manifest guard reports the location type it must allow."
+            exit 1
+          fi
           direct=$(prove Direct \
             "declares android.permission.INTERNET" \
             "declares android.permission.ACCESS_BACKGROUND_LOCATION" \

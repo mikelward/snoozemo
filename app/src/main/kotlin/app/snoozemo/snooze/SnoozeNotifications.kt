@@ -42,6 +42,55 @@ class SnoozeNotifications(private val context: Context) {
 
     private val manager = context.getSystemService(NotificationManager::class.java)
 
+    /**
+     * How the ongoing card reaches the shade, when something more than
+     * `notify` is available.
+     *
+     * Null by default, and null in every instance but the running service's:
+     * this class is constructed fresh wherever a card has to be posted — an
+     * alarm receiver, the screen — and only a live [SnoozeService] can hold a
+     * foreground service. Those other posts still land, because a `notify` on
+     * [ID_ONGOING] updates the same card whether or not a service is attached
+     * to it.
+     */
+    internal var ongoingForegroundHost: OngoingForegroundHost? = null
+
+    /**
+     * The seam a running service installs so the card it posts and the
+     * notification the platform ties its foreground service to are one object
+     * rather than two competing for [ID_ONGOING].
+     *
+     * The service decides whether it *wants* the foreground service at all —
+     * that turns on the snooze's tracking mode, which is the service's to know
+     * — so [promote] returning false is an ordinary answer, not a failure, and
+     * the card is posted the plain way instead.
+     */
+    internal interface OngoingForegroundHost {
+        /**
+         * Makes [notification] the foreground service's own, posting it.
+         *
+         * @return true if it reached the shade that way. False means the card
+         *   still has to be posted — no foreground service is wanted here, or
+         *   the platform refused one.
+         */
+        fun promote(notification: android.app.Notification): Boolean
+
+        /** Releases the foreground service, so the card can be taken down. */
+        fun demote()
+
+        /**
+         * Whether this snooze wants a foreground service and does not have
+         * one — the platform refused it, or its prerequisites are gone.
+         *
+         * Read while the card is *built*, not while it is posted: a value read
+         * at post time would describe the previous card. Null where nobody can
+         * say — every instance but the running service's — and a clause is
+         * omitted there rather than guessed, since those posts happen while a
+         * service may well be holding one.
+         */
+        fun watchIsUnprotected(): Boolean
+    }
+
     init {
         ensureChannels()
     }
@@ -329,13 +378,17 @@ class SnoozeNotifications(private val context: Context) {
         // function of its arguments, and read *once* so the two posts below
         // cannot disagree about the same card.
         val ringerShortfall = ringerShortfall(snooze)
+        // Once, beside the ringer's reading and for its reason: the follow-up
+        // post below must not build a card from a newer answer than the one it
+        // is correcting.
+        val unprotected = ongoingForegroundHost?.watchIsUnprotected() == true
         // Once, for the same reason: the follow-up post below must not build a
         // card from a newer reading than the one it is correcting, or the two
         // posts would differ in a second way nobody asked about.
         val departure = DepartureObservations.latest()
         betweenReadAndPost()
         val posted = postOngoing(
-            buildOngoing(snooze, builtWith, ringerShortfall, silent, departure),
+            buildOngoing(snooze, builtWith, ringerShortfall, silent, departure, unprotected),
             onlyIfGeneration,
         )
         // The cache is read above but written under the lock this post takes,
@@ -355,7 +408,7 @@ class SnoozeNotifications(private val context: Context) {
             if (settled != builtWith) {
                 betweenReadAndPost()
                 postOngoing(
-                    buildOngoing(snooze, settled, ringerShortfall, silent, departure),
+                    buildOngoing(snooze, settled, ringerShortfall, silent, departure, unprotected),
                     onlyIfGeneration = posted,
                 )
             }
@@ -451,12 +504,23 @@ class SnoozeNotifications(private val context: Context) {
      * read so that the caller decides which answer the card is built against,
      * and so this stays a pure function of its arguments.
      */
+    /**
+     * **No defaults, deliberately** (Codex, PR #230). The follow-up post above
+     * rebuilds this card when the calendar answer moves, and a defaulted
+     * parameter it forgot to forward silently replaced the standing card with
+     * one missing that state — which the refusal clause made visible, since a
+     * refusal that stays refused flips nothing and so queues no corrective
+     * repost. Every one of these is a *reading taken once* in [showOngoing] and
+     * threaded through both posts; a default is an invitation to build the
+     * second card from less than the first.
+     */
     private fun buildOngoing(
         snooze: ActiveSnooze,
         until: Instant?,
-        ringerShortfall: String? = null,
-        silent: Boolean = false,
-        departure: DepartureObservation? = null,
+        ringerShortfall: String?,
+        silent: Boolean,
+        departure: DepartureObservation?,
+        unprotected: Boolean,
     ): android.app.Notification {
         val body = when (snooze.mode) {
             TrackingMode.FULL -> context.getString(R.string.ongoing_ends_when_you_leave)
@@ -501,10 +565,31 @@ class SnoozeNotifications(private val context: Context) {
         val withRinger = ringerShortfall?.let {
             context.getString(R.string.ongoing_degraded_reason, withReason, it)
         } ?: withReason
+        // A third axis, and the only one about the *app* rather than the phone:
+        // the mode says what can be watched, the ringer says how quiet it is,
+        // and this says whether the watch will survive to do it (Codex,
+        // PR #230). Without it a refused foreground service leaves the card
+        // claiming a snooze that ends when you leave, while the process it
+        // needs can be reclaimed and nothing but the cap would end it — a mode
+        // degraded in fact and not in what the user is told, which is the
+        // second principle's failure.
+        //
+        // Only where a mode is claimed that this could falsify. `Timer only`
+        // promises nothing a dead process would break, and asks for no
+        // foreground service in the first place.
+        val withProtection = if (unprotected && snooze.mode != TrackingMode.DURATION_ONLY) {
+            context.getString(
+                R.string.ongoing_degraded_reason,
+                withRinger,
+                context.getString(R.string.ongoing_watch_unprotected),
+            )
+        } else {
+            withRinger
+        }
         val notification = android.app.Notification.Builder(context, CHANNEL_ACTIVE)
             .setSmallIcon(TileR.drawable.ic_tile_snooze)
             .setContentTitle(context.getString(R.string.ongoing_title))
-            .setContentText(withRinger)
+            .setContentText(withProtection)
             // The top row, beside the app name and the countdown below
             // (maintainer, 2026-09-08). Null leaves the row as it was, which is
             // the honest rendering of "no reading yet" — an empty string would
@@ -639,7 +724,14 @@ class SnoozeNotifications(private val context: Context) {
             }
             ongoingGeneration++
             ongoingUp = true
-            post(ID_ONGOING, notification)
+            // Through the host first where there is one: a foreground service's
+            // notification is posted by `startForeground`, and posting the same
+            // id separately would leave two ideas of one card. A host that
+            // declines — no foreground service wanted, or the platform refused
+            // one — has posted nothing, so the plain path still has to run.
+            if (ongoingForegroundHost?.promote(notification) != true) {
+                post(ID_ONGOING, notification)
+            }
             return ongoingGeneration
         }
     }
@@ -848,6 +940,12 @@ class SnoozeNotifications(private val context: Context) {
         synchronized(ongoingLock) {
             ongoingGeneration++
             ongoingUp = false
+            // Before the cancel, and unconditionally: the platform keeps a
+            // foreground service's notification on screen through a `cancel`,
+            // so releasing it is what actually lets this card go. Harmless
+            // where no service is attached, which is every instance but the
+            // running one's.
+            ongoingForegroundHost?.demote()
             drop(ID_ONGOING)
         }
     }

@@ -4519,7 +4519,51 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     against this question in the meantime; the engine work already landed stands either way, since
     a snooze that ends on a duration cap needs the same controller.
 
+## Phase 7 cleanup the foreground service enables
+
+- [ ] **`direct`'s foreground-service work shrank** (2026-09-08, PR #230; maintainer asked whether
+  the flavors could now merge — they cannot, and this is what actually simplifies). The service
+  plumbing PR #230 adds is flavor-agnostic and lives in `:app`'s main source set: the
+  `OngoingForegroundHost` seam, `wantsForeground()`, the refusal handling and the card's
+  `tracking may pause` clause. So Phase 7 no longer needs a foreground-service lifecycle for
+  `direct` — it needs a `PresenceMonitor` that watches location without geofencing, and nothing
+  else.
+- [ ] **Move the foreground-service declarations from `play`'s manifest to `main` at Phase 7.**
+  They are `play`-only today because `direct` runs duration-only snoozes and would be holding a
+  permission it cannot use. Once `direct` watches, both flavors need them, and moving them also
+  deletes the `ACCESS_FINE_LOCATION` duplicate in `play`'s manifest — which exists only because
+  lint's `ForegroundServicePermission` reads the manifest the `<service>` is declared in rather
+  than the merged one. `DeclaredPermissionsTest` and `verifyPlayReleaseManifest`'s rules both
+  encode the current split and would move with it.
+
+  **What does *not* move**: `ACCESS_BACKGROUND_LOCATION`, `INTERNET`, and the Play Services
+  dependency. Those are what `direct` exists to ship without (SPEC.md §3.4), and PR #230 makes
+  `play` owe Play two declarations rather than one — so §3.5's risk went up and `direct` is worth
+  more, not less.
+
 ## Decisions needing review
+
+- [ ] **The wording of the refused-foreground-service clause** (maintainer, 2026-09-08: *"ship
+  with your wording for now and record a to-do for me to decide later"*). The ongoing card reads
+  `Ends when you leave — tracking may pause` when `startForeground` is refused, from
+  `ongoing_watch_unprotected`. It has to say, in a lowercase fragment matching its neighbors
+  (`still ringing`, `may still ring`), that the platform declined the service so this process can
+  be reclaimed and a departure might not be noticed until the timer. `may` is load-bearing: the
+  watch keeps running until the process is actually killed, so anything stronger overclaims.
+  Alternatives offered and not taken: `may stop watching` (more concrete about what stops, longer),
+  `watch may pause` (tighter, but "watch" is not a word the UI uses anywhere else), `may miss your
+  leaving` (clearest consequence, longest, and reads as a warning about the snooze rather than
+  about tracking). One string, still carrying `tools:ignore="MissingTranslation"` and its `TODO`
+  comment, so no locale has spent work on it yet.
+
+- [x] **Which tracking modes take the foreground service** — **confirmed** (maintainer,
+  2026-09-08). Their decision named the `location` type and "FGS only when tracking is FULL or
+  Wi-Fi", which left two modes unnamed; autopilot **included** both and that reading is now
+  confirmed. `SETTLING` is the arming window, where the anchor capture is in flight and about to
+  become one of the others; `WIFI_GRACE` is a live watch racing a deadline, where being killed is
+  exactly how the phone stays quiet. Those are the two moments a kill costs the most, which is why
+  the literal reading — excluding them — was the wrong one. `DURATION_ONLY` takes none: its only
+  exit is the cap alarm, which is durable without a process.
 
 - [ ] **Departures are noticed too late, and it is latency rather than the
   threshold** (maintainer, 2026-09-08: over 500 m on a morning walk, then still
@@ -6250,11 +6294,17 @@ wider than the accelerometer:
 >
 > — `developer.android.com/about/versions/pie/android-9.0-changes-all`
 
-**No service in the `play` build calls `startForeground`** (§3.3, and
-`DeclaredPermissionsTest` pins that no service declares a
-`foregroundServiceType`). During a snooze there is no activity either — the
-phone is in a pocket, in a cinema, which is the entire scenario. So on `play`
-the app is *background* in exactly this sense, and two things follow:
+**This was written when no service in the `play` build called `startForeground`,
+and that changed on 2026-09-08** (PR #230, `SPEC.md` D2): a snooze that is
+actually watching now holds a `location` foreground service, which is this
+restriction's own documented remedy. The rest of this section is therefore about
+the cases where it is *not* held — a `DURATION_ONLY` snooze, or one whose
+`startForeground` the platform refused — plus `direct` until Phase 7. Where it
+*is* held, the app is not a background app and both bullets below stop applying;
+`SPEC.md` §6.8 carries the split. During a snooze there is no activity either —
+the phone is in a pocket, in a cinema, which is the entire scenario. So in those
+remaining cases `play` is *background* in exactly this sense, and two things
+follow:
 
 - **The 30-second accelerometer window cannot happen.** Continuous sensors are
   named explicitly. The chain above is therefore a `direct`/Phase 7 shape, or

@@ -9,11 +9,18 @@ declarations.
 Two rules govern everything below. **These answers must stay true of the `play`
 flavor's shipped manifest**, which is the only build that reaches Play (`SPEC.md`
 §3.4). `DeclaredPermissionsTest` covers four of them — `INTERNET` on `play` but never on
-`direct` (Data safety), no `AD_ID` on either (Advertising ID), no typed
-`FOREGROUND_SERVICE_*` permission and no service declaring a `foregroundServiceType`
-on `play` (foreground service types), and the background grant on `play` but never on
+`direct` (Data safety), no `AD_ID` on either (Advertising ID), exactly
+`FOREGROUND_SERVICE_LOCATION` and exactly one service declaring
+`foregroundServiceType="location"` on `play` and neither on `direct` (foreground
+service types), and the background grant on `play` but never on
 `direct`. Everything else here is a
 statement about the product, not something a test can hold.
+
+**The foreground-service answers below changed on 2026-09-08** (PR #230). The `play`
+build used to run no foreground service at all, and this guide said to expect no
+Foreground service types section. It now runs a `location` one while a snooze is
+actually watching, so that section **does** apply and owes a real answer — the rows
+and the paste-ready text below are written for the build that ships today.
 
 **What that test reads is the `playDebug` merged manifest, not `playRelease`.**
 Unit tests run on the debug build type alone here, so a permission arriving through
@@ -96,38 +103,37 @@ Answers, and why each one is what it is.
 | **Financial features** | None | |
 | **Health apps** | No | Not a health app; DND is not a health feature. |
 | **Advertising ID** | Not used | Firebase Analytics merges `AD_ID`, so the `play` manifest removes it (`tools:node="remove"`) and switches `google_analytics_adid_collection_enabled` off. Analytics then reports against the per-install app-instance ID, which cannot be joined to activity in other apps. `DeclaredPermissionsTest` fails if `AD_ID` reappears. |
-| **Foreground service types** | *Expect no section* — but read the note below before assuming | No service in the `play` build declares a `foregroundServiceType`, and the type is what Play reviews (`SPEC.md` §3.3). The merged manifest does carry the bare `FOREGROUND_SERVICE` permission, from WorkManager. |
+| **Foreground service types** | **Location** — one service, `app.snoozemo.snooze.SnoozeService` | Declared since 2026-09-08 (`SPEC.md` D2, §3.4). Held only while a snooze is actually watching for a departure; a duration-only snooze starts none. See the paste-ready justification below. `verifyPlayReleaseManifest` fails the release if a second type appears, or if this one goes missing. |
 
-### Open: WorkManager puts `FOREGROUND_SERVICE` in the shipped manifest
+### Settled: the Foreground service types section applies, and what it says
 
-Found while pinning these answers with tests, and **not resolved here** — a
-foreground-service question is a distribution decision, not an implementation detail
-(`AGENTS.md`, *Play policy questions*).
+**Resolved 2026-09-08** (PR #230), and this section is kept rather than deleted
+because the question it asked was the right one and the answer moved.
 
-The `play` release manifest merges `android.permission.FOREGROUND_SERVICE` and
-`WAKE_LOCK` from WorkManager. Snoozemo's own manifests request neither, and no
-service declares a `foregroundServiceType`.
+It used to read *open*: WorkManager merges `android.permission.FOREGROUND_SERVICE`
+and `WAKE_LOCK` into the `play` release manifest, Snoozemo's own manifests requested
+neither, no service declared a type — and the open question was whether a Foreground
+service types section would appear in the Console anyway, on the strength of a
+permission that grants nothing without a type. The instruction was to look before
+filling anything in, since a foreground-service question is a distribution decision
+rather than an implementation detail (`AGENTS.md`, *Play policy questions*).
 
-`DeclaredPermissionsTest` pins the second half of that only: no typed
-`FOREGROUND_SERVICE_*` permission, and no service carrying a `foregroundServiceType`.
-It deliberately does **not** assert the bare `FOREGROUND_SERVICE`, since that one is
-present, and it never looks at `WAKE_LOCK` — so either of those appearing or
-disappearing leaves the suite green. What is guarded is the thing Play reviews; the
-WorkManager pair is described here, not enforced anywhere.
+That is now decided from the other end. The maintainer chose the **`location`** type
+(2026-09-08) after a field log showed the presence watch's process being reclaimed
+and the geofence exit arriving to a refused service start — so the section applies
+because Snoozemo genuinely declares a type, not because of WorkManager's permission.
+The answer is one service, `app.snoozemo.snooze.SnoozeService`, type `location`, held
+only while a snooze is watching.
 
-The reading that says this is fine: Play's foreground-service-types declaration is
-driven by declared *types*, the permission grants nothing without one, and a service
-cannot start in the foreground without a type. The reading that says check anyway: a
-permission visible on the store listing is a thing reviewers and users see, and
-§3.3's whole argument is that Snoozemo must not end up in a foreground-service
-review.
+What survives from the old question: the bare `FOREGROUND_SERVICE` and `WAKE_LOCK`
+still arrive from WorkManager rather than from Snoozemo's manifests, and
+`DeclaredPermissionsTest` asserts the bare permission is present in **both** flavors
+precisely because it is not a flavor signal. `WAKE_LOCK` is still described here and
+enforced nowhere.
 
-**What to do:** when you open the Console for the other declarations, look at whether
-a Foreground service types section appears at all. If it does, that is the answer to
-this question and it needs a decision before upload — not a form filled in on the
-spot. Removing the permission with `tools:node="remove"` is possible but would need
-to be weighed against what WorkManager does with it (`SPEC.md` §8's backstop schedule
-runs on WorkManager), so it is not a change to make speculatively.
+**Still a human's job before upload:** the justification text, the video, and
+confirming the Console renders the section as this guide expects. `verifyPlayReleaseManifest`
+guarantees what the release *ships*; it cannot fill in a form.
 
 ### Data safety, in detail
 
@@ -316,11 +322,13 @@ keep them true of the build you are uploading.
 > departure, which is minutes or hours later, so a while-in-use grant expires long
 > before the event it exists to detect.
 >
-> A foreground service would keep the app eligible, but Google's April 15, 2026
-> policy update removed geofencing as an approved foreground-service use case and
-> directs developers to the Geofence API for this exact pattern. The Geofence API
-> requires background location. Snoozemo follows that direction: the `play` build
-> runs no foreground service at all and uses geofencing as documented.
+> A foreground service is not the mechanism here. Google's April 15, 2026 policy
+> update removed geofencing as an approved foreground-service use case and directs
+> developers to the Geofence API for this exact pattern, and Snoozemo follows that
+> direction: the Geofence API is what detects the departure, and it requires
+> background location. The app additionally runs a `location` foreground service
+> while a snooze is watching, for a different reason — not to detect anything, but
+> so the process survives to receive the geofence exit the system delivers to it.
 >
 > Without background location the app degrades to a plain timer — it can only end the
 > snooze at a preset time, which is the guessing game the product exists to remove.

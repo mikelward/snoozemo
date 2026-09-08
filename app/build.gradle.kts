@@ -235,8 +235,31 @@ abstract class CheckReleaseManifest : DefaultTask() {
     @get:Input
     abstract val requiredPermissions: ListProperty<String>
 
+    /**
+     * Names exempted from [forbiddenPermissionPrefixes] — the prefix rule with
+     * a hole in it, so a flavor can hold exactly one member of a family it
+     * otherwise refuses.
+     */
+    @get:Input
+    abstract val permissionPrefixExemptions: ListProperty<String>
+
+    /** True where any `foregroundServiceType` is fine, as `direct`'s is. */
     @get:Input
     abstract val allowForegroundServiceType: Property<Boolean>
+
+    /**
+     * The services that must declare a `foregroundServiceType`, and the type
+     * each must declare, when [allowForegroundServiceType] is false.
+     *
+     * **Exact, in both directions.** An allow-list was not enough (Codex,
+     * PR #230): it read an *absent* type as fine, so a release-only manifest
+     * override could drop it and leave the typed `startForeground` refused and
+     * the watch killable, and it read *any number* of location services as
+     * fine, so a dependency could add a second one. The permission is already
+     * required; requiring the type it exists for is the other half.
+     */
+    @get:Input
+    abstract val requiredForegroundServiceTypes: MapProperty<String, String>
 
     @TaskAction
     fun check() {
@@ -270,8 +293,10 @@ abstract class CheckReleaseManifest : DefaultTask() {
             }
         val problems = mutableListOf<String>()
         forbiddenPermissions.get().filter { it in declared }.forEach { problems += "declares $it" }
+        val exempt = permissionPrefixExemptions.get().toSet()
         forbiddenPermissionPrefixes.get().forEach { prefix ->
-            declared.filter { it.startsWith(prefix) }.forEach { problems += "declares $it" }
+            declared.filter { it.startsWith(prefix) && it !in exempt }
+                .forEach { problems += "declares $it" }
         }
         requiredPermissions.get().forEach { required ->
             when {
@@ -280,12 +305,23 @@ abstract class CheckReleaseManifest : DefaultTask() {
             }
         }
         if (!allowForegroundServiceType.get()) {
-            val typed = document.getElementsByTagName("service").let { nodes ->
+            val wanted = requiredForegroundServiceTypes.get()
+            val actual = document.getElementsByTagName("service").let { nodes ->
                 (0 until nodes.length).map { nodes.item(it) as org.w3c.dom.Element }
-            }.filter { it.getAttributeNS(android, "foregroundServiceType").isNotEmpty() }
-            typed.forEach {
-                problems += "service ${it.getAttributeNS(android, "name")} declares " +
-                    "foregroundServiceType=\"${it.getAttributeNS(android, "foregroundServiceType")}\""
+            }.mapNotNull {
+                val type = it.getAttributeNS(android, "foregroundServiceType")
+                if (type.isEmpty()) null else it.getAttributeNS(android, "name") to type
+            }.toMap()
+            // Anything declared that was not asked for, by name and type — a
+            // second service, or the right service with the wrong type.
+            actual.filterNot { (name, type) -> wanted[name] == type }.forEach { (name, type) ->
+                problems += "service $name declares foregroundServiceType=\"$type\""
+            }
+            // And anything asked for that is not there. Without this the guard
+            // passes a release whose service lost its type, which is the
+            // release where `startForeground` is refused on every snooze.
+            wanted.filterNot { (name, type) -> actual[name] == type }.forEach { (name, type) ->
+                problems += "does not declare foregroundServiceType=\"$type\" on $name"
             }
         }
         if (problems.isNotEmpty()) {
@@ -303,6 +339,7 @@ abstract class CheckReleaseManifest : DefaultTask() {
 val adIdPermission = "com.google.android.gms.permission.AD_ID"
 val backgroundLocation = "android.permission.ACCESS_BACKGROUND_LOCATION"
 val internetPermission = "android.permission.INTERNET"
+val foregroundServicePermission = "android.permission.FOREGROUND_SERVICE"
 val typedForegroundServicePrefix = "android.permission.FOREGROUND_SERVICE_"
 
 /**
@@ -313,31 +350,65 @@ val typedForegroundServicePrefix = "android.permission.FOREGROUND_SERVICE_"
 class ReleaseManifestRules(
     val forbidden: List<String>,
     val forbiddenPrefixes: List<String>,
+    val prefixExemptions: List<String>,
     val required: List<String>,
     val allowForegroundServiceType: Boolean,
+    val requiredForegroundServiceTypes: Map<String, String>,
 )
 
-// `play`: nothing Play would review, plus the two grants its declarations
+// `play`: nothing Play would review beyond the three grants its declarations
 // rest on (SPEC.md §3.3, §12). `direct`: no network, no background location,
 // no ad identifier (SPEC.md §3.4); its foreground-service type is by design.
+//
+// **The foreground-service half was reversed on 2026-09-08** (maintainer). It
+// read "no typed permission, no declared type at all", because the type is the
+// real Play exposure and the April 2026 update named geofencing as a
+// non-approved use of the location one. What changed is not the policy reading
+// but the evidence: a device log showed the watch's process dying and the
+// geofence exit arriving to a refused service start, so the snooze the fence
+// existed to end did not end. The guard therefore moves from "none" to
+// "exactly this one" — `FOREGROUND_SERVICE_LOCATION`, required rather than
+// merely tolerated, and the `location` type on one service. A *second* type
+// merged by a dependency still fails the release, which is the decision this
+// guard exists to force.
+//
+// The **base** grant is required beside the typed one (Codex, PR #230), which
+// is not redundant: a typed `startForeground` needs both, so a release-only
+// overlay dropping `FOREGROUND_SERVICE` while leaving the location permission
+// and the type intact would have every promotion refused — the exact release
+// this guard exists to catch, and one `DeclaredPermissionsTest` cannot see.
+// WorkManager merges it in today, but "a dependency happens to supply it" is
+// not the same claim as "the release ships it".
+val locationForegroundServicePermission = "android.permission.FOREGROUND_SERVICE_LOCATION"
 val playManifestRules = ReleaseManifestRules(
     forbidden = listOf(adIdPermission),
     forbiddenPrefixes = listOf(typedForegroundServicePrefix),
-    required = listOf(backgroundLocation, internetPermission),
+    prefixExemptions = listOf(locationForegroundServicePermission),
+    required = listOf(
+        backgroundLocation,
+        internetPermission,
+        foregroundServicePermission,
+        locationForegroundServicePermission,
+    ),
     allowForegroundServiceType = false,
+    requiredForegroundServiceTypes = mapOf("app.snoozemo.snooze.SnoozeService" to "location"),
 )
 val directManifestRules = ReleaseManifestRules(
     forbidden = listOf(internetPermission, backgroundLocation, adIdPermission),
     forbiddenPrefixes = emptyList(),
+    prefixExemptions = emptyList(),
     required = emptyList(),
     allowForegroundServiceType = true,
+    requiredForegroundServiceTypes = emptyMap(),
 )
 
 fun CheckReleaseManifest.applyRules(rules: ReleaseManifestRules) {
     forbiddenPermissions.set(rules.forbidden)
     forbiddenPermissionPrefixes.set(rules.forbiddenPrefixes)
+    permissionPrefixExemptions.set(rules.prefixExemptions)
     requiredPermissions.set(rules.required)
     allowForegroundServiceType.set(rules.allowForegroundServiceType)
+    requiredForegroundServiceTypes.set(rules.requiredForegroundServiceTypes)
 }
 
 fun manifestRulesFor(flavorName: String?) = if (flavorName == "play") playManifestRules else directManifestRules

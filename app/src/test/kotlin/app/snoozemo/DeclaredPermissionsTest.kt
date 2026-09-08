@@ -3,6 +3,7 @@ package app.snoozemo
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -138,6 +139,30 @@ class DeclaredPermissionsTest {
     }
 
     @Test
+    fun `only the play flavor holds the typed foreground grant`() {
+        // The **typed** one is the flavor signal, and the bare one is not:
+        // WorkManager merges `FOREGROUND_SERVICE` into both flavors whatever
+        // the app asks for, so asserting its absence in `direct` fails against
+        // a dependency rather than against a decision. Asserted here so the
+        // next reader does not re-derive that — `direct` genuinely holds the
+        // bare permission and genuinely starts no foreground service, because
+        // the typed grant is what `startForeground` actually requires.
+        assertTrue(
+            "WorkManager merges the bare permission into both flavors",
+            Manifest.permission.FOREGROUND_SERVICE in declared,
+        )
+
+        val typed = Manifest.permission.FOREGROUND_SERVICE_LOCATION in declared
+        if (isDirectFlavor) {
+            // Duration-only until Phase 7: no watch to keep alive, so no
+            // service to outlive one, so nothing to declare.
+            assertFalse("direct starts no watch, so it claims no typed service", typed)
+        } else {
+            assertTrue("play keeps the presence watch's process alive", typed)
+        }
+    }
+
+    @Test
     fun `only the play flavor can reach the network`() {
         val network = Manifest.permission.INTERNET in declared
         if (isDirectFlavor) {
@@ -179,23 +204,32 @@ class DeclaredPermissionsTest {
     }
 
     @Test
-    fun `the play flavor declares no foreground service type`() {
-        // What Play actually reviews is the *type* — the location type's
-        // approved use cases are the ones SPEC.md §3.3 walks through failing,
-        // and the April 2026 update named geofencing as a non-approved use of
-        // it. So the invariant worth pinning is that no service declares a
-        // type at all, which is why the play build owes no foreground-service
-        // declaration in Play Console.
+    fun `the play flavor declares the location type and no other`() {
+        // **This assertion was reversed** (maintainer, 2026-09-08). It used to
+        // require that *no* service declared a type at all, on the reasoning
+        // that the location type's approved use cases are the ones SPEC.md §3.3
+        // walks through failing and that the April 2026 update named geofencing
+        // as a non-approved use of it. What changed is not the policy reading
+        // but the evidence: a device log showed the presence watch closing 67 s
+        // after arming, nothing looking for the next hour, and the geofence
+        // exit finally arriving to a background service start the platform
+        // refused — so the snooze the fence was there to end did not end. The
+        // maintainer read the current policy text, including the docs' own
+        // "consider using the geofence API instead" line, and chose `location`
+        // anyway: Snoozemo does both, and the service is what survives to hear
+        // what the fence delivers.
         //
-        // Deliberately not asserted: the bare android.permission
-        // .FOREGROUND_SERVICE, which WorkManager merges in and which the app's
-        // own manifests never request. It grants nothing on its own — a
-        // service still needs a declared type to start in the foreground — but
-        // it does mean "the play build declares no foreground service" is true
-        // of Snoozemo's code rather than of the merged manifest.
+        // So the invariant is no longer "no type" but "*this* type and nothing
+        // else". A second type appearing — a dependency merging `dataSync`, a
+        // future feature reaching for `mediaPlayback` — changes what Play
+        // reviews and what the Console declaration has to say, and is exactly
+        // the decision this test exists to force rather than let happen.
         //
-        // Scoped to play: direct is option A (SPEC.md §3.4) and gains a typed
-        // service at Phase 7, where none of this review applies.
+        // Deliberately not asserted here: the bare `FOREGROUND_SERVICE`, which
+        // WorkManager merges in regardless. The typed one is what Play reviews,
+        // and the flavor split for both is pinned above.
+        //
+        // Scoped to play: direct is option A (SPEC.md §3.4) and holds neither.
         val context = ApplicationProvider.getApplicationContext<Context>()
         val packageManager = context.packageManager
         if (isDirectFlavor) return
@@ -203,16 +237,26 @@ class DeclaredPermissionsTest {
         val typed = declared.filter {
             it.startsWith("android.permission.FOREGROUND_SERVICE_")
         }
-        assertTrue("play must request no typed foreground-service permission, found: $typed", typed.isEmpty())
+        assertEquals(
+            "play declares the location type and no other",
+            listOf(Manifest.permission.FOREGROUND_SERVICE_LOCATION),
+            typed,
+        )
 
         val services = packageManager
             .getPackageInfo(context.packageName, PackageManager.GET_SERVICES)
             .services
             .orEmpty()
         val withType = services.filter { it.foregroundServiceType != 0 }.map { it.name }
-        assertTrue(
-            "play must declare no foregroundServiceType (SPEC.md §3.3), found: $withType",
-            withType.isEmpty(),
+        assertEquals(
+            "and one service carries it — the one that owns the watch",
+            listOf("app.snoozemo.snooze.SnoozeService"),
+            withType,
+        )
+        assertEquals(
+            "and the type it carries is location",
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
+            services.single { it.foregroundServiceType != 0 }.foregroundServiceType,
         )
     }
 }
