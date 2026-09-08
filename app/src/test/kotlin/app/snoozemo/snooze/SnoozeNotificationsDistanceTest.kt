@@ -95,9 +95,14 @@ class SnoozeNotificationsDistanceTest {
         // happened. `DistanceUnit.toGo` floors at 1 rather than 0, so without
         // this branch the row would read "1 m to go" for the whole
         // confirmation window — a number, and the wrong one.
+        //
+        // And it is only ever reached in the *uncertain* case: a fix
+        // unambiguously beyond the radius ends the snooze outright, so this
+        // row names one qualifying fix waiting on its second, which can still
+        // revert to a distance.
         publish(distanceM = 400.0)
 
-        assertEquals(stringOf(R.string.ongoing_distance_confirming), subText(TrackingMode.FULL))
+        assertEquals(stringOf(R.string.ongoing_distance_leaving), subText(TrackingMode.FULL))
     }
 
     @Test
@@ -121,6 +126,21 @@ class SnoozeNotificationsDistanceTest {
         AnchorWifi.set(true)
 
         assertEquals(stringOf(R.string.ongoing_distance_wifi), subText(TrackingMode.FULL))
+    }
+
+    @Test
+    fun `a qualifying fix outranks the network it disagrees with`() {
+        // Codex, PR #229. A geofence exit escalates to `CHECKING` *without*
+        // clearing the association — `Presence.escalate` does that on purpose,
+        // since two subsystems disagreeing is exactly when a fix is worth
+        // taking — so a qualifying fix arrives while Wi-Fi still reads
+        // associated. Saying `Wi-Fi` there claims the network settled a
+        // question the engine is in the middle of distrusting, and hides a
+        // departure one fix from ending the snooze.
+        publish(distanceM = 400.0)
+        AnchorWifi.set(true)
+
+        assertEquals(stringOf(R.string.ongoing_distance_leaving), subText(TrackingMode.FULL))
     }
 
     @Test

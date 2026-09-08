@@ -387,8 +387,11 @@ class SnoozeNotifications(private val context: Context) {
      * with nothing to say why. Naming the reason turns a blank into an answer
      * — and it is the *stronger* answer, since Wi-Fi association is what ends
      * this snooze's uncertainty, not a number counting toward a threshold.
-     * Ahead of the reading for the same reason: a distance still fresh from
-     * just before the association would be the weaker of two true things.
+     * Ahead of a non-qualifying reading for the same reason: a distance still
+     * fresh from just before the association would be the weaker of two true
+     * things. **Behind a qualifying one**, though — that is the one case where
+     * the network is not the stronger answer, because the engine has evidence
+     * of departure and is actively distrusting Wi-Fi to check it.
      *
      * **Null unless there is something true to say.** Three ways:
      * - Not [TrackingMode.FULL]. The other modes are measuring no distance at
@@ -398,7 +401,15 @@ class SnoozeNotifications(private val context: Context) {
      * - No reading yet, or a stale one. A distance from ten minutes ago is
      *   worse than no distance, and the resting duty cycle (§6.7) can leave a
      *   gap that long on a phone that has not moved.
-     * - Qualifying already, where the answer is a wait rather than a distance.
+     * - Qualifying already, where the answer is `Leaving?` rather than a
+     *   distance (maintainer, 2026-09-08). This row is reached **only** in the
+     *   uncertain case — a fix unambiguously beyond the radius ends the snooze
+     *   outright without passing through it (SPEC.md §6.6) — so what is being
+     *   named is one qualifying fix waiting on a second thirty seconds later,
+     *   which can still revert. `Leaving?` is about the user rather than the
+     *   engine's process, stays true if the confirmation does not land, and
+     *   carries the doubt in its punctuation instead of promising an ending the
+     *   countdown beside it still says is hours away.
      *
      * **The number and its unit, nothing else** (maintainer, 2026-09-08). The
      * countdown beside it carries no label, so a distance that explained itself
@@ -415,9 +426,18 @@ class SnoozeNotifications(private val context: Context) {
      */
     private fun distanceSubText(snooze: ActiveSnooze, departure: DepartureObservation?): String? {
         if (snooze.mode != TrackingMode.FULL) return null
+        val reading = departure?.takeIf { it.isFresh(SnoozeClock.read().uptimeMillis) }
+        // Ahead of the network, and only this case is (Codex, PR #229). A
+        // geofence exit escalates to `CHECKING` *without* clearing the
+        // association — `Presence.escalate` does that deliberately, since the
+        // two subsystems disagreeing is exactly when a fix is worth taking — so
+        // a qualifying fix can arrive while Wi-Fi still reads as associated.
+        // Saying `Wi-Fi` there would claim the network had settled a question
+        // the engine is in the middle of distrusting, and would hide a
+        // departure that is one fix from ending the snooze.
+        if (reading?.qualifies == true) return context.getString(R.string.ongoing_distance_leaving)
         if (AnchorWifi.associated()) return context.getString(R.string.ongoing_distance_wifi)
-        val reading = departure?.takeIf { it.isFresh(SnoozeClock.read().uptimeMillis) } ?: return null
-        if (reading.qualifies) return context.getString(R.string.ongoing_distance_confirming)
+        if (reading == null) return null
         val unit = distanceUnitFor(context.resources.configuration)
         return distanceText(context, unit, unit.toGo(reading.remainingM))
     }

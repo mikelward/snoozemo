@@ -409,9 +409,15 @@ screen's readout answers "how is the test doing"; the card answers "how much lon
 countdown the platform already ticks there — so it shows the meters still *to go* rather than the
 distance away, and the two numbers fall to zero together. **The quantity and its unit and nothing
 else**, since the countdown beside it carries no label either. It is shown only under `FULL`, only
-from a fresh reading, and reads `Confirming` rather than a distance once a fix already qualifies —
+from a fresh reading, and reads `Leaving?` rather than a distance once a fix already qualifies —
 the one place a word appears, because there is no quantity there to print and a motionless `0 m`
-would read as stuck through the thirty-second confirmation. Everything else — the distance away, the combined `±` —
+would read as stuck through the thirty-second confirmation. **The question mark is the point**
+(maintainer, 2026-09-08): that row is reached only in the *uncertain* case, since a fix
+unambiguously beyond the radius ends the snooze without passing through it, so what it names is one
+qualifying fix waiting on a second thirty seconds later — which can still revert. `Leaving?`
+describes the user rather than the engine's process, stays true if the confirmation does not land,
+and carries the doubt in its punctuation instead of promising an ending the countdown beside it
+still says is hours away. Everything else — the distance away, the combined `±` —
 stays on the screen, which has room for the sentence.
 
 **And it reads `Wi-Fi` while the anchor's own network is associated** (maintainer, 2026-09-08).
@@ -420,7 +426,12 @@ answering (6.7), so readings stop arriving and the row would fall silent at the 
 with nothing to say why — a blank at the one moment the snooze is working exactly as designed.
 Naming the reason turns that into an answer, and it is the *stronger* answer: Wi-Fi association is
 what settles the question, where a number only counts toward a threshold nothing is measuring any
-more. It therefore outranks a distance still inside its window, and it is `FULL`-only like the rest
+more. It therefore outranks a distance still inside its window — but **not a qualifying one**
+(Codex, PR #229): a geofence exit escalates to a location check *without* clearing the association,
+deliberately, since the two subsystems disagreeing is exactly when a fix is worth taking, so a
+qualifying fix can arrive while Wi-Fi still reads as associated. `Wi-Fi` there would claim the
+network had settled a question the engine is in the middle of distrusting, and would hide a
+departure one fix from ending the snooze. It is `FULL`-only like the rest
 of the row — under a degraded mode the card already names the mode in its own line, and saying
 `Wi-Fi` in both places would state one fact twice.
 

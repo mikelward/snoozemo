@@ -6436,10 +6436,12 @@ what sets it off.
   What it costs: the row would carry no freshness promise of its own, which is a weakening
   of principle 2 to weigh against three ways of getting the timer wrong.
 
-  Parked with this row's other open questions rather than answered now — rounding by the
-  reading's own confidence, and `Confirming` vs `Ending` — both of which change what the row
-  shows, and neither of which the maintainer has seen on a handset yet (2026-09-08,
-  mid-demo). The Wi-Fi case has since been built, and it narrows this finding rather than
+  Parked with this row's remaining open question rather than answered now — rounding by the
+  reading's own confidence — which changes what the row shows and which the maintainer has
+  not seen on a handset yet (2026-09-08, mid-demo). The row's wording is settled:
+  `Leaving?`, chosen over `Confirming`, `Checking`, `Leaving` and `Ending` because the row is
+  reached only in the uncertain case and the question mark carries that doubt without
+  promising an ending. The Wi-Fi case has since been built, and it narrows this finding rather than
   widening it: the row now says something durable for the whole time the anchor's network is
   associated, which is most of the resting period a stale distance would otherwise sit
   through. Settling how the expiry is delivered before settling what it
