@@ -47,7 +47,21 @@ internal object NextMeetings {
      * rather than a meeting, so offering to snooze until one ends is offering
      * the wrong thing.
      */
-    fun endsBefore(context: Context, snooze: ActiveSnooze, now: Instant): List<Instant> {
+    fun endsBefore(
+        context: Context,
+        snooze: ActiveSnooze,
+        now: Instant,
+        /**
+         * Lets a caller abandon a query a wedged provider has not answered.
+         *
+         * Null for the notification's own read, which happens on a worker the
+         * service owns and outlives nothing. The app screen supplies one and
+         * cancels it in `onDestroy`: a rotation against a slow provider would
+         * otherwise start a fresh query per recreation while every previous
+         * one sat blocked (Codex, PR #234).
+         */
+        cancellation: android.os.CancellationSignal? = null,
+    ): List<Instant> {
         if (!isReadable(context)) return emptyList()
         val from = now.toEpochMilli()
         val until = snooze.capExpiresAt.toEpochMilli()
@@ -111,7 +125,10 @@ internal object NextMeetings {
                     // for not having to depend on that.
                     " AND \"${CalendarContract.Instances.END}\" < " + until,
                 null,
+                // Unsorted, as before: `MeetingEnd` orders what it offers, so
+                // asking the provider to sort would be work for nothing.
                 null,
+                cancellation,
             )?.use { cursor ->
                 buildList {
                     val column = cursor.getColumnIndexOrThrow(CalendarContract.Instances.END)
@@ -120,6 +137,12 @@ internal object NextMeetings {
                     }
                 }
             }.orEmpty()
+        } catch (e: android.os.OperationCanceledException) {
+            // Not a failure: the caller went away and said so. Named before the
+            // blanket case below so an abandoned query does not read as a
+            // broken provider in the log.
+            SnoozeDebugLog.event("calendar: the meeting-end query was abandoned")
+            emptyList()
         } catch (e: RuntimeException) {
             // A provider can be absent, disabled, or throw on a query a
             // particular OEM's calendar does not implement — and the permission

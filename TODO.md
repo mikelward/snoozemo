@@ -1343,6 +1343,92 @@ the point is that every other line of the app is worthless if it isn't true.
 
 `SPEC.md` §4.4 is explicitly provisional — treat its mockups as a starting point.
 
+- [x] **The same end-condition choices on the main screen** (maintainer, 2026-09-08:
+      *"if I start it from the main screen's Snooze now button, or if I open the main app, the
+      user should be able to change the snooze, not just start or edit it"*). A time row with
+      `−`/`+`, a row per offered meeting end (the next two), and `Until I leave`, shown under
+      the status line whenever a snooze is running and there is a time the service would accept.
+      `SPEC.md` §4.4, *The same choices on the main screen*.
+
+      The one new capability behind it: `Until I leave` **lengthens** a cap, which nothing
+      could do before — `ACTION_SET_CAP` only ever shortened. It routes through that same
+      action under a restore flag rather than a parallel one, so it inherits every guard the
+      shortening path already has (the identity check, the alarm reschedule, the record write
+      and its rollback), and it targets the record's own `capCeilingAt` rather than a time the
+      screen computed.
+
+- [ ] **Fix where the end-condition controls sit, and what the exit is called**
+      (maintainer, 2026-09-08, on seeing the first screenshot — for the PR after
+      the one that added the rows).
+
+      - **`Until I leave` goes first**, above the time row and the meetings.
+        Settled: it is the product's own thesis and the default a snooze is
+        armed on, so it reads wrong sitting under two refinements of it.
+      - **The exit moves to the bottom and stays there**, so both ends of the
+        list are at fixed positions whatever the calendar contributes. Today
+        the number of meeting rows moves it, which is exactly the control that
+        must never be somewhere new — `SPEC.md` §7's "always available, always
+        instant". Worth costing against §4.2's reason for *not* pinning the
+        title row: pinning takes height off the viewport in the short-window
+        and large-font cases. That argument cut against pinning something
+        secondary; it cuts the other way for the exit, which is the thing the
+        height is being reserved *for*.
+      - **Rename `End snooze` to `End now`**, and give it the same size and
+        shape as the rows above it. The maintainer's reason: every other
+        control on the screen names a time or a condition, so `End now` is the
+        one that completes the set — and matching sizes stop the exit reading
+        as a different kind of thing from the choices. Open to being talked
+        out of the rename; the sizing and the position are not in question.
+
+      - **A calendar mark on the meeting rows, appended after the time**
+        (maintainer, 2026-09-08). Every row's label starts at the same x and
+        the eye scans the times, so the mark goes after the text rather than
+        in front of it — it says *where this time came from*, which qualifies
+        the answer rather than categorizing it. A monochrome vector, tinted by
+        the row (maintainer: "monochrome vector is fine"), rather than an
+        emoji: 🗓️ renders differently per device and font and cannot take the
+        row's content color. It also needs a `contentDescription`, since the
+        label alone reads identically to the adjustable time and the mark is
+        the only thing distinguishing them for a screen reader.
+
+      Two new strings (`End now`, and the mark's description), both proposed
+      or implied by the maintainer, so the English is approved — they still
+      ship with the deferral markers until the locales are fanned out.
+
+- [ ] **Consider deleting the bottom sheet** (maintainer, 2026-09-08, asked for alongside the
+      entry above). The main screen now offers everything the sheet does and two things it does
+      not — meeting rows, and a departure choice that actually commits — so the sheet is no
+      longer the only place a snooze can be refined.
+
+      What argues against deleting it: the sheet is the **only** refinement a tile user ever
+      sees, and the tile-first user who never opens the app is exactly who `SPEC.md` D9 was
+      written for. Deleting it would mean the shade arms and nothing more, with the app the only
+      way to say anything about the end — which is the split D9 exists to avoid, in the other
+      direction. What argues for it: two surfaces for one decision is two things to keep in step,
+      the sheet's own `Until I leave` row is a no-op that reads like a control, and the setting
+      that gates it (`Ask when to unsnooze`) is one more thing to explain.
+
+      A middle option worth costing before either: keep the sheet but make the tile open the app
+      screen instead, so there is one refinement surface reached two ways. That trades a
+      transparent activity for a full one on the arm path, which §6.9 has opinions about.
+
+- [ ] **Should the stepper be able to lengthen a cap too?** Today its ceiling is the cap the
+      snooze currently carries, so a user who shortened to an hour cannot step back to two — they
+      tap `Until I leave` and step down again. `+30 min` (§4.3) is the control that lengthens, and
+      giving the stepper the same reach would make the two consistent. Not guessed at under
+      autopilot because it changes what a control offered at arm time can do, not just what the
+      main screen can.
+
+- [ ] **Should tapping the tile arm, or show the sheet first?** (maintainer, 2026-09-08:
+      *"yes for now tapping the tile starts the snooze, that was what I had in mind, but I
+      haven't validated that with users yet so it's open to change"*, then *"maybe tapping the
+      tile should just show the sheet idk"*.) Arm-first is what `SPEC.md` D9 specifies and what
+      ships: one tap from the shade with nothing in the way is goal 1, and a sheet that has to be
+      answered before anything is silenced makes the fast path slower for every user in order to
+      serve the one who wanted a different end. Sheet-first would make the choice explicit and
+      would make the sheet the obvious place to look, at the cost of the thing the product is
+      for. Left as it is until there is a user to ask.
+
 - [x] **How loud a snooze may be** (`SPEC.md` §5.9) — a ceiling of `Ring` / `Vibrate` /
       `Silent`, defaulting to `Vibrate`, applied to the global ringer
       mode for the duration of a snooze and handed back at the end. Driven from

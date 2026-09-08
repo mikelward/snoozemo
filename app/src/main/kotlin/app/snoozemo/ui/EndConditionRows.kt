@@ -1,0 +1,307 @@
+package app.snoozemo.ui
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
+import app.snoozemo.R
+import app.snoozemo.core.ActiveSnooze
+import app.snoozemo.core.EndCondition
+import app.snoozemo.core.MeetingEnd
+import app.snoozemo.core.TrackingMode
+import java.time.Instant
+
+/**
+ * The end-condition choices as the **main screen** shows them (SPEC.md §4.4).
+ *
+ * The same choices the sheet offers over a freshly-armed snooze, on a screen
+ * the user can open at any point during one — which is the difference that
+ * matters: the sheet appears once, at the arm, and a snooze refined an hour
+ * later had nowhere to be refined from (maintainer, 2026-09-08).
+ *
+ * Two things follow from being a screen rather than a sheet, and both are
+ * behavior rather than layout:
+ *
+ * - **The rows are capitalized and stand alone.** The sheet's read under its
+ *   own "Snoozing" title — `until 14:30` — while these are buttons with
+ *   nothing above them to complete the sentence, so they reuse the ongoing
+ *   notification's `Until %s` and its approved wording.
+ * - **`Until I leave` commits.** On the sheet it dismisses, because a snooze
+ *   that has just been armed is already running to its ceiling and "until I
+ *   leave" is what it is already doing. Here the snooze may have been
+ *   shortened minutes ago, so choosing it has to put the cap back — the one
+ *   choice in the app that lengthens one, bounded by the same ceiling `+30
+ *   min` is (§4.3).
+ *
+ * Deliberately stateless, like the sheet's own content: it is handed what to
+ * draw and reports taps. Every label arrives already formatted, so this stays
+ * free of platform calls and a screenshot test can pin exact strings.
+ *
+ * @param meetingLabels each offered meeting end, already rendered in the user's
+ *   own 12/24-hour setting, earliest first. Empty when the calendar cannot be
+ *   read or has nothing that would change anything — the rows simply aren't
+ *   there, since a disabled row for a meeting nobody has explains nothing.
+ */
+@Composable
+internal fun EndConditionRows(
+    condition: EndCondition,
+    formattedTime: String,
+    meetingLabels: List<String>,
+    onChooseTime: () -> Unit,
+    onChooseMeeting: (Int) -> Unit,
+    onChooseDeparture: () -> Unit,
+    onStepDown: () -> Unit,
+    onStepUp: () -> Unit,
+    committing: Boolean = false,
+    failed: Boolean = false,
+    tracksDeparture: Boolean = true,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // The row commits; the steppers beside it only change what it would
+            // commit. Two targets rather than one nested in the other, so
+            // TalkBack names each — the rule the sheet's own row keeps.
+            EndChoiceRow(
+                label = stringResource(R.string.action_end_at, formattedTime),
+                onClick = onChooseTime,
+                enabled = !committing,
+                modifier = Modifier.weight(1f),
+            )
+            EndStepper(
+                symbol = "−",
+                description = stringResource(R.string.sheet_earlier),
+                enabled = condition.canStepDown && !committing,
+                onClick = onStepDown,
+            )
+            EndStepper(
+                symbol = "+",
+                description = stringResource(R.string.sheet_later),
+                enabled = condition.canStepUp && !committing,
+                onClick = onStepUp,
+            )
+        }
+
+        // Times only, and the same string the notification's action uses: a
+        // meeting's *name* would put the user's day on a screen that needs a
+        // time and nothing else (`AGENTS.md`, *Privacy*), and nothing here ever
+        // asked the provider for one.
+        meetingLabels.forEachIndexed { index, label ->
+            EndChoiceRow(
+                label = stringResource(R.string.action_end_at, label),
+                onClick = { onChooseMeeting(index) },
+                enabled = !committing,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
+        if (tracksDeparture) {
+            EndChoiceRow(
+                label = stringResource(R.string.main_until_i_leave),
+                onClick = onChooseDeparture,
+                enabled = !committing,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
+        // Above nothing in particular here — unlike the sheet, there is no
+        // bottom-most control for a growing message to push off screen — but
+        // still beside the rows that produced it, which is where the tap was.
+        if (failed) {
+            Text(
+                text = stringResource(R.string.failure_could_not_set_end),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+}
+
+/**
+ * One committing row: tapping it chooses that end condition.
+ *
+ * Shared by the sheet and the main screen so the two cannot drift into
+ * different-looking versions of the same control. [enabled] is what keeps a
+ * second tap off an in-flight first one; the row stays drawn either way, since
+ * a control that vanished mid-tap would move its neighbor under the finger.
+ */
+@Composable
+internal fun EndChoiceRow(
+    label: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier
+                // Before the padding, so the whole card answers the tap and the
+                // Surface's shape clips the ripple to it.
+                .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+                .fillMaxWidth()
+                .padding(16.dp),
+        )
+    }
+}
+
+/**
+ * One of the `−` / `+` steppers.
+ *
+ * The symbol is drawn, but the name announced is the whole phrase: "minus"
+ * tells a screen-reader user nothing about what it steps or by how much.
+ */
+@Composable
+internal fun EndStepper(
+    symbol: String,
+    description: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.semantics { contentDescription = description },
+    ) {
+        Text(text = symbol, style = MaterialTheme.typography.titleMedium)
+    }
+}
+
+/**
+ * One offered meeting end: the instant to commit and the label that names it.
+ *
+ * One object rather than two parallel lists, so the row a user reads and the
+ * time a tap sends cannot drift apart — an index into a labels list that was
+ * built from a different filtering is exactly the shape that commits the wrong
+ * time silently.
+ */
+@Immutable
+internal data class MeetingChoice(
+    val at: Instant,
+    /** [at] in the user's own 12/24-hour setting. */
+    val label: String,
+)
+
+/**
+ * Everything [EndConditionRows] draws, as one value.
+ *
+ * Bundled rather than passed as seven more parameters on [MainScreen], which
+ * already takes enough of them — and null here is the whole answer to "is
+ * there anything to refine right now", so the screen has one thing to check
+ * rather than a condition plus six fields that only mean something when it is
+ * non-null.
+ *
+ * `@Immutable` because [meetings] is a `List`, which Compose otherwise treats
+ * as unstable and re-reads on every recomposition of the screen.
+ */
+@Immutable
+internal data class EndChoiceUiState(
+    val condition: EndCondition,
+    /** [EndCondition.endsAt], already in the user's own 12/24-hour setting. */
+    val formattedTime: String,
+    val meetings: List<MeetingChoice> = emptyList(),
+    val committing: Boolean = false,
+    val failed: Boolean = false,
+    /**
+     * Whether this snooze can end on a departure at all. False on a
+     * duration-only snooze, where `Until I leave` would name something nothing
+     * is watching for (`TrackingMode.DURATION_ONLY`) — the row is dropped
+     * rather than disabled, since a grayed control invites a tap that can
+     * never work.
+     */
+    val tracksDeparture: Boolean = true,
+)
+
+/**
+ * The screen's end-condition offer, or null when there is nothing to refine.
+ *
+ * Pure, and separate from the composition that reads it, because all three of
+ * its rules are the kind that go wrong quietly and are worth a JVM test rather
+ * than a Robolectric one (AGENTS.md, *Testing expectations*).
+ *
+ * **[record] has to be the offer's own**, matched on [offerFor], and the
+ * caller is not trusted to have done that: an offer restored from saved state
+ * is on screen before the asynchronous record read lands, and a null record
+ * read as "tracks departure" would offer to put a duration-only snooze's cap
+ * back to its eight-hour ceiling with nothing watching for the departure that
+ * names (Codex, PR #234). Both questions fail closed on a record that is
+ * absent or is another snooze's.
+ *
+ * **Everything is decided against [now], not against the moment the record was
+ * read.** The offer is built from a snapshot and rendered against a moving
+ * clock, and that gap is a *class* of bug rather than one: a meeting end
+ * sliding inside the floor and the cap itself crossing inside it are the same
+ * shape, and both leave a row that the service declines on every tap — the
+ * controller cannot even reseed past it, since the offer it would rebuild from
+ * no longer offers a choice. So the whole offer is withheld the moment the
+ * record stops being refinable, rather than each row being patched as its own
+ * case (Codex, PR #234, twice in the same mechanism).
+ *
+ * That gate also answers the unread record: an offer this cannot confirm still
+ * belongs to a running, refinable snooze is one it must not solicit taps on.
+ */
+internal fun endChoiceUiState(
+    condition: EndCondition?,
+    offerFor: Instant?,
+    record: ActiveSnooze?,
+    meetingEnds: List<Instant>,
+    now: Instant,
+    committing: Boolean,
+    failed: Boolean,
+    format: (Instant) -> String,
+): EndChoiceUiState? {
+    if (condition == null) return null
+    val offerRecord = record?.takeIf { it.startedAt == offerFor }
+    // Fails closed on all three at once: no record, another snooze's record,
+    // and a cap that has come inside the floor while the screen sat open.
+    if (!EndCondition.offersAChoice(offerRecord, now)) return null
+    return EndChoiceUiState(
+        condition = condition,
+        formattedTime = format(condition.endsAt),
+        meetings = MeetingEnd.offersFor(offerRecord, meetingEnds, now, limit = MEETING_ROWS)
+            .map { MeetingChoice(at = it, label = format(it)) },
+        committing = committing,
+        failed = failed,
+        // The same predicate the service honors the tap with, so the row is
+        // never offered where the restore would be declined — and never
+        // withheld where it would be taken.
+        tracksDeparture = offerRecord?.mode?.tracksDeparture == true,
+    )
+}
+
+/**
+ * How many meeting ends the screen offers.
+ *
+ * Two rather than the notification's one: a screen has room for the choice a
+ * card has to pick between, and "the meeting after this one" is the common
+ * answer when the current one is nearly over.
+ */
+internal const val MEETING_ROWS = 2

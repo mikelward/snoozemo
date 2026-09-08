@@ -1149,6 +1149,71 @@ either path.
   Rounding the seed onto the half hour can leave less than a step of headroom, and a control
   whose promise is half-hour steps must not answer a tap with a ragged time.
 
+#### The same choices on the main screen
+
+**The sheet is offered once, at the arm; the main screen offers the same choices for as long as the
+snooze runs** (maintainer, 2026-09-08). The sheet answers "how should this snooze end?" in the
+seconds after arming, and a user who works that out an hour later — a meeting appears, plans change,
+they simply forgot to pick — had nowhere to say so. Opening the app showed the snooze and offered
+exactly two things: end it, or nothing. So the same rows now sit on the main screen, under the status
+line and above `End snooze`, whenever a snooze is running and there is a time the service would
+accept (§7's `MIN_CAP`).
+
+Three differences from the sheet, and all three are behavior rather than layout:
+
+- **`Until I leave` commits, where the sheet's dismisses.** On the sheet that row changes nothing,
+  because the snooze it is offered over was armed seconds ago and is already running to its
+  ceiling. Here the snooze may have been shortened half an hour ago, so choosing it has to put the
+  cap **back** — the one choice in the app that lengthens one. It is bounded by the same ceiling
+  `+30 min` is (§4.3), the snooze's own `capCeilingAt`, so it can never run past the backstop the
+  snooze started with. The service is what names that instant, not the screen: a clock change moves
+  the ceiling under a fixed `startedAt`, so a time computed on this side would be a guess about a
+  moment only the record knows. **The service also re-checks that the snooze still tracks a
+  departure at all** and declines otherwise — a snooze that degrades mid-flight keeps its
+  `startedAt`, so the identity check passes and the screen's own reading is by definition a moment
+  behind. Restoring anyway would put an eight-hour cap on a snooze with nothing watching for the
+  departure the row named.
+- **Meeting ends are rows here, not just a notification action.** §4.3's card offers the next
+  meeting end; the screen offers the next two, on the same rules — later than the floor, earlier
+  than the cap, times only and never a title. Two rather than one because a screen has room for the
+  choice a card has to pick between, and because "the meeting after this one" is the common answer
+  when the current one is nearly over.
+- **The rows are dropped, not disabled, where they cannot be honored.** A duration-only snooze
+  (§6.5) gets no `Until I leave`, because nothing is watching for a departure and the row would name
+  an end that cannot arrive. A calendar that cannot be read, or has nothing inside the window,
+  contributes no meeting rows.
+
+**The offer is decided against the clock, not against the moment the record was
+read.** The rows sit there for as long as the snooze does, so the snapshot they
+were built from goes stale under them — a meeting end slides inside the floor, or
+the cap itself crosses inside it — and the service declines a time inside the
+floor. A row left standing over one of those fails on every tap, and the refusal
+cannot recover it: the offer the controller would rebuild from no longer offers a
+choice. So the whole offer is withheld the moment the running record stops being
+refinable, and the meeting rows are re-chosen from *every* candidate the calendar
+returned rather than from a pair fixed when the record was read. The same gate
+answers a record that has not been read yet: an offer that cannot be confirmed
+against a running, refinable snooze is one the screen must not solicit taps on.
+
+`End snooze` keeps the last word on the screen, below every refinement — the order says which of
+them is the terminal answer.
+
+**It is not pinned, and that is a gap rather than a decision** (Codex, PR #234). The rows sit in the
+same scrolling column, so on a short window, at a large font, or under a banner, up to four of them
+now stand between the top of the screen and the exit. It stays reachable — the column scrolls, which
+is what §7's "always available" rests on — but "reachable by scrolling past the refinements" is
+weaker than what this screen owes its one guaranteed way back to a ringing phone. Pinning it outside
+the scroll is tracked in `TODO.md` with the rest of the layout work the maintainer asked for.
+
+**The stepper still only shortens.** Its ceiling is the cap the snooze currently carries, so a user
+who has shortened to an hour cannot step back to two — they choose `Until I leave` and step down
+again. `+30 min` (§4.3) is the control that lengthens, and giving the stepper the same reach is
+tracked in `TODO.md` rather than guessed at here.
+
+**Whether the sheet survives this is an open question**, recorded in `TODO.md`: the screen now does
+everything the sheet does and more, but the sheet is the only refinement a *tile* user ever sees, and
+the tile-first user who never opens the app is exactly who D9 was written for.
+
 #### Candidates considered
 
 | End condition | Signal needed | Verdict |

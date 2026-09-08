@@ -1,6 +1,5 @@
 package app.snoozemo.ui
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -11,16 +10,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import app.snoozemo.R
 import app.snoozemo.core.EndCondition
@@ -98,19 +93,19 @@ internal fun EndConditionSheetContent(
                 // The row commits; the steppers beside it only change what it
                 // would commit. Two targets, not one nested inside the other, so
                 // TalkBack has a name for each — the same rule `SetupRow` keeps.
-                ChoiceRow(
+                EndChoiceRow(
                     label = stringResource(R.string.sheet_until_time, formattedTime),
                     onClick = onChooseTime,
                     enabled = !committing,
                     modifier = Modifier.weight(1f),
                 )
-                Stepper(
+                EndStepper(
                     symbol = "−",
                     description = stringResource(R.string.sheet_earlier),
                     enabled = condition.canStepDown && !committing,
                     onClick = onStepDown,
                 )
-                Stepper(
+                EndStepper(
                     symbol = "+",
                     description = stringResource(R.string.sheet_later),
                     enabled = condition.canStepUp && !committing,
@@ -119,7 +114,7 @@ internal fun EndConditionSheetContent(
             }
 
             if (tracksDeparture) {
-                ChoiceRow(
+                EndChoiceRow(
                     label = stringResource(R.string.sheet_until_i_leave),
                     onClick = onChooseDeparture,
                     enabled = !committing,
@@ -172,62 +167,6 @@ internal fun EndConditionSheetContent(
 }
 
 /**
- * One committing row: tapping it chooses that end condition.
- *
- * The time row dismisses only once the service has confirmed the change, so
- * [enabled] is what keeps a second tap off an in-flight first one. The row stays
- * drawn either way — a control that vanished mid-tap would move the other one
- * under the user's finger.
- */
-@Composable
-private fun ChoiceRow(
-    label: String,
-    onClick: () -> Unit,
-    enabled: Boolean = true,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier,
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier
-                // Before the padding, so the whole card answers the tap and the
-                // Surface's shape clips the ripple to it.
-                .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
-                .fillMaxWidth()
-                .padding(16.dp),
-        )
-    }
-}
-
-/**
- * One of the `−` / `+` steppers.
- *
- * The symbol is drawn, but the name announced is the whole phrase: "minus" tells
- * a screen-reader user nothing about what it steps or by how much.
- */
-@Composable
-private fun Stepper(
-    symbol: String,
-    description: String,
-    enabled: Boolean,
-    onClick: () -> Unit,
-) {
-    OutlinedButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier.semantics { contentDescription = description },
-    ) {
-        Text(text = symbol, style = MaterialTheme.typography.titleMedium)
-    }
-}
-
-/**
  * [instant] as the user's own phone writes a time — their 12/24-hour setting,
  * their locale, their zone.
  *
@@ -237,7 +176,49 @@ private fun Stepper(
  *
  * Shared by both hosts, so the tile and the app screen cannot format the same
  * offer two ways.
+ *
+ * **[rememberSheetTimeFormatter] is the form to use from a composable**, and
+ * this one is for the callers that format once — the sheet's single row, a
+ * notification action. A screen that keeps rows up for the length of a snooze
+ * re-formats them on every minute tick, and `getTimeFormat` reads the
+ * 12/24-hour setting each time it is asked (Codex, PR #234).
  */
+@androidx.compose.runtime.Composable
+internal fun rememberSheetTimeFormatter(): (java.time.Instant) -> String {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    // **Keyed on everything `getTimeFormat` actually reads**, which took three
+    // rounds to get right (Codex, PR #234) — the first version keyed on the
+    // configuration alone and I wrote a comment claiming a 12/24-hour change
+    // arrives as one. It does not: `Configuration` carries the locale, and
+    // nothing else here.
+    //
+    // So all three, and each for a change the others miss: the configuration
+    // for the locale, the zone because `getTimeFormat` bakes the default one
+    // into the formatter it returns, and the 12/24-hour preference because it
+    // lives in `Settings.System` and moves neither of the others.
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    // **And on the time zone, which the configuration does not carry** (Codex,
+    // PR #234). `getTimeFormat` bakes the default zone into the formatter it
+    // returns, and a zone change moves no `Configuration` field — so a cached
+    // one goes on writing the old local time while the instant behind it is
+    // unchanged. After travel that is a row labeled 14:00 that in fact keeps
+    // the phone silent until 15:00. Read per composition, which is a static
+    // field rather than the settings lookup the cache exists to avoid; the
+    // screen's minute tick is what bounds how long a stale label can stand.
+    val zone = java.util.TimeZone.getDefault().id
+    // The one key that is not free: `Settings.System` is read per composition
+    // rather than per row. That still leaves the saving the cache exists for —
+    // the resource lookup and the formatter's own construction — and a key
+    // that cannot see a change is not a cache, it is a stale value.
+    val hours24 = android.text.format.DateFormat.is24HourFormat(context)
+    val format = androidx.compose.runtime.remember(configuration, zone, hours24) {
+        android.text.format.DateFormat.getTimeFormat(context)
+    }
+    return androidx.compose.runtime.remember(format) {
+        { instant: java.time.Instant -> format.format(java.util.Date(instant.toEpochMilli())) }
+    }
+}
+
 internal fun formatSheetTime(context: android.content.Context, instant: java.time.Instant): String =
     android.text.format.DateFormat.getTimeFormat(context)
         .format(java.util.Date(instant.toEpochMilli()))

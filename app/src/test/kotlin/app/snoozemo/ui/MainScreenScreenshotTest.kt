@@ -21,6 +21,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import app.snoozemo.PlayUpdateState
 import app.snoozemo.core.DegradationCause
+import app.snoozemo.core.EndCondition
 import app.snoozemo.core.DepartureObservation
 import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
@@ -36,6 +37,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.time.Duration
+import java.time.Instant
 
 /**
  * The home screen in each state it can actually be in, light and dark.
@@ -477,6 +479,112 @@ class MainScreenScreenshotTest {
         // No idle claim either — the record has not been read, so "Not
         // snoozing" would be a guess over a snooze that may well be running.
         composeRule.onNodeWithText("Not snoozing").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a running snooze can be refined without being restarted`() {
+        var chosenTime = 0
+        var chosenMeeting = -1
+        var chosenDeparture = 0
+        var stepped = 0
+
+        capture("main-screen-end-condition.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.FULL,
+                remaining = Duration.ofHours(3).plusMinutes(40),
+                degradation = null,
+                endChoice = EndChoiceUiState(
+                    condition = EndCondition(
+                        endsAt = NOON.plus(Duration.ofHours(1)),
+                        floor = NOON.plus(Duration.ofMinutes(30)),
+                        ceiling = NOON.plus(Duration.ofHours(8)),
+                    ),
+                    formattedTime = "1:00 PM",
+                    meetings = listOf(
+                        MeetingChoice(NOON.plus(Duration.ofMinutes(90)), "1:30 PM"),
+                        MeetingChoice(NOON.plus(Duration.ofMinutes(165)), "2:45 PM"),
+                    ),
+                ),
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onChooseEndTime = { chosenTime++ },
+                onChooseEndMeeting = { chosenMeeting = it },
+                onChooseDeparture = { chosenDeparture++ },
+                onStepEndDown = { stepped-- },
+                onStepEndUp = { stepped++ },
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        // The choices the arm-time sheet offers, on a screen the user can open
+        // at any point during the snooze (maintainer, 2026-09-08).
+        composeRule.onNodeWithText("Until 1:00 PM").performScrollTo().performClick()
+        assertEquals(1, chosenTime)
+        // Times only for the meetings — never a title (`AGENTS.md`, Privacy).
+        composeRule.onNodeWithText("Until 2:45 PM").performScrollTo().performClick()
+        assertEquals(1, chosenMeeting)
+        composeRule.onNodeWithText("Until I leave").performScrollTo().performClick()
+        assertEquals(1, chosenDeparture)
+        composeRule.onNodeWithContentDescription("Half an hour later").performScrollTo().performClick()
+        assertEquals(1, stepped)
+        // And the exit is still the bottom-most control: refining a snooze
+        // must never push the one guaranteed way out of it off the screen
+        // (SPEC.md §7).
+        composeRule.onNodeWithText("End snooze").performScrollTo().assertIsEnabled()
+    }
+
+    @Test
+    fun `a duration-only snooze is not offered a departure it cannot make`() {
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.DURATION_ONLY,
+                remaining = Duration.ofHours(3),
+                degradation = null,
+                endChoice = EndChoiceUiState(
+                    condition = EndCondition(
+                        endsAt = NOON.plus(Duration.ofHours(1)),
+                        floor = NOON.plus(Duration.ofMinutes(30)),
+                        ceiling = NOON.plus(Duration.ofHours(8)),
+                    ),
+                    formattedTime = "1:00 PM",
+                    tracksDeparture = false,
+                ),
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Until 1:00 PM").assertExists()
+        // Dropped rather than disabled: nothing is watching for a departure on
+        // this snooze, so the row would name an end that cannot arrive.
+        composeRule.onNodeWithText("Until I leave").assertDoesNotExist()
     }
 
     @Test
@@ -1850,6 +1958,15 @@ class MainScreenScreenshotTest {
      * both variants and would have made the dark snapshots look like a theming
      * bug in the app rather than a missing wrapper in the test.
      */
+    private companion object {
+        /**
+         * A fixed instant for the end-condition bounds. Nothing renders it —
+         * the row's label arrives already formatted — so it only has to sit
+         * far enough inside the bounds for the steppers to be enabled.
+         */
+        val NOON: Instant = Instant.parse("2026-09-08T12:00:00Z")
+    }
+
     private fun capture(
         name: String? = null,
         widthPx: Int = 1080,

@@ -62,9 +62,14 @@ class MainActivitySheetTest {
      * waited on (`AGENTS.md`, no papering over racy tests).
      */
     private fun screen(): MainActivity =
-        Robolectric.buildActivity(MainActivity::class.java).setup().get().also {
-            it.runOffMainThread = { work -> work() }
-        }
+        // Before `setup()`, which runs `onStart` and launches the first
+        // record read: installed after, the runner cannot make *that* read
+        // synchronous and idling the looper does not join the thread it went
+        // to (Codex, PR #234, on the sibling test).
+        Robolectric.buildActivity(MainActivity::class.java).also {
+            it.get().runOffMainThread = { work -> work() }
+            it.setup()
+        }.get()
 
     /**
      * Drains the offer's own post — which is deliberate in production, so the

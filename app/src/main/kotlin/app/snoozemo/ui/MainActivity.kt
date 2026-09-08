@@ -68,6 +68,8 @@ import app.snoozemo.snooze.EndSheetSetting
 import app.snoozemo.snooze.reconcileRingerInBackground
 import app.snoozemo.snooze.SnoozeRingerSetting
 import app.snoozemo.core.EndCondition
+import app.snoozemo.core.MeetingEnd
+import app.snoozemo.core.TrackingMode
 import java.time.Instant
 import app.snoozemo.snooze.EndChoiceController
 import app.snoozemo.snooze.EndChoiceOutcome
@@ -80,6 +82,7 @@ import app.snoozemo.snooze.NotificationPromptStore
 import app.snoozemo.snooze.RecreationMarker
 import app.snoozemo.snooze.PlayUpdateStore
 import app.snoozemo.snooze.WelcomeStore
+import app.snoozemo.snooze.NextMeetings
 import app.snoozemo.snooze.SnoozeClock
 import app.snoozemo.snooze.SnoozeNotifications
 import app.snoozemo.snooze.activeChannelEnabled
@@ -129,6 +132,17 @@ private const val KEY_SHEET_FAILED = "sheetFailed"
 private const val KEY_SHEET_ENDS_AT = "sheetEndsAt"
 private const val KEY_SHEET_FLOOR = "sheetFloor"
 private const val KEY_SHEET_CEILING = "sheetCeiling"
+
+// The main screen's own rows keep their own set: the two offers are separate
+// choices about the same snooze and can be stepped to different times, so one
+// set of keys would restore whichever was saved last onto both.
+private const val KEY_ROWS_COMMITTING = "rowsCommitting"
+private const val KEY_ROWS_REQUEST_ID = "rowsRequestId"
+private const val KEY_ROWS_OFFERED_FOR = "rowsOfferedFor"
+private const val KEY_ROWS_FAILED = "rowsFailed"
+private const val KEY_ROWS_ENDS_AT = "rowsEndsAt"
+private const val KEY_ROWS_FLOOR = "rowsFloor"
+private const val KEY_ROWS_CEILING = "rowsCeiling"
 
 /** How often [MainActivity.now] advances while visible — see its own comment. */
 private const val TICK_INTERVAL_MS = 60_000L
@@ -279,11 +293,93 @@ class MainActivity : ComponentActivity() {
         chooseEnd = { endsAt, requestId, forSnooze ->
             SnoozeService.chooseEnd(this, endsAt, requestId, forSnooze)
         },
+        // Wired but unreached: this sheet's departure row dismisses, because
+        // the snooze it is offered over was armed seconds ago and is already
+        // running to its ceiling. Supplied rather than made optional so there
+        // is no null branch to reason about in the controller.
+        restoreDeparture = { requestId, forSnooze ->
+            SnoozeService.restoreEnd(this, requestId, forSnooze)
+        },
         watchOutcome = EndChoiceOutcome::watch,
         // Nothing to finish: clearing the offer is what closes this sheet,
         // unlike the trampoline where the activity *is* the sheet.
         onDismiss = {},
     )
+
+    /**
+     * The same choices as [sheet], on the screen itself rather than over it
+     * (SPEC.md §4.4) — so a snooze can be refined at any point during it, not
+     * only in the seconds after arming (maintainer, 2026-09-08).
+     *
+     * **A second controller rather than a second use of the first**, because
+     * the two have opposite lifetimes: the sheet is one-shot and is *supposed*
+     * to disappear once it has been answered, while these rows stand for as
+     * long as a snooze does. Sharing one instance would mean either a sheet
+     * that never closes or rows that vanish on the first tap. Everything that
+     * made the controller worth sharing still applies — the commit lifecycle,
+     * the refusal handling, the identity check — and both are answered by
+     * request id, so an outcome settles the offer that asked for it and leaves
+     * the other alone.
+     *
+     * **Settling a commit re-reads the record rather than doing nothing**, and
+     * that is what keeps the rows on screen. `dismiss` is how the controller
+     * ends *any* settled commit, including one the service applied by changing
+     * nothing — which is the ordinary answer to `Until I leave` on a snooze
+     * already running to its ceiling. With no record change there is no
+     * observer to fire, so an empty callback left every row gone until the next
+     * one, over a snooze that was still running (Codex, PR #234).
+     *
+     * A read rather than a re-seed from the warm copy, because the two cases
+     * need different records and this cannot tell them apart: a no-op leaves
+     * the record exactly as the warm copy has it, while a commit that took has
+     * moved the cap the next offer must be bounded by. Reading answers both,
+     * off the main thread, on a tap.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal val rows = EndChoiceController(
+        currentRecord = { activeSnooze },
+        chooseEnd = { endsAt, requestId, forSnooze ->
+            SnoozeService.chooseEnd(this, endsAt, requestId, forSnooze)
+        },
+        restoreDeparture = { requestId, forSnooze ->
+            SnoozeService.restoreEnd(this, requestId, forSnooze)
+        },
+        watchOutcome = EndChoiceOutcome::watch,
+        onDismiss = { refreshSnoozing() },
+    )
+
+    /**
+     * When the user's next meetings end, for the rows' `Until <time>` choices
+     * — already filtered to what could actually be set (`MeetingEnd`).
+     *
+     * Read on [refreshSnoozing]'s background thread, never here: it is a
+     * binder call into the calendar provider, which has no business on the
+     * main thread or in front of a frame (`NextMeetings`).
+     */
+    @androidx.annotation.VisibleForTesting
+    internal var meetingOffers by mutableStateOf<List<Instant>>(emptyList())
+
+    /**
+     * Abandons the calendar read in flight, when there is one.
+     *
+     * Cancelled in [onDestroy] — a rotation against a slow or wedged provider
+     * would otherwise start a fresh query per recreation with every previous
+     * one still blocked — and cancelled again by the *next* read, which is
+     * what makes one field enough.
+     *
+     * **One signal per query, not one for the activity** (Codex, PR #234). A
+     * `CancellationSignal` holds a single remote endpoint, so two overlapping
+     * `query` calls sharing one leave only the second cancellable: `onStart`'s
+     * refresh and the post-first-frame calendar read do overlap, and the first
+     * of them would have been left blocked by exactly the cancel meant to stop
+     * it. Superseding rather than accumulating is the honest shape anyway —
+     * only the newest refresh's answer is ever used ([latestSnoozingRefresh]),
+     * so an older query is work already known to be wasted.
+     *
+     * Touched only on the main thread; the worker holds its own reference to
+     * the signal it was started with.
+     */
+    private var calendarRead: android.os.CancellationSignal? = null
     private lateinit var promptStore: NotificationPromptStore
     private lateinit var locationPromptStore: LocationPromptStore
     private lateinit var calendarPromptStore: CalendarPromptStore
@@ -878,6 +974,10 @@ class MainActivity : ComponentActivity() {
     private var accessReceiverRegistered = false
 
     /** The same, for [refreshSnoozing]. Main thread only, for the same reason. */
+    // `@Volatile` because the calendar half of [refreshSnoozing] reads it from
+    // its worker to skip a query it already knows is superseded. Only ever
+    // *written* on the main thread, so the value is still authoritative there.
+    @Volatile
     private var latestSnoozingRefresh = 0
 
     /**
@@ -1047,6 +1147,18 @@ class MainActivity : ComponentActivity() {
                 marker.created = true
                 already
             }
+        // **Before the restore below, not after it** (Codex, PR #234). Restoring
+        // the rows can settle a commit on the spot — an outcome that arrived
+        // while this activity was being recreated is held by
+        // `EndChoiceOutcome` and consumed synchronously — and settling one
+        // re-reads the record, which needs this. Left below, a rotation with a
+        // commit in flight crashed `onCreate` on an uninitialized `lateinit`.
+        // **Before the restore below, not after it** (Codex, PR #234). Restoring
+        // the rows can settle a commit on the spot — an outcome that arrived
+        // while this activity was being recreated is held by
+        // `EndChoiceOutcome` and consumed synchronously — and settling one
+        // re-reads the record, which needs this.
+        store = ActiveSnoozeStore(applicationContext)
         savedInstanceState?.let {
             screen = Screen.entries.firstOrNull { s -> s.name == it.getString(KEY_SCREEN) } ?: screen
             // Through `WelcomeCardMemory`, exactly as the `WelcomeStore`
@@ -1075,8 +1187,8 @@ class MainActivity : ComponentActivity() {
                     ?: permissionsOrigin
             routedToPermissionsOnce = it.getBoolean(KEY_ROUTED_TO_PERMISSIONS_ONCE, routedToPermissionsOnce)
             restoreSheet(it, configurationChange = wasRecreatedByConfiguration)
+            restoreRows(it, configurationChange = wasRecreatedByConfiguration)
         }
-        store = ActiveSnoozeStore(applicationContext)
         promptStore = NotificationPromptStore(applicationContext)
         locationPromptStore = LocationPromptStore(applicationContext)
         calendarPromptStore = CalendarPromptStore(applicationContext)
@@ -1222,7 +1334,31 @@ class MainActivity : ComponentActivity() {
                                 onBack = goBack,
                             )
                         }
-                        Screen.MAIN -> MainScreen(
+                        Screen.MAIN -> {
+                        // `DateFormat.getTimeFormat` reads the 12/24-hour
+                        // setting, and these rows are on screen for the whole
+                        // snooze — so formatting inside composition put that
+                        // lookup on the main thread on every minute tick, once
+                        // per row (Codex, PR #234). Remembered against the
+                        // configuration, which is what a locale or 12/24-hour
+                        // change moves.
+                        val formatTime = rememberSheetTimeFormatter()
+                        // Rebuilt on every recomposition rather than only on a
+                        // record change, and deliberately: it re-filters the
+                        // meeting rows against the ticking clock, and the
+                        // minute tick is what drives that. Pure and at most
+                        // two entries — the reasoning is on [endChoiceUiState].
+                        val endChoice = endChoiceUiState(
+                            condition = rows.endCondition,
+                            offerFor = rows.offerFor,
+                            record = activeSnooze,
+                            meetingEnds = meetingOffers,
+                            now = Instant.ofEpochMilli(now.wallMillis),
+                            committing = rows.committing,
+                            failed = rows.commitFailed,
+                            format = formatTime,
+                        )
+                        MainScreen(
                             access = access,
                             // The same two readings the tile tap's gate makes,
                             // handed over raw so the screen and the gate share
@@ -1253,6 +1389,10 @@ class MainActivity : ComponentActivity() {
                             dismissFailed = dismissFailed,
                             sharing = sharing,
                             settingsFailure = settingsFailure,
+                            // Null whenever there is nothing to refine, which
+                            // is what keeps the rows off an idle screen and
+                            // off one whose record has not been read yet.
+                            endChoice = endChoice,
                             onOpenPermissions = { openPermissions(Screen.MAIN) },
                             onOpenSettings = { screen = Screen.SETTINGS },
                             // Replays the flow from its first card. The seen
@@ -1295,12 +1435,35 @@ class MainActivity : ComponentActivity() {
                             },
                             onArm = ::armFromScreen,
                             onRelease = ::endFromScreen,
+                            // From what was drawn, not from the controller's
+                            // live state — the meeting rows already commit
+                            // their rendered snapshot, and the time row has the
+                            // same exposure: an external cap change (the
+                            // notification's `+30 min`) can reseed the offer
+                            // between the draw and the tap, and the tap would
+                            // then commit an instant the user never saw
+                            // (Codex, PR #234).
+                            onChooseEndTime = {
+                                endChoice?.let { rows.commit(it.condition.endsAt) }
+                            },
+                            // Indexed rather than carrying the instant back
+                            // through the UI, so the time committed is the one
+                            // this screen was drawn from and a list that moved
+                            // under a tap commits nothing rather than
+                            // something else.
+                            onChooseEndMeeting = { index ->
+                                endChoice?.meetings?.getOrNull(index)?.let { rows.commit(it.at) }
+                            },
+                            onChooseDeparture = ::chooseDepartureFromScreen,
+                            onStepEndDown = rows::stepDown,
+                            onStepEndUp = rows::stepUp,
                             onShareDebugLog = ::shareDebugLog,
                             onDismissCrash = ::dismissCrash,
                             onStartPlayUpdate = ::startPlayUpdate,
                             onCompletePlayUpdate = ::completePlayUpdate,
                             onDismissPlayUpdate = ::dismissPlayUpdate,
                         )
+                        }
                         Screen.PERMISSIONS -> {
                             // Falls back to whoever opened this screen —
                             // `permissionsOrigin`, saved and restored across a
@@ -1491,6 +1654,20 @@ class MainActivity : ComponentActivity() {
             outState.putLong(KEY_SHEET_FLOOR, it.floor.toEpochMilli())
             outState.putLong(KEY_SHEET_CEILING, it.ceiling.toEpochMilli())
         }
+        // And the screen's own rows, for the same reason: the time on them is
+        // the only work the user has done there, and a rotation would
+        // otherwise reseed it back to an hour from now. Rebuilt from the
+        // record on the next read either way, but only where the cap has
+        // actually moved ([refreshRows]).
+        outState.putBoolean(KEY_ROWS_COMMITTING, rows.committing)
+        outState.putLong(KEY_ROWS_REQUEST_ID, rows.committingRequestId)
+        rows.offerFor?.let { outState.putLong(KEY_ROWS_OFFERED_FOR, it.toEpochMilli()) }
+        outState.putBoolean(KEY_ROWS_FAILED, rows.commitFailed)
+        rows.endCondition?.let {
+            outState.putLong(KEY_ROWS_ENDS_AT, it.endsAt.toEpochMilli())
+            outState.putLong(KEY_ROWS_FLOOR, it.floor.toEpochMilli())
+            outState.putLong(KEY_ROWS_CEILING, it.ceiling.toEpochMilli())
+        }
     }
 
     /** Puts a sheet that survived a configuration change back as it was. */
@@ -1513,6 +1690,37 @@ class MainActivity : ComponentActivity() {
             requestId = state.getLong(KEY_SHEET_REQUEST_ID),
             offeredFor = if (state.containsKey(KEY_SHEET_OFFERED_FOR)) {
                 Instant.ofEpochMilli(state.getLong(KEY_SHEET_OFFERED_FOR))
+            } else {
+                null
+            },
+        )
+    }
+
+    /**
+     * Puts the screen's own rows back where they were.
+     *
+     * No generation counter, unlike the sheet's: that one exists to stop a
+     * record read older than the *arm* closing a sheet that arm opened, and
+     * these rows are not opened by an arm — every record read is theirs, and
+     * [refreshRows] rebuilds them from whatever it finds.
+     */
+    private fun restoreRows(state: Bundle, configurationChange: Boolean) {
+        rows.restore(
+            condition = if (state.containsKey(KEY_ROWS_ENDS_AT)) {
+                EndCondition(
+                    endsAt = Instant.ofEpochMilli(state.getLong(KEY_ROWS_ENDS_AT)),
+                    floor = Instant.ofEpochMilli(state.getLong(KEY_ROWS_FLOOR)),
+                    ceiling = Instant.ofEpochMilli(state.getLong(KEY_ROWS_CEILING)),
+                )
+            } else {
+                null
+            },
+            wasCommitting = state.getBoolean(KEY_ROWS_COMMITTING),
+            failed = state.getBoolean(KEY_ROWS_FAILED),
+            configurationChange = configurationChange,
+            requestId = state.getLong(KEY_ROWS_REQUEST_ID),
+            offeredFor = if (state.containsKey(KEY_ROWS_OFFERED_FOR)) {
+                Instant.ofEpochMilli(state.getLong(KEY_ROWS_OFFERED_FOR))
             } else {
                 null
             },
@@ -1551,6 +1759,52 @@ class MainActivity : ComponentActivity() {
         sheet.reconcile(record, Instant.ofEpochMilli(SnoozeClock.read().wallMillis))
     }
 
+    /**
+     * Puts the main screen's end-condition rows onto the record just read.
+     *
+     * Unlike [reconcileSheet] this both seeds and reconciles, because the rows
+     * are not offered once and then answered: they stand for as long as a
+     * snooze does, so every record read is either the arrival of a snooze to
+     * refine, a change to one already being refined, or its end.
+     *
+     * **Three cases, and the middle one is the subtle one.**
+     *
+     * - **Nothing to refine** — no snooze, or a cap already inside the floor
+     *   (`EndCondition.offersAChoice`). The rows go; there is no time the
+     *   service would accept.
+     * - **A different snooze, or a cap that has moved.** Re-seeded, discarding
+     *   whatever the user had stepped to, because the bounds the stepping
+     *   happened inside are no longer the snooze's. The cap check is what
+     *   catches a settled commit: the offer's ceiling *is* `capExpiresAt`
+     *   (`EndCondition.ceilingFor`), so a shortened cap leaves the two
+     *   unequal, and re-seeding is what stops the next offer being one the
+     *   service would honor by doing nothing while reporting it applied.
+     * - **The same snooze on the same cap.** Reconciled only, so a time the
+     *   user stepped to survives every record read that did not change what
+     *   it is bounded by.
+     *
+     * Never touches a commit in flight, for [EndChoiceController.reconcile]'s
+     * reason: its answer is coming and settles the rows itself, and rebuilding
+     * underneath would lose the refusal message.
+     */
+    private fun refreshRows(record: ActiveSnooze?) {
+        if (rows.committing) return
+        val now = Instant.ofEpochMilli(SnoozeClock.read().wallMillis)
+        if (record == null || !EndCondition.offersAChoice(record, now)) {
+            if (rows.endCondition != null) rows.dismiss()
+            return
+        }
+        val standing = rows.endCondition
+        if (standing == null ||
+            rows.offerFor != record.startedAt ||
+            standing.ceiling != EndCondition.ceilingFor(record, now)
+        ) {
+            rows.seed(record, now)
+        } else {
+            rows.reconcile(record, now)
+        }
+    }
+
     override fun onStart() {
         super.onStart()
         watchAccessAfterFirstFrame()
@@ -1558,6 +1812,7 @@ class MainActivity : ComponentActivity() {
         // The service can arm or end while this screen is up — the cap firing,
         // a tile tap, a notification action — so follow the record rather than
         // reading it once.
+        forgetMeetingOffers()
         refreshSnoozing()
         recordWatch = store.observe { refreshSnoozing() }
         // Followed rather than read once, and for the reason the record watch
@@ -1737,6 +1992,32 @@ class MainActivity : ComponentActivity() {
      * (`AGENTS.md`, jank-free UI). [snoozing] stays null until then, so nothing
      * on screen claims a state that hasn't been read yet.
      */
+    /**
+     * Drops meeting offers that describe a calendar this screen has not
+     * re-read since (Codex, PR #234).
+     *
+     * They name a time as *a meeting's end*, and a meeting deleted or moved
+     * while the screen was away leaves a row promising an end that no longer
+     * exists — one the service then accepts as an ordinary chosen time,
+     * shortening the snooze to a moment nothing corresponds to. Against a
+     * wedged provider the stale row would stand until something else changed
+     * the record.
+     *
+     * Called where a re-read is *begun*, on the main thread, rather than when
+     * one lands: the rows must not outlive the moment their claim stopped
+     * being checkable.
+     *
+     * **Not on every record read**, which is the wider fix and the wrong one.
+     * A record change is not a calendar change, and the record changes often
+     * enough through an ordinary snooze — mode, degradation, the cap — that
+     * clearing there would blink the meeting rows away and back. What that
+     * leaves uncovered is a calendar edited while this screen stays up; the
+     * next start, or a permission change, catches it.
+     */
+    private fun forgetMeetingOffers() {
+        meetingOffers = emptyList()
+    }
+
     private fun refreshSnoozing() {
         // The same generation guard the access refresh has, for the same
         // reason: `observe` fires one of these per record change, they finish
@@ -1746,15 +2027,41 @@ class MainActivity : ComponentActivity() {
         // change. Bumped and checked on the main thread only.
         val refresh = ++latestSnoozingRefresh
         val sheetAt = sheetGeneration
-        Thread {
-            val loaded = store.load()
+        // Superseded the moment a newer refresh starts, on the main thread
+        // where this field lives: its answer would be discarded by the
+        // generation guard regardless, so leaving it running is a blocked
+        // thread bought for nothing.
+        calendarRead?.cancel()
+        val reading = android.os.CancellationSignal()
+        calendarRead = reading
+        // Read on the calling thread, not inside the lambda: `store` is a
+        // `lateinit`, and dereferencing it on a worker turns "this ran before
+        // the store existed" into an uncaught exception on a thread nobody is
+        // watching — which Android answers by killing the process, with a
+        // stack that names the worker rather than what ordered the work.
+        // Here it fails where the mistake is (Codex, PR #234).
+        val records = store
+        // Through the same seam the offer's own read uses, so a test can run
+        // it inline and assert on a settled state rather than race a thread.
+        runOffMainThread {
+            val loaded = records.load()
             runOnUiThread {
                 if (refresh != latestSnoozingRefresh) return@runOnUiThread
                 val running = loaded != null
                 val changed = snoozing != running
                 snoozing = running
+                // Before the assignment, so the comparison is against the
+                // record this screen was showing: a different snooze must not
+                // inherit the last one's meeting times for the moment before
+                // the calendar answers for the new one.
+                // Before the assignment, so the comparison is against the
+                // record this screen was showing: a different snooze must not
+                // inherit the last one's meeting times for the moment before
+                // the calendar answers for the new one.
+                if (loaded?.startedAt != activeSnooze?.startedAt) meetingOffers = emptyList()
                 activeSnooze = loaded
                 reconcileSheet(loaded, sheetAt)
+                refreshRows(loaded)
                 // Reconciling policy access reads whether a snooze is running,
                 // so the pass in onStart ran before this was known. Re-run it
                 // now that it is: access revoked while the service was dead has
@@ -1764,7 +2071,47 @@ class MainActivity : ComponentActivity() {
                 // is still the right thing to show while this re-reads access.
                 if (changed) refreshAccess(ruleMayHaveChanged = false)
             }
-        }.start()
+
+            // **The calendar comes after the record is on screen, not before
+            // it** (Codex, PR #234). This is an optional cross-process query
+            // into another app's provider, and a slow or wedged one used to
+            // hold `snoozing` and `activeSnooze` behind it — so a fresh launch
+            // showed no status and no way to refine while `store.load()` had
+            // already supplied the answer. Still off the main thread, and
+            // still bounded by the record it was read for.
+            // A record write can change several preference keys, and the
+            // store's observer fires once per key — so without this a single
+            // arm fans out into that many cross-process calendar reads, all
+            // but the last of them already superseded. The authoritative
+            // guard is still the one below, on the main thread; this is the
+            // one that stops the work from being done at all (Codex, PR #234).
+            if (refresh != latestSnoozingRefresh) return@runOffMainThread
+            val wallNow = Instant.ofEpochMilli(SnoozeClock.read().wallMillis)
+            // **Every candidate the query found, not the first two.** Which
+            // two are offerable is a question about the clock, and the clock
+            // moves under this list: keeping only the first two meant that
+            // once one of them slid inside the floor, a third meeting that was
+            // still perfectly offerable could never take its place, because it
+            // had already been discarded and nothing re-runs the query
+            // (Codex, PR #234). The provider's own window is still the cap, so
+            // this holds no more of the user's calendar than the query
+            // returned — and it is times only, as `NextMeetings` keeps it.
+            // `applicationContext`, not `this`: the worker outlives a rotation
+            // against a slow provider, and holding the activity there is what
+            // turns a slow read into a retained destroyed activity.
+            val ends = loaded?.let {
+                NextMeetings.endsBefore(applicationContext, it, wallNow, reading)
+            } ?: emptyList()
+            runOnUiThread {
+                // The same generation guard, plus the record's own identity:
+                // this answer describes `loaded`, and a snooze that arrived
+                // while the provider was thinking is not the one it answers
+                // for.
+                if (refresh != latestSnoozingRefresh) return@runOnUiThread
+                if (activeSnooze?.startedAt != loaded?.startedAt) return@runOnUiThread
+                meetingOffers = ends
+            }
+        }
     }
 
     /**
@@ -2318,6 +2665,16 @@ class MainActivity : ComponentActivity() {
         // already takes two beside it, well past the first frame.
         val readabilityChanged = if (previous == null) true else couldRead != canRead
         if (readabilityChanged && store.load() != null) SnoozeService.refresh(this)
+        // And this screen's own rows, which the repost above does not reach:
+        // it refreshes the *notification*, and changes nothing about the
+        // record — so a grant taken from the runtime dialog while this screen
+        // stayed started left the meeting rows absent until the next record
+        // change or restart, on exactly the tap that was asking for them
+        // (Codex, PR #234).
+        if (readabilityChanged) {
+            forgetMeetingOffers()
+            refreshSnoozing()
+        }
         return current
     }
 
@@ -2435,6 +2792,10 @@ class MainActivity : ComponentActivity() {
         // activity with it. Idempotent, and a no-op on the ordinary session
         // that never opened a sheet at all.
         sheet.close()
+        rows.close()
+        // Whatever calendar read is outstanding is one this activity will
+        // never use the answer to.
+        calendarRead?.cancel()
         // One checker per activity instance, so drop its install listener
         // here or Play's update manager would retain a dead one — capturing
         // this activity — on every recreation. Idempotent, and guarded like
@@ -2859,6 +3220,18 @@ class MainActivity : ComponentActivity() {
      * The direct branch does report, because there the outcome is known here:
      * `releaseDirectly` returns whether the rule is confirmed off.
      */
+    /**
+     * The rows' `Until I leave`: put the cap back to its ceiling.
+     *
+     * Goes through the controller rather than starting the service directly,
+     * so it gets the same commit lifecycle every other row has — inert rows
+     * while it is out, and the refusal shown where the tap happened rather
+     * than only in a notification the user may have denied (SPEC.md §4.2).
+     */
+    private fun chooseDepartureFromScreen() {
+        rows.commitDeparture()
+    }
+
     private fun endFromScreen() {
         if (!endThroughServiceOrDirectly(EndReason.MANUAL)) {
             lastOutcome = getString(R.string.failure_could_not_end)
