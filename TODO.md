@@ -6418,6 +6418,41 @@ what sets it off.
   behavior? A cinema and a walk in a park want opposite answers.
 - Thirty seconds is a guess. It wants a handset in an actual cinema.
 
+## Deferred review findings (Codex, PR #229)
+
+- [ ] **The anchor-Wi-Fi level has drawn four findings, and the fourth says the class is
+  not closed** (Codex, PR #229). `AnchorWifi` mirrors the controller's cached level so the
+  ongoing card can say `Wi-Fi` while the anchor's own network is answering. Four findings,
+  all verified, all the same shape — *a copy of the level outliving the thing that reported
+  it*:
+
+  1. **A refused ending cleared it** while the snooze was still running. *Fixed.*
+  2. **The engine's restore assumption reached the card as fact.** *Fixed* at the publish
+     boundary — `atAnchorWifi && !awaitingAssociationConfirmation`.
+  3. **A restore posted its card before the hand-placed clear ran.** *Fixed by design*: the
+     controller became the single writer, reporting the level on every update with the edge
+     marked, and both hand-placed clears in the service went away.
+  4. **`adopt` starts no watch, and did not announce the reset.** *Fixed* — the reset now
+     runs there too, before the snooze is taken over.
+
+  **Finding 4 is evidence the redesign narrowed the class rather than deleting it.** The
+  single-writer shape removed the *service's* copies, but it left the invariant "every path
+  that takes over a snooze must announce a reset" — and takeover paths are open-ended, so
+  the next one added is the fifth finding. What makes `DepartureObservations` immune to all
+  of this is that a reading carries its own expiry: a stale one is simply not fresh, and no
+  takeover path has to remember anything. The Wi-Fi level is a bare boolean with no notion
+  of how long ago it was true.
+
+  **The design that would close it, for the maintainer to accept or reject.** Tie the
+  level's lifetime to the *collection* rather than to the takeover: the claim `Wi-Fi` is
+  only honest while something is actually watching Wi-Fi, and the service knows that
+  exactly. Collection-death sites are closed and few — `stopPresence` and `onDestroy`,
+  where `DepartureObservations.clear()` already lives — whereas takeover sites are not.
+  Cost: it puts a second writer back beside the controller, which is what finding 3's
+  redesign moved away from, so it is a genuine trade and not a strict improvement. Not
+  taken under autopilot: `AGENTS.md` says a design change is the maintainer's call, and one
+  redesign of this mechanism has already landed this PR.
+
 ## Deferred review findings (Codex, PR #228)
 
 - [ ] **The distance row's expiry mechanism has drawn three findings, and the third is a
