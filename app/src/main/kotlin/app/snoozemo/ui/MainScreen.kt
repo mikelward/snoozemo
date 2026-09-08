@@ -347,11 +347,13 @@ internal fun MainScreen(
             else -> Unit
         }
         // Above the button block rather than below it, so the screen reads
-        // status, then how to change it, then how to end it. `End snooze`
-        // keeps the last word — it is the guaranteed way back to a ringing
-        // phone (SPEC.md §7) and the thing a user reaches for in a hurry, so
-        // it stays the bottom-most control rather than sitting above a stack
-        // of refinements.
+        // status, then how to change it, then how to end it. `End now` keeps
+        // the last word — it is the guaranteed way back to a ringing phone
+        // (SPEC.md §7) and the thing a user reaches for in a hurry, so it
+        // stays the bottom-most control rather than sitting above a stack of
+        // refinements. Bottom-most in *order*: it is not pinned outside the
+        // scroll, so a snooze offering both meeting rows on a short screen
+        // can still put it below the fold (`TODO.md`).
         endChoice?.let { choice ->
             EndConditionRows(
                 condition = choice.condition,
@@ -393,12 +395,19 @@ internal fun MainScreen(
                     Text(stringResource(R.string.arm))
                 }
             } else {
-                OutlinedButton(
+                // **The same size as the choices above it, outlined rather
+                // than filled** (maintainer, 2026-09-08). Same size because it
+                // is the guaranteed way back to a ringing phone (SPEC.md §7)
+                // and must stay the easiest thing on the screen to hit;
+                // outlined because it is the one row that acts rather than
+                // schedules, and a stack of identical cards ending in the
+                // irreversible one invites the wrong tap.
+                EndChoiceRow(
+                    label = stringResource(R.string.action_end_now),
                     onClick = onRelease,
+                    outlined = true,
                     modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(stringResource(R.string.release))
-                }
+                )
             }
         }
         lastOutcome?.let {

@@ -382,7 +382,6 @@
          than promising the snooze is over. -->
     <string name="main_distance_confirming" tools:ignore="MissingTranslation">%1$s away ±%2$s · confirming</string>
     <string name="arm">Snooze</string>
-    <string name="release">End snooze</string>
     <string name="rule_failed">Do Not Disturb access is on, but Snoozemo could not create its rule</string>
     <string name="rule_disabled">Snoozemo\'s rule is switched off in Settings</string>
 
@@ -410,6 +409,12 @@
     <string name="ongoing_cause_no_background" tools:ignore="MissingTranslation">background location off</string>
     <!-- TODO: translate -->
     <string name="ongoing_cause_permission_gone" tools:ignore="MissingTranslation">location permission off</string>
+    <!-- Used twice on purpose: the ongoing notification's action and the main
+         screen's exit button. They end the same snooze the same way, so one
+         name for one action is what a user should meet in both places — which
+         is why the screen's own `release` ("End snooze") was retired here
+         rather than reworded into a second key saying this over again
+         (maintainer, 2026-09-08). -->
     <string name="action_end_now">End now</string>
     <string name="action_extend">+30 min</string>
     <!-- The next meeting's end (SPEC.md §4.3). The placeholder is the time as
@@ -457,6 +462,12 @@
          describing them (maintainer, 2026-09-08). -->
     <!-- TODO: translate -->
     <string name="main_until_i_leave" tools:ignore="MissingTranslation">Until I leave</string>
+    <!-- Names the calendar mark on a row whose time came from a meeting, for a
+         screen reader: the label alone reads the same as the adjustable time,
+         so the mark is the only thing saying where that time came from. Not
+         drawn as text anywhere. -->
+    <!-- TODO: translate -->
+    <string name="main_from_your_calendar" tools:ignore="MissingTranslation">From your calendar</string>
     <!--
       Not decoration: choosing a time lowers the cap rather than replacing
       departure tracking, so the two rows are not exclusive modes and the sheet

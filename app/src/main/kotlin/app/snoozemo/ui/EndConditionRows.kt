@@ -1,11 +1,16 @@
 package app.snoozemo.ui
 
+import androidx.annotation.DrawableRes
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -14,6 +19,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -76,6 +83,18 @@ internal fun EndConditionRows(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        // **First, above every refinement of it** (maintainer, 2026-09-08).
+        // This is what the product is for and what an arm already does, so it
+        // reads wrong sitting underneath two ways of narrowing it.
+        if (tracksDeparture) {
+            EndChoiceRow(
+                label = stringResource(R.string.main_until_i_leave),
+                onClick = onChooseDeparture,
+                enabled = !committing,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -113,15 +132,8 @@ internal fun EndConditionRows(
                 label = stringResource(R.string.action_end_at, label),
                 onClick = { onChooseMeeting(index) },
                 enabled = !committing,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-
-        if (tracksDeparture) {
-            EndChoiceRow(
-                label = stringResource(R.string.main_until_i_leave),
-                onClick = onChooseDeparture,
-                enabled = !committing,
+                trailingIcon = R.drawable.ic_calendar,
+                trailingIconDescription = stringResource(R.string.main_from_your_calendar),
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -152,24 +164,73 @@ internal fun EndChoiceRow(
     label: String,
     onClick: () -> Unit,
     enabled: Boolean = true,
+    /**
+     * A mark drawn after [label], or null for a row that needs none.
+     *
+     * **After the text, never before it** (maintainer, 2026-09-08). Every row
+     * on this screen starts its label at the same x, and a leading icon on
+     * some of them would break that column — the eye scans the times, so the
+     * times are what has to line up. What the mark says is *where this time
+     * came from*, which is a qualifier on the answer rather than a category
+     * in front of it.
+     */
+    @DrawableRes trailingIcon: Int? = null,
+    trailingIconDescription: String? = null,
+    /**
+     * Draw the row as an outline rather than a filled card.
+     *
+     * **`End now` takes this** (maintainer, 2026-09-08). It is the same size
+     * and shape as the rows above it, because it answers the same question,
+     * but it is not one of the *whens* — every filled row schedules an end,
+     * this one performs it — and a wall of identical cards where the last is
+     * the irreversible one is the arrangement a hurried tap gets wrong. The
+     * outline is what says "different kind of answer" without saying
+     * "smaller", which would have made the guaranteed way back to a ringing
+     * phone the hardest thing on the screen to hit (SPEC.md §7).
+     */
+    outlined: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Surface(
         shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        // Transparent rather than `surface`: the screen's own background may
+        // not be `surface` under every theme, and a near-match that is not a
+        // match reads as a rendering bug rather than as a choice.
+        color = if (outlined) Color.Transparent else MaterialTheme.colorScheme.surfaceVariant,
+        contentColor =
+            if (outlined) MaterialTheme.colorScheme.onSurface
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        border = if (outlined) BorderStroke(1.dp, MaterialTheme.colorScheme.outline) else null,
         modifier = modifier,
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.titleMedium,
+        Row(
             modifier = Modifier
                 // Before the padding, so the whole card answers the tap and the
                 // Surface's shape clips the ripple to it.
                 .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
                 .fillMaxWidth()
                 .padding(16.dp),
-        )
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            trailingIcon?.let {
+                Icon(
+                    painter = painterResource(it),
+                    // Named for a screen reader, since the mark carries meaning
+                    // the label does not: which of two identical-looking times
+                    // came from the calendar.
+                    contentDescription = trailingIconDescription,
+                    // Tinted by the row rather than by the drawable, so it sits
+                    // at the weight of the text it follows in either theme.
+                    tint = LocalContentColor.current,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
     }
 }
 

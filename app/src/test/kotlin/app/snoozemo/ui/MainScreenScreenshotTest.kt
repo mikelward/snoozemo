@@ -94,7 +94,7 @@ class MainScreenScreenshotTest {
         composeRule.onNodeWithText("Snoozemo").assertExists()
         composeRule.onNodeWithText("Do Not Disturb access needed").assertDoesNotExist()
         composeRule.onNodeWithText("Snooze").assertDoesNotExist()
-        composeRule.onNodeWithText("End snooze").assertDoesNotExist()
+        composeRule.onNodeWithText("End now").assertDoesNotExist()
         // And no idle claim either: the record has not been read, so "Not
         // snoozing" would be a guess — over a snooze that may well be running.
         composeRule.onNodeWithText("Not snoozing").assertDoesNotExist()
@@ -133,7 +133,7 @@ class MainScreenScreenshotTest {
         // Same gating the old DebugScreen had — neither button is a stray
         // affordance while access is missing.
         composeRule.onNodeWithText("Snooze").assertDoesNotExist()
-        composeRule.onNodeWithText("End snooze").assertDoesNotExist()
+        composeRule.onNodeWithText("End now").assertDoesNotExist()
         // Missing access is why nothing *can* snooze; it does not make the
         // state itself unknown, so the line still reports it.
         composeRule.onNodeWithText("Not snoozing").assertExists()
@@ -396,7 +396,7 @@ class MainScreenScreenshotTest {
         // The mirror of the running case (maintainer, 2026-08-22): confidently
         // idle is the one state where the way out is hidden, because there is
         // provably nothing to get out of.
-        composeRule.onNodeWithText("End snooze").assertDoesNotExist()
+        composeRule.onNodeWithText("End now").assertDoesNotExist()
         composeRule.onNodeWithContentDescription("Settings").assertExists()
     }
 
@@ -472,7 +472,7 @@ class MainScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("End snooze").assertIsEnabled()
+        composeRule.onNodeWithText("End now").assertIsEnabled()
         // And `Snooze` is absent, not merely disabled: arming over a snooze
         // this screen has not read is how the user loses their cap.
         composeRule.onNodeWithText("Snooze").assertDoesNotExist()
@@ -543,7 +543,7 @@ class MainScreenScreenshotTest {
         // And the exit is still the bottom-most control: refining a snooze
         // must never push the one guaranteed way out of it off the screen
         // (SPEC.md §7).
-        composeRule.onNodeWithText("End snooze").performScrollTo().assertIsEnabled()
+        composeRule.onNodeWithText("End now").performScrollTo().assertIsEnabled()
     }
 
     @Test
@@ -617,7 +617,7 @@ class MainScreenScreenshotTest {
         // (maintainer, 2026-08-22). `Snooze` used to render here disabled;
         // the state it would have communicated is already on the card above.
         composeRule.onNodeWithText("Snooze").assertDoesNotExist()
-        composeRule.onNodeWithText("End snooze").assertIsEnabled()
+        composeRule.onNodeWithText("End now").assertIsEnabled()
         // One row at the default width, not the title-over-condition split:
         // `Snoozing until you leave` says the whole thing in a sentence and is
         // preferred wherever it fits (maintainer, 2026-09-05).
@@ -1838,7 +1838,7 @@ class MainScreenScreenshotTest {
     fun `a short window still reaches the way out`() {
         // Landscape, which is the constrained case: title, banner, the status
         // line and three controls do not fit, and an unscrolled column clips
-        // whatever is last — which is `End snooze`. Manual exit is "always
+        // whatever is last — which is `End now`. Manual exit is "always
         // available, always instant" (SPEC.md §7), so losing it to a window
         // shape is the one failure this screen may not have. The status line
         // is included (not null) so this covers the worst case honestly —
@@ -1870,13 +1870,83 @@ class MainScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("End snooze").performScrollTo().assertIsEnabled()
+        composeRule.onNodeWithText("End now").performScrollTo().assertIsEnabled()
         // And the gear is up here without scrolling back, which is the claim
         // this move actually makes: it is where the screen opens, not pinned
         // against the scroll (SPEC.md §4.2). Asserted in the constrained case
         // because that is the one where its old position at the foot — below
         // the exit — cost the most to reach.
         composeRule.onNodeWithContentDescription("Settings").assertIsDisplayed()
+    }
+
+    @Test
+    fun `the fullest offer on the shortest window still reaches the way out`() {
+        // The worst case the refinements can make, in the window shape that
+        // has least room for it: every row a snooze can offer — departure,
+        // the adjustable time with its steppers, and both meeting ends — over
+        // a landscape window. Four rows plus the exit is more than the earlier
+        // short-window case ever put on screen, and it is the arrangement that
+        // decides whether `End now` being *last* is the same thing as `End
+        // now` being *reachable*.
+        //
+        // It is reachable, but only after a scroll: the exit is bottom-most in
+        // order and is not pinned outside it (`TODO.md`). That is stated here
+        // rather than asserted away, so the recorded image shows what a full
+        // offer actually costs the exit — the evidence the pinning question
+        // needs, instead of a claim about it.
+        RuntimeEnvironment.setQualifiers("w914dp-h411dp-420dpi")
+
+        capture("main-screen-end-condition-short-window.png", widthPx = 2400, heightPx = 1080) {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.FULL,
+                remaining = Duration.ofHours(3).plusMinutes(40),
+                degradation = null,
+                endChoice = EndChoiceUiState(
+                    condition = EndCondition(
+                        endsAt = NOON.plus(Duration.ofHours(1)),
+                        floor = NOON.plus(Duration.ofMinutes(30)),
+                        ceiling = NOON.plus(Duration.ofHours(8)),
+                    ),
+                    formattedTime = "1:00 PM",
+                    meetings = listOf(
+                        MeetingChoice(NOON.plus(Duration.ofMinutes(90)), "1:30 PM"),
+                        MeetingChoice(NOON.plus(Duration.ofMinutes(165)), "2:45 PM"),
+                    ),
+                ),
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onChooseEndTime = {},
+                onChooseEndMeeting = {},
+                onChooseDeparture = {},
+                onStepEndDown = {},
+                onStepEndUp = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        // The gear first, and *before* any scroll — that is the whole of
+        // §4.2's claim: it is where the screen opens. Asserted here rather
+        // than after the scroll below, because with four rows on this window
+        // reaching the exit does carry the gear off the top, and asserting
+        // both at once would have claimed a screen that fits when it doesn't.
+        composeRule.onNodeWithContentDescription("Settings").assertIsDisplayed()
+        // The exit is still reachable, and a scroll is what it costs. Both
+        // halves matter: unreachable would break SPEC.md §7 outright, and
+        // free would mean there was never a pinning question to answer.
+        composeRule.onNodeWithText("End now").performScrollTo().assertIsEnabled()
     }
 
     @Test
