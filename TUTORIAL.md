@@ -94,8 +94,8 @@ screen already has a reason attached.
 - **Progress dots, no numbers, no "1 of 5".** Five dots say enough.
 - **Each card offers the grant for the thing it just introduced** (maintainer,
   2026-09-05). Card 2 carries `Allow` for location, for the calendar and for
-  notifications, card 3 the `Add tile` action, card 4 `Allow` for Do Not Disturb
-  access and the live ringer choice. The button is the same tri-state row
+  notifications, card 3 `Allow` for Do Not Disturb access and the live ringer
+  choice, card 4 the `Add tile` action. The button is the same tri-state row
   `PermissionsScreen` already draws (§5.2: the action is a verb, it is offered only
   while the platform will still honor it, and it points at the app's settings once
   the prompts are spent) — the cards embed those rows, they do not re-implement
@@ -239,26 +239,7 @@ that flavor's `PermissionsScreen`; the second line and the calendar row are
 unchanged, since `READ_CALENDAR` is declared for both flavors. The card still
 reads.
 
-### 3 · How to start one
-
-> **Snooze from Quick Settings**
->
-> Swipe down and tap the **Zzz** tile.
-> Works with the phone locked.
->
-> [ Add tile ]
-
-Illustration: a Quick Settings panel with the tile highlighted; the tile in its
-1×1 icon-only form, since that is the expected presentation (§4.2).
-
-The tile is the arm affordance (§4.2) and the one path that is one tap with the
-phone locked (§4.1), so this card leads with it and the app's own Snooze button is
-not mentioned — it stays where it is as the fallback. `Add tile` is the same action
-`MainScreen`'s banner and `SettingsScreen`'s row offer, and it disappears once the
-tile is there, replaced by `Added`. A user who says no here is not asked again by
-this card; the permanent row in Settings is the standing route (§4.2).
-
-### 4 · Your Do Not Disturb rule
+### 3 · Your Do Not Disturb rule
 
 > **One rule, yours**
 >
@@ -282,7 +263,15 @@ Do Not Disturb access is the one grant that is a Settings screen rather than a
 dialog (§5.2): `Allow` leaves the app, the user flips the toggle, and on return the
 row reads as it does on `PermissionsScreen` — the action gone, its capability
 sentence in place. It is the grant without which nothing here can snooze at all,
-so it comes last, after the user has seen everything it is for.
+so it is asked once the user has seen what it is for — after what the app is and
+how a snooze ends, and **before** the tile that will do the arming (maintainer,
+2026-09-08). It used to come after the tile, on the reasoning that the essential
+grant should be last of them. The order is the other way round now because the
+two halves fail asymmetrically when someone abandons the flow part way: a tile
+added before the grant is a tile whose first tap fails with `NO_POLICY_ACCESS`,
+while the grant taken before the tile leaves an app that already snoozes from
+its own button, with `MainScreen`'s banner and the Settings row both still
+offering the tile later.
 
 One rule, named `Snoozemo`, created once and never churned (§5.3); the app turns off
 *only its own rule* and leaves any other Do Not Disturb alone (§5.6). Filters is the
@@ -297,6 +286,28 @@ cutting. If it has to lose something, lose the Filters *sentence* in the body no
 that the row itself is there — the row says the same thing and can be acted on —
 and keep the ringer choice, which is the setting a user is most surprised by after
 the fact.
+
+### 4 · How to start one
+
+> **Snooze from Quick Settings**
+>
+> Swipe down and tap the **Zzz** tile.
+> Works with the phone locked.
+>
+> [ Add tile ]
+
+Illustration: a Quick Settings panel with the tile highlighted; the tile in its
+1×1 icon-only form, since that is the expected presentation (§4.2).
+
+The tile is the arm affordance (§4.2) and the one path that is one tap with the
+phone locked (§4.1), so this card leads with it and the app's own Snooze button is
+not mentioned — it stays where it is as the fallback. `Add tile` is the same action
+`MainScreen`'s banner and `SettingsScreen`'s row offer, and it disappears once the
+tile is there, replaced by `Added`. A user who says no here is not asked again by
+this card; the permanent row in Settings is the standing route (§4.2).
+
+It follows the rule card rather than leading it (see card 3), which also leaves
+the setup run ending on something to do rather than on something to allow.
 
 ### 5 · If something goes wrong
 
@@ -352,7 +363,7 @@ does, which is what "help fix bugs" refers to.
 
 The existing `PermissionsScreen`, unchanged: Do Not Disturb access, notifications,
 location and the calendar row — permissions only. The tile is not on it and never
-routes to it; a user who skipped card 3 has `MainScreen`'s banner and
+routes to it; a user who skipped card 4 has `MainScreen`'s banner and
 `SettingsScreen`'s permanent tile row as the standing routes (§4.2). With every
 grant already offered on its own card this screen is a recap, and its job is what is
 *still* missing: each row
@@ -391,7 +402,7 @@ flow.
   device.
 - The control that replays the flow is a (?) icon in `MainScreen`'s title row, beside
   the settings gear, with `Tutorial` as its accessible name.
-- Card 4's ringer choice is a live control.
+- Card 3's ringer choice is a live control.
 - Card 2's first body line is what happens by itself — departure and the cap — and
   its second is the taps, the meeting among them and named as a button: `+30 min`
   extends rather than ends, `Until <time>` needs a meeting, and the calendar is
@@ -417,7 +428,7 @@ flow.
 
 ## Open questions for the maintainer
 
-- ~~Card 4's title.~~ **Decided (maintainer, 2026-09-05): `One rule, yours`.**
+- ~~The rule card's title.~~ **Decided (maintainer, 2026-09-05): `One rule, yours`.**
   The four-word cut from `One rule, yours to edit` had produced `One editable
   rule`, which lost the word the card is actually about. `One rule you
   configure` was considered and dropped as too long. *Yours* is also the half

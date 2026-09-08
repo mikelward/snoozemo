@@ -33,7 +33,7 @@ class WelcomeExitTest {
     @Test
     fun `a permission other than access needs the recap too`() {
         // The bug this covers: the exit tested access alone, so a user who
-        // allowed it on card 4 and skipped the rest reached the main screen
+        // allowed it on card 3 and skipped the rest reached the main screen
         // able to arm with no notification to show status on (Codex, PR #204).
         assertTrue(needsRecap(notifications = NotificationPermission.ASKABLE))
         assertTrue(needsRecap(location = LocationPermission.ASKABLE))

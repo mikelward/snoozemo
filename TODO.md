@@ -4670,22 +4670,25 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   is signed off, then fans out to the locales. Body and button reuse the notifications
   row's existing strings, so only the title is new.
 
-- [ ] **Consider moving the tile card after the rule card** (maintainer,
-  2026-09-06 — tried, then set aside as "too much going on here now"). The flow
-  is `WHAT → ENDS → TILE → RULE → TELEMETRY`, so the tile is offered on card 3,
-  before the Do Not Disturb grant on card 4. Adding the tile puts a control in
-  the shade the user can tap at any moment, including the moment after they add
-  it, and at that point the app may have been granted nothing: no Do Not Disturb
-  access means no rule, so the tap does nothing. `WHAT → ENDS → RULE → TILE →
-  TELEMETRY` would put every grant this flavor offers ahead of the tile.
-  **The change is small** — the enum order is the flow order and the dot count,
-  so it is one reorder plus the card numbers in comments, seven screenshot test
-  names, and the prose in `SPEC.md` §4.2 and `TUTORIAL.md`. No snapshot
-  re-records: the cards themselves are unchanged, only their positions.
-  **What it does not fix, and why it was not urgent**: `Skip`, `MainScreen`'s
-  own add-tile banner and an install predating the flow all reach a tile
-  another way, so the tile-tap gate is what actually holds this line — the
-  reorder only tidies the one path through the flow.
+- [x] **Move the tile card after the rule card** (maintainer, 2026-09-06 —
+  tried, then set aside as "too much going on here now"; raised again and
+  **done** 2026-09-08). The flow is now `WHAT → ENDS → RULE → TILE →
+  TELEMETRY`, so every grant this flavor offers comes ahead of the tile.
+  Adding the tile first put a control in the shade the user could tap at any
+  moment, including the moment after they added it, when the app may have been
+  granted nothing: no Do Not Disturb access means no rule, so the tap posts
+  `ZenFailure.NO_POLICY_ACCESS`.
+  **Two things the earlier estimate got wrong**, worth keeping for the next
+  one. The snapshots *do* re-record — the cards are unchanged but the progress
+  dots move with them, so `welcome-rule*`, `welcome-tile` and
+  `welcome-tap-blocked` all shift; CI's own refresh commit handles it. And the
+  card numbers live in more places than the enum and the tests: `strings.xml`,
+  `PermissionRows.kt`, `MainActivity.kt` and `WelcomeExitTest.kt` all name a
+  card by number in a comment (Codex, PR #226).
+  **What it does not fix**: `Skip`, `MainScreen`'s own add-tile banner and an
+  install predating the flow all reach a tile another way, so the tile-tap gate
+  is still what holds this line — the reorder tidies the one path through the
+  flow, which is why it was not urgent.
 
 - **Open: whether `ACTIVITY_RECOGNITION` moves a Data Safety answer** (raised under
   autopilot from PR #212; put to the maintainer 2026-09-06 and **not yet answered** —
