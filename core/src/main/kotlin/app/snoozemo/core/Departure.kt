@@ -194,10 +194,38 @@ data class DepartureObservation(
     }
 }
 
+/**
+ * Which of §6.6's two routes to [DepartureVerdict.DEPARTED] this fix took.
+ *
+ * The verdict collapses them, and for the debug log that loses the thing §4.6
+ * asks to record — "which confirmation rule matched" (Codex, PR #233). A
+ * reader can *infer* it from the margin, since only [Departure.isUnambiguous]
+ * clears [Departure.UNAMBIGUOUS_MARGIN_M], but that asks them to know a
+ * constant that has moved before; naming it is one word and cannot drift from
+ * the branch that produced it.
+ *
+ * Null for every other verdict: those name their own rule already.
+ */
+enum class DepartureRule {
+    /**
+     * One fix, far enough out that confirmation would only keep a phone silent
+     * for somebody plainly gone ([Departure.UNAMBIGUOUS_MARGIN_M]).
+     */
+    UNAMBIGUOUS,
+
+    /**
+     * Two qualifying fixes at least [Departure.CONFIRMATION_GAP] apart — the
+     * rule that kills the GPS jump.
+     */
+    TWO_FIX,
+}
+
 /** The result of feeding one fix to the test: the verdict, and the state to carry forward. */
 data class DepartureStep(
     val verdict: DepartureVerdict,
     val progress: DepartureProgress,
+    /** Which rule produced a [DepartureVerdict.DEPARTED]; null for the rest. */
+    val rule: DepartureRule? = null,
 )
 
 /**
@@ -391,7 +419,11 @@ object Departure {
         progress: DepartureProgress = DepartureProgress.NONE,
     ): DepartureStep {
         if (isUnambiguous(fix, anchor)) {
-            return DepartureStep(DepartureVerdict.DEPARTED, DepartureProgress.NONE)
+            return DepartureStep(
+                DepartureVerdict.DEPARTED,
+                DepartureProgress.NONE,
+                DepartureRule.UNAMBIGUOUS,
+            )
         }
         if (!qualifies(fix, anchor)) {
             // Both close the window, and only the *verdict* differs (Codex,
@@ -426,7 +458,11 @@ object Departure {
         // against the user's phone staying silent.
         val gapMs = fix.elapsedRealtimeMs - openedAtMs
         if (gapMs >= CONFIRMATION_GAP.toMillis()) {
-            return DepartureStep(DepartureVerdict.DEPARTED, DepartureProgress.NONE)
+            return DepartureStep(
+                DepartureVerdict.DEPARTED,
+                DepartureProgress.NONE,
+                DepartureRule.TWO_FIX,
+            )
         }
 
         // Qualifying, but too soon to be independent evidence. The window keeps

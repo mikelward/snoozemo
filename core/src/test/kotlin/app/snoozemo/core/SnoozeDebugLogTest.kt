@@ -30,6 +30,8 @@ import org.junit.Test
  */
 class SnoozeDebugLogTest {
 
+    private val t0: Instant = Instant.parse("2026-01-01T12:00:00Z")
+
     // --- the privacy floor (SPEC.md §4.6: absolute, and tested on its own) ---
 
     @Test
@@ -151,6 +153,117 @@ class SnoozeDebugLogTest {
         assertFalse("the place name is banned", summarized.contains("Cinema"))
         assertFalse("latitude is banned", summarized.contains("12.345678"))
         assertTrue("and the summary is what survives", summarized.contains("ssid captured"))
+    }
+
+    // --- the departure line (SPEC.md §4.6) ---
+
+    @Test
+    fun `the departure summary carries the arithmetic and none of the position`() {
+        // Built through `Departure.observe` rather than by hand, so this pins
+        // what the engine actually renders: a constructed observation could
+        // agree with the format string while disagreeing with the test.
+        val anchor = Anchor(lat = 0.0, lon = 0.0, fixAccuracyM = 20f, capturedAt = t0)
+        val fix = Fix(
+            lat = 250.0 / 111_320.0,
+            lon = 0.0,
+            accuracyM = 20f,
+            elapsedRealtimeMs = 1_000L,
+        )
+        val observation = requireNotNull(Departure.observe(fix, anchor))
+
+        val line = observation.logSummary(DepartureVerdict.DEPARTED).value.toString()
+
+        // ~250 m out, both endpoints 20 m: uncertainty is 28 m in quadrature
+        // and the margin is what §6.6 thresholds once the radius comes off.
+        assertTrue(line, line.contains("distance=250m"))
+        assertTrue(line, line.contains("accuracy=20.0m"))
+        assertTrue(line, line.contains("uncertainty=28m"))
+        assertTrue(line, line.contains("margin=121m"))
+        assertTrue(line, line.contains("radius=100m"))
+        assertTrue(line, line.contains("verdict=DEPARTED"))
+
+        // The floor, on the one value this line is built from: the fix has a
+        // position and the rendering must not.
+        assertFalse("latitude is banned", line.contains("0.002245"))
+    }
+
+    @Test
+    fun `the departure summary shows when the anchor is what cannot place anyone`() {
+        // The line exists for this reading. A phone sitting still, a sharp fix,
+        // and a capture as vague as the radius: `Departure.confirmsPresence`
+        // needs the whole uncertainty circle inside the radius, so at this
+        // anchor accuracy no fix of any precision can confirm presence and
+        // every one of them is INCONCLUSIVE — which the engine then reports as
+        // `FIXES_TOO_VAGUE`, naming the fix. Without the line below, nothing in
+        // the log can tell that apart from fixes that really were vague.
+        val vagueAnchor = Anchor(lat = 0.0, lon = 0.0, fixAccuracyM = 100f, capturedAt = t0)
+        val sharp = Fix(
+            lat = 10.0 / 111_320.0,
+            lon = 0.0,
+            accuracyM = 20f,
+            elapsedRealtimeMs = 1_000L,
+        )
+        val observation = requireNotNull(Departure.observe(sharp, vagueAnchor))
+
+        val line = observation.logSummary(DepartureVerdict.INCONCLUSIVE).value.toString()
+
+        // The fix was sharp; the uncertainty is five times its accuracy, and
+        // that gap is the anchor's contribution said out loud.
+        assertTrue(line, line.contains("accuracy=20.0m"))
+        assertTrue(line, line.contains("uncertainty=102m"))
+        assertTrue(line, line.contains("verdict=INCONCLUSIVE"))
+    }
+
+    @Test
+    fun `the departure summary names which rule a departure matched`() {
+        // The verdict collapses the two routes to DEPARTED, and §4.6 asks for
+        // the one that matched (Codex, PR #233).
+        val anchor = Anchor(lat = 0.0, lon = 0.0, fixAccuracyM = 20f, capturedAt = t0)
+        val fix = Fix(
+            lat = 250.0 / 111_320.0,
+            lon = 0.0,
+            accuracyM = 20f,
+            elapsedRealtimeMs = 1_000L,
+        )
+        val observation = requireNotNull(Departure.observe(fix, anchor))
+
+        val confirmed = observation
+            .logSummary(DepartureVerdict.DEPARTED, DepartureRule.TWO_FIX)
+            .value.toString()
+        assertTrue(confirmed, confirmed.contains("verdict=DEPARTED rule=TWO_FIX"))
+
+        // And nothing trails a verdict that names its own rule already.
+        val inconclusive = observation.logSummary(DepartureVerdict.INCONCLUSIVE).value.toString()
+        assertFalse(inconclusive, inconclusive.contains("rule="))
+    }
+
+    @Test
+    fun `a fix with no arithmetic in it is rendered, not thrown on`() {
+        // `roundToLong` throws on a NaN, and a mock or faulty provider can set
+        // a coordinate or an accuracy to one — `hasAccuracy()` is still true,
+        // so it reaches the haversine and every derived value is NaN. The
+        // engine has always handled that fix safely (every comparison against
+        // a NaN is false, so it falls out inconclusive); a throw from the log
+        // would have made it an exception on the fix path instead, leaving a
+        // snooze armed with nothing running to end it (Codex, PR #233).
+        val anchor = Anchor(lat = 0.0, lon = 0.0, fixAccuracyM = 20f, capturedAt = t0)
+        val broken = Fix(
+            lat = Double.NaN,
+            lon = 0.0,
+            accuracyM = 20f,
+            elapsedRealtimeMs = 1_000L,
+        )
+        val observation = requireNotNull(Departure.observe(broken, anchor))
+
+        val line = observation.logSummary(DepartureVerdict.INCONCLUSIVE).value.toString()
+
+        // `unknown` rather than a substituted zero: a zero would claim the
+        // phone is at the anchor on a reading that said nothing at all.
+        assertTrue(line, line.contains("distance=unknown"))
+        assertTrue(line, line.contains("margin=unknown"))
+        // The accuracy was real, so it is still reported — the fix is only
+        // partly broken, and which part is the diagnostic.
+        assertTrue(line, line.contains("accuracy=20.0m"))
     }
 
     @Test

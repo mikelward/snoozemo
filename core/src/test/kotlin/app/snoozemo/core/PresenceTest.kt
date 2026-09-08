@@ -1438,4 +1438,93 @@ class PresenceTest {
         assertNull(state.graceDeadlineMs)
         assertTrue(state.locationAccessLost)
     }
+
+    // --- what the log gets out of all this (SPEC.md §4.6) ---
+
+    /**
+     * The departure lines this replay wrote, and only this replay's.
+     *
+     * [SnoozeDebugLog] is a process-wide buffer every test in this JVM shares,
+     * so a plain filter over the snapshot reads other tests' fixes back as this
+     * one's — and a count taken before and after can be moved by eviction at
+     * the buffer's bound. A marker logged first is neither: everything after it
+     * belongs to the replay that follows.
+     */
+    private fun departureLinesSince(marker: String): List<String> {
+        val all = SnoozeDebugLog.snapshot()
+        val at = all.indexOfLast { it.contains(marker) }
+        assertTrue("the marker survived the buffer", at >= 0)
+        return all.drop(at + 1).filter { it.contains("departure(") }
+    }
+
+    @Test
+    fun `every fix the test acts on leaves its arithmetic in the log`() {
+        // §4.6 has always asked for this line and nothing wrote it, so a
+        // degraded snooze could be read back as *that* it degraded and never as
+        // *why*. Written from the engine because that is the only place the
+        // observation and the verdict exist together: a listener sees the
+        // observation alone, and only under FULL.
+        SnoozeDebugLog.event("marker %s", "acted-on-fixes")
+        replay(tracked, signals = arrayOf(outside(0), outside(60)))
+
+        val lines = departureLinesSince("acted-on-fixes")
+
+        assertEquals("one line per acted-on fix", 2, lines.size)
+        // The two-fix rule, visible in the log for the first time: the same
+        // reading is awaiting confirmation and then confirms.
+        assertTrue(lines[0], lines[0].contains("verdict=AWAITING_CONFIRMATION"))
+        assertTrue(lines[1], lines[1].contains("verdict=DEPARTED"))
+        assertTrue(lines[1], lines[1].contains("accuracy=20.0m"))
+    }
+
+    @Test
+    fun `a broken fix still degrades rather than throwing on the fix path`() {
+        // The end-to-end half of the log's NaN guard: a provider handing over
+        // a fix with a NaN coordinate must still fall out inconclusive and
+        // count toward degradation, exactly as it did before the line existed.
+        // A throw here is principle 1's failure — the snooze stays armed with
+        // nothing left running to end it (Codex, PR #233).
+        SnoozeDebugLog.event("marker %s", "broken-fix")
+        val broken = PresenceSignal.FixArrived(
+            Fix(lat = Double.NaN, lon = 0.0, accuracyM = 20f, elapsedRealtimeMs = 1_000L),
+        )
+
+        val (_, state) = replay(tracked, signals = arrayOf(broken))
+
+        assertEquals("counted as an observation that said nothing", 1, state.uselessObservations)
+        val lines = departureLinesSince("broken-fix")
+        assertEquals(1, lines.size)
+        assertTrue(lines[0], lines[0].contains("distance=unknown"))
+    }
+
+    @Test
+    fun `a departure line names the rule that ended the snooze`() {
+        // Both routes to DEPARTED, so the log distinguishes the one fix that
+        // was plainly far enough from the pair that confirmed each other.
+        SnoozeDebugLog.event("marker %s", "which-rule")
+        replay(tracked, signals = arrayOf(arrived(northM = 5_000.0, accuracyM = 20f, atSeconds = 0)))
+
+        val unambiguous = departureLinesSince("which-rule")
+        assertEquals(1, unambiguous.size)
+        assertTrue(unambiguous[0], unambiguous[0].contains("rule=UNAMBIGUOUS"))
+
+        SnoozeDebugLog.event("marker %s", "which-rule-two-fix")
+        replay(tracked, signals = arrayOf(outside(0), outside(60)))
+
+        val confirmed = departureLinesSince("which-rule-two-fix")
+        assertEquals(2, confirmed.size)
+        assertFalse(confirmed[0], confirmed[0].contains("rule="))
+        assertTrue(confirmed[1], confirmed[1].contains("rule=TWO_FIX"))
+    }
+
+    @Test
+    fun `a snooze with nothing to measure against writes no departure line`() {
+        // Wi-Fi-only is not a tracking failure (SPEC.md §8.4) and there is no
+        // arithmetic to record: a line here would be a distance from an origin
+        // the app has already declared unusable.
+        SnoozeDebugLog.event("marker %s", "nothing-to-measure")
+        replay(wifiOnly, signals = arrayOf(outside(0)))
+
+        assertTrue(departureLinesSince("nothing-to-measure").isEmpty())
+    }
 }
