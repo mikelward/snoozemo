@@ -3,6 +3,7 @@ package app.snoozemo.snooze
 import android.content.Intent
 import app.snoozemo.R
 import app.snoozemo.core.ActiveSnooze
+import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenOutcome
 import java.time.Duration
 import java.time.Instant
@@ -120,6 +121,60 @@ class SnoozeServiceSetCapTest {
 
         assertEquals(chosen, ActiveSnoozeStore(appContext).load()?.capExpiresAt)
         assertEquals(EndChoiceResult.APPLIED, reported)
+    }
+
+    /** `Until I leave`: no time, the record's own ceiling. */
+    private fun restoreEnd(record: ActiveSnooze?) =
+        startService(SnoozeService.ACTION_SET_CAP, record) {
+            putExtra(SnoozeService.EXTRA_RESTORE_END, true)
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+            record?.let { putExtra(SnoozeService.EXTRA_CHOICE_FOR_SNOOZE, it.startedAt.toEpochMilli()) }
+        }
+
+    @Test
+    fun `restoring puts a shortened cap back to its ceiling`() {
+        val record = snoozeFixture(now).let { it.copy(capExpiresAt = now.plus(Duration.ofHours(1))) }
+
+        restoreEnd(record)
+
+        assertEquals(record.capCeilingAt, ActiveSnoozeStore(appContext).load()?.capExpiresAt)
+        assertEquals(EndChoiceResult.APPLIED, reported)
+    }
+
+    @Test
+    fun `restoring never runs past the ceiling the snooze started with`() {
+        // The one control besides `+30 min` that lengthens a cap, and it is
+        // bounded by the same backstop: what it restores is where the snooze
+        // was already heading before the user shortened it.
+        val record = snoozeFixture(now)
+
+        restoreEnd(record)
+
+        val after = ActiveSnoozeStore(appContext).load()
+        assertEquals("already at its ceiling, so nothing moves", record.capExpiresAt, after?.capExpiresAt)
+        assertEquals(EndChoiceResult.APPLIED, reported)
+    }
+
+    @Test
+    fun `a departure restore is declined once the snooze tracks no departure`() {
+        // A snooze that degrades mid-flight keeps its `startedAt`, so the
+        // identity check passes and the screen's own mode check is by
+        // definition a moment behind. Restoring anyway would leave the phone
+        // silent for up to the full ceiling with nothing watching for the
+        // departure the row promised (Codex, PR #234).
+        val record = snoozeFixture(now).copy(
+            capExpiresAt = now.plus(Duration.ofHours(1)),
+            mode = TrackingMode.DURATION_ONLY,
+        )
+
+        restoreEnd(record)
+
+        assertEquals(
+            "the shortened cap stands",
+            record.capExpiresAt,
+            ActiveSnoozeStore(appContext).load()?.capExpiresAt,
+        )
+        assertEquals("and the tap is not left looking accepted", EndChoiceResult.REFUSED, reported)
     }
 
     private fun chooseEnd(endsAt: Instant, record: ActiveSnooze?) =
