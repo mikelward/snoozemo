@@ -600,9 +600,9 @@ leads with — it is no longer true as a statement that the tile is the *only* w
 **The app is four screens, not one** (`TODO.md` Phase 4, landed 2026-08-23; the fourth,
 `LicensesScreen`, arrived later — §4.7). `MainScreen` is the
 tile-equivalent Arm/Release control: the app's title, a banner for each required-and-missing
-capability, the tile banner below, and the Snooze/End snooze controls — **exactly one of Snooze and End snooze at a
+capability, the tile banner below, and the Snooze/End now controls — **exactly one of Snooze and End now at a
 time**, split on a confident "nothing is running" rather than on a confident "something is". End
-snooze is the one guaranteed way back to a ringing phone (§7), so it disappears only where the
+now is the one guaranteed way back to a ringing phone (§7), so it disappears only where the
 screen has actually read the record and found nothing; while that reading is still unknown it
 stays, and Snooze — which could otherwise arm over a snooze the screen has not seen, costing the
 user the deadline they were promised — is the one that waits. **Two capabilities are required, and each states itself** (maintainer, 2026-09-06). Do Not
@@ -659,7 +659,7 @@ itself.
 
 The row still scrolls with the column, deliberately. Pinning it would guarantee the gear at the
 cost of the scroll viewport in exactly the constrained cases — short window, large font — where
-`End snooze` is already tight, and this section ranks those the other way round: the manual exit is
+`End now` is already tight, and this section ranks those the other way round: the manual exit is
 "always available, always instant" (§7), Settings is touched rarely and usually never. So the
 guarantee stays with the exit, and Settings gets the better position rather than a reserved one
 (Codex, PR #202).
@@ -746,7 +746,7 @@ place for two reasons: reaching either meant scrolling past everything including
 under, and each took the full width immediately beneath the one control that has to be unmissable
 (§7). In the title row they are where the screen opens and where a user already looks, and the
 arm/end button gets the width to itself. The row still scrolls with the column — pinning it would
-buy a guarantee for the two rarely-touched controls by spending viewport that `End snooze` may
+buy a guarantee for the two rarely-touched controls by spending viewport that `End now` may
 need in exactly the short-window and large-font cases, and this section ranks those the other way
 round. Each icon carries its label as its accessible name, since an icon-only control is nameless
 to a screen reader otherwise; the help icon lands with the flow it opens, not before it.
@@ -1156,7 +1156,7 @@ snooze runs** (maintainer, 2026-09-08). The sheet answers "how should this snooz
 seconds after arming, and a user who works that out an hour later — a meeting appears, plans change,
 they simply forgot to pick — had nowhere to say so. Opening the app showed the snooze and offered
 exactly two things: end it, or nothing. So the same rows now sit on the main screen, under the status
-line and above `End snooze`, whenever a snooze is running and there is a time the service would
+line and above `End now`, whenever a snooze is running and there is a time the service would
 accept (§7's `MIN_CAP`).
 
 Three differences from the sheet, and all three are behavior rather than layout:
@@ -1195,15 +1195,35 @@ returned rather than from a pair fixed when the record was read. The same gate
 answers a record that has not been read yet: an offer that cannot be confirmed
 against a running, refinable snooze is one the screen must not solicit taps on.
 
-`End snooze` keeps the last word on the screen, below every refinement — the order says which of
-them is the terminal answer.
+**The order is `Until I leave`, then the adjustable time, then the meeting ends, then `End now`**
+(maintainer, 2026-09-08). Departure leads because it is what the product is for and what an arm
+already does — it read wrong sitting underneath two ways of narrowing it. `End now` keeps the last
+word, below every refinement, because the order is what says which of them is the terminal answer.
+**A meeting row is marked as one**, by a calendar glyph after its time rather than before it: every
+row's label starts at the same x and the eye scans the times, so the mark qualifies the answer
+instead of categorizing it, and it is named for a screen reader because the label alone reads
+identically to the adjustable time.
 
-**It is not pinned, and that is a gap rather than a decision** (Codex, PR #234). The rows sit in the
-same scrolling column, so on a short window, at a large font, or under a banner, up to four of them
-now stand between the top of the screen and the exit. It stays reachable — the column scrolls, which
-is what §7's "always available" rests on — but "reachable by scrolling past the refinements" is
-weaker than what this screen owes its one guaranteed way back to a ringing phone. Pinning it outside
-the scroll is tracked in `TODO.md` with the rest of the layout work the maintainer asked for.
+**`End now` is the same size as the choices and drawn as an outline** (maintainer, 2026-09-08). The
+size is not negotiable — it is the one guaranteed way back to a ringing phone (§7) and may not
+become the hardest thing on the screen to hit. The outline is what distinguishes it without
+shrinking it: every filled row *schedules* an end, this one *performs* one, and a stack of identical
+cards ending in the irreversible one is the arrangement a hurried tap gets wrong. It shares the
+ongoing notification's own `End now` wording, so one action carries one name wherever the user meets
+it (§4.3).
+
+**It is last, but it is not yet at a fixed position, and that is outstanding work rather than a
+settled design** (Codex, PR #234). The rows sit in the same scrolling column, so on a short window,
+at a large font, or under a banner, up to four of them stand between the top of the screen and the
+exit — reaching it there costs a scroll that also carries the settings gear off the top. It stays
+reachable, which is what §7's "always available" rests on, but "reachable by scrolling past the
+refinements" is weaker than what this screen owes the one guaranteed way back to a ringing phone,
+and weaker than what was asked for: a position that does not move with the meeting count. The
+requirement stands; only the mechanism is undecided, and `TODO.md` carries both. Pinning is the
+obvious candidate and is not free — it buys the guaranteed position by spending viewport height in
+exactly the short-window and large-font cases that make it look necessary, which is the same trade
+§4.2 declined for the title row and the reason this is the maintainer's call rather than a
+one-line fix.
 
 **The stepper still only shortens.** Its ceiling is the cap the snooze currently carries, so a user
 who has shortened to an hour cannot step back to two — they choose `Until I leave` and step down

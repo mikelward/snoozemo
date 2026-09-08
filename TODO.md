@@ -1358,42 +1358,41 @@ the point is that every other line of the app is worthless if it isn't true.
       screen computed.
 
 - [ ] **Fix where the end-condition controls sit, and what the exit is called**
-      (maintainer, 2026-09-08, on seeing the first screenshot — for the PR after
-      the one that added the rows).
+      (maintainer, 2026-09-08, on seeing the first screenshot). Three of the four
+      landed in their own PR after the one that added the rows; the fourth is what
+      keeps this item open.
 
-      - **`Until I leave` goes first**, above the time row and the meetings.
-        Settled: it is the product's own thesis and the default a snooze is
-        armed on, so it reads wrong sitting under two refinements of it.
-      - **The exit moves to the bottom and stays there**, so both ends of the
-        list are at fixed positions whatever the calendar contributes. Today
-        the number of meeting rows moves it, which is exactly the control that
-        must never be somewhere new — `SPEC.md` §7's "always available, always
-        instant". Worth costing against §4.2's reason for *not* pinning the
-        title row: pinning takes height off the viewport in the short-window
-        and large-font cases. That argument cut against pinning something
-        secondary; it cuts the other way for the exit, which is the thing the
-        height is being reserved *for*.
-      - **Rename `End snooze` to `End now`**, and give it the same size and
-        shape as the rows above it. The maintainer's reason: every other
-        control on the screen names a time or a condition, so `End now` is the
-        one that completes the set — and matching sizes stop the exit reading
-        as a different kind of thing from the choices. Open to being talked
-        out of the rename; the sizing and the position are not in question.
+      - [x] **`Until I leave` goes first**, above the time row and the meetings — it
+        is the product's own thesis and the default a snooze is armed on, so it read
+        wrong sitting under two refinements of it.
+      - [x] **A calendar mark on the meeting rows, appended after the time.** Every
+        row's label starts at the same x and the eye scans the times, so the mark goes
+        after the text — it says *where this time came from*, which qualifies the
+        answer rather than categorizing it. A monochrome vector tinted by the row
+        rather than an emoji: 🗓️ renders differently per device and font and cannot
+        take the row's content color. It carries a `contentDescription`, since the
+        label alone reads identically to the adjustable time.
+      - [x] **`End snooze` became `End now`**, full width, drawn as an outline rather
+        than a filled card (maintainer: "outlining end now is a good idea to try").
+        Same size because it is the one guaranteed way back to a ringing phone and may
+        not become the hardest thing on the screen to hit; outlined because every
+        filled row *schedules* an end and this one *performs* one, and a wall of
+        identical cards ending in the irreversible one is what a hurried tap gets
+        wrong.
+      - [ ] **The exit at a fixed position, whatever the calendar contributes.** Not
+        done. It is last in the list, which is not the same thing: it still sits
+        inside the scrolling column, so on a landscape window with both meeting rows
+        it goes below the fold — `main-screen-end-condition-short-window.png` records
+        exactly that. This item asked for a position that does not move with the
+        meeting count and said the position was not in question, so it stays unchecked
+        rather than being reframed as satisfied; what *is* genuinely undecided is
+        whether pinning is the right way to buy it, and that is under *Decisions
+        needing review* below with the argument on both sides.
 
-      - **A calendar mark on the meeting rows, appended after the time**
-        (maintainer, 2026-09-08). Every row's label starts at the same x and
-        the eye scans the times, so the mark goes after the text rather than
-        in front of it — it says *where this time came from*, which qualifies
-        the answer rather than categorizing it. A monochrome vector, tinted by
-        the row (maintainer: "monochrome vector is fine"), rather than an
-        emoji: 🗓️ renders differently per device and font and cannot take the
-        row's content color. It also needs a `contentDescription`, since the
-        label alone reads identically to the adjustable time and the mark is
-        the only thing distinguishing them for a screen reader.
-
-      Two new strings (`End now`, and the mark's description), both proposed
-      or implied by the maintainer, so the English is approved — they still
-      ship with the deferral markers until the locales are fanned out.
+      No new string in the end: the ongoing notification's action already said
+      `End now`, already translated, and the two end the same snooze the same way —
+      so the screen's own `End snooze` was retired rather than reworded into a second
+      key saying it again. The mark's `contentDescription` is the one addition.
 
 - [ ] **Consider deleting the bottom sheet** (maintainer, 2026-09-08, asked for alongside the
       entry above). The main screen now offers everything the sheet does and two things it does
@@ -4684,6 +4683,30 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   more, not less.
 
 ## Decisions needing review
+
+- [ ] **How should `End now` get a position that does not move with the meeting
+      count — pinned outside the scroll, or something else?** The requirement itself
+      is not in question and its Phase 4 item stays unchecked until it is met; what is
+      open is the mechanism. The maintainer asked for the exit "at the bottom, so
+      their locations are always fixed, no matter how many meetings there are".
+      Shipped so far: *last in order*, which fixes where it sits in the list and does
+      not fix where it sits on the screen. That much was worth landing on its own —
+      the reorder is what stops the meeting rows shifting `Until I leave` too — but it
+      is a step toward the item, not the item.
+
+      The two readings differ only when the list is long enough to scroll, so
+      `main-screen-end-condition-short-window.png` is the evidence: every row a snooze
+      can offer, on a landscape window. There, reaching `End now` costs a scroll, and
+      that scroll carries the settings gear off the top. So "always fixed" is *not*
+      what the current build delivers on that window — it is fixed in the list, not
+      on the screen.
+
+      Against pinning, and why this was not simply done: `SPEC.md` §4.2 declined to
+      pin the title row precisely because a pinned band takes height off the viewport
+      in the short-window and large-font cases — the same cases that make pinning look
+      necessary here. That argument cut against pinning something secondary; whether
+      it cuts the other way for the exit is the maintainer's call, since it trades a
+      guaranteed position for less room to read the choices in.
 
 - [ ] **Whether a checked item may defer pieces to another item** — specifically the Phase 3
   debug-log entry, which is `[x]` while two of the records it describes (the wake-up-source and
