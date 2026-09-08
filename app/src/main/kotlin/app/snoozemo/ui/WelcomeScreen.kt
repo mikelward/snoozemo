@@ -61,6 +61,47 @@ enum class WelcomeCard {
 }
 
 /**
+ * Where a card name is stored, and what an older one means.
+ *
+ * **Two things persist the card, and both outlive an app update**: the
+ * `WelcomeStore` breadcrumb, and `MainActivity`'s saved instance state, which
+ * the system holds outside the process. The first version of this migration
+ * covered the breadcrumb alone, so a task restored from a bundle written before
+ * the reorder still resumed on the tile card (Codex, PR #226). One object
+ * rather than a rule written out at each site, so the next reorder cannot fix
+ * one path and miss the other.
+ *
+ * **The key is the version.** [KEY] is new in the build that reordered the
+ * cards, so a name found under [LEGACY_KEY] was written by the old order by
+ * definition — no counter to seed, and no way to mistake one order's memory for
+ * the other's. Writing only ever touches [KEY], so the rewind is spent the
+ * first time the flow moves: without that it would repeat forever, sending a
+ * user who legitimately reaches the tile card back a step on every restore.
+ *
+ * All three can go once no install can still hold a pre-reorder name.
+ */
+object WelcomeCardMemory {
+
+    /** What this build writes. */
+    const val KEY = "welcomeCard2"
+
+    /** What builds before the 2026-09-08 reorder wrote. Read, never written. */
+    const val LEGACY_KEY = "welcomeCard"
+
+    /**
+     * The stored name, preferring [KEY] and rewinding a legacy one.
+     *
+     * A flow paused on the tile card by an older build has not seen the rule
+     * card — the tile came first then — so resuming it in place would walk the
+     * user past the only card that offers Do Not Disturb access, and, if they
+     * had already added the tile, into the tile-without-access state the
+     * reorder exists to prevent.
+     */
+    fun resolve(current: String?, legacy: String?): String? =
+        current ?: legacy?.let { if (it == WelcomeCard.TILE.name) WelcomeCard.RULE.name else it }
+}
+
+/**
  * The cards this build actually shows, in order.
  *
  * [TELEMETRY][WelcomeCard.TELEMETRY] is dropped where nothing collects — the
@@ -106,6 +147,10 @@ fun welcomeCards(collectsTelemetry: Boolean): List<WelcomeCard> =
  *
  * One function for both the gate and the seed, so a name that cannot be shown
  * can never be the thing that opens the flow either.
+ *
+ * The name arrives already migrated for the card order it was written under —
+ * `WelcomeStore.lastCard` does that, since which order wrote it is a question
+ * about storage rather than about cards.
  */
 fun rememberedWelcomeCard(name: String?, cards: List<WelcomeCard>): WelcomeCard? =
     name?.let { remembered -> cards.firstOrNull { it.name == remembered } }

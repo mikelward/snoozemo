@@ -114,7 +114,6 @@ internal const val EXTRA_OPEN_PERMISSIONS = "app.snoozemo.OPEN_PERMISSIONS"
 internal const val EXTRA_BLOCKED_TAP_ID = "app.snoozemo.BLOCKED_TAP_ID"
 
 private const val KEY_SCREEN = "screen"
-private const val KEY_WELCOME_CARD = "welcomeCard"
 private const val KEY_PERMISSIONS_ORIGIN = "permissionsOrigin"
 private const val KEY_ROUTED_TO_PERMISSIONS_ONCE = "routedToPermissionsOnce"
 private const val KEY_WELCOME_TAP_BLOCKED = "welcomeTapBlocked"
@@ -1050,8 +1049,17 @@ class MainActivity : ComponentActivity() {
             }
         savedInstanceState?.let {
             screen = Screen.entries.firstOrNull { s -> s.name == it.getString(KEY_SCREEN) } ?: screen
+            // Through `WelcomeCardMemory`, exactly as the `WelcomeStore`
+            // breadcrumb is (Codex, PR #226): this bundle is held by the system
+            // rather than by the process, so it survives an app update too, and
+            // a card name written before the reorder means the same thing
+            // whichever of the two carried it.
+            val restoredCard = WelcomeCardMemory.resolve(
+                current = it.getString(WelcomeCardMemory.KEY),
+                legacy = it.getString(WelcomeCardMemory.LEGACY_KEY),
+            )
             welcomeCard = WelcomeCard.entries
-                .firstOrNull { c -> c.name == it.getString(KEY_WELCOME_CARD) } ?: welcomeCard
+                .firstOrNull { c -> c.name == restoredCard } ?: welcomeCard
             // With the card, not with the launch intent (Codex, PR #220): a
             // recreation restores from this bundle and skips the intent gate
             // entirely, so a flag left out of it takes the tap's only
@@ -1461,7 +1469,9 @@ class MainActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putString(KEY_SCREEN, screen.name)
-        outState.putString(KEY_WELCOME_CARD, welcomeCard.name)
+        // Only the current key — the legacy one is read, never written, which
+        // is what spends the rewind after the first save.
+        outState.putString(WelcomeCardMemory.KEY, welcomeCard.name)
         outState.putString(KEY_PERMISSIONS_ORIGIN, permissionsOrigin.name)
         outState.putBoolean(KEY_ROUTED_TO_PERMISSIONS_ONCE, routedToPermissionsOnce)
         outState.putBoolean(KEY_WELCOME_TAP_BLOCKED, welcomeTapBlocked)

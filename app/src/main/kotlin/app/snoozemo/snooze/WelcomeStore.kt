@@ -2,6 +2,7 @@ package app.snoozemo.snooze
 
 import android.content.Context
 import android.util.Log
+import app.snoozemo.ui.WelcomeCardMemory
 
 /**
  * Remembers that the welcome flow has been shown (`SPEC.md` §4.2).
@@ -69,20 +70,40 @@ class WelcomeStore(context: Context) {
      * the flow has never been entered or has been left; the name of a
      * `WelcomeCard` otherwise, resolved by the caller so a card removed in a
      * later build reads as "no memory" rather than as a crash.
+     *
+     * **A name written before the 2026-09-08 card reorder is migrated**, by the
+     * same [WelcomeCardMemory] the saved-instance-state path uses — the reasons
+     * are there, and one owner is what keeps the two stores from drifting
+     * (Codex, PR #226).
      */
-    fun lastCard(): String? = prefs.getString(KEY_CARD, null)
+    fun lastCard(): String? = WelcomeCardMemory.resolve(
+        current = prefs.getString(WelcomeCardMemory.KEY, null),
+        legacy = prefs.getString(WelcomeCardMemory.LEGACY_KEY, null),
+    )
 
     /** Remembers [card] as the one the flow is on. */
     fun rememberCard(card: String) {
         // `apply`, not `commit`: this is a breadcrumb, and the cost of losing
         // the last one to a kill is starting the flow one card earlier — worth
         // less than a disk write in front of the card's own frame.
-        prefs.edit().putString(KEY_CARD, card).apply()
+        //
+        // The legacy key goes in the same edit, so the migration fires at most
+        // once per install: after this there is a new-key breadcrumb, and it
+        // wins.
+        prefs.edit()
+            .putString(WelcomeCardMemory.KEY, card)
+            .remove(WelcomeCardMemory.LEGACY_KEY)
+            .apply()
     }
 
     /** Forgets it, once the flow has been left. */
     fun forgetCard() {
-        prefs.edit().remove(KEY_CARD).apply()
+        // Both keys: leaving the legacy one behind would resume a flow the user
+        // has finished with.
+        prefs.edit()
+            .remove(WelcomeCardMemory.KEY)
+            .remove(WelcomeCardMemory.LEGACY_KEY)
+            .apply()
     }
 
     /**
@@ -148,6 +169,5 @@ class WelcomeStore(context: Context) {
         const val FILE_NAME = "welcome"
         const val KEY_SEEN = "seen"
         const val KEY_HINT_DISMISSED = "replayHintDismissed"
-        const val KEY_CARD = "welcomeCard"
     }
 }

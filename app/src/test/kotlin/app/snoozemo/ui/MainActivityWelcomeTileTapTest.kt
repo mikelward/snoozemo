@@ -91,7 +91,7 @@ class MainActivityWelcomeTileTapTest {
         // recreation marker, which a new process does not have.
         val restored = Bundle().apply {
             putString("screen", Screen.WELCOME.name)
-            putString("welcomeCard", WelcomeCard.TILE.name)
+            putString(WelcomeCardMemory.KEY, WelcomeCard.TILE.name)
         }
 
         val activity = Robolectric.buildActivity(MainActivity::class.java, blockedTap(id = "tap-2"))
@@ -103,6 +103,29 @@ class MainActivityWelcomeTileTapTest {
         assertEquals(Screen.WELCOME, activity.screen)
         assertEquals(WelcomeCard.TILE, activity.welcomeCard)
         assertTrue(activity.welcomeTapBlocked)
+    }
+
+    @Test
+    fun `a bundle written before the reorder resumes at the rule card too`() {
+        // Codex, PR #226, after the breadcrumb migration landed: the saved
+        // instance state is held by the system rather than by the process, so
+        // it survives an app update as well — and `onCreate` restores from it
+        // *instead of* the breadcrumb, so migrating only the breadcrumb left
+        // this path resuming on the tile card. Written under the legacy key by
+        // hand, because that is the only thing an older build could have saved.
+        val restored = Bundle().apply {
+            putString("screen", Screen.WELCOME.name)
+            putString(WelcomeCardMemory.LEGACY_KEY, WelcomeCard.TILE.name)
+        }
+
+        val activity = Robolectric.buildActivity(MainActivity::class.java, blockedTap(id = "tap-3"))
+            .create(restored)
+            .start()
+            .resume()
+            .get()
+
+        assertEquals(Screen.WELCOME, activity.screen)
+        assertEquals(WelcomeCard.RULE, activity.welcomeCard)
     }
 
     @Test
@@ -202,6 +225,46 @@ class MainActivityWelcomeTileTapTest {
         assertEquals(Screen.WELCOME, activity.screen)
         assertEquals(WelcomeCard.RULE, activity.welcomeCard)
         assertTrue(activity.welcomeTapBlocked)
+    }
+
+    @Test
+    fun `a flow paused on the tile before the reorder resumes at the rule card`() {
+        // Codex, PR #226. The tile card used to precede the rule card, so a
+        // breadcrumb written by an older build names a card that now sits after
+        // the one it had not reached. Resuming in place would walk the user
+        // past the only card offering Do Not Disturb access — and, if they had
+        // already added the tile, straight into the tile-without-access state
+        // the reorder exists to prevent. Written under the legacy key by hand,
+        // because that is the only thing an older build could have left.
+        context.getSharedPreferences("welcome", Context.MODE_PRIVATE)
+            .edit()
+            .putString(WelcomeCardMemory.LEGACY_KEY, WelcomeCard.TILE.name)
+            .commit()
+
+        val activity = Robolectric.buildActivity(MainActivity::class.java, blockedTap())
+            .setup()
+            .get()
+
+        assertEquals(Screen.WELCOME, activity.screen)
+        assertEquals(WelcomeCard.RULE, activity.welcomeCard)
+    }
+
+    @Test
+    fun `the rewind is spent once, so the tile card can be resumed after it`() {
+        // The other half: without this the rewind repeats forever, and a user
+        // who legitimately reaches the tile card is sent back to the rule card
+        // every time the process dies. Resuming writes the new key, which then
+        // wins over the legacy one.
+        val store = WelcomeStore(context)
+        context.getSharedPreferences("welcome", Context.MODE_PRIVATE)
+            .edit()
+            .putString(WelcomeCardMemory.LEGACY_KEY, WelcomeCard.TILE.name)
+            .commit()
+        assertEquals(WelcomeCard.RULE.name, store.lastCard())
+
+        store.rememberCard(WelcomeCard.TILE.name)
+
+        assertEquals(WelcomeCard.TILE.name, store.lastCard())
     }
 
     @Test
