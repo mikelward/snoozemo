@@ -46,6 +46,7 @@ class SnoozeNotificationsDistanceTest {
         appContext.getSystemService(AudioManager::class.java).ringerMode =
             AudioManager.RINGER_MODE_NORMAL
         DepartureObservations.clear()
+        AnchorWifi.clear()
     }
 
     @Test
@@ -100,6 +101,45 @@ class SnoozeNotificationsDistanceTest {
     }
 
     @Test
+    fun `the anchor's own network is named, not left blank`() {
+        // While it is associated, `Presence` asks location for nothing (SPEC.md
+        // §6.7), so no reading arrives and the row would go quiet at the
+        // freshness window with nothing to say why. The blank is the bug this
+        // answers: the snooze is working exactly as intended at that moment.
+        AnchorWifi.set(true)
+
+        assertEquals(stringOf(R.string.ongoing_distance_wifi), subText(TrackingMode.FULL))
+    }
+
+    @Test
+    fun `the network outranks a distance still inside its window`() {
+        // The association arrives while the last fix is still fresh, so both
+        // are true and the row can only hold one. Wi-Fi is the stronger answer
+        // — it is what ends the uncertainty, where the number is only counting
+        // toward a threshold nothing is measuring any more.
+        publish(distanceM = 60.0)
+        AnchorWifi.set(true)
+
+        assertEquals(stringOf(R.string.ongoing_distance_wifi), subText(TrackingMode.FULL))
+    }
+
+    @Test
+    @Config(qualifiers = "en-rGB")
+    fun `leaving the network hands the row back to the distance`() {
+        // The level is restated on every update and reported on its edges, so
+        // the row has to come back rather than latch — a stuck `Wi-Fi` would
+        // hide the departure it is meant to explain the run-up to.
+        publish(distanceM = 60.0)
+        AnchorWifi.set(true)
+        AnchorWifi.set(false)
+
+        assertEquals(
+            appContext.getString(R.string.distance_meters, 109),
+            subText(TrackingMode.FULL),
+        )
+    }
+
+    @Test
     fun `a mode that measures no distance shows none`() {
         // The same rule the main screen applies to the same reading: a number
         // from the last fix before tracking degraded explains a threshold that
@@ -109,6 +149,18 @@ class SnoozeNotificationsDistanceTest {
         assertNull(subText(TrackingMode.WIFI_ONLY))
         assertNull(subText(TrackingMode.DURATION_ONLY))
         assertNull(subText(TrackingMode.WIFI_GRACE))
+    }
+
+    @Test
+    fun `a degraded mode says nothing even on the anchor's network`() {
+        // The card already names a degraded mode in its own line, and this row
+        // answers "how much further" — a question `WIFI_ONLY` is not measuring
+        // an answer to at all. Saying `Wi-Fi` in both places would state the
+        // same fact twice and crowd out the countdown.
+        AnchorWifi.set(true)
+
+        assertNull(subText(TrackingMode.WIFI_ONLY))
+        assertNull(subText(TrackingMode.DURATION_ONLY))
     }
 
     @Test

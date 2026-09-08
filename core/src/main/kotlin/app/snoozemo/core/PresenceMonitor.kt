@@ -158,6 +158,24 @@ data class PresenceUpdate(
      */
     val locationAccessLost: Boolean = false,
     /**
+     * Whether the anchor's own network is **confirmed** associated — a level
+     * like [graceActive] and [locationAccessLost], restated on every update.
+     *
+     * Confirmed, not merely believed: the engine seeds an association from the
+     * stored anchor's SSID on restore and rests on it for duty, but a watch
+     * that cannot yet identify the network reports it as unconfirmed, and this
+     * stays false through that window rather than asserting a network nobody
+     * has checked.
+     *
+     * It is the reason the distance readout goes quiet rather than a fault:
+     * `Presence` drops [LocationDuty] to `NONE` while this holds (SPEC.md
+     * §6.7), because Wi-Fi has already answered the question location would
+     * have been asked, so no fix arrives and no [observation] follows. A
+     * surface drawing the readout needs to tell that silence from the ones
+     * that mean something is wrong.
+     */
+    val atAnchorWifi: Boolean = false,
+    /**
      * The departure test's arithmetic for the fix this update came from, or
      * null for an update no fix produced.
      *

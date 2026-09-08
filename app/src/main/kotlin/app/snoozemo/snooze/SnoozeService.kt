@@ -2543,6 +2543,32 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * for an expiry that has been superseded would rebuild a card nobody asked
      * to change.
      */
+    /**
+     * The anchor's own network came or went (`SPEC.md` §4.6).
+     *
+     * Reposted because the card's top row says so: while the network is
+     * associated `Presence` asks location for nothing, so no reading follows to
+     * carry the news, and a row left alone would keep counting down a distance
+     * nothing is measuring any more — then fall silent at the freshness window
+     * with no explanation.
+     *
+     * Edges only, so this is not the per-fix repost the reading already pays
+     * for. Guarded on the live snooze for that repost's reason: a level
+     * arriving just after an ending must not put a card back up.
+     */
+    override fun onAnchorWifi(atAnchorWifi: Boolean, changed: Boolean) {
+        // Unconditionally, so the holder is a mirror of the controller rather
+        // than a second copy kept in step by hand. That is what makes it safe
+        // wherever a card is posted: the level cannot be stale, because the one
+        // thing that writes it is the one thing that knows it.
+        AnchorWifi.set(atAnchorWifi)
+        // The repost is the part that costs anything, so only the edge gets it
+        // — a restated level per fix would be the flapping the level shape
+        // exists to prevent. Guarded on the live snooze so a level arriving
+        // just after an ending cannot put a card back up.
+        if (changed) controller.active?.let(notifications::showOngoing)
+    }
+
     private fun scheduleDistanceExpiry(observation: DepartureObservation) {
         val alarms = getSystemService(AlarmManager::class.java) ?: return
         // Replaced, not stacked: only the newest reading decides when the row

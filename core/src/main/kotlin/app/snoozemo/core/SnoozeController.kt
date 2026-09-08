@@ -106,6 +106,27 @@ class SnoozeController(
          * disk write.
          */
         fun onDepartureObservation(observation: DepartureObservation) = Unit
+
+        /**
+         * What the engine last said about the anchor's own network, and
+         * whether that differs from the previous report (`SPEC.md` §4.6).
+         *
+         * **Reported on every update, not only on its edges**, and the two
+         * halves exist because a listener needs them for different things
+         * (Codex, PR #229, third finding on this mechanism). A surface that
+         * caches the level must be able to overwrite it unconditionally, or it
+         * has to be kept in step by hand at every site that could post before
+         * an edge arrives — which produced three separate bugs before this
+         * shape replaced it. [changed] is what a listener reposts on, so a
+         * restated level still costs nothing.
+         *
+         * It is the *explanation* for the departure readout falling silent,
+         * since `Presence` stops asking location anything while it holds.
+         * Defaulted to nothing for the same reason [onDepartureObservation]
+         * is: a listener with nothing to draw is a correct implementation, not
+         * one that forgot a case.
+         */
+        fun onAnchorWifi(atAnchorWifi: Boolean, changed: Boolean) = Unit
     }
 
     var state: SnoozeState = SnoozeState.IDLE
@@ -126,6 +147,30 @@ class SnoozeController(
      * that last one (flagged by Codex on PR #73).
      */
     private var supportedModes: Set<TrackingMode> = setOf(TrackingMode.DURATION_ONLY)
+
+    /**
+     * The last [PresenceUpdate.atAnchorWifi] reported. False before any
+     * update, which is the honest opening state: nothing has said the anchor's
+     * network is associated.
+     */
+    private var atAnchorWifi: Boolean = false
+
+    /**
+     * Records [value] and tells the listener, every time — including when it
+     * has not moved.
+     *
+     * The one writer, so a listener that mirrors this level cannot drift from
+     * it. Announcing only the edges meant every surface holding a copy had to
+     * be cleared by hand wherever one could be posted before the first update
+     * arrived, and each site that was missed was its own bug: a refused
+     * release that cleared a level the snooze still had, and a restore that
+     * posted its card before the clear ran (Codex, PR #229).
+     */
+    private fun setAnchorWifi(value: Boolean) {
+        val changed = value != atAnchorWifi
+        atAnchorWifi = value
+        listener.onAnchorWifi(value, changed)
+    }
 
     /**
      * [mode], or the nearest less capable mode the machinery actually runs.
@@ -242,6 +287,10 @@ class SnoozeController(
         // Nothing is watching yet, so nothing may claim more until the anchor
         // lands and brings the machinery's real answer with it.
         supportedModes = setOf(TrackingMode.DURATION_ONLY)
+        // Announced, not merely assigned: a surface caching this has to hear
+        // that the new snooze starts with nothing known about its network,
+        // before any card for it is posted.
+        setAnchorWifi(false)
         active = snooze
         state = SnoozeState.ARMING
         listener.onStateChanged(state, snooze, null)
@@ -545,6 +594,16 @@ class SnoozeController(
             update.observation?.let { listener.onDepartureObservation(it) }
         }
 
+        // Every update, with the edge marked rather than filtered here: a
+        // listener caching this must be free to overwrite it unconditionally,
+        // and only the edge is worth reposting a card for.
+        //
+        // Not gated on `FULL` the way the reading above is: this is a fact
+        // about Wi-Fi rather than a measurement location took, and it stays
+        // true whatever location can currently do. Which surfaces act on it is
+        // theirs to decide.
+        setAnchorWifi(update.atAnchorWifi)
+
         val before = state
         update.event?.let { report(it) }
 
@@ -599,6 +658,21 @@ class SnoozeController(
      */
     fun adopt(snooze: ActiveSnooze) {
         if (active != null) return
+        // As at the arm and the restore, and here for a reason neither of them
+        // has: this path starts no watch. Android destroys an ordinary service
+        // routinely without killing its process, and `onDestroy` cancels the
+        // collection without stopping the monitor — so a surface caching the
+        // level can hold what the *previous* instance's watch last reported,
+        // with nothing running to correct it. An `End now` whose zen write is
+        // retryably refused leaves the snooze alive on exactly that path, and
+        // the next card restate would claim a network nobody has checked since
+        // (Codex, PR #229).
+        //
+        // Before the assignment, like the restore's: a listener that reposts
+        // the card on an edge finds no active snooze yet, so this cannot put an
+        // ongoing notification in front of a snooze that is about to end —
+        // which is the whole reason this path exists rather than [restore].
+        setAnchorWifi(false)
         active = snooze
         state = SnoozeState.ARMED
     }
@@ -618,6 +692,11 @@ class SnoozeController(
         supported: Set<TrackingMode> = TrackingMode.entries.toSet(),
     ) {
         supportedModes = supported
+        // As at the arm, and for the same reason — and here the ordering is
+        // load-bearing: this runs before the `ARMED` transition below posts a
+        // card, so a surface caching the level is told to forget the previous
+        // snooze's network first rather than drawing it (Codex, PR #229).
+        setAnchorWifi(false)
         // The record's own claim is lowered too: it was written under some
         // machinery, but not provably this one — an app update can change
         // what is watched between the write and this read.

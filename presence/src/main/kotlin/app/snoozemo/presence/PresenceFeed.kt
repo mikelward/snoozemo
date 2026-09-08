@@ -199,6 +199,19 @@ internal class PresenceFeed(
             event = step.event,
             degradation = step.state.degradation,
             graceActive = step.state.graceDeadlineMs != null,
+            // **Confirmed** association only, which is not what the engine
+            // holds internally (Codex, PR #229). The seed above believes the
+            // anchor's network is associated whenever the stored anchor has an
+            // SSID, because a snooze armed on that network should not spend a
+            // fix rediscovering it — a sound assumption for deciding duty, and
+            // corrected within moments either way. It is not sound as a claim
+            // to the user: a restore onto a *different* network reports
+            // `AnchorWifiPresentUnconfirmed` first, since the synchronous read
+            // cannot identify the network, and publishing the seed through that
+            // window would put `Wi-Fi` on the card while the app has no idea
+            // which network it is on. The engine keeps its assumption; the
+            // surfaces get the part that has been checked.
+            atAnchorWifi = step.state.atAnchorWifi && !step.state.awaitingAssociationConfirmation,
             // Whatever the step measured, which is nothing unless a usable,
             // non-stale fix produced it.
             observation = step.observation,

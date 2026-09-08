@@ -380,6 +380,16 @@ class SnoozeNotifications(private val context: Context) {
      * than a sharp one, and naming the nominal radius would promise a departure
      * the current fix could not deliver.
      *
+     * **`Wi-Fi` while the anchor's own network is associated** (maintainer,
+     * 2026-09-08). Not a distance, because there is none to have: `Presence`
+     * asks location for nothing while Wi-Fi is answering (SPEC.md §6.7), so
+     * the readings stop and the row would fall silent at the freshness window
+     * with nothing to say why. Naming the reason turns a blank into an answer
+     * — and it is the *stronger* answer, since Wi-Fi association is what ends
+     * this snooze's uncertainty, not a number counting toward a threshold.
+     * Ahead of the reading for the same reason: a distance still fresh from
+     * just before the association would be the weaker of two true things.
+     *
      * **Null unless there is something true to say.** Three ways:
      * - Not [TrackingMode.FULL]. The other modes are measuring no distance at
      *   all, so a number from the last fix before tracking degraded would
@@ -405,6 +415,7 @@ class SnoozeNotifications(private val context: Context) {
      */
     private fun distanceSubText(snooze: ActiveSnooze, departure: DepartureObservation?): String? {
         if (snooze.mode != TrackingMode.FULL) return null
+        if (AnchorWifi.associated()) return context.getString(R.string.ongoing_distance_wifi)
         val reading = departure?.takeIf { it.isFresh(SnoozeClock.read().uptimeMillis) } ?: return null
         if (reading.qualifies) return context.getString(R.string.ongoing_distance_confirming)
         val unit = distanceUnitFor(context.resources.configuration)

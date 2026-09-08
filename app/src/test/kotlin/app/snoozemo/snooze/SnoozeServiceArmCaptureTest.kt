@@ -10,6 +10,7 @@ import app.snoozemo.core.Anchor
 import app.snoozemo.core.DepartureObservation
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.TrackingMode
+import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
 import app.snoozemo.ui.MainActivity
 import java.time.Instant
@@ -58,6 +59,7 @@ class SnoozeServiceArmCaptureTest {
         // in this JVM is still the latest one here — which the distance on the
         // card now reads (SPEC.md §4.6).
         DepartureObservations.clear()
+        AnchorWifi.clear()
     }
 
     /**
@@ -239,6 +241,85 @@ class SnoozeServiceArmCaptureTest {
             appContext.getString(R.string.distance_feet, 355),
             ongoingSubText(),
         )
+    }
+
+    @Test
+    fun `joining the anchor's network puts it on the card`() {
+        // The other half of the same problem the reading's repost solves. While
+        // the network is associated the engine asks location for nothing
+        // (SPEC.md §6.7), so no reading follows to carry the news — the row
+        // would keep the last distance until its window closed and then go
+        // blank, at the one moment the snooze is working exactly as intended.
+        val service = startService(SnoozeService.ACTION_ARM).get()
+        TestSnoozeService.captureRequests.single().invoke(captured)
+        shadowOf(Looper.getMainLooper()).idle()
+        service.onDepartureObservation(
+            DepartureObservation(
+                distanceM = 60.0,
+                accuracyM = 15f,
+                anchorAccuracyM = 10f,
+                radiusM = 100,
+                elapsedRealtimeMs = SystemClock.elapsedRealtime(),
+            ),
+        )
+        assertEquals(
+            appContext.getString(R.string.distance_feet, 355),
+            ongoingSubText(),
+        )
+
+        service.onAnchorWifi(true, changed = true)
+
+        assertEquals(stringOf(R.string.ongoing_distance_wifi), ongoingSubText())
+
+        // And back, so the row cannot latch on a network the phone has left.
+        service.onAnchorWifi(false, changed = true)
+
+        assertEquals(
+            appContext.getString(R.string.distance_feet, 355),
+            ongoingSubText(),
+        )
+    }
+
+    @Test
+    fun `a refused ending leaves the network on the card`() {
+        // Codex, PR #229. `onReleasing` and `onReleaseSuperseded` both run
+        // *before* the zen write, and a refused release keeps the snooze
+        // alive — so clearing the level there dropped the row while the engine
+        // still said the network was associated. Because the level is
+        // announced only on its edges, nothing would have restated it until
+        // the phone actually left the network and rejoined.
+        //
+        // `DepartureObservations` survives the same treatment only because it
+        // republishes on every fix, which is exactly the difference this test
+        // pins.
+        val service = startService(SnoozeService.ACTION_ARM).get()
+        TestSnoozeService.captureRequests.single().invoke(captured)
+        shadowOf(Looper.getMainLooper()).idle()
+        service.onAnchorWifi(true, changed = true)
+        assertEquals(stringOf(R.string.ongoing_distance_wifi), ongoingSubText())
+
+        // The platform refuses, so the snooze is still running afterwards.
+        TestSnoozeService.zen.outcome = ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED)
+        sameInstance(service, SnoozeService.ACTION_END, startId = 2)
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertNotNull("the snooze survived the refusal", storedMode())
+
+        // The bug only shows on the *next* repost, so force one that does not
+        // touch the level: a fresh reading. With the level wrongly cleared the
+        // row falls back to that reading's distance; with it intact the network
+        // still outranks the number.
+        service.onDepartureObservation(
+            DepartureObservation(
+                distanceM = 60.0,
+                accuracyM = 15f,
+                anchorAccuracyM = 10f,
+                radiusM = 100,
+                elapsedRealtimeMs = SystemClock.elapsedRealtime(),
+            ),
+        )
+
+        assertEquals(stringOf(R.string.ongoing_distance_wifi), ongoingSubText())
     }
 
     @Test
