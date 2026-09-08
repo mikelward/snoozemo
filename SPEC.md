@@ -384,17 +384,22 @@ even started, so it carried the same wrong claim for the same ten seconds. A mod
 record is not a decision, it is the absence of one, so **the record carries that absence as a
 mode of its own** and every surface reads it. Putting it there rather
 than in a second signal is what makes them agree: they render one field, so there is no way for
-one to be fixed and the others not. **The copy names the sensor, and there are two settling
-values so that it can.** One wording could not: with location denied or services off the capture
-records "no fix" at once and waits on Wi-Fi or the ceiling, so `Waiting for location` would spend
-ten seconds claiming to await a permission the user had refused — the same failure one level
-down, and a generic line that named neither half read as vaguer than the app's actual knowledge.
-So the capture reports **which half is still outstanding** — not which one failed — the record
-carries that as the second settling value, and the surfaces say `Waiting for location` or
-`Waiting for Wi-Fi`, each true for exactly the window it is shown, since the capture ends the
-moment both halves answer. Outstanding rather than failed is load-bearing: a cause covers only
-the failures somebody enumerated, and the first version of this missed the ordinary case, where
-a fix simply *arrives* first and the line went on naming a sensor that had already answered. The Quick
+one to be fixed and the others not. **One settling value, and one line: `Waiting for location`
+for the whole capture** (maintainer, 2026-09-08). It was briefly two. The objection that produced
+the split stands and is worth keeping: with location denied or services off the capture records
+"no fix" at once and waits on Wi-Fi or the ceiling, so this line spends that window naming a
+sensor that is not coming. The split answered it with a second settling value and a second line,
+`Waiting for Wi-Fi`, shown once only the SSID read was left — and keyed on which half was still
+*outstanding* rather than which had failed, since a cause covers only the failures somebody
+enumerated and misses the ordinary case where a fix simply arrives first.
+
+What that bought in practice was a flicker: the Wi-Fi read is near-instant, so the second line
+appeared for a fraction of a second on the way to the real content, and two sentences flickering
+past read worse than one that stands until the card fills in. So the objection is **accepted
+rather than answered** — the line can name a sensor that has already answered, or one that never
+will, for the length of the capture. What keeps that from being a silent failure is not the copy
+but the ceiling: the arm gives up at 10 s and degrades with its own reason (4.1), which is where
+principle 2 is actually discharged. The Quick
 Settings tile makes no claim at all in this window, showing its countdown without the `Timer only`
 qualifier: the qualifier *is* the claim, and the shade would otherwise contradict the notification
 directly below it.

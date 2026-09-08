@@ -4521,27 +4521,21 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
-- [ ] **The settling copy is keyed on which capture half is still outstanding, not on
-  which one failed** (autopilot, 2026-09-07, on the second finding in this mechanism —
-  Codex, PR #225). The first version had `AnchorCaptureRunner` report that location
-  *could not* answer (denied, services off, no provider) and set
-  `SETTLING_WITHOUT_LOCATION` from that. A cause covers only the failures somebody
-  enumerated, and it missed the ordinary case: `startLocation` seeds with the last known
-  fix synchronously, so on most arms the location half closes first and the record then
-  sat on `Waiting for location` with that half already answered — the same wrong claim
-  the split existed to remove, pointing the other way. Replaced with
-  `AnchorCapture.awaitingWifi` beside the existing `awaitingFix`, reported from
-  `settle()`, which every path answering a half already goes through; the mode is now
-  `SETTLING_AWAITING_WIFI`. AGENTS.md says a second finding in one mechanism is evidence
-  about the design and that the design call is the maintainer's, so this is flagged
-  rather than assumed. Reversible: one enum value, one callback, and the two booleans it
-  reads. The alternative was to also report on a *successful* fix, keeping the
-  cause-based shape — smaller as a diff, but it leaves the same class open for whatever
-  way a half closes next.
+- [x] **The settling copy is keyed on which capture half is still outstanding, not on
+  which one failed** (autopilot, 2026-09-07 — **settled 2026-09-08 by removing the
+  split**, so the question it raised is moot). The maintainer's call is one line,
+  `Waiting for location`, for the whole capture: the Wi-Fi-only window is near-instant,
+  so a second sentence for it is a flicker rather than information. With one string,
+  `SETTLING_AWAITING_WIFI` had no observable consequence anywhere — every other consumer
+  already treated the two identically and the debug log does not carry the mode — so the
+  value, `AnchorCapture.awaitingWifi`, the runner's report and the controller callback
+  all went with it. See the entry below for the part of that which was mine to judge.
 
 
-- [ ] **An arm with neither location nor Wi-Fi still sits on `Waiting for Wi-Fi` for the
-  full ceiling** (autopilot, 2026-09-07). The capture answers its location half at once
+
+- [ ] **An arm with neither location nor Wi-Fi still sits on the settling line for the
+  full ceiling** (autopilot, 2026-09-07; the line is `Waiting for location` since
+  2026-09-08, which does not change the timing this is about). The capture answers its location half at once
   and then waits out `AnchorCapture.CEILING` (10 s) for a Wi-Fi read that is not coming
   either, so the one case where the app could settle in well under a second is the case
   it holds longest — and it holds it under a line naming a sensor that cannot answer.
@@ -4552,6 +4546,22 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   wording change indistinguishable in the trace. Reversible either way — nothing here
   is persisted, and the early settle would only shorten a window this already renders
   correctly.
+
+- [ ] **Deleting the second settling mode, rather than pointing both at one string**
+  (autopilot, 2026-09-08). The maintainer decided the copy — `Waiting for location` for
+  both halves — and explicitly had no view on the internal shape, so what to do with
+  `TrackingMode.SETTLING_AWAITING_WIFI` was mine. Removed it. The narrower alternative
+  was to keep the value and render the same string from both branches, which is a
+  smaller diff and cheaper to undo if the distinction is ever wanted back on screen.
+  Removed anyway because with one string the value had **no observable consequence**:
+  `TileSnapshot`, `ActiveSnoozeStore` and the controller's ladder already treated the
+  two identically, and the debug log does not record `TrackingMode` at all — so the
+  justification for keeping it as a diagnostic would have meant *adding* logging, which
+  is scope this change did not have. A distinction nothing can observe is one that
+  misleads the next reader. Reversible: the revert is one enum value, one callback, one
+  boolean and the runner's one-shot reporter, all in this PR's diff. **What would change
+  the call**: the mode reaching the debug log for its own reasons, at which point
+  knowing which half an arm stalled on is worth a value again.
 
 - [ ] **A posted ongoing card can go stale while a snooze is still starting, and that
   is accepted rather than fixed** (autopilot, 2026-09-07, on the fifth Codex finding in

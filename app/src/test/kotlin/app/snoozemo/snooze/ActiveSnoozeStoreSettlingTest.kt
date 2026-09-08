@@ -81,36 +81,6 @@ class ActiveSnoozeStoreSettlingTest {
     }
 
     @Test
-    fun `the no-location settling value survives the write like its sibling`() {
-        // It round-trips as a mode because it *is* one — the reason the split
-        // is a second enum value rather than a flag beside it. A flag would
-        // have needed its own key here, and a reader that forgot it would show
-        // the wrong half.
-        val startedAt = Instant.now().minusMillis(500)
-        ActiveSnoozeStore(context).arm(
-            arming(startedAt, mode = TrackingMode.SETTLING_AWAITING_WIFI),
-        )
-
-        assertEquals(
-            TrackingMode.SETTLING_AWAITING_WIFI,
-            ActiveSnoozeStore(context).load()?.mode,
-        )
-    }
-
-    @Test
-    fun `it expires the same way, since it is the same window`() {
-        // The half a check written against one value would miss: both settling
-        // modes claim a capture is running, and both die with the process that
-        // made the claim.
-        val startedAt = Instant.now().minus(Duration.ofMinutes(5))
-        ActiveSnoozeStore(context).arm(
-            arming(startedAt, mode = TrackingMode.SETTLING_AWAITING_WIFI),
-        )
-
-        assertEquals(TrackingMode.DURATION_ONLY, ActiveSnoozeStore(context).load()?.mode)
-    }
-
-    @Test
     fun `a capture settling on the ceiling itself is still believed`() {
         val startedAt = Instant.now().minusMillis(AnchorCapture.CEILING.toMillis())
         ActiveSnoozeStore(context).arm(arming(startedAt))

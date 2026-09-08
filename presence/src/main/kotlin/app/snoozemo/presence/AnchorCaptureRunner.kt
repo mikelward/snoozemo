@@ -54,14 +54,12 @@ class AnchorCaptureRunner(context: Context) {
      */
     fun begin(
         capturedAt: Instant,
-        onAwaitingWifiOnly: () -> Unit = {},
         onCaptured: (Anchor) -> Unit,
     ): AutoCloseable =
-        Session(capturedAt, onAwaitingWifiOnly, onCaptured).also { it.start() }
+        Session(capturedAt, onCaptured).also { it.start() }
 
     private inner class Session(
         capturedAt: Instant,
-        private val onAwaitingWifiOnly: () -> Unit,
         private val onCaptured: (Anchor) -> Unit,
     ) : AutoCloseable {
 
@@ -218,12 +216,9 @@ class AnchorCaptureRunner(context: Context) {
             }
         }
 
-        /** Whether the caller has already been told, so it is told once. */
-        private var reportedAwaitingWifiOnly = false
-
         /**
-         * Finishes the capture if [anchor] is the completed one; otherwise
-         * reports what the arm is now still waiting for. Main thread.
+         * Finishes the capture if [anchor] is the completed one, and otherwise
+         * leaves it running for whichever half has yet to answer. Main thread.
          *
          * Every path that answers a half goes through here, which is the
          * point: the caller is told *what is outstanding* rather than *what
@@ -232,31 +227,10 @@ class AnchorCaptureRunner(context: Context) {
          * right settling copy without any of them being enumerated.
          */
         private fun settle(anchor: Anchor?) {
-            if (done) return
-            if (anchor == null) {
-                reportIfAwaitingWifiOnly()
-                return
-            }
+            if (done || anchor == null) return
             done = true
             cleanup()
             onCaptured(anchor)
-        }
-
-        /**
-         * Tells the caller once that the location half is closed and only the
-         * Wi-Fi read is left — which is what lets the settling line say
-         * "Waiting for Wi-Fi" rather than naming a sensor that has already
-         * answered, or one that is never going to.
-         *
-         * Only while the capture is still running: once both halves answer the
-         * anchor lands and the real mode replaces the settling one, so a report
-         * after that would be a claim about a snooze that has stopped arming.
-         */
-        private fun reportIfAwaitingWifiOnly() {
-            if (reportedAwaitingWifiOnly) return
-            if (capture.awaitingFix || !capture.awaitingWifi) return
-            reportedAwaitingWifiOnly = true
-            onAwaitingWifiOnly()
         }
 
         override fun close() {

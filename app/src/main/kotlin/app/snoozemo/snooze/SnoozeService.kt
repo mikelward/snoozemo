@@ -1500,29 +1500,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     private fun beginAnchorCaptureFor(snooze: ActiveSnooze) {
         anchorCapture?.close()
         val startedAt = snooze.startedAt
-        anchorCapture = beginAnchorCapture(
-            snooze.anchor.capturedAt,
-            // Only the settling line moves: the capture is still running, and
-            // what it can eventually watch is still `onAnchorCaptured`'s answer.
-            // Fires on a fix arriving as well as on one that cannot, so the
-            // usual arm — where the seeded last-known fix closes the location
-            // half at once — reaches the right line rather than naming a
-            // sensor that has already answered (Codex, PR #225).
-            //
-            // Reposted here rather than from `onStateChanged`, because the
-            // state does not change — the snooze is ARMING before this and
-            // ARMING after, and that branch deliberately posts nothing at all
-            // (it is delivered on the arm path, ahead of the zen rule). By the
-            // time a capture can report this the rule is already on and the
-            // card is already up, so a repost is an ordinary update to a
-            // posted notification rather than arm-path work.
-            onAwaitingWifiOnly = {
-                controller.onAwaitingWifiWhileArming()
-                controller.active
-                    ?.takeIf { it.startedAt == startedAt }
-                    ?.let(notifications::showOngoing)
-            },
-        ) { anchor ->
+        anchorCapture = beginAnchorCapture(snooze.anchor.capturedAt) { anchor ->
             anchorCapture = null
             val running = controller.active
             if (running == null || running.startedAt != startedAt) {
@@ -1550,10 +1528,8 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      */
     internal open fun beginAnchorCapture(
         capturedAt: Instant,
-        onAwaitingWifiOnly: () -> Unit = {},
         onCaptured: (Anchor) -> Unit,
-    ): AutoCloseable = AnchorCaptureRunner(applicationContext)
-        .begin(capturedAt, onAwaitingWifiOnly, onCaptured)
+    ): AutoCloseable = AnchorCaptureRunner(applicationContext).begin(capturedAt, onCaptured)
 
     /**
      * The user set the clock, and this service is the one holding the snooze

@@ -322,41 +322,26 @@
       that went on to track perfectly (maintainer, 2026-09-07, from a device
       log).
 
-      Names the sensor now, because the mode says which one is outstanding
-      (maintainer, 2026-09-07). The generic "Checking where you are" was
-      chosen when this was one value covering both cases: "Waiting for
-      location" is false where fine location is denied or location services
-      are off, since the capture records "no fix" at once and then waits on
-      Wi-Fi or the ceiling — so the app would spend ten seconds claiming to
-      await a permission the user has refused, pointing them at a fix that is
-      not the problem (Codex, PR #221).
+      **One line for the whole capture** (maintainer, 2026-09-08), covering the
+      Wi-Fi read as well as the fix. It briefly did not: PR #221 objected that
+      this line is false where fine location is denied or location services are
+      off, since the capture records "no fix" at once and then waits on Wi-Fi or
+      the ceiling, and PR #225 answered that with a second mode and a second
+      string, "Waiting for Wi-Fi", for the window where only the SSID read is
+      left.
 
-      Splitting the mode settles that without hedging either string. This one
-      is shown only while a fix is genuinely outstanding.
+      That window is near-instant, so what the split actually bought was a
+      flicker between two sentences on the way to the real content — worse to
+      read than one sentence that stands until the card fills in. The
+      objection's substance is unchanged and is worth stating plainly: for the
+      denied-location case this line names a sensor that is not coming. It is
+      accepted rather than answered, because the alternative on the table cost
+      more than it fixed, and because nothing is silent either way — the arming
+      ceiling still fires at 10 s and degrades with its own reason
+      (SPEC.md 4.1), which is what principle 2 actually rests on here.
     -->
     <!-- TODO: translate -->
     <string name="ongoing_settling" tools:ignore="MissingTranslation">Waiting for location</string>
-    <!-- TODO: translate -->
-    <!--
-      The other half, shown once the location half has closed — a fix arrived,
-      or none is coming (permission denied, location services off, no usable
-      provider). Either way the only thing still outstanding is the Wi-Fi read:
-      which network the phone is on, since the SSID is the anchor (SPEC.md 6.2).
-      Keyed on what is outstanding rather than on what failed, because a cause
-      covers only the failures somebody listed and misses the ordinary case of
-      a fix simply arriving first (Codex, PR #225).
-
-      Deliberately parallel with the line above (maintainer, 2026-09-07): two
-      sentences of the same shape, differing only in what is being waited for,
-      so the pair reads as one idea rather than two unrelated states. "Waiting
-      for" rather than "Checking" also carries less of the wrong reading, where
-      the user hears a connection being tested rather than a network being
-      identified.
-
-      True for exactly the window it is shown: the capture finishes the moment
-      both halves have answered, so it goes as soon as the Wi-Fi read lands.
-    -->
-    <string name="ongoing_settling_awaiting_wifi" tools:ignore="MissingTranslation">Waiting for Wi-Fi</string>
     <!-- TODO: translate -->
     <!-- The distance itself, with its unit, so the sentences below take one
          placeholder rather than needing a metric and an imperial copy of each.
