@@ -85,6 +85,31 @@ class SnoozeControllerTest {
             statesWhenObserved += states.size
         }
 
+        /** Every anchor-Wi-Fi report, in order, as (level, changed). */
+        val anchorWifiReports = mutableListOf<Pair<Boolean, Boolean>>()
+
+        /** Just the edges — what a surface would repost a card for. */
+        val anchorWifi: List<Boolean>
+            get() = anchorWifiReports.filter { it.second }.map { it.first }
+
+        /**
+         * What a surface reposting on an edge would find at each report.
+         *
+         * The service's handler is `if (changed) controller.active?.let(::showOngoing)`,
+         * so whether a reset posts a card turns entirely on whether it is
+         * announced before or after the snooze is taken over. Wired only by the
+         * tests that assert that ordering.
+         */
+        var snoozeAtReport: () -> ActiveSnooze? = { null }
+
+        /** [snoozeAtReport], sampled at each report. */
+        val activeWhenAnchorWifi = mutableListOf<ActiveSnooze?>()
+
+        override fun onAnchorWifi(atAnchorWifi: Boolean, changed: Boolean) {
+            anchorWifiReports += atAnchorWifi to changed
+            activeWhenAnchorWifi += snoozeAtReport()
+        }
+
         override fun onReleasing(reason: EndReason) {
             releasing += reason
         }
@@ -663,7 +688,8 @@ class SnoozeControllerTest {
         // recorded after location came back — passes false explicitly, and
         // there is a test below that does.
         locationAccessLost: Boolean = degradation?.blocksLocationReads == true,
-    ) = PresenceUpdate(event, degradation, graceActive, locationAccessLost)
+        atAnchorWifi: Boolean = false,
+    ) = PresenceUpdate(event, degradation, graceActive, locationAccessLost, atAnchorWifi)
 
     private fun observation(distanceM: Double) = DepartureObservation(
         distanceM = distanceM,
@@ -672,6 +698,94 @@ class SnoozeControllerTest {
         radiusM = 150,
         elapsedRealtimeMs = 0L,
     )
+
+    @Test
+    fun `the anchor's network is reported every update, with the edge marked`() {
+        // Every update, so a surface caching the level can overwrite it
+        // unconditionally rather than being cleared by hand wherever a card
+        // might be posted first — the shape that produced three separate bugs
+        // (Codex, PR #229). Only the edge is marked, since only the edge is
+        // worth reposting a card for: a restated level per fix would be the
+        // flapping the level shape exists to prevent.
+        armFully()
+
+        controller.onPresenceUpdate(update(atAnchorWifi = true))
+        controller.onPresenceUpdate(update(atAnchorWifi = true))
+        controller.onPresenceUpdate(update(atAnchorWifi = true))
+
+        assertEquals("only the first is an edge", listOf(true), listener.anchorWifi)
+
+        controller.onPresenceUpdate(update(atAnchorWifi = false))
+        controller.onPresenceUpdate(update(atAnchorWifi = false))
+
+        assertEquals(listOf(true, false), listener.anchorWifi)
+        // But the level itself reached the listener every single time, which is
+        // what lets a cache of it never be stale.
+        assertEquals(
+            listOf(true, true, true, false, false),
+            listener.anchorWifiReports.map { it.first }.takeLast(5),
+        )
+    }
+
+    @Test
+    fun `a restore reports the reset before it announces the snooze`() {
+        // The ordering is the bug this shape removes (Codex, PR #229): the
+        // restore's own `ARMED` transition posts a card, so a surface caching
+        // the level has to have been told to forget the previous snooze's
+        // network *before* that, not after.
+        armFully()
+        controller.onPresenceUpdate(update(atAnchorWifi = true))
+        val statesBefore = listener.states.size
+        listener.anchorWifiReports.clear()
+
+        controller.restore(
+            ActiveSnooze(
+                anchor = Anchor(capturedAt = now),
+                startedAt = now,
+                capExpiresAt = ActiveSnooze.capExpiryFor(now),
+                mode = TrackingMode.SETTLING,
+                lifecycle = SnoozeLifecycle.ARMED,
+            ),
+        )
+
+        assertEquals(
+            "the level is forgotten before the transition is announced",
+            listOf(false to true),
+            listener.anchorWifiReports,
+        )
+        assertTrue("and the restore did announce one", listener.states.size > statesBefore)
+    }
+
+    @Test
+    fun `the anchor's network is reported whatever location can do`() {
+        // Unlike the departure readout, which is FULL-only because nothing
+        // else is measuring one: this is a fact about Wi-Fi, and it stays true
+        // when location has stopped answering. Which surfaces act on it is
+        // theirs to decide.
+        armFully()
+
+        controller.onPresenceUpdate(
+            update(atAnchorWifi = true, degradation = DegradationCause.NO_LOCATION_FIX),
+        )
+
+        assertEquals(listOf(true), listener.anchorWifi)
+    }
+
+    @Test
+    fun `a new snooze does not inherit the last one's network`() {
+        // The arm announces the reset rather than assigning it quietly, so a
+        // surface caching the level is told to forget the previous snooze's
+        // network before any card for the new one is posted — and an arm onto
+        // the *same* network is then a genuine edge again rather than silence.
+        armFully()
+        controller.onPresenceUpdate(update(atAnchorWifi = true))
+        controller.end(EndReason.MANUAL)
+
+        armFully()
+        controller.onPresenceUpdate(update(atAnchorWifi = true))
+
+        assertEquals(listOf(true, false, true), listener.anchorWifi)
+    }
 
     @Test
     fun `a readout reaches the screen without counting as news`() {
@@ -1207,6 +1321,49 @@ class SnoozeControllerTest {
 
         assertEquals(SnoozeState.ARMED, controller.state)
         assertEquals(emptyList<Pair<SnoozeState, EndReason?>>(), listener.states)
+    }
+
+    @Test
+    fun `adopting forgets the previous instance's network`() {
+        // Codex, PR #229. This path starts no watch, so nothing will correct a
+        // stale level afterward: Android destroys an ordinary service without
+        // killing its process, `onDestroy` cancels the collection without
+        // stopping the monitor, and an `End now` whose zen write is retryably
+        // refused leaves the snooze running on exactly this path. The reset has
+        // to come from here, and before the snooze is adopted, so a listener
+        // that reposts on an edge still finds nothing to post for.
+        val running = ActiveSnooze(
+            anchor = anchor,
+            startedAt = start,
+            capExpiresAt = start.plus(Duration.ofHours(7)),
+            mode = TrackingMode.FULL,
+        )
+
+        // A previous snooze on the anchor's network, then gone — which is what
+        // makes the reset an *edge* here, and so the case where the ordering
+        // below can be got wrong. On a cold instance the report is `false` with
+        // no edge instead, and still clears the mirror: the service sets it on
+        // every report and reposts only on an edge.
+        armFully()
+        controller.onPresenceUpdate(update(atAnchorWifi = true))
+        controller.end(EndReason.MANUAL)
+        listener.anchorWifiReports.clear()
+        listener.activeWhenAnchorWifi.clear()
+        listener.states.clear()
+        listener.snoozeAtReport = { controller.active }
+
+        controller.adopt(running)
+
+        assertEquals(listOf(false to true), listener.anchorWifiReports)
+        // And before the snooze was taken over, so a surface reposting on the
+        // edge finds nothing to post — this path exists precisely to avoid
+        // putting an ongoing card in front of a snooze that is about to end.
+        assertEquals(listOf<ActiveSnooze?>(null), listener.activeWhenAnchorWifi)
+        assertEquals(
+            "and still no transition, so nothing announced the snooze",
+            emptyList<Pair<SnoozeState, EndReason?>>(),
+            listener.states,
+        )
     }
 
     @Test

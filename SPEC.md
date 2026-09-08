@@ -414,6 +414,16 @@ the one place a word appears, because there is no quantity there to print and a 
 would read as stuck through the thirty-second confirmation. Everything else — the distance away, the combined `±` —
 stays on the screen, which has room for the sentence.
 
+**And it reads `Wi-Fi` while the anchor's own network is associated** (maintainer, 2026-09-08).
+Not a distance, because there is none to have: the engine asks location for nothing while Wi-Fi is
+answering (6.7), so readings stop arriving and the row would fall silent at the freshness window
+with nothing to say why — a blank at the one moment the snooze is working exactly as designed.
+Naming the reason turns that into an answer, and it is the *stronger* answer: Wi-Fi association is
+what settles the question, where a number only counts toward a threshold nothing is measuring any
+more. It therefore outranks a distance still inside its window, and it is `FULL`-only like the rest
+of the row — under a degraded mode the card already names the mode in its own line, and saying
+`Wi-Fi` in both places would state one fact twice.
+
 **The card is reposted per reading, and again when that reading expires, to keep the number
 honest.** A notification is a posted object, so a distance left alone freezes at whatever it was
 first built with, which is worse than showing none: it looks current. Reposting per reading covers

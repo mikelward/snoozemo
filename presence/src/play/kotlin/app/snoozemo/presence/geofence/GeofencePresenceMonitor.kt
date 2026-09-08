@@ -385,7 +385,12 @@ class GeofencePresenceMonitor(
         // correct, since nothing before that can have started a grace period.
         val publishLock = Any()
         var publishedSequence = 0L
-        var published = PublishedLevels(degradation = null, graceActive = false, locationAccessLost = false)
+        var published = PublishedLevels(
+            degradation = null,
+            graceActive = false,
+            locationAccessLost = false,
+            atAnchorWifi = false,
+        )
 
         // The one place an update reaches the flow. Every path that sets or
         // clears a platform level ends here — a refused registration, a
@@ -440,7 +445,7 @@ class GeofencePresenceMonitor(
                 when (publication(sequence, publishedSequence, update.event)) {
                     Publication.Publish -> {
                         publishedSequence = sequence
-                        published = PublishedLevels(update.degradation, graceActive, locationAccessLost)
+                        published = PublishedLevels(update.degradation, graceActive, locationAccessLost, update.atAnchorWifi)
                         emit(update.event, published, update.observation)
                     }
                     Publication.EventOnly -> {
@@ -2256,6 +2261,7 @@ class GeofencePresenceMonitor(
             degradation = platformLevel ?: levels.degradation,
             graceActive = levels.graceActive,
             locationAccessLost = levels.locationAccessLost,
+            atAnchorWifi = levels.atAnchorWifi,
             observation = observation,
         )
 
@@ -2367,6 +2373,7 @@ internal data class PublishedLevels(
     val degradation: DegradationCause?,
     val graceActive: Boolean,
     val locationAccessLost: Boolean,
+    val atAnchorWifi: Boolean,
 )
 
 /** What a feed transition does when it reaches publication; see [GeofencePresenceMonitor.publication]. */

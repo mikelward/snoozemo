@@ -51,6 +51,7 @@ class GeofencePresenceMonitorTest {
                 degradation = null,
                 graceActive = false,
                 locationAccessLost = false,
+                atAnchorWifi = false,
             ),
             platformLevel = null,
             observation = observation,
@@ -69,6 +70,7 @@ class GeofencePresenceMonitorTest {
                 degradation = null,
                 graceActive = false,
                 locationAccessLost = false,
+                atAnchorWifi = false,
             ),
             platformLevel = null,
             observation = null,
@@ -87,6 +89,7 @@ class GeofencePresenceMonitorTest {
                 degradation = DegradationCause.NO_LOCATION_FIX,
                 graceActive = true,
                 locationAccessLost = true,
+                atAnchorWifi = true,
             ),
             // Outranks the engine's cause when both are set (PR #72).
             platformLevel = DegradationCause.LOCATION_SERVICES_OFF,
@@ -97,6 +100,13 @@ class GeofencePresenceMonitorTest {
         assertEquals(DegradationCause.LOCATION_SERVICES_OFF, update.degradation)
         assertTrue(update.graceActive)
         assertTrue(update.locationAccessLost)
+        // The newest field, and the one this seam has now dropped twice: the
+        // departure readout defaulted to null here and was never seen on
+        // `play` at all, and the anchor-Wi-Fi level went the same way (Codex,
+        // PR #229). `play` is the only flavor that tracks presence, so a field
+        // that stops here reaches no device even though the tests either side
+        // of the rebuild pass.
+        assertTrue(update.atAnchorWifi)
     }
 
     @Test

@@ -35,6 +35,48 @@ class PresenceFeedTest {
     private val restartedAtMs = armedAtMs + 1_200_000L
 
     @Test
+    fun `the anchor's network is carried on the update, not only in the state`() {
+        // A level like the degradation beside it: the surfaces that explain why
+        // the departure readout has gone quiet read it from here, and the
+        // engine drops location to NONE while it holds, so nothing else on the
+        // update would tell them.
+        val feed = PresenceFeed(anchor, seedElapsedRealtimeMs = armedAtMs)
+
+        val joined = feed.accept(
+            PresenceSignal.AnchorWifiAssociated(armedAtMs + 60_000),
+        )
+        assertTrue("associated with the anchor's network", joined.atAnchorWifi)
+
+        val left = feed.accept(PresenceSignal.AnchorWifiLost(armedAtMs + 120_000))
+        assertFalse("no longer associated", left.atAnchorWifi)
+    }
+
+    @Test
+    fun `an unconfirmed association is not published as the anchor's network`() {
+        // The restore seed believes the anchor's network is associated whenever
+        // the stored anchor carries an SSID — sound for deciding duty, and what
+        // stops a snooze armed on that network spending a fix rediscovering it.
+        // It is not sound as a claim to the user: restore onto a *different*
+        // network and the watch reports "present, unconfirmed" first, because
+        // the synchronous read cannot identify which network it is. Publishing
+        // the seed through that window would put `Wi-Fi` on the card while the
+        // app has no idea where it is (Codex, PR #229).
+        val withSsid = anchor.copy(ssid = "ExampleWifi")
+        val feed = PresenceFeed(withSsid, seedElapsedRealtimeMs = armedAtMs)
+
+        val unconfirmed = feed.accept(
+            PresenceSignal.AnchorWifiPresentUnconfirmed(armedAtMs + 60_000),
+        )
+        assertFalse("nothing has identified the network yet", unconfirmed.atAnchorWifi)
+
+        // And it appears the moment the watch actually names it.
+        val confirmed = feed.accept(
+            PresenceSignal.AnchorWifiAssociated(armedAtMs + 61_000),
+        )
+        assertTrue("the watch confirmed the anchor's network", confirmed.atAnchorWifi)
+    }
+
+    @Test
     fun `a geofence exit escalates and turns location on`() {
         val feed = PresenceFeed(anchor, seedElapsedRealtimeMs = armedAtMs)
 

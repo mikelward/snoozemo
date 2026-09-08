@@ -6437,9 +6437,12 @@ what sets it off.
   of principle 2 to weigh against three ways of getting the timer wrong.
 
   Parked with this row's other open questions rather than answered now — rounding by the
-  reading's own confidence, the Wi-Fi case, and `Confirming` vs `Ending` — all of which
-  change what the row shows, and none of which the maintainer has seen on a handset yet
-  (2026-09-08, mid-demo). Settling how the expiry is delivered before settling what it
+  reading's own confidence, and `Confirming` vs `Ending` — both of which change what the row
+  shows, and neither of which the maintainer has seen on a handset yet (2026-09-08,
+  mid-demo). The Wi-Fi case has since been built, and it narrows this finding rather than
+  widening it: the row now says something durable for the whole time the anchor's network is
+  associated, which is most of the resting period a stale distance would otherwise sit
+  through. Settling how the expiry is delivered before settling what it
   expires would be building the mechanism twice.
 
 ## Deferred review findings (Codex, PR #217)
