@@ -108,6 +108,13 @@ class TileTrampolineActivity : ComponentActivity() {
         chooseEnd = { endsAt, requestId, forSnooze ->
             SnoozeService.chooseEnd(this, endsAt, requestId, forSnooze)
         },
+        // Wired but unreached from here: this sheet's departure row dismisses,
+        // because the snooze it is offered over was armed seconds ago and is
+        // already running to its ceiling. Supplied rather than made optional so
+        // there is no null branch to reason about in the controller.
+        restoreDeparture = { requestId, forSnooze ->
+            SnoozeService.restoreEnd(this, requestId, forSnooze)
+        },
         watchOutcome = EndChoiceOutcome::watch,
         onDismiss = ::finish,
     )

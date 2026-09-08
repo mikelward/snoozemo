@@ -56,6 +56,16 @@ internal class EndChoiceController(
      * so no outcome is coming and this settles the commit itself.
      */
     private val chooseEnd: (endsAt: Instant, requestId: Long, forSnooze: Instant?) -> Boolean,
+    /**
+     * Puts the cap back to its ceiling, so the snooze runs until departure
+     * again. Same contract as [chooseEnd] — false means it never dispatched.
+     *
+     * Separate from [chooseEnd] because it names no time: the target is the
+     * record's own `capCeilingAt`, which only the service can read, and
+     * sending a time this side computed would be sending a guess about a
+     * ceiling a clock change may already have moved.
+     */
+    private val restoreDeparture: (requestId: Long, forSnooze: Instant?) -> Boolean,
     /** Subscribes to what the service said; closed on every settled commit. */
     private val watchOutcome: (requestId: Long, onOutcome: (EndChoiceResult) -> Unit) -> AutoCloseable,
     /** Called when the sheet has nothing left to ask and should go away. */
@@ -157,6 +167,30 @@ internal class EndChoiceController(
     /**
      * Sends a chosen time to the service and **waits to hear what happened**
      * before dismissing. A second tap while one is out is ignored.
+     */
+    fun commit(endsAt: Instant) =
+        dispatch { requestId, forSnooze -> chooseEnd(endsAt, requestId, forSnooze) }
+
+    /**
+     * Chooses "until I leave" as a real end condition rather than as a
+     * dismissal.
+     *
+     * The one commit that *lengthens* a cap, which is what makes it a choice
+     * at all: a snooze shortened to an hour half an hour ago has no other way
+     * back to the departure it was armed on. Bounded by the same ceiling
+     * `+30 min` is (SPEC.md §4.3), so it can never run past the backstop the
+     * snooze started with.
+     *
+     * Where a sheet appears at the arm, this has nothing to do — the snooze it
+     * is offered over is already running to its ceiling — and that host wires
+     * the row to a dismissal instead.
+     */
+    fun commitDeparture() =
+        dispatch { requestId, forSnooze -> restoreDeparture(requestId, forSnooze) }
+
+    /**
+     * The commit lifecycle both choices share: one request out at a time, and
+     * nothing dismissed until the service has said what happened.
      *
      * A started service is not an applied change: the alarm can still refuse,
      * the record can still fail to write, and the snooze can have ended in
@@ -171,10 +205,10 @@ internal class EndChoiceController(
      * the watch existed would be one nobody heard.
      *
      * Staying put on a failure matters twice over: the snooze is still running
-     * on the cap it had, so nothing is stranded, and the sheet is the one place
+     * on the cap it had, so nothing is stranded, and the offer is the one place
      * the user is certain to be looking.
      */
-    fun commit(endsAt: Instant) {
+    private fun dispatch(start: (requestId: Long, forSnooze: Instant?) -> Boolean) {
         if (committing) return
         committing = true
         commitFailed = false
@@ -188,7 +222,7 @@ internal class EndChoiceController(
         // The identity travels with the choice. The check here is redraw-time
         // hygiene; this is what makes it binding, since the service applies the
         // cap and validates the claim in the same pass (Codex, PR #155).
-        if (!chooseEnd(endsAt, committingRequestId, offerFor)) {
+        if (!start(committingRequestId, offerFor)) {
             SnoozeDebugLog.warning("the service refused to start for a chosen end time")
             onOutcome(EndChoiceResult.REFUSED)
         }

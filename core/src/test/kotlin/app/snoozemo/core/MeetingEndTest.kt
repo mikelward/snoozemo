@@ -93,4 +93,67 @@ class MeetingEndTest {
     fun `an empty calendar offers nothing`() {
         assertNull(MeetingEnd.offerFor(snooze(), emptyList(), now))
     }
+
+    @Test
+    fun `several offers come back earliest first`() {
+        val offers = MeetingEnd.offersFor(snooze(), listOf(at(240), at(90), at(180)), now, limit = 2)
+
+        assertEquals(listOf(at(90), at(180)), offers)
+    }
+
+    @Test
+    fun `two meetings ending together are one choice`() {
+        // Back-to-back calls sharing an end, or a meeting and someone's
+        // reminder for it: the second row would be the same time twice.
+        val offers = MeetingEnd.offersFor(snooze(), listOf(at(90), at(90), at(180)), now, limit = 2)
+
+        assertEquals(listOf(at(90), at(180)), offers)
+    }
+
+    @Test
+    fun `the same ends are excluded as for a single offer`() {
+        val insideFloor = now.plus(Duration.ofMinutes(1))
+        val pastTheCap = now.plus(ActiveSnooze.DEFAULT_CAP).plus(Duration.ofMinutes(1))
+
+        val offers = MeetingEnd.offersFor(
+            snooze(),
+            listOf(insideFloor, pastTheCap, at(90), at(180)),
+            now,
+            limit = 4,
+        )
+
+        assertEquals(listOf(at(90), at(180)), offers)
+    }
+
+    @Test
+    fun `fewer qualifying ends than asked for is not an error`() {
+        val offers = MeetingEnd.offersFor(snooze(), listOf(at(90)), now, limit = 2)
+
+        assertEquals(listOf(at(90)), offers)
+    }
+
+    @Test
+    fun `a single offer is the first of several`() {
+        // The claim the KDoc makes: one function, one set of rules, so the
+        // notification's action and a screen listing more cannot disagree.
+        val ends = listOf(at(240), at(90), at(180))
+
+        assertEquals(
+            MeetingEnd.offerFor(snooze(), ends, now),
+            MeetingEnd.offersFor(snooze(), ends, now, limit = 1).firstOrNull(),
+        )
+    }
+
+    @Test
+    fun `no snooze running offers nothing to a list either`() {
+        assertEquals(emptyList<java.time.Instant>(), MeetingEnd.offersFor(null, listOf(at(90)), now, limit = 2))
+    }
+
+    @Test
+    fun `asking for none offers none`() {
+        assertEquals(
+            emptyList<java.time.Instant>(),
+            MeetingEnd.offersFor(snooze(), listOf(at(90)), now, limit = 0),
+        )
+    }
 }

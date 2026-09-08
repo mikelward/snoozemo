@@ -161,6 +161,28 @@ enum class TrackingMode {
     val isSettling: Boolean
         get() = this == SETTLING
 
+    /**
+     * Whether a departure is actually being watched for right now.
+     *
+     * **One predicate, asked on both sides of the same question** (Codex,
+     * PR #234). `Until I leave` is offered by the screen and honored by the
+     * service, and the two must agree or the row is either a dead control or
+     * an unguarded one. Answering it here is what keeps them from drifting.
+     *
+     * False for [DURATION_ONLY], where nothing is watching, and false for
+     * [SETTLING], where whether anything will be is not yet known — the
+     * absence of an answer is not a yes. That matters because the control it
+     * gates *lengthens* a cap: restoring an eight-hour ceiling on a snooze
+     * that turns out to track nothing is the phone left silent by a promise
+     * the app could not keep (principle 1).
+     *
+     * True for [WIFI_GRACE] as well as [FULL] and [WIFI_ONLY]: the grace
+     * period is a departure that is being resolved, not one nobody is looking
+     * for.
+     */
+    val tracksDeparture: Boolean
+        get() = this != DURATION_ONLY && !isSettling
+
     companion object {
         /**
          * The most capable mode [anchor] actually supports.

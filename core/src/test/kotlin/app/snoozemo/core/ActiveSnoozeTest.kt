@@ -546,6 +546,27 @@ class ActiveSnoozeTest {
     }
 
     @Test
+    fun `only a mode actually watching for a departure says so`() {
+        // One predicate, asked by the screen offering `Until I leave` and by
+        // the service honoring it — so it is pinned here rather than at either
+        // call site, and every mode is named so a new one cannot be added
+        // without deciding which side of this it falls on.
+        assertTrue(TrackingMode.FULL.tracksDeparture)
+        assertTrue(TrackingMode.WIFI_ONLY.tracksDeparture)
+        // A departure being resolved is still a departure being watched for.
+        assertTrue(TrackingMode.WIFI_GRACE.tracksDeparture)
+        assertFalse("nothing is watching", TrackingMode.DURATION_ONLY.tracksDeparture)
+        // The absence of an answer is not a yes: the control it gates
+        // *lengthens* a cap, so "not known yet" has to read as no.
+        assertFalse("the arm is still looking", TrackingMode.SETTLING.tracksDeparture)
+        assertEquals(
+            "every mode is accounted for above",
+            5,
+            TrackingMode.entries.size,
+        )
+    }
+
+    @Test
     fun `reconciling an undisturbed clock changes nothing`() {
         // The common case: TIME_SET fires for a trivial correction and both
         // frames already agree, so nothing is written.

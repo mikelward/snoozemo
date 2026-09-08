@@ -40,6 +40,8 @@ class EndChoiceControllerTest {
         var watchedRequestId: Long = 0L
         var sentRequestId: Long = 0L
         var sentForSnooze: Instant? = null
+        /** Whether the departure restore was the thing dispatched. */
+        var restored = false
         /** What the host would answer if asked what is running right now. */
         var live: ActiveSnooze? = null
     }
@@ -51,6 +53,12 @@ class EndChoiceControllerTest {
         currentRecord = { seams.live },
         chooseEnd = { at, requestId, forSnooze ->
             seams.sent = at
+            seams.sentRequestId = requestId
+            seams.sentForSnooze = forSnooze
+            seams.accepted
+        },
+        restoreDeparture = { requestId, forSnooze ->
+            seams.restored = true
             seams.sentRequestId = requestId
             seams.sentForSnooze = forSnooze
             seams.accepted
@@ -90,6 +98,48 @@ class EndChoiceControllerTest {
         assertFalse(controller.committing)
         assertEquals(1, seams.dismissals)
         assertNull(controller.endCondition)
+    }
+
+    @Test
+    fun `choosing a departure restores rather than naming a time`() {
+        // The target is the record's own ceiling, which only the service can
+        // read: a time computed here would be a guess about a backstop a clock
+        // change may already have moved.
+        val seams = Seams(now)
+        val controller = seeded(seams)
+
+        controller.commitDeparture()
+
+        assertTrue(seams.restored)
+        assertNull("no time was sent with it", seams.sent)
+        assertTrue(controller.committing)
+        assertEquals("and it carries the offer's identity", seams.now, seams.sentForSnooze)
+    }
+
+    @Test
+    fun `a departure choice waits for the answer like any other`() {
+        val seams = Seams(now)
+        val controller = seeded(seams)
+
+        controller.commitDeparture()
+        assertEquals("nothing dismissed until the service answers", 0, seams.dismissals)
+        seams.onOutcome!!(EndChoiceResult.APPLIED)
+
+        assertEquals(1, seams.dismissals)
+        assertFalse(controller.committing)
+    }
+
+    @Test
+    fun `a second choice cannot stack on an unanswered departure`() {
+        val seams = Seams(now)
+        val controller = seeded(seams)
+
+        controller.commitDeparture()
+        seams.restored = false
+        controller.commit(controller.endCondition!!.endsAt)
+
+        assertNull("the time never went out", seams.sent)
+        assertFalse(seams.restored)
     }
 
     @Test

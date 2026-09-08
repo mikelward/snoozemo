@@ -41,11 +41,38 @@ object MeetingEnd {
         snooze: ActiveSnooze?,
         candidateEnds: List<Instant>,
         now: Instant,
-    ): Instant? {
-        val cap = snooze?.capExpiresAt ?: return null
+    ): Instant? = offersFor(snooze, candidateEnds, now, limit = 1).firstOrNull()
+
+    /**
+     * The first [limit] end times worth offering for [snooze], earliest first.
+     *
+     * Every rule [offerFor] applies is applied here — it is this function with
+     * a limit of one — so the notification's single action and a screen showing
+     * several can never disagree about what qualifies.
+     *
+     * **Distinct, because two meetings ending together are one choice.** A
+     * shared end is ordinary (a block of back-to-back calls, a meeting and the
+     * reminder someone set for it), and offering the same time twice spends a
+     * button on nothing and asks the user which of two identical rows they
+     * meant.
+     *
+     * Still no event identity, for the reason [offerFor] gives: what comes back
+     * is times, and a caller that wanted to say *which* meeting would have to
+     * read something this deliberately never asks the provider for.
+     */
+    fun offersFor(
+        snooze: ActiveSnooze?,
+        candidateEnds: List<Instant>,
+        now: Instant,
+        limit: Int,
+    ): List<Instant> {
+        val cap = snooze?.capExpiresAt ?: return emptyList()
+        if (limit <= 0) return emptyList()
         val floor = now.plus(ActiveSnooze.MIN_CAP)
         return candidateEnds
             .filter { it.isAfter(floor) && it.isBefore(cap) }
-            .minOrNull()
+            .distinct()
+            .sorted()
+            .take(limit)
     }
 }

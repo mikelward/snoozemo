@@ -1831,8 +1831,13 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * doing nothing there is honoring it — gone, or refused.
      */
     private fun applyChosenEnd(intent: Intent?): EndChoiceResult {
+        // A restore names no time: its target is the snooze's own backstop,
+        // read from the record here rather than computed by a caller that
+        // cannot see it. So the "carried no time" defect below is a defect only
+        // for a chosen time (SPEC.md §4.4).
+        val restoring = intent?.getBooleanExtra(EXTRA_RESTORE_END, false) == true
         val requestedMillis = intent?.getLongExtra(EXTRA_CAP_EXPIRES_AT, 0L) ?: 0L
-        if (requestedMillis <= 0L) {
+        if (!restoring && requestedMillis <= 0L) {
             // No sender produces this, so it is a defect rather than a state —
             // but silently doing nothing to a snooze the user just set a time on
             // is exactly what leaves them thinking the app ignored them.
@@ -1879,7 +1884,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // refusal, so declining is recoverable where a silent substitution was
         // simply wrong.
         val requested = Instant.ofEpochMilli(requestedMillis)
-        if (requested.isBefore(floor)) {
+        if (!restoring && requested.isBefore(floor)) {
             SnoozeDebugLog.event("end-condition: the chosen end is inside the floor now; declining it")
             return EndChoiceResult.REFUSED
         }
@@ -1892,14 +1897,38 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // absolute above any chosen value. Cheap, and the alternative is
         // remembering to add it back at exactly the moment it stops being
         // obvious.
-        val target = requested.coerceAtMost(snooze.capCeilingAt)
-        if (!target.isBefore(snooze.capExpiresAt)) {
+        // **The mode is revalidated here, not on the screen**, and the screen's
+        // check cannot stand in for it: a snooze that degrades to
+        // duration-only mid-flight keeps its `startedAt`, so the identity
+        // check above passes and the rows are by definition a moment behind
+        // the record. Restoring then puts an eight-hour cap on a snooze with
+        // nothing watching for the departure that name promises — a phone left
+        // silent by a control that said otherwise, which is principle 1's
+        // failure (Codex, PR #234). The service is the only place holding the
+        // live record, so this is where the question gets answered.
+        if (restoring && !snooze.mode.tracksDeparture) {
+            SnoozeDebugLog.event("end-condition: declining a departure restore; this snooze tracks no departure")
+            return EndChoiceResult.REFUSED
+        }
+        val target = if (restoring) snooze.capCeilingAt else requested.coerceAtMost(snooze.capCeilingAt)
+        // **A restore is the one choice that lengthens**, and it is bounded by
+        // the same ceiling everything else is: `capCeilingAt` is where this
+        // snooze was always going to end before the user shortened it, so
+        // nothing becomes possible that was not a moment earlier. `+30 min`
+        // already moves a cap this way (§4.3) — this is that, in one tap
+        // instead of sixteen, and it exists because "until I leave" has to be
+        // choosable *after* a time or the row is a label rather than a control
+        // (maintainer, 2026-09-08).
+        val alreadyThere = if (restoring) {
+            !target.isAfter(snooze.capExpiresAt)
+        } else {
+            !target.isBefore(snooze.capExpiresAt)
+        }
+        if (alreadyThere) {
             // Not a failure: the snooze already ends no later than the moment
-            // the user picked, so their choice is honored by doing nothing.
-            // `+30 min` is what moves a cap the other way (§4.3).
-            SnoozeDebugLog.event("end-condition: the chosen end is not sooner than the cap; leaving it")
-            // Applied, not failed: the snooze already ends no later than the
-            // moment chosen, so doing nothing *is* honoring it.
+            // the user picked — or, restoring, already runs to its ceiling — so
+            // their choice is honored by doing nothing.
+            SnoozeDebugLog.event("end-condition: the chosen end changes nothing; leaving the cap")
             return EndChoiceResult.APPLIED
         }
 
@@ -1908,13 +1937,13 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // to a time no alarm is set for is a phone that stays quiet past the
         // moment the user just chose — principle 1's failure, not a cosmetic
         // disagreement.
-        val shortened = snooze.copy(capExpiresAt = target)
-        if (!CapAlarm.arm(applicationContext, shortened, reading)) {
+        val changed = snooze.copy(capExpiresAt = target)
+        if (!CapAlarm.arm(applicationContext, changed, reading)) {
             notifications.showCouldNotSetEnd()
             return EndChoiceResult.REFUSED
         }
 
-        if (!store.update(shortened)) {
+        if (!store.update(changed)) {
             notifications.showCouldNotSetEnd()
 
             // The record, then the alarm — the order `+30 min` rolls back in,
@@ -1966,7 +1995,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 EndChoiceResult.REFUSED
             }
         }
-        controller.lowerCapTo(target)
+        if (restoring) controller.extendTo(target) else controller.lowerCapTo(target)
         return EndChoiceResult.APPLIED
     }
 
@@ -3052,6 +3081,18 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         const val EXTRA_RECORD_STARTED_AT = "app.snoozemo.extra.RECORD_STARTED_AT"
 
         /**
+         * That an [ACTION_SET_CAP] start is putting the cap **back** to the
+         * snooze's own ceiling rather than naming a time (SPEC.md §4.4).
+         *
+         * A flag rather than a ceiling passed in, because the ceiling is a
+         * property of the record and only the service can read it: a caller
+         * that computed one would be guessing at a value that moves with every
+         * clock restatement, and a guess too high is the backstop failing at
+         * the control meant to respect it.
+         */
+        const val EXTRA_RESTORE_END = "app.snoozemo.extra.RESTORE_END"
+
+        /**
          * When an [ACTION_SET_CAP] start wants the snooze to end, as epoch
          * millis.
          *
@@ -3129,6 +3170,28 @@ open class SnoozeService : Service(), SnoozeController.Listener {
 
         /** Ask the running monitor to re-check its location grants, after one landed. */
         fun locationGranted(context: Context) = start(context, ACTION_LOCATION_GRANTED)
+
+        /**
+         * Put the running snooze's cap back to its own ceiling — the
+         * `Until I leave` row chosen after a time was (SPEC.md §4.4).
+         *
+         * The one control that lengthens a cap outside `+30 min`, and bounded
+         * by the same backstop: what it restores is where the snooze was
+         * already heading before the user shortened it. Reported like any other
+         * choice, so the screen behind it can say a refused tap did nothing.
+         */
+        fun restoreEnd(
+            context: Context,
+            requestId: Long,
+            forSnooze: Instant?,
+        ): Boolean =
+            start(context, ACTION_SET_CAP) {
+                it.putExtra(EXTRA_RESTORE_END, true)
+                it.putExtra(EXTRA_CHOICE_REQUEST_ID, requestId)
+                forSnooze?.let { startedAt ->
+                    it.putExtra(EXTRA_CHOICE_FOR_SNOOZE, startedAt.toEpochMilli())
+                }
+            }
 
         /**
          * Bring the running snooze's cap in to [endsAt] — the end-condition
