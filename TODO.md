@@ -4521,18 +4521,50 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
-- [ ] **The departure bar is too high in practice — over 500 m on a real walk**
-  (maintainer, 2026-09-08, from a morning walk; parked, not to be acted on yet).
-  The arithmetic says less: a 100 m radius plus the 50 m hysteresis plus a typical
-  fix's combined uncertainty should end a snooze somewhere near 200 m, so a
-  measured 500 m means one of the terms is bigger in the field than on paper —
-  the likeliest being the fix accuracy feeding `Departure.uncertaintyM`, which is
-  squared into the combined figure and is what a phone in a pocket reports worst.
-  **This is now measurable rather than guessable**: the `±` readout (#223) is on
-  the main screen and the distance is about to be on the notification, so the next
-  walk can say which term is large instead of inferring it. Related but not the
-  same as the shelved #224, which shortened the bar only after the anchor's Wi-Fi
-  was seen to go; this is about the ordinary case.
+- [ ] **Departures are noticed too late, and it is latency rather than the
+  threshold** (maintainer, 2026-09-08: over 500 m on a morning walk, then still
+  snoozing five bus stops later). The first reading looked like a threshold
+  problem. The bus ride settles that it is not: at roughly 8 m/s the whole
+  arithmetic bar — radius, the 50 m hysteresis, a typical fix's combined
+  uncertainty, ~200 m in total — is **about 25 seconds** of travel, and five
+  stops is minutes. Nearly all of the delay is therefore time in which nothing
+  looked, not a bar set too high, and **the shelved #224 would not have helped**:
+  it shortens the bar, which is the term that barely matters here.
+
+  Where the time plausibly goes, in order of suspicion:
+
+  1. **Significant motion did not fire.** `TYPE_SIGNIFICANT_MOTION` is tuned to
+     detect a *change* in the user's motion state, and sitting still on a smooth
+     bus with the phone pocketed is close to its designed reject case. The
+     trigger re-arms itself correctly after each firing (`MotionTrigger.onFired`),
+     so this is the sensor's own character rather than a bug in the wiring.
+  2. **The geofence exit was late.** Nothing calls `setNotificationResponsiveness`,
+     so registration takes Play Services' default batching, which trades exit
+     latency for power and is worse under Doze. Crossing a boundary at bus speed
+     is the case this *should* win, so if it did not, it is the thing to fix.
+  3. **Wi-Fi loss** only helps where the anchor has an SSID and the phone was on
+     it — informative by its absence as much as its presence.
+  4. Failing all three, the resting **`SANITY` poll at ~10 minutes** is the
+     backstop, and at bus speed ten minutes is kilometers on its own. It fits the
+     observation almost exactly.
+
+  **Approved, to be built as its own PR** (maintainer, 2026-09-08): set the
+  geofence's responsiveness explicitly; take a fix immediately on escalation
+  rather than waiting out a 90 s `ACTIVE` cycle, and consider shortening that
+  interval while `CHECKING`; and confirm the "one fix unambiguously beyond the
+  radius ends it" path is actually reachable, since at these distances the first
+  fix should end the snooze outright rather than waiting for a second.
+
+  **The log decides the order.** `SnoozeDebugLog` timestamps which source fired
+  and the result of each departure test, so one ride with the log on says whether
+  the delay was before the first look or between the two fixes — which is the
+  difference between fixing (2) and fixing the cadence. The maintainer is pulling
+  the log from the bus session. Every change above is justified independently, so
+  none of them waits on it; what waits is knowing which one mattered.
+
+  Battery is the counterweight and is stated where each change lands: shortening
+  `SANITY` is the one that would genuinely cost (`SPEC.md` §9), which is why it is
+  not on the approved list.
 
 - [ ] **Round the displayed distance by its own confidence** (maintainer,
   2026-09-08). `355 ft to go` beside a `±60 ft` is four significant figures of
