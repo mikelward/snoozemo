@@ -152,19 +152,26 @@ class SnoozeController(
      * The last [PresenceUpdate.atAnchorWifi] reported. False before any
      * update, which is the honest opening state: nothing has said the anchor's
      * network is associated.
+     *
+     * **Read, don't copy** (maintainer, 2026-09-08). Anything drawing the
+     * departure readout asks this rather than keeping a mirror of it. Codex
+     * found four bugs of one shape on the mirrored version, all of them a copy
+     * outliving what reported it, and making this the single writer narrowed
+     * that class without closing it — a copy still had to be cleared correctly
+     * on real collection deaths but *not* on the watch's own restart, which is
+     * a distinction no writer here can see. There is no copy now.
      */
-    private var atAnchorWifi: Boolean = false
+    var atAnchorWifi: Boolean = false
+        private set
 
     /**
      * Records [value] and tells the listener, every time — including when it
      * has not moved.
      *
-     * The one writer, so a listener that mirrors this level cannot drift from
-     * it. Announcing only the edges meant every surface holding a copy had to
-     * be cleared by hand wherever one could be posted before the first update
-     * arrived, and each site that was missed was its own bug: a refused
-     * release that cleared a level the snooze still had, and a restore that
-     * posted its card before the clear ran (Codex, PR #229).
+     * Still every time rather than on the edge, even now nothing mirrors it:
+     * [Listener.onAnchorWifi] carries `changed` so a listener can repost only
+     * when the row's answer actually moved, and the unconditional call is what
+     * lets that flag be trustworthy.
      */
     private fun setAnchorWifi(value: Boolean) {
         val changed = value != atAnchorWifi

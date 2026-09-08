@@ -6470,8 +6470,16 @@ what sets it off.
 
 ## Deferred review findings (Codex, PR #229)
 
-- [ ] **The anchor-Wi-Fi level has drawn four findings, and the fourth says the class is
-  not closed** (Codex, PR #229). `AnchorWifi` mirrors the controller's cached level so the
+- [x] **The anchor-Wi-Fi level has drawn four findings, and the fourth says the class is
+  not closed** (Codex, PR #229). **Closed by option D** (maintainer, 2026-09-08, "ok let's
+  do d"): `AnchorWifi` is deleted. The ongoing card asks the controller for the level as it
+  builds, through the same `OngoingForegroundHost` seam PR #230 established for the
+  foreground service, so there is no copy to keep in step and no lifetime to tie to
+  anything. Where no service is running the row goes quiet, which is the honest answer — a
+  card posted with no live watch genuinely cannot say. The history below is kept because it
+  is the argument for the shape, not because anything is outstanding.
+
+  `AnchorWifi` mirrored the controller's cached level so the
   ongoing card can say `Wi-Fi` while the anchor's own network is answering. Four findings,
   all verified, all the same shape — *a copy of the level outliving the thing that reported
   it*:
@@ -6493,15 +6501,14 @@ what sets it off.
   takeover path has to remember anything. The Wi-Fi level is a bare boolean with no notion
   of how long ago it was true.
 
-  **The design that would close it, for the maintainer to accept or reject.** Tie the
-  level's lifetime to the *collection* rather than to the takeover: the claim `Wi-Fi` is
-  only honest while something is actually watching Wi-Fi, and the service knows that
-  exactly. Collection-death sites are closed and few — `stopPresence` and `onDestroy`,
-  where `DepartureObservations.clear()` already lives — whereas takeover sites are not.
-  Cost: it puts a second writer back beside the controller, which is what finding 3's
-  redesign moved away from, so it is a genuine trade and not a strict improvement. Not
-  taken under autopilot: `AGENTS.md` says a design change is the maintainer's call, and one
-  redesign of this mechanism has already landed this PR.
+  **Two designs were put to the maintainer, and D was chosen.** Option B tied the level's
+  lifetime to the *collection* — the claim `Wi-Fi` is only honest while something is
+  actually watching Wi-Fi — which is closer to the truth than tying it to takeover, but
+  still needs a copy cleared on real collection deaths and *not* on `startPresence`'s own
+  restart cancel, a distinction no clear site can see from where it stands. Option D
+  removes the copy instead: ask the controller, which is the only thing that knows. That
+  costs a fourth method on the seam and makes the row's answer depend on a service being
+  installed, and buys the deletion of the class rather than another narrowing of it.
 
 ## Deferred review findings (Codex, PR #228)
 

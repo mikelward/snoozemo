@@ -457,6 +457,7 @@ class SnoozeNotificationsCalendarTest {
             override fun promote(notification: android.app.Notification) = false
             override fun demote() = Unit
             override fun watchIsUnprotected() = true
+            override fun atAnchorWifi() = false
         }
         // The first post queues the calendar read; the seam then runs it in the
         // gap of the *second*, so the answer settles between that post's read

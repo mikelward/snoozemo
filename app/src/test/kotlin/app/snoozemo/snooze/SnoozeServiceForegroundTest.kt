@@ -171,6 +171,32 @@ class SnoozeServiceForegroundTest {
     }
 
     @Test
+    fun `a destroyed service stops answering for the card it posted`() {
+        // Codex, PR #231. `SnoozeNotifications.readCalendar` is a process-wide
+        // executor, so a calendar read queued by this service still holds this
+        // notifications instance after Android destroys it — and Android
+        // destroys an ordinary background service routinely. A replacement
+        // then restores the snooze and posts its own card, and that orphaned
+        // worker can pass the generation check and repost through *this*
+        // instance, whose host would answer from a controller nothing updates
+        // any more: a confident `Wi-Fi` row, or a refusal clause, from a
+        // service that stopped watching.
+        //
+        // Detaching is what ties the host's lifetime to the service's, so both
+        // readings degrade to the same "cannot say" any other instance gets.
+        val controller = armWith(watchable)
+        val notifications = controller.get().notifications
+        assertNotNull("installed while it was running", notifications.ongoingForegroundHost)
+
+        controller.destroy()
+
+        assertNull(
+            "and gone with it, so nothing answers for a service that stopped watching",
+            notifications.ongoingForegroundHost,
+        )
+    }
+
+    @Test
     fun `a refused refresh does not forget a service already held`() {
         // Codex, PR #230, the same flag from the other side. A refusal on a
         // *refresh* is not a demotion — the service stays foreground — so

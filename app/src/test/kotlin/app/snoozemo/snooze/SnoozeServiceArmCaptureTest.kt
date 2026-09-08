@@ -8,6 +8,7 @@ import android.os.SystemClock
 import app.snoozemo.R
 import app.snoozemo.core.Anchor
 import app.snoozemo.core.DepartureObservation
+import app.snoozemo.core.PresenceUpdate
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenFailure
@@ -59,7 +60,6 @@ class SnoozeServiceArmCaptureTest {
         // in this JVM is still the latest one here — which the distance on the
         // card now reads (SPEC.md §4.6).
         DepartureObservations.clear()
-        AnchorWifi.clear()
     }
 
     /**
@@ -73,6 +73,25 @@ class SnoozeServiceArmCaptureTest {
      */
     private fun storedMode(): TrackingMode? =
         ActiveSnoozeStore(appContext) { TestSnoozeService.testReading.wallMillis }.load()?.mode
+
+    /**
+     * Reports the anchor's network through the presence engine, the way the
+     * real one does.
+     *
+     * Through the monitor rather than by calling the service's listener
+     * callback: the card reads this level from the controller as it builds
+     * (maintainer, 2026-09-08), so the controller has to be the thing that
+     * learned it. Driving the whole chain is what these tests were reaching
+     * for anyway.
+     */
+    private fun emitAnchorWifi(associated: Boolean) {
+        assertTrue(
+            TestSnoozeService.presence.updates.tryEmit(
+                PresenceUpdate(event = null, degradation = null, atAnchorWifi = associated),
+            ),
+        )
+        shadowOf(Looper.getMainLooper()).idle()
+    }
 
     /** The top row of the ongoing card currently in the shade. */
     private fun ongoingSubText(): String? =
@@ -267,12 +286,12 @@ class SnoozeServiceArmCaptureTest {
             ongoingSubText(),
         )
 
-        service.onAnchorWifi(true, changed = true)
+        emitAnchorWifi(true)
 
         assertEquals(stringOf(R.string.ongoing_distance_wifi), ongoingSubText())
 
         // And back, so the row cannot latch on a network the phone has left.
-        service.onAnchorWifi(false, changed = true)
+        emitAnchorWifi(false)
 
         assertEquals(
             appContext.getString(R.string.distance_feet, 355),
@@ -282,20 +301,17 @@ class SnoozeServiceArmCaptureTest {
 
     @Test
     fun `a refused ending leaves the network on the card`() {
-        // Codex, PR #229. `onReleasing` and `onReleaseSuperseded` both run
-        // *before* the zen write, and a refused release keeps the snooze
-        // alive — so clearing the level there dropped the row while the engine
-        // still said the network was associated. Because the level is
-        // announced only on its edges, nothing would have restated it until
-        // the phone actually left the network and rejoined.
-        //
-        // `DepartureObservations` survives the same treatment only because it
-        // republishes on every fix, which is exactly the difference this test
-        // pins.
+        // Codex, PR #229, and now structurally impossible: the card reads the
+        // level from the controller as it is built, so there is no copy for a
+        // release path to clear. It was a real bug when a copy existed —
+        // `onReleasing` and `onReleaseSuperseded` both run *before* the zen
+        // write, and a refused release keeps the snooze alive, so clearing
+        // there dropped the row while the engine still said the network was
+        // associated. Kept as the regression the design has to keep passing.
         val service = startService(SnoozeService.ACTION_ARM).get()
         TestSnoozeService.captureRequests.single().invoke(captured)
         shadowOf(Looper.getMainLooper()).idle()
-        service.onAnchorWifi(true, changed = true)
+        emitAnchorWifi(true)
         assertEquals(stringOf(R.string.ongoing_distance_wifi), ongoingSubText())
 
         // The platform refuses, so the snooze is still running afterwards.

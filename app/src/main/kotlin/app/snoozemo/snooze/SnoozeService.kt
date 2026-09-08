@@ -95,7 +95,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * the failure ones — a cap that wouldn't schedule, an arm that was refused
      * — where there is no snooze left to be quick for.
      */
-    private val notifications: SnoozeNotifications by lazy {
+    private val notificationsDelegate = lazy {
         // The host is installed *here* rather than in `onCreate` (Codex,
         // PR #230). Assigning it there reads this property, and reading it
         // constructs the object, whose `init` creates three notification
@@ -107,6 +107,19 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // through it.
         SnoozeNotifications(applicationContext).apply { ongoingForegroundHost = foregroundHost }
     }
+
+    /**
+     * The card poster this service installed its host on.
+     *
+     * Held through a named [Lazy] rather than a plain delegate so [onDestroy]
+     * can detach the host *without* constructing one that was never needed —
+     * reading the property is what builds it, and building it is the thing the
+     * laziness exists to keep off the arm path.
+     *
+     * `internal` so a test can assert the detach actually happened; nothing
+     * outside this class reads it.
+     */
+    internal val notifications: SnoozeNotifications by notificationsDelegate
     private lateinit var pendingFailure: PendingFailureStore
     private lateinit var controller: SnoozeController
 
@@ -2567,11 +2580,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * arriving just after an ending must not put a card back up.
      */
     override fun onAnchorWifi(atAnchorWifi: Boolean, changed: Boolean) {
-        // Unconditionally, so the holder is a mirror of the controller rather
-        // than a second copy kept in step by hand. That is what makes it safe
-        // wherever a card is posted: the level cannot be stale, because the one
-        // thing that writes it is the one thing that knows it.
-        AnchorWifi.set(atAnchorWifi)
+        // Nothing is recorded here. The card reads the level from the
+        // controller when it is built, through the same seam the foreground
+        // service uses, so this callback exists only to say *when* the row's
+        // answer moved (maintainer, 2026-09-08).
+        //
         // The repost is the part that costs anything, so only the edge gets it
         // — a restated level per fix would be the flapping the level shape
         // exists to prevent. Guarded on the live snooze so a level arriving
@@ -2767,6 +2780,10 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // here on its own, as before.
         override fun watchIsUnprotected(): Boolean =
             wantsForeground() && foregroundRefused && !foregroundHeld
+
+        // Straight through to the controller, which is the only thing that
+        // knows (maintainer, 2026-09-08). Nothing caches it on the way.
+        override fun atAnchorWifi(): Boolean = controller.atAnchorWifi
     }
 
     /**
@@ -2926,6 +2943,29 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 Log.w(TAG, "Unregistering the rule-status receiver failed.", it)
             }
         }
+        // Last, and the reason it is here at all (Codex, PR #231): the card
+        // poster can outlive this service. `SnoozeNotifications.readCalendar`
+        // is a process-wide executor, so a calendar read queued by this
+        // instance still holds it after Android destroys us — and Android
+        // destroys an ordinary background service routinely. A replacement
+        // service then restores the snooze and posts its own card, and that
+        // orphaned worker can pass the generation check and repost *through
+        // this instance*, whose host answers from a controller nothing updates
+        // any more.
+        //
+        // The record it builds from is loaded fresh, so only what the host
+        // reports could be stale — the anchor-Wi-Fi level and the
+        // foreground-service refusal. Detaching is what makes the host's
+        // lifetime exactly this service's, so both degrade to "cannot say"
+        // instead of to a confident wrong answer. That is the same answer any
+        // other instance gets, and the honest one: nothing here is watching
+        // any more.
+        //
+        // Guarded on the delegate rather than the property, because reading
+        // the property would construct a `SnoozeNotifications` — three
+        // notification-channel binder calls — for a service that never needed
+        // one.
+        if (notificationsDelegate.isInitialized()) notifications.ongoingForegroundHost = null
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
