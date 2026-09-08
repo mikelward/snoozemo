@@ -138,6 +138,17 @@ internal fun MainScreen(
     // this signature can see at a glance it's the same failure state as
     // everywhere else, not a screen-local one.
     settingsFailure: SetupRowId? = null,
+    /**
+     * The end-condition choice for the snooze running right now, or null when
+     * there is nothing to refine — no snooze, a cap already inside the floor,
+     * or the record not read yet.
+     *
+     * The same choices the arm-time sheet offers, on a surface the user can
+     * open at any point during a snooze rather than only in the seconds after
+     * arming it (maintainer, 2026-09-08). Defaulted, so a screenshot test
+     * pinning any other state need not state an opinion about this one.
+     */
+    endChoice: EndChoiceUiState? = null,
     onOpenPermissions: () -> Unit,
     onOpenSettings: () -> Unit,
     /**
@@ -150,6 +161,14 @@ internal fun MainScreen(
     onDismissReplayHint: () -> Unit = {},
     onArm: () -> Unit,
     onRelease: () -> Unit,
+    /** Commits [EndChoiceUiState.condition] as the snooze's new end. */
+    onChooseEndTime: () -> Unit = {},
+    /** Commits the meeting end at that index of [EndChoiceUiState.meetings]. */
+    onChooseEndMeeting: (Int) -> Unit = {},
+    /** Puts the cap back to its ceiling, so the snooze runs until departure again. */
+    onChooseDeparture: () -> Unit = {},
+    onStepEndDown: () -> Unit = {},
+    onStepEndUp: () -> Unit = {},
     onShareDebugLog: () -> Unit,
     onDismissCrash: () -> Unit,
     onStartPlayUpdate: () -> Unit = {},
@@ -326,6 +345,27 @@ internal fun MainScreen(
             // one wrong thing this line could say, and it is exactly the
             // wrong direction to be wrong in.
             else -> Unit
+        }
+        // Above the button block rather than below it, so the screen reads
+        // status, then how to change it, then how to end it. `End snooze`
+        // keeps the last word — it is the guaranteed way back to a ringing
+        // phone (SPEC.md §7) and the thing a user reaches for in a hurry, so
+        // it stays the bottom-most control rather than sitting above a stack
+        // of refinements.
+        endChoice?.let { choice ->
+            EndConditionRows(
+                condition = choice.condition,
+                formattedTime = choice.formattedTime,
+                meetingLabels = choice.meetings.map { it.label },
+                onChooseTime = onChooseEndTime,
+                onChooseMeeting = onChooseEndMeeting,
+                onChooseDeparture = onChooseDeparture,
+                onStepDown = onStepEndDown,
+                onStepUp = onStepEndUp,
+                committing = choice.committing,
+                failed = choice.failed,
+                tracksDeparture = choice.tracksDeparture,
+            )
         }
         // Gated behind access being allowed, same as the old DebugScreen.
         //
