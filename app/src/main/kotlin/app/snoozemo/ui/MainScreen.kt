@@ -16,8 +16,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import android.icu.util.LocaleData
-import android.icu.util.ULocale
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -25,12 +23,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import app.snoozemo.PlayUpdateState
+import app.snoozemo.distanceText
+import app.snoozemo.distanceUnitFor
 import app.snoozemo.R
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.DepartureObservation
@@ -41,9 +42,7 @@ import app.snoozemo.core.notificationsMissing
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.degradationReasonRes
 import app.snoozemo.tile.R as TileR
-import androidx.core.os.ConfigurationCompat
 import java.time.Duration
-import java.util.Locale
 
 /**
  * The home screen: the Arm/Release control the tile mirrors, plus whatever
@@ -595,23 +594,14 @@ private fun departureText(observation: DepartureObservation): String {
     }
 }
 
-/** A whole number of [unit], with the unit's own translatable abbreviation. */
+/** A whole number of [unit] — the shared [distanceText], for the reason above. */
 @Composable
-private fun distanceText(unit: DistanceUnit, value: Int): String = stringResource(
-    when (unit) {
-        DistanceUnit.METER -> R.string.distance_meters
-        DistanceUnit.FOOT -> R.string.distance_feet
-    },
-    value,
-)
+private fun distanceText(unit: DistanceUnit, value: Int): String =
+    distanceText(LocalContext.current, unit, value)
 
 /**
- * The unit this phone measures distance in, read from its own locale.
- *
- * Only the US measurement system takes feet. The UK's is `UK` rather than `SI`
- * — it keeps miles for road distance — but short distances there are read in
- * meters, so it falls in with everyone else rather than getting the imperial
- * form of a walk down the street.
+ * The unit this phone measures distance in — [distanceUnitFor], which the
+ * ongoing notification asks too, so the two surfaces cannot disagree.
  *
  * Remembered against the configuration rather than read per recomposition: it
  * changes when the locale does, and a configuration change recreates the
@@ -620,14 +610,7 @@ private fun distanceText(unit: DistanceUnit, value: Int): String = stringResourc
 @Composable
 private fun rememberDistanceUnit(): DistanceUnit {
     val configuration = LocalConfiguration.current
-    return remember(configuration) {
-        val locale = ULocale.forLocale(ConfigurationCompat.getLocales(configuration)[0] ?: Locale.getDefault())
-        if (LocaleData.getMeasurementSystem(locale) == LocaleData.MeasurementSystem.US) {
-            DistanceUnit.FOOT
-        } else {
-            DistanceUnit.METER
-        }
-    }
+    return remember(configuration) { distanceUnitFor(configuration) }
 }
 
 /** The same hours/minutes split and copy [app.snoozemo.tile.TileSnapshot] formats the tile's countdown from. */

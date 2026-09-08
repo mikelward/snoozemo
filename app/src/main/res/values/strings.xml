@@ -356,6 +356,22 @@
          counted as leaving. All three values arrive already formatted with
          their unit. The uncertainty is the anchor's and this fix's confidence
          radii combined, which is the quantity the test itself thresholds. -->
+    <!--
+      The ongoing notification's top row, beside the app name and the platform's
+      own countdown (maintainer, 2026-09-08: "the distance left in the
+      notification top row"). Distance *remaining* rather than distance away, so
+      it counts down toward zero next to a time that does the same — the pair
+      reads as one answer to "how much longer".
+
+      **The quantity and its unit, and nothing else** (maintainer, 2026-09-08):
+      the countdown beside it carries no label either, so a distance that
+      explained itself would be the only words in a row that is otherwise two
+      numbers. There is no string of its own for it — the shared
+      `distance_meters` / `distance_feet` pair is the whole row. The full
+      arithmetic (distance away, the combined ±, the meters to go) stays on the
+      main screen, which has room for the sentence.
+    -->
+    <string name="ongoing_distance_confirming" tools:ignore="MissingTranslation">Confirming</string>
     <string name="main_distance_to_go" tools:ignore="MissingTranslation">%1$s away ±%2$s · %3$s to go</string>
     <!-- TODO: translate -->
     <!-- Far enough that this fix counts, but a departure still needs a second
