@@ -91,7 +91,7 @@ object PermissionRows {
                 // A disabled rule sends this row's button to the filters
                 // screen, so it reports that launch failing — but only where
                 // it is the only row that can. Where [Filters] is drawn too
-                // (the welcome flow's card 4, the first screen to show both)
+                // (the welcome flow's card 3, the first screen to show both)
                 // one refused tap would otherwise print the same line twice
                 // and make the untouched row look like it failed as well
                 // (Codex, PR #206). One failure, on the row that carries the

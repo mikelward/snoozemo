@@ -171,7 +171,7 @@ class MainActivity : ComponentActivity() {
      * Which card of the welcome flow is showing, while [screen] is
      * [Screen.WELCOME] (`SPEC.md` §4.2). Internal for the same test-only reason
      * as [screen], and saved across a configuration change beside it — a
-     * rotation on card 3 must not restart the flow.
+     * rotation on card 4 must not restart the flow.
      */
     internal var welcomeCard by mutableStateOf(WelcomeCard.WHAT)
 

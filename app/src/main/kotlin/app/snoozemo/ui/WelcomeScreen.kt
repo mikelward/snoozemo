@@ -50,11 +50,11 @@ enum class WelcomeCard {
     /** How a snooze ends, on a render of the ongoing notification. */
     ENDS,
 
-    /** How to start one: the tile. */
-    TILE,
-
     /** The one Do Not Disturb rule, and the ringer ceiling. */
     RULE,
+
+    /** How to start one: the tile. */
+    TILE,
 
     /** The crash-report and analytics consent (§12). */
     TELEMETRY,
@@ -133,7 +133,7 @@ fun shouldOpenWelcome(
  * still ungranted.
  *
  * **Every offered row, not just Do Not Disturb access.** Access alone was the
- * wrong test: a user who allowed it on card 4 and skipped the rest reached the
+ * wrong test: a user who allowed it on card 3 and skipped the rest reached the
  * main screen able to arm with no notification to show status on, which is the
  * recap's whole job to catch, since each of its rows carries the consequence of
  * the no the user just gave (Codex, PR #204).
@@ -219,7 +219,7 @@ fun WelcomeScreen(
     snoozeRinger: SnoozeRinger? = null,
     snoozeRingerSaveFailed: Boolean = false,
     /**
-     * The verified state of Snoozemo's own rule, or null while unread. Card 4's
+     * The verified state of Snoozemo's own rule, or null while unread. Card 3's
      * access row needs it for the same reason `PermissionsScreen`'s does: with
      * access granted and this null the row reads as unread and renders nothing,
      * which would hide both a known failure and, for a disabled rule, the
@@ -228,7 +228,7 @@ fun WelcomeScreen(
     ruleState: ZenRuleState? = null,
     /**
      * The rule's id, or null while there is nothing to edit — no access, or
-     * access granted and the rule not created yet. Card 4 offers Filters only
+     * access granted and the rule not created yet. Card 3 offers Filters only
      * when it is non-null, exactly as `SettingsScreen` does.
      */
     filtersRuleId: String? = null,
@@ -365,11 +365,6 @@ fun WelcomeScreen(
                     onLocationRow = onLocationRow,
                     onCalendarRow = onCalendarRow,
                 )
-                WelcomeCard.TILE -> TileCard(
-                    tileAdded = tileAdded,
-                    settingsFailure = settingsFailure,
-                    onAddTile = onAddTile,
-                )
                 WelcomeCard.RULE -> RuleCard(
                     access = access,
                     ruleState = ruleState,
@@ -380,6 +375,11 @@ fun WelcomeScreen(
                     onAccessRow = onAccessRow,
                     onRuleRow = onRuleRow,
                     onSnoozeRinger = onSnoozeRinger,
+                )
+                WelcomeCard.TILE -> TileCard(
+                    tileAdded = tileAdded,
+                    settingsFailure = settingsFailure,
+                    onAddTile = onAddTile,
                 )
                 WelcomeCard.TELEMETRY -> TelemetryCard(onAnswerTelemetry)
             }
@@ -495,29 +495,18 @@ private fun EndsCard(
     )
 }
 
-/** Card 3: the tile, which is the arm affordance and the one locked-phone path. */
-@Composable
-private fun TileCard(
-    tileAdded: Boolean?,
-    settingsFailure: SetupRowId?,
-    onAddTile: () -> Unit,
-) {
-    CardBody(stringResource(R.string.welcome_tile_body))
-    CardBody(stringResource(R.string.welcome_tile_locked))
-    PermissionRows.Tile(
-        tileAdded = tileAdded,
-        settingsFailure = settingsFailure,
-        onAction = onAddTile,
-        hideWhenSatisfied = true,
-    )
-}
-
 /**
- * Card 4: one rule, and the ringer ceiling.
+ * Card 3: one rule, and the ringer ceiling.
  *
- * Do Not Disturb access comes last of the grants because it is the one without
- * which nothing here can snooze at all — asked after the user has seen what it
- * is for.
+ * Do Not Disturb access is the one grant without which nothing here can snooze
+ * at all, so it is asked once the user has seen what it is for — after what the
+ * app is and how a snooze ends, and before the tile that will do the arming
+ * (maintainer, 2026-09-08). It used to come after the tile, on the reasoning
+ * that the essential grant should be last of them; the order is the other way
+ * round now because a tile added before the grant is a tile whose first tap
+ * fails with `NO_POLICY_ACCESS`, while a grant taken before the tile leaves an
+ * app that already snoozes from its own button. Abandoning the flow half way
+ * costs less in this order.
  *
  * Filters is offered rather than only named (maintainer, 2026-09-05), through
  * the same row `SettingsScreen` draws. The objection to a button here was that
@@ -561,6 +550,29 @@ private fun RuleCard(
         filtersRuleId = filtersRuleId,
         settingsFailure = settingsFailure,
         onAction = onRuleRow,
+    )
+}
+
+/**
+ * Card 4: the tile, which is the arm affordance and the one locked-phone path.
+ *
+ * After the rule card rather than before it — card 3's KDoc has the reasoning —
+ * which also leaves the setup run ending on something to do rather than on
+ * something to allow.
+ */
+@Composable
+private fun TileCard(
+    tileAdded: Boolean?,
+    settingsFailure: SetupRowId?,
+    onAddTile: () -> Unit,
+) {
+    CardBody(stringResource(R.string.welcome_tile_body))
+    CardBody(stringResource(R.string.welcome_tile_locked))
+    PermissionRows.Tile(
+        tileAdded = tileAdded,
+        settingsFailure = settingsFailure,
+        onAction = onAddTile,
+        hideWhenSatisfied = true,
     )
 }
 
@@ -697,8 +709,8 @@ private fun WelcomeDots(position: Int, count: Int, modifier: Modifier = Modifier
 private fun cardTitle(card: WelcomeCard): Int = when (card) {
     WelcomeCard.WHAT -> R.string.welcome_what_title
     WelcomeCard.ENDS -> R.string.welcome_ends_title
-    WelcomeCard.TILE -> R.string.welcome_tile_title
     WelcomeCard.RULE -> R.string.welcome_rule_title
+    WelcomeCard.TILE -> R.string.welcome_tile_title
     WelcomeCard.TELEMETRY -> R.string.telemetry_invite_title
 }
 

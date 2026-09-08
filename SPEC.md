@@ -591,10 +591,14 @@ size instead of rotting with a platform release, and the ring is what marks Snoo
 rather than a different tile style, which would teach the user to look for something the shade
 will never show them; how a snooze ends, shown on a render of the ongoing notification (§4.3), the one surface
 that carries every way it can — departure, a chosen time, `End now` — so the end sheet (§4.4) needs
-neither a card nor a switch in the flow (maintainer, 2026-09-05); the tile; the one Do Not Disturb
+neither a card nor a switch in the flow (maintainer, 2026-09-05); the one Do Not Disturb
 rule and the ringer choice (§5.9) — plus, since that card calls the rule the user's, the same
 Filters row `SettingsScreen` offers, absent until there is a rule to edit (maintainer,
-2026-09-05); and, last, the crash-report and analytics consent (§12) on its
+2026-09-05); the tile, **after** the rule rather than before it (maintainer, 2026-09-08), because
+a tile added before Do Not Disturb access is granted is a tile whose first tap fails, while the
+grant taken before the tile leaves an app that already snoozes from its own button — the order
+that costs least when someone abandons the flow part way, and it leaves the setup run ending on
+something to do rather than something to allow; and, last, the crash-report and analytics consent (§12) on its
 own — the debug log is not mentioned, since a card whose job is one question about data leaving the
 phone is the wrong place for a sentence about a log that never does (maintainer, 2026-09-05). That
 last card is absent on `direct`, which ships neither SDK, so the flow is four cards there. Each card offers the grant for the thing it just introduced, drawn

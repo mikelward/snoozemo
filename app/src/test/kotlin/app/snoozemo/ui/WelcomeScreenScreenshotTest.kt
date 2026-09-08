@@ -221,8 +221,27 @@ class WelcomeScreenScreenshotTest {
         // nothing else on that card, so it would be a blank screen and a fifth
         // dot promising one.
         assertEquals(
-            listOf(WelcomeCard.WHAT, WelcomeCard.ENDS, WelcomeCard.TILE, WelcomeCard.RULE),
+            listOf(WelcomeCard.WHAT, WelcomeCard.ENDS, WelcomeCard.RULE, WelcomeCard.TILE),
             welcomeCards(collectsTelemetry = false),
+        )
+    }
+
+    @Test
+    fun `the rule comes before the tile it will arm`() {
+        // Do Not Disturb access before `Add tile` (maintainer, 2026-09-08). A
+        // tile added first is one whose first tap fails with NO_POLICY_ACCESS;
+        // the grant taken first leaves an app that already snoozes from its own
+        // button, so this is the order that costs least when the user abandons
+        // the flow part way.
+        assertEquals(
+            listOf(
+                WelcomeCard.WHAT,
+                WelcomeCard.ENDS,
+                WelcomeCard.RULE,
+                WelcomeCard.TILE,
+                WelcomeCard.TELEMETRY,
+            ),
+            welcomeCards(collectsTelemetry = true),
         )
     }
 
@@ -433,7 +452,7 @@ class WelcomeScreenScreenshotTest {
 
     @Test
     fun `a refused filters launch is reported once`() {
-        // Card 4 is the only screen that draws the access row and the Filters
+        // Card 3 is the only screen that draws the access row and the Filters
         // row together, and with the rule disabled both buttons open the same
         // settings screen. Reported on both, one refused tap printed the line
         // twice and made the untouched row look like it had failed too (Codex,

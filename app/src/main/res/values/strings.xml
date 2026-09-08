@@ -654,7 +654,12 @@
     -->
     <!-- TODO: translate -->
     <string name="welcome_ends_body_timer_only" tools:ignore="MissingTranslation">When your meeting ends, or at the time you choose.</string>
-    <!-- Card 3. The tile is the arm affordance and the one path that works with
+    <!-- Card 3. One rule, created once, and the app switches only that one. -->
+    <!-- TODO: translate -->
+    <string name="welcome_rule_title" tools:ignore="MissingTranslation">One rule, yours</string>
+    <!-- TODO: translate -->
+    <string name="welcome_rule_body" tools:ignore="MissingTranslation">Snoozemo adds one Do Not Disturb rule and only ever switches that one on and off. Choose what still gets through in Settings › Filters.</string>
+    <!-- Card 4. The tile is the arm affordance and the one path that works with
          the phone locked. -->
     <!-- TODO: translate -->
     <string name="welcome_tile_title" tools:ignore="MissingTranslation">Snooze from Quick Settings</string>
@@ -662,11 +667,6 @@
     <string name="welcome_tile_body" tools:ignore="MissingTranslation">Swipe down and tap the Zzz tile.</string>
     <!-- TODO: translate -->
     <string name="welcome_tile_locked" tools:ignore="MissingTranslation">Works with the phone locked.</string>
-    <!-- Card 4. One rule, created once, and the app switches only that one. -->
-    <!-- TODO: translate -->
-    <string name="welcome_rule_title" tools:ignore="MissingTranslation">One rule, yours</string>
-    <!-- TODO: translate -->
-    <string name="welcome_rule_body" tools:ignore="MissingTranslation">Snoozemo adds one Do Not Disturb rule and only ever switches that one on and off. Choose what still gets through in Settings › Filters.</string>
     <!-- The render of the ongoing notification on card 2, which is a picture
          rather than a live card. Named so a screen reader reaches it as one
          thing instead of reading a fake notification's controls as tappable. -->
