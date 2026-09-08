@@ -4521,6 +4521,29 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
+- [ ] **The departure bar is too high in practice — over 500 m on a real walk**
+  (maintainer, 2026-09-08, from a morning walk; parked, not to be acted on yet).
+  The arithmetic says less: a 100 m radius plus the 50 m hysteresis plus a typical
+  fix's combined uncertainty should end a snooze somewhere near 200 m, so a
+  measured 500 m means one of the terms is bigger in the field than on paper —
+  the likeliest being the fix accuracy feeding `Departure.uncertaintyM`, which is
+  squared into the combined figure and is what a phone in a pocket reports worst.
+  **This is now measurable rather than guessable**: the `±` readout (#223) is on
+  the main screen and the distance is about to be on the notification, so the next
+  walk can say which term is large instead of inferring it. Related but not the
+  same as the shelved #224, which shortened the bar only after the anchor's Wi-Fi
+  was seen to go; this is about the ordinary case.
+
+- [ ] **Round the displayed distance by its own confidence** (maintainer,
+  2026-09-08). `355 ft to go` beside a `±60 ft` is four significant figures of
+  precision the reading does not have, and reads as false authority. The
+  uncertainty is already carried on every `DepartureObservation`, so the number of
+  significant figures could come from it rather than from a fixed rule — a sharp
+  fix keeping its tens, a vague one rounding to the nearest fifty. Applies to both
+  surfaces, since `DistanceUnit`'s rounding is what they share (`away`, `toGo` and
+  `uncertainty` each round differently today, which is the seam to change).
+
+
 - [x] **The settling copy is keyed on which capture half is still outstanding, not on
   which one failed** (autopilot, 2026-09-07 — **settled 2026-09-08 by removing the
   split**, so the question it raised is moot). The maintainer's call is one line,
@@ -6362,6 +6385,62 @@ what sets it off.
 - Is it a per-snooze end condition the user picks (§4.4's sheet), or a global
   behavior? A cinema and a walk in a park want opposite answers.
 - Thirty seconds is a guess. It wants a handset in an actual cinema.
+
+## Deferred review findings (Codex, PR #228)
+
+- [ ] **The distance row's expiry mechanism has drawn three findings, and the third is a
+  distribution question** (Codex, PR #228). The row shows the meters still to go from the
+  latest departure reading, and hides it once that reading passes `FRESH_FOR_MS`. A
+  notification is a posted snapshot, so it cannot re-evaluate that window for itself:
+  something has to come back and repost the card at expiry. Every property of that
+  "something" has now been a separate finding —
+
+  1. **Clock base.** A `Handler` measures on uptime, which stops in deep sleep, while
+     `isFresh` reads elapsed realtime, which does not. *Fixed* — an elapsed-realtime alarm.
+  2. **Process lifetime.** An `OnAlarmListener` dies with the process, while the card is a
+     plain `notify()` post with no `startForeground` behind it, so it stays in the shade.
+     *Open.*
+  3. **Delivery precision.** `AlarmManager.set` is inexact by contract: not before the
+     trigger time, but no bound on how far after. *Open.*
+
+  **Finding 3 is not autopilot's to take, and probably not the maintainer's to want.**
+  Exactness costs `SCHEDULE_EXACT_ALARM`, which this app deliberately holds nowhere: the
+  duration cap, the grace alarm, the capability-loss alarm and the Wi-Fi recheck alarm all
+  say so in as many words, each citing `SPEC.md` §3 — a distribution question, not an
+  implementation detail, and `AGENTS.md` puts those outside autopilot's remit entirely.
+  Spending a permission that carries Play scrutiny on a **distance readout**, while the cap
+  that guarantees the phone comes back accepts the same inexactness, inverts the priorities
+  exactly. The honest answer is that this row does not deserve a stronger alarm than the
+  cap does.
+
+  **Finding 2 is bounded and self-healing.** `DepartureObservations` is in memory only, so
+  the first repost after any restart clears the row by itself; `SnoozeBackstop`'s half-hourly
+  wake is the durable thing that provides one. Worst case is a stale number for the ~25
+  minutes between the freshness window and the next backstop wake. The cap alarm is durable
+  and the countdown beside the distance stays correct, so the snooze still ends on time —
+  what is wrong is what the row says, not what the app does. Making it survive the process
+  is a durable `PendingIntent` (the plumbing exists: `CapAlarm` → `CapAlarmReceiver`) whose
+  cost is a **process start** to tidy a readout nobody is looking at, against `SPEC.md` §9.
+
+  **Three findings on one small mechanism is evidence about the design** (`AGENTS.md`), so
+  the question to answer is not which of the three to patch but whether the timer should
+  exist. **The option that deletes the class: tie the row's freshness to the duty cycle
+  instead of to a separate window.** Every repost already happens on a reading, so a reading
+  would be fresh by construction until the next one replaced it, and no invalidation timer
+  would exist to get the clock, the process or the precision wrong. What makes that
+  defensible rather than a shrug is *why* the duty cycle slows down: it backs off because
+  the phone is stationary (`SPEC.md` §6.7), so an old reading at rest is an **accurate**
+  reading, not merely an old one — and the case where the number would genuinely mislead,
+  somebody moving, is exactly the case where readings keep arriving. The degradation paths
+  that stop readings for other reasons already clear the row through `onTrackingChanged`.
+  What it costs: the row would carry no freshness promise of its own, which is a weakening
+  of principle 2 to weigh against three ways of getting the timer wrong.
+
+  Parked with this row's other open questions rather than answered now — rounding by the
+  reading's own confidence, the Wi-Fi case, and `Confirming` vs `Ending` — all of which
+  change what the row shows, and none of which the maintainer has seen on a handset yet
+  (2026-09-08, mid-demo). Settling how the expiry is delivered before settling what it
+  expires would be building the mechanism twice.
 
 ## Deferred review findings (Codex, PR #217)
 

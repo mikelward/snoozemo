@@ -1,15 +1,20 @@
 package app.snoozemo.snooze
 
+import android.app.AlarmManager
 import android.app.NotificationManager
 import android.content.Intent
+import android.os.Looper
+import android.os.SystemClock
 import app.snoozemo.R
 import app.snoozemo.core.Anchor
+import app.snoozemo.core.DepartureObservation
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenOutcome
 import app.snoozemo.ui.MainActivity
 import java.time.Instant
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -17,6 +22,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.ShadowSystemClock
 
 /**
  * The arm path's half of anchor capture: what the service starts, what it does
@@ -48,6 +54,10 @@ class SnoozeServiceArmCaptureTest {
         TestSnoozeService.reset(now)
         TestSnoozeService.zen.outcome = ZenOutcome.Applied("refusing-zen-rule-id")
         ActiveSnoozeStore(appContext).clear()
+        // Process-wide and in memory, so a reading published by an earlier test
+        // in this JVM is still the latest one here — which the distance on the
+        // card now reads (SPEC.md §4.6).
+        DepartureObservations.clear()
     }
 
     /**
@@ -61,6 +71,15 @@ class SnoozeServiceArmCaptureTest {
      */
     private fun storedMode(): TrackingMode? =
         ActiveSnoozeStore(appContext) { TestSnoozeService.testReading.wallMillis }.load()?.mode
+
+    /** The top row of the ongoing card currently in the shade. */
+    private fun ongoingSubText(): String? =
+        shadowOf(appContext.getSystemService(NotificationManager::class.java))
+            .allNotifications
+            .last { shadowOf(it).contentTitle?.toString() == stringOf(R.string.ongoing_title) }
+            .extras
+            .getCharSequence(android.app.Notification.EXTRA_SUB_TEXT)
+            ?.toString()
 
     /** The body line of the ongoing card currently in the shade. */
     private fun ongoingBody(): String? =
@@ -184,6 +203,90 @@ class SnoozeServiceArmCaptureTest {
         // The mode is what the monitor says it can watch for these fields
         // (SPEC.md §6.1, §8.1) — a fenced anchor is fully watched now.
         assertEquals(TrackingMode.FULL, record?.mode)
+    }
+
+    @Test
+    fun `a fresh reading reposts the card, so the distance is not frozen`() {
+        // The half a notification test alone cannot cover. `buildOngoing` puts
+        // the distance on the card, but the card is a posted object: without a
+        // repost it keeps the number it was built with, which is worse than
+        // showing none — a distance that looks current and is not (SPEC.md
+        // §4.6).
+        val service = startService(SnoozeService.ACTION_ARM).get()
+        TestSnoozeService.captureRequests.single().invoke(captured)
+        // Settle first, so nothing is left queued that would repost for its own
+        // reasons: `showOngoing` schedules a calendar-offer refresh after the
+        // card is up, and that would land after the reading below and rebuild
+        // the card from it — passing this test with the repost removed.
+        shadowOf(Looper.getMainLooper()).idle()
+        assertNull("nothing to show before the first fix", ongoingSubText())
+
+        service.onDepartureObservation(
+            DepartureObservation(
+                distanceM = 60.0,
+                accuracyM = 15f,
+                anchorAccuracyM = 10f,
+                radiusM = 100,
+                elapsedRealtimeMs = SystemClock.elapsedRealtime(),
+            ),
+        )
+
+        // 60 m inside a 100 m anchor: 18.0 m of combined uncertainty, so 108.0 m
+        // of ground left once the 50 m hysteresis is counted — 355 ft on this
+        // US-locale test device, ceiled after the conversion rather than from a
+        // rounded meter figure.
+        assertEquals(
+            appContext.getString(R.string.distance_feet, 355),
+            ongoingSubText(),
+        )
+    }
+
+    @Test
+    fun `the distance leaves the card when its reading goes stale`() {
+        // Codex, PR #228. The freshness test runs while the card is *built*,
+        // and a card is a posted object — so without an expiry the row keeps a
+        // distance the app itself no longer trusts. At rest that gap is real:
+        // the duty cycle can put the next fix ten minutes out against a
+        // five-minute window (SPEC.md §6.7).
+        val service = startService(SnoozeService.ACTION_ARM).get()
+        TestSnoozeService.captureRequests.single().invoke(captured)
+        shadowOf(Looper.getMainLooper()).idle()
+        val observation = DepartureObservation(
+            distanceM = 60.0,
+            accuracyM = 15f,
+            anchorAccuracyM = 10f,
+            radiusM = 100,
+            elapsedRealtimeMs = SystemClock.elapsedRealtime(),
+        )
+
+        service.onDepartureObservation(observation)
+
+        assertNotNull("the reading is on the card to begin with", ongoingSubText())
+        val alarms = shadowOf(appContext.getSystemService(AlarmManager::class.java))
+        // Picked by its listener, not by position: the cap's own wake-up alarm
+        // is also scheduled here, and it is the one that happens to be last.
+        val scheduled = alarms.scheduledAlarms.single { it.onAlarmListener != null }
+        // On the elapsed-realtime clock, which is the one `isFresh` reads
+        // (Codex, PR #228, second pass): `Handler.postDelayed` measures against
+        // uptime, which stops in deep sleep, so a phone that slept after a fix
+        // would wake still showing an expired distance.
+        assertEquals(AlarmManager.ELAPSED_REALTIME, scheduled.type)
+        // And past the window rather than on it, since `isFresh` is inclusive.
+        assertEquals(
+            observation.elapsedRealtimeMs + DepartureObservation.FRESH_FOR_MS + 1,
+            scheduled.triggerAtTime,
+        )
+
+        // The clock reaching that time is what the alarm represents, so the
+        // test moves it before firing — otherwise the reading is still fresh
+        // and the repost rebuilds the same row.
+        ShadowSystemClock.advanceBy(
+            java.time.Duration.ofMillis(DepartureObservation.FRESH_FOR_MS + 1),
+        )
+        scheduled.onAlarmListener!!.onAlarm()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertNull("the stale distance was cleared", ongoingSubText())
     }
 
     @Test

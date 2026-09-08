@@ -11,12 +11,15 @@ import app.snoozemo.R
 import app.snoozemo.core.RingerMode
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.degradationReasonRes
+import app.snoozemo.distanceText
+import app.snoozemo.distanceUnitFor
 import app.snoozemo.dnd.AudioRingerController
 import app.snoozemo.dnd.RingerShortfall
 import app.snoozemo.tile.R as TileR
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.identity
 import app.snoozemo.core.DegradationCause
+import app.snoozemo.core.DepartureObservation
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.MeetingEnd
@@ -326,8 +329,15 @@ class SnoozeNotifications(private val context: Context) {
         // function of its arguments, and read *once* so the two posts below
         // cannot disagree about the same card.
         val ringerShortfall = ringerShortfall(snooze)
+        // Once, for the same reason: the follow-up post below must not build a
+        // card from a newer reading than the one it is correcting, or the two
+        // posts would differ in a second way nobody asked about.
+        val departure = DepartureObservations.latest()
         betweenReadAndPost()
-        val posted = postOngoing(buildOngoing(snooze, builtWith, ringerShortfall, silent), onlyIfGeneration)
+        val posted = postOngoing(
+            buildOngoing(snooze, builtWith, ringerShortfall, silent, departure),
+            onlyIfGeneration,
+        )
         // The cache is read above but written under the lock this post takes,
         // so the worker can commit an answer in between and lose its own
         // repost to this one — the newer post wins the generation, and the
@@ -344,7 +354,10 @@ class SnoozeNotifications(private val context: Context) {
             val settled = cachedOfferFor(snooze, calendarReadable)
             if (settled != builtWith) {
                 betweenReadAndPost()
-                postOngoing(buildOngoing(snooze, settled, ringerShortfall, silent), onlyIfGeneration = posted)
+                postOngoing(
+                    buildOngoing(snooze, settled, ringerShortfall, silent, departure),
+                    onlyIfGeneration = posted,
+                )
             }
         }
         // After the card is up, never before it: this is a binder query into
@@ -353,6 +366,49 @@ class SnoozeNotifications(private val context: Context) {
         // gains the third a moment later, which is the same trade the screen
         // makes everywhere else — show now, fill in when ready.
         refreshOfferIfUnknown(snooze, calendarReadable)
+    }
+
+    /**
+     * How much further this snooze needs before it ends, for the card's top
+     * row (`SPEC.md` §4.6).
+     *
+     * **Remaining, not distance away.** It sits beside the platform's own
+     * countdown, so the two read as one answer to "how much longer" only if
+     * both count toward zero. The meters still to go are a property of *this*
+     * reading rather than of the anchor — the test subtracts the combined
+     * uncertainty before comparing, so a vague fix genuinely needs more ground
+     * than a sharp one, and naming the nominal radius would promise a departure
+     * the current fix could not deliver.
+     *
+     * **Null unless there is something true to say.** Three ways:
+     * - Not [TrackingMode.FULL]. The other modes are measuring no distance at
+     *   all, so a number from the last fix before tracking degraded would
+     *   explain a threshold that is no longer what ends this snooze — the same
+     *   rule `MainScreen` applies to the same reading.
+     * - No reading yet, or a stale one. A distance from ten minutes ago is
+     *   worse than no distance, and the resting duty cycle (§6.7) can leave a
+     *   gap that long on a phone that has not moved.
+     * - Qualifying already, where the answer is a wait rather than a distance.
+     *
+     * **The number and its unit, nothing else** (maintainer, 2026-09-08). The
+     * countdown beside it carries no label, so a distance that explained itself
+     * would be the only words in a row that is otherwise two numbers. The
+     * qualifying case is the one exception, because there is no quantity to
+     * print: `remainingM` is zero there, and `0 m` sitting still for the
+     * thirty-second confirmation would read as stuck rather than as nearly
+     * done.
+     *
+     * The clock is read here rather than passed in because freshness is a
+     * property of *now*, not of the post: this card is rebuilt on every
+     * reading, and a value captured earlier would age against a check that
+     * thinks it is current.
+     */
+    private fun distanceSubText(snooze: ActiveSnooze, departure: DepartureObservation?): String? {
+        if (snooze.mode != TrackingMode.FULL) return null
+        val reading = departure?.takeIf { it.isFresh(SnoozeClock.read().uptimeMillis) } ?: return null
+        if (reading.qualifies) return context.getString(R.string.ongoing_distance_confirming)
+        val unit = distanceUnitFor(context.resources.configuration)
+        return distanceText(context, unit, unit.toGo(reading.remainingM))
     }
 
     /**
@@ -369,6 +425,7 @@ class SnoozeNotifications(private val context: Context) {
         until: Instant?,
         ringerShortfall: String? = null,
         silent: Boolean = false,
+        departure: DepartureObservation? = null,
     ): android.app.Notification {
         val body = when (snooze.mode) {
             TrackingMode.FULL -> context.getString(R.string.ongoing_ends_when_you_leave)
@@ -417,6 +474,11 @@ class SnoozeNotifications(private val context: Context) {
             .setSmallIcon(TileR.drawable.ic_tile_snooze)
             .setContentTitle(context.getString(R.string.ongoing_title))
             .setContentText(withRinger)
+            // The top row, beside the app name and the countdown below
+            // (maintainer, 2026-09-08). Null leaves the row as it was, which is
+            // the honest rendering of "no reading yet" — an empty string would
+            // reserve space for a number that is not coming.
+            .setSubText(distanceSubText(snooze, departure))
             .setOngoing(true)
             // This card is reposted on every ARMED/CHECKING transition, which
             // includes presence evidence flip-flopping (ProbablyLeft then

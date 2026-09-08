@@ -1,5 +1,6 @@
 package app.snoozemo.snooze
 
+import android.app.AlarmManager
 import android.app.NotificationManager
 import android.app.Service
 import android.content.BroadcastReceiver
@@ -192,6 +193,39 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * meantime owns the rule, and this would turn it off underneath them.
      */
     private val releaseRetryHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * Fires when the reading behind the card's distance expires, so the row
+     * clears instead of showing a number the app no longer trusts (Codex,
+     * PR #228).
+     *
+     * The freshness test runs while the card is *built*, and a notification is
+     * a posted object — so a distance posted from a fresh reading stays up
+     * until something reposts, and at rest the next reading can be ten minutes
+     * away against a five-minute window (`DepartureObservation.FRESH_FOR_MS`,
+     * SPEC.md §6.7). Without this the row spends that gap lying, which is the
+     * failure the repost-per-fix exists to prevent, one step later.
+     *
+     * **An alarm on the elapsed-realtime clock, not a `Handler`.** The first
+     * version used `postDelayed`, which measures against *uptime* — a clock
+     * that stops in deep sleep — while [DepartureObservation.isFresh] measures
+     * against elapsed realtime, which does not. A phone that slept after a fix
+     * would therefore wake with an expired distance still on the card and keep
+     * it for up to five minutes of *awake* time, which is exactly when somebody
+     * is looking at it (Codex, PR #228, second pass). Scheduling on the same
+     * clock the freshness test reads removes the mismatch rather than
+     * narrowing it.
+     *
+     * **Non-wakeup**, so it never wakes the phone to tidy a readout: asleep,
+     * nobody is reading the card, and the alarm lands at the next wake, which
+     * is the first moment it could matter. A listener alarm rather than a
+     * `PendingIntent`, so it needs no action of its own and is cancelled by
+     * reference.
+     */
+    private val distanceExpiry = AlarmManager.OnAlarmListener { repostForDistanceExpiry() }
+
+    /** What [distanceExpiry] was scheduled for, so a superseded one can be told apart. */
+    private var distanceExpiryFor: DepartureObservation? = null
 
     /**
      * Which record [forget] is entitled to erase — the `startedAt` of the
@@ -2468,12 +2502,78 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      *
      * In memory only, and deliberately not on the paths [onTrackingChanged]
      * takes: this arrives per fix, so persisting it would put a disk write on
-     * the fix path and reposting the notification for it would rewrite a line
-     * that has not changed. Nothing here decides anything — it is the same
-     * distance and accuracy the log already records, published live.
+     * the fix path. Nothing here decides anything — it is the same distance
+     * and accuracy the log already records, published live.
+     *
+     * **The card is reposted for it** (maintainer, 2026-09-08), which this
+     * deliberately did not do while the reading only reached the screen. It
+     * does now because the reading *is* a line on the card — the top row's
+     * distance — so leaving the post alone would freeze the number the moment
+     * it first appeared, which is worse than not showing one: a distance that
+     * looks current and is not.
+     *
+     * Affordable because the repost is silent by construction:
+     * `setOnlyAlertOnce` means later posts of this id update the text without
+     * sounding or vibrating (`SnoozeNotifications`), so the cost is one builder
+     * and one binder call per fix, on a cadence the duty cycle (SPEC.md §6.7)
+     * already bounds — every ten minutes at rest, and only faster while
+     * somebody is actually walking, which is exactly when the number is worth
+     * updating.
+     *
+     * Guarded on the live snooze rather than posted blind: a reading can arrive
+     * against a snooze that has just ended, and reposting for it would put a
+     * card back up after the release path took it down.
      */
     override fun onDepartureObservation(observation: DepartureObservation) {
         DepartureObservations.publish(observation)
+        controller.active?.let(notifications::showOngoing)
+        scheduleDistanceExpiry(observation)
+    }
+
+    /**
+     * Reposts the card once [observation] goes stale, so the distance leaves
+     * the top row rather than sitting there looking current.
+     *
+     * Replaces any earlier one: only the newest reading decides when the row
+     * expires, and a reading arriving before the last one's window closes moves
+     * the deadline out rather than adding a second post.
+     *
+     * Guarded twice over — on the snooze still being the one this reading
+     * belongs to, and on the reading still being the latest — because a repost
+     * for an expiry that has been superseded would rebuild a card nobody asked
+     * to change.
+     */
+    private fun scheduleDistanceExpiry(observation: DepartureObservation) {
+        val alarms = getSystemService(AlarmManager::class.java) ?: return
+        // Replaced, not stacked: only the newest reading decides when the row
+        // expires, so one arriving mid-window moves the deadline out rather
+        // than leaving an earlier alarm to clear a distance that is current
+        // again.
+        alarms.cancel(distanceExpiry)
+        distanceExpiryFor = observation
+        // Past the window, not at its edge: `isFresh` is inclusive, so an alarm
+        // landing exactly on `FRESH_FOR_MS` would still build a card that
+        // thinks the reading is current.
+        val at = observation.elapsedRealtimeMs + DepartureObservation.FRESH_FOR_MS + 1
+        alarms.set(
+            AlarmManager.ELAPSED_REALTIME,
+            at,
+            "snoozemo:distance-expiry",
+            distanceExpiry,
+            null,
+        )
+    }
+
+    /**
+     * Rebuilds the card once the reading behind its distance has expired.
+     *
+     * Guarded on that reading still being the latest — a newer one has its own
+     * alarm and its own window — and on a snooze still running, since a card
+     * must not be put back up after the release path took it down.
+     */
+    private fun repostForDistanceExpiry() {
+        if (DepartureObservations.latest() !== distanceExpiryFor) return
+        controller.active?.let(notifications::showOngoing)
     }
 
     override fun onTrackingChanged(snooze: ActiveSnooze, degradation: DegradationCause?) {
@@ -2546,6 +2646,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // re-reads the record and picks the work back up if it is still there.
         eraseRetryHandler.removeCallbacksAndMessages(null)
         releaseRetryHandler.removeCallbacksAndMessages(null)
+        getSystemService(AlarmManager::class.java)?.cancel(distanceExpiry)
         // The capture dies with the controller it feeds. The snooze survives —
         // its record is on disk with whatever mode ARMING wrote — and a
         // capture lost this way is the arm ceiling's degraded path arriving

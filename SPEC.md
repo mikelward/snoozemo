@@ -404,6 +404,25 @@ Settings tile makes no claim at all in this window, showing its countdown withou
 qualifier: the qualifier *is* the claim, and the shade would otherwise contradict the notification
 directly below it.
 
+**The ongoing card carries the distance too, in its top row** (maintainer, 2026-09-08). The main
+screen's readout answers "how is the test doing"; the card answers "how much longer", beside the
+countdown the platform already ticks there — so it shows the meters still *to go* rather than the
+distance away, and the two numbers fall to zero together. **The quantity and its unit and nothing
+else**, since the countdown beside it carries no label either. It is shown only under `FULL`, only
+from a fresh reading, and reads `Confirming` rather than a distance once a fix already qualifies —
+the one place a word appears, because there is no quantity there to print and a motionless `0 m`
+would read as stuck through the thirty-second confirmation. Everything else — the distance away, the combined `±` —
+stays on the screen, which has room for the sentence.
+
+**The card is reposted per reading, and again when that reading expires, to keep the number
+honest.** A notification is a posted object, so a distance left alone freezes at whatever it was
+first built with, which is worse than showing none: it looks current. Reposting per reading covers
+the walk; the expiry repost covers the rest, where the duty cycle (6.7) can put the next fix ten
+minutes out against a five-minute freshness window, and the row would otherwise spend that gap
+showing a distance the app itself no longer trusts. Both are silent by construction
+(`setOnlyAlertOnce`), and the cadence is the duty cycle's — faster only while somebody is walking,
+which is exactly when the number is worth updating.
+
 **It never survives a process, and it says so itself rather than relying on a reader to ask.** A
 capture dies with its process; the record it wrote does not, so a stored settling mode
 can outlive the capture that meant it — and the readers that would show it are exactly the ones
