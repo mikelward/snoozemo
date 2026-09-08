@@ -1807,46 +1807,6 @@ class MainScreenScreenshotTest {
     }
 
     @Test
-    fun `an arm with no location to wait for names the half that is left`() {
-        // The other settling value, and the reason it exists: with location
-        // denied or switched off the capture answers its fix half instantly
-        // with nothing, so "Waiting for location" would spend the whole
-        // window pointing the user at a permission that is not what the arm
-        // is waiting on. The Wi-Fi read is (maintainer, 2026-09-07).
-        //
-        // Rendering only, like its sibling above — that the arm actually
-        // produces this mode is `SnoozeControllerTest`'s job.
-        capture("main-screen-arming-waiting-wifi.png") {
-            MainScreen(
-                access = PolicyAccess.GRANTED,
-                tileAdded = true,
-                tileBannerDismissed = true,
-                snoozing = true,
-                trackingMode = TrackingMode.SETTLING_AWAITING_WIFI,
-                remaining = Duration.ofHours(8),
-                degradation = null,
-                lastOutcome = null,
-                crashPending = false,
-                shareFailed = false,
-                dismissFailed = false,
-                onOpenPermissions = {},
-                onOpenSettings = {},
-                onAddTile = {},
-                onDismissTileBanner = {},
-                onArm = {},
-                onRelease = {},
-                onShareDebugLog = {},
-                onDismissCrash = {},
-            )
-        }
-
-        composeRule.onNodeWithText("Waiting for Wi-Fi").assertExists()
-        // Still not a timer: the arm is in flight, so the qualifier that says
-        // nothing is watching would be as wrong here as in the case above.
-        composeRule.onNodeWithText("Timer only").assertDoesNotExist()
-    }
-
-    @Test
     fun `a settled timer-only snooze still says so`() {
         // The direction that stops the fix swallowing a real degraded mode:
         // once the arm has settled, a timer is a timer and says why.

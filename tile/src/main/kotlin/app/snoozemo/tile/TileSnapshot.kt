@@ -133,7 +133,7 @@ internal data class TileSnapshot(
                 // is still waiting on decides the *notification's* wording, not
                 // whether anything is pending — and pending is the only
                 // question the shade is asking.
-                TrackingMode.SETTLING, TrackingMode.SETTLING_AWAITING_WIFI ->
+                TrackingMode.SETTLING ->
                     !TrackingMode.settlingStillStands(startedAtMillis, nowMillis)
                 null -> true
             }

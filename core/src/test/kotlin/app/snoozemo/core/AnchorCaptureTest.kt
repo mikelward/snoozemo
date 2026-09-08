@@ -212,54 +212,49 @@ class AnchorCaptureTest {
     }
 
     @Test
-    fun `a fix arriving first leaves only the Wi-Fi half open`() {
-        // What the settling copy reads, and the case a cause-based report
-        // missed (Codex, PR #225): the ordinary arm, where the seeded
-        // last-known fix closes the location half before any Wi-Fi callback.
-        // "Waiting for location" is then a claim about a sensor that has
-        // already answered.
+    fun `a fix arriving first closes the location half`() {
+        // What spares the arm a live location request it does not need: the
+        // seeded last-known fix usually lands before any callback, and ten
+        // seconds of updates a settled half will ignore is battery spent on
+        // nothing (SPEC.md 9).
         val capture = AnchorCapture(Instant.EPOCH)
 
         assertNull(capture.onFix(0.0, 0.0, accuracyM = 20f))
 
         assertFalse("the fix half is answered", capture.awaitingFix)
-        assertTrue("and only Wi-Fi is left", capture.awaitingWifi)
     }
 
     @Test
-    fun `a fix that cannot come leaves the same half open`() {
-        // The direction the first version handled, asserted beside it so the
-        // two are visibly the same state rather than two mechanisms.
+    fun `a fix that cannot come closes it too`() {
+        // Denied, switched off, no provider: the half is answered, not
+        // pending, so the request is just as pointless.
         val capture = AnchorCapture(Instant.EPOCH)
 
         assertNull(capture.onNoFix())
 
         assertFalse(capture.awaitingFix)
-        assertTrue(capture.awaitingWifi)
     }
 
     @Test
-    fun `a vague fix leaves both halves open`() {
+    fun `a vague fix leaves it open`() {
         // The gate is what decides, not the arrival: a fix too vague to test
-        // against is discarded, so the location half is still genuinely
-        // outstanding and the line still names it.
+        // against is discarded, so a live request is still worth making.
         val capture = AnchorCapture(Instant.EPOCH)
 
         assertNull(capture.onFix(0.0, 0.0, accuracyM = Anchor.MAX_ANCHOR_ACCURACY_M + 1f))
 
         assertTrue(capture.awaitingFix)
-        assertTrue(capture.awaitingWifi)
     }
 
     @Test
     fun `a finished capture is waiting for nothing`() {
-        // So a report cannot fire against a snooze that has stopped arming.
+        // Both halves answered, so nothing is outstanding whatever the fix
+        // half alone would say.
         val capture = AnchorCapture(Instant.EPOCH)
         capture.onFix(0.0, 0.0, accuracyM = 20f)
 
         assertNotNull(capture.onNoWifi())
 
         assertFalse(capture.awaitingFix)
-        assertFalse(capture.awaitingWifi)
     }
 }
