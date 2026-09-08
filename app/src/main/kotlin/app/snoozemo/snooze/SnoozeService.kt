@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ServiceInfo
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -95,7 +96,16 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * — where there is no snooze left to be quick for.
      */
     private val notifications: SnoozeNotifications by lazy {
-        SnoozeNotifications(applicationContext)
+        // The host is installed *here* rather than in `onCreate` (Codex,
+        // PR #230). Assigning it there reads this property, and reading it
+        // constructs the object, whose `init` creates three notification
+        // channels with synchronous binder calls — which is the whole reason
+        // this is lazy, and would have put them back between a cold tile tap
+        // and the zen rule going `STATE_TRUE` (SPEC.md §4.1, §6.9). Installing
+        // it inside the initializer is free: it runs exactly when the object
+        // first exists, which is necessarily before anything can post a card
+        // through it.
+        SnoozeNotifications(applicationContext).apply { ongoingForegroundHost = foregroundHost }
     }
     private lateinit var pendingFailure: PendingFailureStore
     private lateinit var controller: SnoozeController
@@ -2600,6 +2610,211 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     private fun repostForDistanceExpiry() {
         if (DepartureObservations.latest() !== distanceExpiryFor) return
         controller.active?.let(notifications::showOngoing)
+    }
+
+    /**
+     * Whether this service should be running in the foreground right now.
+     *
+     * **The gate is the tracking mode, not the flavor** (maintainer,
+     * 2026-09-08): a snooze with something watching for a departure needs this
+     * process to survive to hear it, and a duration-only one does not — its
+     * only exit is the cap alarm, which is durable on its own and outlives any
+     * process. So the modes that watch take a foreground service and the one
+     * that does not takes none, which also means `direct` reaches this only
+     * when Phase 7 gives it something to watch.
+     *
+     * [TrackingMode.SETTLING] and [TrackingMode.WIFI_GRACE] count as watching,
+     * which the maintainer's "FULL or Wi-Fi" did not spell out. Settling is the
+     * arming window — the anchor capture is in flight and about to become one
+     * of the others — and grace is a live watch racing a deadline, where being
+     * killed is precisely how the phone stays quiet. Both are principle 1
+     * cases; only [TrackingMode.DURATION_ONLY] genuinely has nothing running.
+     */
+    private fun wantsForeground(): Boolean =
+        when (controller.active?.mode) {
+            TrackingMode.FULL,
+            TrackingMode.WIFI_ONLY,
+            TrackingMode.WIFI_GRACE,
+            TrackingMode.SETTLING,
+            -> true
+
+            TrackingMode.DURATION_ONLY, null -> false
+        }
+
+    /**
+     * Whether the platform may still consider this service foreground.
+     *
+     * **One-way, and deliberately conservative** (Codex, PR #230, twice). It
+     * is set by a `startForeground` that returned, and cleared *only* by a
+     * `stopForeground` that returned — never by anything that merely guesses
+     * where the platform got to. Two findings landed on the same flag from
+     * opposite sides, both because a write mirrored an *attempt* rather than
+     * an outcome: a refused refresh does not demote a service that is already
+     * foreground, and a `stopForeground` that throws has not taken it back.
+     *
+     * The asymmetry is what makes the flag safe rather than merely correct.
+     * Its one reader is the early return in [releaseForeground], so
+     * over-reporting costs one `stopForeground` on a service that was not
+     * foreground — a documented no-op — while under-reporting strands a
+     * *location* foreground service for a snooze doing no location work, with
+     * nothing left that will try again. Only one of those is a bug, so every
+     * uncertain case resolves to `true`.
+     */
+    private var foregroundHeld: Boolean = false
+
+    /**
+     * Whether the last attempt to take one was refused — the state the card
+     * reports, and not the same question as [foregroundHeld].
+     *
+     * The card is *built* before it is posted, and promotion happens on the
+     * post, so "wants one and doesn't hold one" is true of every watched
+     * snooze's very first card and would put a refusal on the arm. This is
+     * true only after an attempt has actually failed.
+     */
+    private var foregroundRefused: Boolean = false
+
+    /**
+     * Reposts the card when [foregroundRefused] flips, on the loop rather than
+     * inline: the flip happens inside the post that is being built, so
+     * reposting there would re-enter it. Edge-triggered, like the anchor-Wi-Fi
+     * level, so the refusal that stays refused costs one repost rather than one
+     * per reading — and so recovery takes the clause back off.
+     */
+    private val foregroundStateHandler = Handler(Looper.getMainLooper())
+
+    private fun noteForegroundOutcome(refused: Boolean) {
+        if (refused == foregroundRefused) return
+        foregroundRefused = refused
+        foregroundStateHandler.post {
+            controller.active?.let(notifications::showOngoing)
+        }
+    }
+
+    /**
+     * Ties the ongoing card to a foreground service while something is
+     * watching (SPEC.md §6.10).
+     *
+     * What this buys is the *process*, not the card: the card is posted either
+     * way. An ordinary started service is destroyed routinely, and a device log
+     * showed exactly what that costs — the presence watch closing 67 s after
+     * arming, nothing looking for the next hour, and the geofence exit finally
+     * arriving to a background service start the platform refused. A foreground
+     * service is what stays alive to receive what the fence already delivers.
+     */
+    private val foregroundHost = object : SnoozeNotifications.OngoingForegroundHost {
+        override fun promote(notification: android.app.Notification): Boolean {
+            if (!wantsForeground()) {
+                // Not a failure — a duration-only snooze has nothing to keep
+                // alive. Releasing here rather than only on teardown is what
+                // makes a *degradation* give the foreground service back: the
+                // mode can fall to duration-only mid-snooze, and this runs on
+                // the repost that announces it.
+                releaseForeground()
+                return false
+            }
+            return runCatching {
+                enterForeground(
+                    SnoozeNotifications.ID_ONGOING,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
+                )
+                foregroundHeld = true
+                noteForegroundOutcome(refused = false)
+                true
+            }.getOrElse {
+                // Every refusal lands here and none of them may take the snooze
+                // with it: a background start the platform declines, location
+                // services switched off, the runtime grant withdrawn — the
+                // platform's own prerequisites for this type, any of which
+                // throws. The snooze is unaffected and the card is posted the
+                // plain way instead, so what is lost is the process's
+                // protection, not the promise. Said in the log rather than
+                // swallowed, because a watch that is now killable is exactly
+                // the thing a later "it never ended" report needs explaining.
+                // `foregroundHeld` is deliberately untouched: a refusal here
+                // is not a demotion, and a *refresh* refused while the service
+                // is already foreground leaves it foreground. Clearing it lost
+                // that (Codex, PR #230) — a later degrade to duration-only then
+                // took the early return in `releaseForeground` and held the
+                // service to the cap. See the flag's own KDoc.
+                SnoozeDebugLog.event("foreground service refused; the watch is now killable")
+                Log.w(TAG, "startForeground was refused; the snooze continues without it.", it)
+                // And said where the user is looking, not only in the log
+                // (Codex, PR #230): a watched mode the process cannot keep is
+                // degraded in fact, so the card has to stop claiming it.
+                noteForegroundOutcome(refused = true)
+                false
+            }
+        }
+
+        override fun demote() = releaseForeground()
+
+        // Asked while the card is built, so a refusal reaches the *same* card
+        // that would otherwise have claimed a watch it cannot keep. All three
+        // conjuncts earn their place, and the third was missing (Codex,
+        // PR #230): it wants one, an attempt has actually failed, and it does
+        // not have one.
+        //
+        // `foregroundRefused` alone cannot answer this. The card is built
+        // before it is posted and promotion happens on the post, so "wants one
+        // and holds none" is true of every watched snooze's first card — the
+        // remembered failure is what keeps the clause off the arm. But a
+        // refused *refresh* of a service that is already foreground sets it
+        // too, and there the process is protected: the warning would have told
+        // the user tracking may pause while the watch was in no danger at all,
+        // which spends the credibility the clause needs for the case that is
+        // real. A refusal that has since been recovered from stops being true
+        // here on its own, as before.
+        override fun watchIsUnprotected(): Boolean =
+            wantsForeground() && foregroundRefused && !foregroundHeld
+    }
+
+    /**
+     * The platform call, as a seam like [createZenController] and
+     * [createPresenceMonitor] and for the same reason: `startForeground` is
+     * final, Robolectric's shadow accepts every one of them, and a refusal is
+     * exactly what no JVM test can otherwise produce — while what the app does
+     * *about* a refusal is the part that must stay covered.
+     */
+    internal open fun enterForeground(
+        id: Int,
+        notification: android.app.Notification,
+        type: Int,
+    ) = startForeground(id, notification, type)
+
+    /** The other half of [enterForeground]'s seam, final for the same reason. */
+    internal open fun exitForeground() = stopForeground(STOP_FOREGROUND_REMOVE)
+
+    /**
+     * Gives the foreground service back, if it was taken.
+     *
+     * `STOP_FOREGROUND_REMOVE` because the only caller that matters is the
+     * card's own takedown: leaving the notification behind detached would put
+     * a `Snoozing` card in the shade for a snooze that has ended, which is the
+     * second principle's failure in its most literal form.
+     */
+    private fun releaseForeground() {
+        // Before the early return, and set rather than announced: this runs on
+        // the card's own takedown, so a repost is the last thing wanted — and
+        // the refused case is exactly the one that never held anything, which
+        // is where a stale flag would otherwise survive into the next snooze's
+        // first card.
+        foregroundRefused = false
+        if (!foregroundHeld) return
+        // Cleared only once the platform has actually taken it back (Codex,
+        // PR #230). Clearing it first read as tidier and was wrong in the one
+        // case that matters: a live transition to duration-only whose
+        // `stopForeground` throws leaves the process still foreground while
+        // this thinks it is not, and since the snooze is still running nothing
+        // stops the service either — so every later post takes the early
+        // return above and the location service is held until the snooze ends.
+        // Left set, the next post retries it.
+        runCatching { exitForeground() }.fold(
+            onSuccess = { foregroundHeld = false },
+            onFailure = {
+                Log.w(TAG, "Releasing the foreground service failed; it stays held.", it)
+            },
+        )
     }
 
     override fun onTrackingChanged(snooze: ActiveSnooze, degradation: DegradationCause?) {

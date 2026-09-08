@@ -399,6 +399,8 @@
     <!-- TODO: translate -->
     <string name="ongoing_degraded_reason" tools:ignore="MissingTranslation">%1$s — %2$s</string>
     <!-- TODO: translate -->
+    <string name="ongoing_watch_unprotected" tools:ignore="MissingTranslation">tracking may pause</string>
+    <!-- TODO: translate -->
     <string name="ongoing_cause_services_off" tools:ignore="MissingTranslation">location is off</string>
     <!-- TODO: translate -->
     <string name="ongoing_cause_no_fix" tools:ignore="MissingTranslation">no location</string>

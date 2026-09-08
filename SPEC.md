@@ -54,7 +54,7 @@ DND back off.
 | # | Decision | Rationale |
 |---|---|---|
 | D1 | Control DND via **`AutomaticZenRule`**, never `setInterruptionFilter` | Required for apps targeting Android 15+; also composes correctly with the user's other rules |
-| D2 | **Two flavors, chosen by distribution channel** — `play` uses the Geofencing API and `ACCESS_BACKGROUND_LOCATION`; `direct` uses a foreground service and no restricted permissions | Play's April 2026 policy removed geofencing as an approved foreground-service use case and directs it to the Geofence API, so the FGS route is not viable on Play (§3) |
+| D2 | **Two flavors, chosen by distribution channel** — `play` uses the Geofencing API and `ACCESS_BACKGROUND_LOCATION`, plus a `location` foreground service while something is watching; `direct` uses a foreground service and no restricted permissions | Play's April 2026 policy removed geofencing as an approved foreground-service use case and directs it to the Geofence API, so an FGS cannot be the *mechanism* on Play — and it is not: the fence still delivers the exit. **Amended 2026-09-08**: the fence delivering it is worth nothing with no process left to hear it (a field log: the watch closed 67 s after arming, the exit arrived to a refused service start, the snooze did not end), so `play` now holds an FGS for process survival, gated on the snooze actually watching (§3.4) |
 | D3 | The presence engine is **behind one interface with two implementations** | The flavors differ only below `PresenceMonitor` (§6.1); all product behavior, DND handling, and UI is shared |
 | D4 | **Wi-Fi is a suppressor, not a trigger** | Still on the anchor SSID ⇒ definitely still here (skip location entirely). Wi-Fi dropped ⇒ *maybe* left, so escalate to a location check. Never end a snooze on Wi-Fi loss alone |
 | D5 | **Implicit anchor**: the tile captures "here" at arm time | Zero setup. Saved places are a later addition, not a prerequisite |
@@ -158,8 +158,39 @@ above is the one to build — not a fresh one improvised under time pressure.
 
 **Two product flavors, differing only below `PresenceMonitor` (§6.1):**
 
-- **`play`** — option B. Geofencing API, `ACCESS_BACKGROUND_LOCATION`, **no foreground service**.
-  This is the shipping build for any Play track, internal included.
+- **`play`** — option B. Geofencing API, `ACCESS_BACKGROUND_LOCATION`, and — since 2026-09-08 — a
+  **`location` foreground service while something is watching**. This is the shipping build for any
+  Play track, internal included.
+
+  > **Reversed 2026-09-08** (maintainer, from a device log). This bullet read "**no foreground
+  > service**", and that was much of the point of option B: the foreground-service *type* is the
+  > actual Play-policy exposure (§3.5), and the April 2026 update named geofencing as a
+  > non-approved use of the location type. None of that reasoning was wrong and none of it is
+  > dropped — what changed is that the alternative stopped working. A field log showed the
+  > presence watch closing 67 s after arming, nothing looking for the next hour, and the geofence
+  > exit finally arriving to a background service start the platform **refused**. The fence did
+  > its job; there was no process left to hear it, and the snooze did not end. That is principle
+  > 1's failure, and the one the app exists to prevent.
+  >
+  > Option B keeps its shape — the fence is still the wake-up source, and this is still not a
+  > service polling a position — and gains the thing that lets the wake-up land. The type is
+  > `location`, chosen with the current policy text in view, including the docs' own *"if your app
+  > needs to be triggered when the user reaches specific locations, consider using the geofence
+  > API instead"*: Snoozemo does use the geofence API, and the service is what survives to receive
+  > what it delivers.
+  >
+  > **Gated on tracking, not on the flavor.** A snooze with something watching for a departure
+  > takes the service; a duration-only one takes none, because its only exit is the cap alarm and
+  > that is durable without a process. So the app never holds a *location* foreground service for
+  > a snooze doing no location work — the honest position, and the defensible one in review.
+  > §3.5's risk is unchanged in kind and larger in degree: the Console now owes a
+  > foreground-service declaration beside the background-location one.
+  >
+  > Three passages below still argue from "`play` runs no foreground service" and are marked where
+  > they stand: the 10-minute cadence (§6.7), the sensor restriction (§6.8), and the Wi-Fi watch's
+  > durable half (§6.10). Their conclusions are unchanged for a duration-only snooze and for any
+  > moment the service is refused, which is why they stay rather than being rewritten as if the
+  > process were now guaranteed.
 
   > **Amended 2026-08-12** (maintainer: no strong preference, decision delegated). This bullet
   > used to read "no ongoing notification", which was the wrong thing to write down. What option B
@@ -174,6 +205,20 @@ above is the one to build — not a fresh one improvised under time pressure.
   > countdown, the degraded-mode reason, or `End now` to live. That is not a trade worth making
   > to satisfy a phrase, so **both flavors post the ongoing notification**; only `direct` posts
   > one the system requires.
+  >
+  > **Amended again 2026-09-08** (maintainer). That last clause no longer holds: a *watched*
+  > `play` snooze now runs a foreground service too, so its card is the system-required one
+  > while the watch is live — `direct`'s distinction was never the notification itself, and now
+  > it is not the mandatory-ness either. Read the paragraph above as the argument it was: an
+  > ordinary ongoing notification needs no service, which is why one is posted for a
+  > duration-only snooze, for a refused promotion, and on `direct` before Phase 7.
+  >
+  > What option B still buys, narrowed but not gone: the Geofence API is what *detects* the
+  > departure, so nothing here watches a position continuously, and the service is held only
+  > while a snooze is actually watching rather than for the life of the app. Under option A the
+  > foreground service would be the detection mechanism itself. That is the difference the
+  > Console declaration turns on, and it is why the reasoning above is amended rather than
+  > deleted.
 - **`direct`** — option A. Foreground service, no restricted permissions, no Play Services
   dependency. For sideloaded APKs and F-Droid, and the better build on Samsung. **Insurance, not a
   parallel product**: it exists so a refused declaration is a distribution setback rather than a dead
@@ -2730,7 +2775,8 @@ A phone sitting on a desk for four hours therefore does essentially no location 
 **The resting cadence is per flavor, and on `play` it is the §6.10 backstop's** (maintainer,
 2026-08-30). This section was written for the foreground-service design, where the process stays
 alive and an in-process 10-minute timer is exactly right — which is `direct`'s shape from Phase 7,
-and there the 10 minutes stands. `play` runs no foreground service (§3.4): the process is reclaimed
+and there the 10 minutes stands. `play` ran no foreground service (§3.4, reversed 2026-09-08 — and still true of a
+duration-only snooze, or one whose service the platform refused): the process is reclaimed
 within about a minute of each wake, so an in-process timer would almost never fire, and the only
 mechanism that would actually deliver a 10-minute cadence is a repeating alarm — roughly **6 wakes
 an hour against the backstop's 2**, each one a service start and a location request, for a snooze
@@ -2751,17 +2797,27 @@ unchanged and remains the only hard bound (D7).
 **On `play`, plan as though the trigger never fires in the background** (2026-09-06, PR #212).
 Android 9 gives a background app no events from continuous *or* one-shot sensors and names a
 foreground service as the remedy; `minSdk` 35 puts every supported device inside that restriction,
-and `play` runs no foreground service (§3.4). An earlier reading granted `play` a live window of
+and `play` ran no foreground service (§3.4, reversed 2026-09-08 — a watched snooze now holds one,
+so this restriction bites on the duration-only case and on a refusal). An earlier reading granted
+`play` a live window of
 roughly the minute after each wake, on the grounds that `requestTriggerSensor` stays registered
 while the process is alive — but that argued from process lifetime rather than importance. A
 geofence broadcast does reach foreground importance, only while its receiver runs; the trigger
-fires later, when the user moves, and by then just the started service is left. **A handset cannot
-settle it either**: a device that delivered the event would be showing undocumented leniency, not a
-guarantee, so a positive result would license nothing. So every `play` device rests on the
-backstop's ~30 minutes — the same position the paragraph above describes for a device with no
-sensor at all, now reached for a different reason and reaching every device. `direct` is
-unaffected: Phase 7's foreground service lifts the restriction, and the trigger works as this
-section intends wherever the hardware exists. §6.10's three wake-up sources are untouched on both
+fires later, when the user moves, and by then just the started service was left. **A handset could
+not settle it either**: a device that delivered the event would be showing undocumented leniency,
+not a guarantee, so a positive result licensed nothing.
+
+**That conclusion now splits, and the split is the foreground service** (2026-09-08, Codex,
+PR #230). The restriction's own documented remedy is a foreground service, and a *watched* `play`
+snooze holds one — so while it does, the app is not a background app and the trigger is expected to
+fire as this section intends. Escalation for those snoozes is motion latency, not the backstop's
+~30 minutes. It also becomes device-verifiable, which it was not before: a positive result is now
+the documented behavior rather than leniency, so a handset check means something. What keeps the
+old conclusion is everything outside that: a `DURATION_ONLY` snooze asks for no service and has no
+escalation to be late, and a snooze whose `startForeground` was **refused** is exactly the old
+position — background, no sensor events, resting on the backstop — which is why the refusal is
+said on the card (§4.6) rather than only in the log. `direct` is unaffected either way: Phase 7's
+foreground service lifts the restriction, and the trigger works wherever the hardware exists. §6.10's three wake-up sources are untouched on both
 flavors — what is at stake here is escalation latency, never whether a departure is detected.
 
 ### 6.8 Foreground service
@@ -2906,7 +2962,8 @@ and they fail independently:
    a *watched* mode at last: an SSID-only anchor gets a real watch, and a fenced anchor that
    loses location degrades to Wi-Fi rather than to the bare timer.
    **The watch is in-process, and that needed a durable half** (landed 2026-08-24, from a field
-   report). A `NetworkCallback` lives in a process; this flavor runs no foreground service (§3.4),
+   report). A `NetworkCallback` lives in a process; this flavor ran no foreground service (§3.4,
+   reversed 2026-09-08 — this paragraph is a large part of what reversed it),
    and Android stops the snooze's ordinary service within about a minute of the app going to the
    background — so the watch closes with it. A fenced anchor loses nothing, because the fence is
    registered with the system and outlives the process. An anchor with **no usable fix has no

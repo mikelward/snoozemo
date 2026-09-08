@@ -442,6 +442,39 @@ class SnoozeNotificationsCalendarTest {
     }
 
     @Test
+    fun `the follow-up post keeps the foreground refusal the first one carried`() {
+        // Codex, PR #230. The follow-up rebuilds the card from the settled
+        // calendar answer, and a state it forgets to forward is silently
+        // dropped from the card that replaces the standing one. The refusal
+        // clause is the case where that bites hardest: a refusal that stays
+        // refused flips nothing, so nothing queues a corrective repost and the
+        // warning would stay gone until some other state change.
+        val store = ActiveSnoozeStore(appContext)
+        val record = snoozeFixture(now)
+        store.arm(record)
+        val notifications = SnoozeNotifications(appContext)
+        notifications.ongoingForegroundHost = object : SnoozeNotifications.OngoingForegroundHost {
+            override fun promote(notification: android.app.Notification) = false
+            override fun demote() = Unit
+            override fun watchIsUnprotected() = true
+        }
+        // The first post queues the calendar read; the seam then runs it in the
+        // gap of the *second*, so the answer settles between that post's read
+        // and its post and the follow-up fires — the same shape as the stale-offer
+        // test above.
+        notifications.showOngoing(record)
+        atEachPost(listOf({ held.single().run() }))
+
+        notifications.showOngoing(record)
+
+        assertTrue(
+            "the follow-up must not quietly drop it",
+            currentOngoing().extras.getCharSequence("android.text").toString()
+                .contains(stringOf(R.string.ongoing_watch_unprotected)),
+        )
+    }
+
+    @Test
     fun `the follow-up post loses to a takedown that beat it`() {
         // The follow-up carries a guard of its own — the generation its own
         // first post wrote — and this is what that guard is for: the phone has

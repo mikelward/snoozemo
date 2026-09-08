@@ -171,6 +171,26 @@ internal class TestSnoozeService : SnoozeService() {
 
     override fun createPresenceMonitor(): PresenceMonitor = presence
 
+    /**
+     * Robolectric's shadow accepts every `startForeground`, so a test that
+     * needs the platform's refusal has to inject it here — the one thing the
+     * production path cannot be driven to do off a device.
+     */
+    override fun enterForeground(id: Int, notification: android.app.Notification, type: Int) {
+        if (refuseForeground) {
+            throw android.app.ForegroundServiceStartNotAllowedException("refused by the test")
+        }
+        super.enterForeground(id, notification, type)
+    }
+
+    override fun exitForeground() {
+        foregroundExits++
+        if (refuseForegroundExit) {
+            throw IllegalStateException("giving it back refused by the test")
+        }
+        super.exitForeground()
+    }
+
     override fun pokeWatchRepair() {
         repairPokes++
     }
@@ -219,7 +239,27 @@ internal class TestSnoozeService : SnoozeService() {
             uptimeMillis = FIXTURE_UPTIME_MILLIS,
         )
 
+        /**
+         * Makes `startForeground` throw, standing in for every way the
+         * platform declines one — a background start it refuses, location
+         * services off, the runtime grant withdrawn. Robolectric's shadow
+         * accepts them all, so the refusal has to be injected here.
+         */
+        var refuseForeground: Boolean = false
+
+        /**
+         * Refuses the *give-back*, which no shadow throws either — and which
+         * is where clearing the held flag too early stranded the service.
+         */
+        var refuseForegroundExit: Boolean = false
+
+        /** How many times the service tried to give the foreground back. */
+        var foregroundExits: Int = 0
+
         fun reset(now: Instant) {
+            refuseForeground = false
+            refuseForegroundExit = false
+            foregroundExits = 0
             zen = RefusingZen()
             captureRequests = mutableListOf()
             captureClosed = 0
@@ -279,6 +319,14 @@ internal fun postedOneShot(): String? =
         ?.let { shadowOf(it).contentTitle?.toString() }
 
 /** Whether any notification carrying [title] is in the shade. */
+/** The ongoing card's body text, or an empty string if there is none. */
+internal fun shadeText(): String =
+    shadowOf(appContext.getSystemService(NotificationManager::class.java))
+        .allNotifications
+        .lastOrNull { shadowOf(it).contentTitle?.toString() == appContext.getString(app.snoozemo.R.string.ongoing_title) }
+        ?.let { shadowOf(it).contentText?.toString() }
+        .orEmpty()
+
 internal fun shadeShows(title: String): Boolean =
     shadowOf(appContext.getSystemService(NotificationManager::class.java))
         .allNotifications

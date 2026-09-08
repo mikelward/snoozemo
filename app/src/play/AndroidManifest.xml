@@ -35,6 +35,46 @@
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
     <!--
+      The snooze service runs in the foreground while something is actually
+      watching for a departure (SPEC.md §6.10). Not for the sake of the
+      notification — the ongoing card is posted either way — but for the
+      process: an ordinary started service is destroyed routinely, and a device
+      log showed the presence watch closing 67 s after arming with nothing
+      looking for the next hour, then the geofence exit arriving to a *refused*
+      background service start. A foreground service is what keeps the
+      collection alive to receive what the fence already delivers.
+
+      The `location` type, chosen by the maintainer (2026-09-08) with the
+      policy text in front of them: Android's own page for this type carries an
+      "Alternatives" line reading "if your app needs to be triggered when the
+      user reaches specific locations, consider using the geofence API
+      instead", which is SPEC.md §3's April 2026 concern still live in Google's
+      current wording. Snoozemo does both — the fence delivers the exit, the
+      service is what survives to hear it — and this is the type that describes
+      what the process is doing while it waits.
+
+      `play`-only, like the background grant above and for the same reason:
+      `direct` runs duration-only snoozes until Phase 7, so it starts no watch,
+      needs no service to outlive one, and keeps holding nothing it does not
+      use. The gate in the service is the tracking mode rather than the flavor,
+      so `direct` reaches it only when Phase 7 gives it something to watch.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+
+    <!--
+      Repeated from the main manifest, where the location family is declared for
+      both flavors and where it stays. It is a no-op at merge — the same
+      permission twice is one permission — and it is here so the check that ties
+      a `location` service to its prerequisites can see them together:
+      `ForegroundServicePermission` reads the manifest the `<service>` is
+      declared in rather than the merged one, so with the type here and the
+      grant only over there it reports the type as unbacked. Better a stated
+      duplicate than a suppressed check.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!--
       Crash reporting and Firebase Analytics use this, and nothing else
       (SPEC.md §12). Both sit behind one consent the user has to give first,
       so the permission is held by a build that sends nothing until asked.
@@ -60,6 +100,16 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application>
+        <!--
+          The type is declared here rather than beside the service in the main
+          manifest, so `direct` ships a plain started service: a manifest type
+          it can never use would be a claim the build does not make.
+        -->
+        <service
+            android:name="app.snoozemo.snooze.SnoozeService"
+            android:foregroundServiceType="location"
+            tools:node="merge" />
+
         <!--
           Off until the app says otherwise. Crashlytics would otherwise start
           collecting during process creation — before Snoozemo has read the
