@@ -66,6 +66,41 @@ class ActiveSnoozeTest {
     }
 
     @Test
+    fun `a snooze's age is measured on the elapsed clock, not the wall one`() {
+        // The number this feeds is a diagnostic whose whole signal is being
+        // small — a snooze ending seconds after it was armed (SPEC.md §4.6).
+        // So the wall clock moving must not move it: `startedAt` is the
+        // unrestated identity, and subtracting it from a jumped wall reading
+        // mixes frames and can read hours out, or negative.
+        val armed = snooze()
+        assertEquals(90L, armed.armedForSeconds(at(start.plus(Duration.ofSeconds(90)))))
+
+        // Ninety seconds in by the elapsed clock, but the wall clock has been
+        // wound forward a day. The age is unmoved; `startedAt` arithmetic
+        // would have said a day.
+        val jumped = ClockReading(
+            wallMillis = start.plus(Duration.ofDays(1)).toEpochMilli(),
+            uptimeMillis = uptimeAtStart + Duration.ofSeconds(90).toMillis(),
+        )
+        assertEquals(90L, armed.armedForSeconds(jumped))
+
+        // And backward, where the mixed answer goes negative — the reading
+        // that would make a freshly-armed snooze look ancient, or absurd.
+        val woundBack = ClockReading(
+            wallMillis = start.minus(Duration.ofHours(3)).toEpochMilli(),
+            uptimeMillis = uptimeAtStart + Duration.ofSeconds(90).toMillis(),
+        )
+        assertEquals(90L, armed.armedForSeconds(woundBack))
+    }
+
+    @Test
+    fun `a record with no frame cannot date itself`() {
+        // Deliberately null rather than zero: "just armed" is the answer this
+        // diagnostic is looking for, so guessing it would invent the evidence.
+        assertNull(snooze().copy(bootReference = null).armedForSeconds(at(start)))
+    }
+
+    @Test
     fun `a record with no frame has no arm moment to seed from`() {
         assertNull(snooze().copy(bootReference = null).armedAtElapsedRealtimeMs())
     }

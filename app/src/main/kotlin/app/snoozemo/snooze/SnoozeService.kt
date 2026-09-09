@@ -46,6 +46,7 @@ import app.snoozemo.core.ZenTrigger
 import app.snoozemo.core.endReason
 import app.snoozemo.core.endingFor
 import app.snoozemo.core.logSummary
+import app.snoozemo.core.ruleSubject
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.presence.AnchorCaptureRunner
 import app.snoozemo.presence.defaultPresenceMonitor
@@ -620,21 +621,76 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // a moment that has already passed and the rule outlives the snoozes it
         // enforces (Codex, PR #36). Only consulted when something is running,
         // so an idle status change still costs no IPC.
-        val stillActive =
+        // Kept as the activation rather than collapsed straight to a Boolean,
+        // so the log below can say *which* not-active answer came back. Null
+        // covers both "nothing running, so nothing was asked" and "the read
+        // threw", and the line distinguishes them.
+        val activation =
             if (controller.active == null) {
                 null
             } else {
-                runCatching { zen.ruleActivation(enforcing) == ZenRuleActivation.ACTIVE }.getOrElse {
+                runCatching { zen.ruleActivation(enforcing) }.getOrElse {
                     Log.w(TAG, "Re-reading the rule state failed; acting on the broadcast alone.", it)
                     null
                 }
             }
+        val stillActive = activation?.let { it == ZenRuleActivation.ACTIVE }
+        val resolved = status.toZenRuleStatus()
         val action = ZenRuleStatusChange.resolve(
-            status = status.toZenRuleStatus(),
+            status = resolved,
             ours = ours,
             snoozing = controller.active != null,
             stillActive = stillActive,
         )
+        // **Every rule-status decision is recorded, including the ones that do
+        // nothing**, because the interesting case is a snooze ending on a
+        // broadcast the user did not cause and the log had nothing to say about
+        // it (maintainer, device capture 2026-09-09: a snooze ended
+        // `DND_TURNED_OFF` 1.5s after arming, 2.5s after the previous snooze's
+        // release deactivated the same rule).
+        //
+        // The read-back is the veto that is supposed to catch exactly that, so
+        // what it returned is the field this line exists for. `armedFor` is the
+        // second: a stale broadcast overtaking a fresh arm shows up as an
+        // ending on a snooze seconds old, and nothing else in the log dates the
+        // running snooze against the moment a broadcast arrived.
+        //
+        // **On the elapsed clock, like every other age this app measures**
+        // (Codex, PR #238). `startedAt` is the snooze's unrestated wall-time
+        // identity while `wallMillis` jumps with the user or the network, so
+        // subtracting one from the other mixes frames and can read hours wrong,
+        // or negative — turning the one field that says "seconds old" into the
+        // one that hides it. `armedAtElapsedRealtimeMs` speaks the same
+        // monotonic frame the cap does (§7), which is why it already seeds the
+        // presence monitor.
+        //
+        // A record with no boot frame says `unknown` rather than falling back
+        // to now: that fallback errs toward dropping a stale fix where
+        // `presenceSeedFor` uses it, but here it would read as `0s` and invent
+        // evidence for exactly the race this line was added to test.
+        //
+        // Coarse state and reasons only, which is what the debug log is for
+        // (`AGENTS.md`, *Privacy*): no rule id — knowing whether it was ours is
+        // the diagnostic, the identifier is not — and a duration rather than a
+        // wall-clock time.
+        val snooze = controller.active
+        val armedFor = snooze?.armedForSeconds(readClock())?.let { "${it}s" } ?: "unknown"
+        //
+        // **Only while a snooze is running**, which is the same gate the
+        // read-back above already applies and for a related reason (Codex, PR
+        // #238). The broadcast is not filtered to our own rule — `ownsRule` is
+        // what decides that, after the fact — so an idle line would be a
+        // timestamped record of some *other* rule going on or off, which
+        // explains no ending because there is no snooze to end. A user
+        // schedule turning on at bedtime is not this log's business.
+        if (snooze != null) {
+            SnoozeDebugLog.event(
+                "rule status: $resolved rule=${ruleSubject(ruleId, ours)} " +
+                    "read-back=${activation?.name ?: "unreadable"} " +
+                    "armedFor=$armedFor " +
+                    "→ $action",
+            )
+        }
         when (action) {
             is ZenRuleStatusAction.EndSnooze -> {
                 controller.end(action.reason)
@@ -3119,6 +3175,28 @@ open class SnoozeService : Service(), SnoozeController.Listener {
          * never redraws at all (Codex, PR #155).
          */
         const val EXTRA_CHOICE_FOR_SNOOZE = "app.snoozemo.extra.CHOICE_FOR_SNOOZE"
+
+        /**
+         * Which surface a tap came from, for the debug log and nothing else.
+         *
+         * `RELEASED (MANUAL)` says a person ended the snooze and says nothing
+         * about where they touched, and the two surfaces that produce it — the
+         * app screen's `End now` and the tile, which sends `ACTION_END`
+         * whenever it believes a snooze is running — are the exact pair a user
+         * cannot tell apart from a log afterwards. A device capture where
+         * someone reported ending a snooze they had not knowingly ended cost a
+         * round of guessing for want of this one field (maintainer, 2026-09-09).
+         *
+         * Absent means the tile: it builds its intent in `:tile`, which has no
+         * dependency on this class, and adding one to name a log field is a
+         * worse trade than reading the absence. Read for logging only — nothing
+         * branches on it, so a missing or unexpected value costs a vaguer line
+         * and never a different outcome.
+         */
+        const val EXTRA_REQUESTED_FROM = "app.snoozemo.extra.REQUESTED_FROM"
+
+        /** [EXTRA_REQUESTED_FROM] for the ongoing notification's own actions. */
+        const val REQUESTED_FROM_NOTIFICATION = "notification"
 
         /**
          * Why an [ACTION_RELEASE_STUCK] start is ending a snooze, as an

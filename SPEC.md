@@ -1458,6 +1458,27 @@ happened:
   is visible after the fact.
 - The cap: that it was armed, that it fired, and whether the alarm or the in-service timer got there
   first.
+- **Which control a tap came from** — the tile, an action on the ongoing notification, a button
+  in the app, or a refinement row or sheet choosing an end — and whether the service accepted the
+  start. `MANUAL` names a person and not a place,
+  and the two controls that produce it are the app's `End now` and the tile, which ends a snooze
+  whenever it believes one is running. Those are exactly the pair a user cannot tell apart
+  afterwards, so a tap that toggled a state they thought was something else reads identically to one
+  they meant. Only the surfaces that carry a tap say so: an ending with no such line is the app's
+  own, which is why the automatic ones name themselves too.
+- **How a `DND_TURNED_OFF` ending was decided**, and only while a snooze is running: the
+  broadcast is not filtered to our own rule, so an idle line would timestamp some other rule's
+  transition while explaining no ending — a user's bedtime schedule is not this log's business.
+  What the platform reported, whether the rule was ours — **or that the broadcast named no
+  rule at all**, which is a third answer and not the same as somebody else's — what
+  reading the rule back said — distinguishing "not asked" from "unreadable" — how long the snooze
+  had been running, and what Snoozemo did about it, including the times it did nothing. That
+  read-back is the veto against acting on news that has already been overtaken (§5.8), and the case
+  it exists for is a snooze ending seconds after being armed on the *previous* snooze's
+  deactivation. Whether the veto held is the whole question there, and it was unrecorded. The
+  decisions that change nothing are kept because a snooze surviving a broadcast is as informative
+  as one that does not. Never the rule's identifier: whether it was ours is the diagnostic, which
+  one it was is not.
 - Permission and capability state at each decision — notification-policy access, location permission
   and its precision, whether location services are on system-wide, battery-saver state. A denied
   permission is often the whole answer to "why didn't it end".

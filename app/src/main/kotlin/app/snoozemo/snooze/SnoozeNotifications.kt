@@ -1318,6 +1318,13 @@ class SnoozeNotifications(private val context: Context) {
             requestCode,
             Intent(context, TileTrampolineActivity::class.java)
                 .setAction(action)
+                // Names this surface in the debug log, so an `End now` from the
+                // shade is distinguishable from the tile's own — the two are
+                // otherwise the same action arriving at the same activity.
+                .putExtra(
+                    SnoozeService.EXTRA_REQUESTED_FROM,
+                    SnoozeService.REQUESTED_FROM_NOTIFICATION,
+                )
                 // Started from a notification, so there is no task to land in.
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
@@ -1348,6 +1355,10 @@ class SnoozeNotifications(private val context: Context) {
             REQUEST_END_AT,
             Intent(context, TileTrampolineActivity::class.java)
                 .setAction(SnoozeService.ACTION_SET_CAP)
+                .putExtra(
+                    SnoozeService.EXTRA_REQUESTED_FROM,
+                    SnoozeService.REQUESTED_FROM_NOTIFICATION,
+                )
                 .putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, endsAt.toEpochMilli())
                 .putExtra(SnoozeService.EXTRA_CHOICE_FOR_SNOOZE, snooze.startedAt.toEpochMilli())
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),

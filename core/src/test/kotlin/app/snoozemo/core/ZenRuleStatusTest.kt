@@ -178,4 +178,21 @@ class ZenRuleStatusTest {
             ),
         )
     }
+
+    @Test
+    fun `a broadcast that named no rule is not reported as somebody else's`() {
+        // `ownsRule` answers false to both "another app's rule" and "this
+        // broadcast carried no id we could read", and the log has to keep them
+        // apart: reporting the second as the first is evidence pointing the
+        // wrong way, which is worse than no field at all (Codex, PR #238).
+        assertEquals("ours", ruleSubject("rule-1", ours = true))
+        assertEquals("another", ruleSubject("rule-2", ours = false))
+        assertEquals("unnamed", ruleSubject(null, ours = false))
+        // Empty counts as absent, since that is what a missing string extra
+        // can also look like.
+        assertEquals("unnamed", ruleSubject("", ours = false))
+        // And it stays `unnamed` whatever ownership claims, because with no id
+        // to compare there was nothing for that claim to be about.
+        assertEquals("unnamed", ruleSubject(null, ours = true))
+    }
 }

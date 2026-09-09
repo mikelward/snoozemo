@@ -287,6 +287,7 @@ class MainActivity : ComponentActivity() {
      */
     @androidx.annotation.VisibleForTesting
     internal val sheet = EndChoiceController(
+        surface = "the sheet in the app",
         // The warm copy, which may be stale or null — the controller checks
         // its identity against the offer's before trusting it.
         currentRecord = { activeSnooze },
@@ -337,6 +338,7 @@ class MainActivity : ComponentActivity() {
      */
     @androidx.annotation.VisibleForTesting
     internal val rows = EndChoiceController(
+        surface = "the app screen",
         currentRecord = { activeSnooze },
         chooseEnd = { endsAt, requestId, forSnooze ->
             SnoozeService.chooseEnd(this, endsAt, requestId, forSnooze)
@@ -3024,6 +3026,12 @@ class MainActivity : ComponentActivity() {
             // `access` is set above from a reading that did happen, so the
             // screen already shows that Do Not Disturb access is gone.
             PolicyAccessAction.EndSnooze -> {
+                // Nobody tapped anything: this is the screen noticing that Do
+                // Not Disturb access is gone. Said in its own words so a trace
+                // cannot read it as the user having ended the snooze.
+                SnoozeDebugLog.event(
+                    "Do Not Disturb access is gone; ending the snooze without being asked",
+                )
                 if (!endThroughServiceOrDirectly(EndReason.LOST_CAPABILITY)) {
                     lastOutcome = getString(R.string.failure_could_not_end)
                 }
@@ -3144,7 +3152,30 @@ class MainActivity : ComponentActivity() {
      * has spent the user's exit on a snooze that is still going.
      */
     private fun armFromScreen() {
-        if (SnoozeService.arm(this)) {
+        // Arms are logged for the same reason ends are: a capture of someone
+        // toggling quickly needs every tap in it, and an arm the user read as a
+        // second tap on something else is exactly the entry that would be
+        // missing (Codex, PR #238).
+        //
+        // **After the start, carrying its result** — the trampoline's shape,
+        // and here for a second reason (Codex, PR #238): a refused arm leaves
+        // *nothing else* in this log. No service ran, so no transition was
+        // recorded, and the refusal itself only reaches logcat, which is not
+        // what the user hands over. A bare tap line then reads as an arm whose
+        // record went missing rather than one that never happened — the same
+        // silent wrong answer §4.6 added these lines to end. The end path needs
+        // no equivalent: its fallback writes `no-service release`, which names
+        // the refusal and its outcome both.
+        //
+        // Synchronous like every other `SnoozeDebugLog` call, and for the
+        // reason the trampoline's twin records: the file write is coalesced on
+        // the sink's own executor, so this pays a string build and an in-memory
+        // append and nothing else.
+        val started = SnoozeService.arm(this)
+        SnoozeDebugLog.event(
+            "tap: arm from the app screen" + if (started) "" else " (the service refused to start)",
+        )
+        if (started) {
             offerSheetForThisArm()
             return
         }
@@ -3233,6 +3264,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun endFromScreen() {
+        // **On the handler, not on the helper underneath it.** That helper is
+        // also how revoked Do Not Disturb access ends a snooze, which nobody
+        // tapped — logging there recorded an automatic reconciliation as a user
+        // action, which is precisely the confusion this line exists to remove
+        // (Codex, PR #238). The trampoline's own tap line is the other half:
+        // between them every `MANUAL` ending in the log names the surface that
+        // asked for it, and an ending with neither line is the app's own.
+        SnoozeDebugLog.event("tap: end from the app screen")
         if (!endThroughServiceOrDirectly(EndReason.MANUAL)) {
             lastOutcome = getString(R.string.failure_could_not_end)
         }
