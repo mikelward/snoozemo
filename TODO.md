@@ -649,14 +649,18 @@ the point is that every other line of the app is worthless if it isn't true.
           broadcast does — same proof, no fix, no D4 exception — and keep waiting for a fix when
           the origin was `GeofenceObservation.Unavailable`, where "location is on" says nothing
           about whether geofencing is.
-        - **A Wi-Fi-only anchor can strand the registration level permanently.** Pre-existing,
-          not introduced here: `deliver`'s recovery branch sets
-          `registrationDegradation = LOCATION_SERVICES_OFF` and calls `repairOnRecovery()` on
+        - **A Wi-Fi-only anchor could strand the registration level permanently.** Pre-existing,
+          not introduced there; **fixed 2026-09-09**. `deliver`'s recovery branch set
+          `registrationDegradation = LOCATION_SERVICES_OFF` and called `repairOnRecovery()` on
           the fix that clears services-off, but `registerFence` early-returns for an anchor with
-          no usable fix, so nothing ever clears what it just set and the snooze reports degraded
-          until a restore rebuilds the monitor. One-line guard (`if (anchor.hasUsableFix)`
-          around the mark-suspect), left out of this PR to keep it minimal — an anchor with no
-          fence has no registration to be suspicious of. Also still to come is
+          no usable fix, so nothing ever cleared what it had just set and the snooze reported
+          degraded until a restore rebuilt the monitor — principle 2's failure, since the card
+          named a subsystem that anchor never used. The mark-suspect is now gated on
+          `marksFenceSuspect(anchor)`; clearing services-off is unchanged, being about the
+          platform rather than this anchor. Named as a pure predicate rather than written inline
+          because the branch lives in a `callbackFlow` closure no test can reach, and pinned in
+          both directions plus against `grantPokeSteps`, which already asked the same question
+          the same way. Also still to come is
         the on-device verification the whole item is gated on. The grace alarm for
         `graceDeadlineMs` landed with the Wi-Fi suppressor slice.
       - [x] **The grace deadline has to survive process death** (Codex, PR #31, re-flagged and

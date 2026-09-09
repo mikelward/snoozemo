@@ -180,6 +180,56 @@ class GeofencePresenceMonitorTest {
     }
 
     @Test
+    fun `only an anchor with a fence has a registration to mark suspect`() {
+        // The bug this pins: a services outage ending used to latch
+        // `LOCATION_SERVICES_OFF` against the registration for *every* anchor,
+        // then call the repair to clear it. For a Wi-Fi-only anchor the repair
+        // is a no-op — `registerFence` declines without a usable fix — so the
+        // latch stayed set and the snooze reported degraded tracking, over a
+        // subsystem it never used, until a restore rebuilt the monitor.
+        //
+        // Both directions, because the failure is only visible as a *missing*
+        // clear: an over-narrow guard that skipped the mark for a fenced anchor
+        // would leave a genuinely dropped fence unrepaired, which is the same
+        // silence pointing the other way.
+        assertTrue(
+            "a fenced anchor's registration may not have survived the outage",
+            GeofencePresenceMonitor.marksFenceSuspect(
+                Anchor(capturedAt = Instant.EPOCH, lat = 0.0, lon = 0.0, fixAccuracyM = 20f),
+            ),
+        )
+        assertFalse(
+            "a Wi-Fi-only anchor registered no fence, so there is nothing to doubt",
+            GeofencePresenceMonitor.marksFenceSuspect(
+                Anchor(capturedAt = Instant.EPOCH, ssid = "ExampleWifi"),
+            ),
+        )
+        assertFalse(
+            "and a duration-only anchor least of all",
+            GeofencePresenceMonitor.marksFenceSuspect(Anchor(capturedAt = Instant.EPOCH)),
+        )
+        // It agrees with the repair step's own gate rather than restating the
+        // rule: two answers to "is there a fence here" that could drift apart
+        // is how one of them gets fixed alone.
+        val wifiOnly = Anchor(capturedAt = Instant.EPOCH, ssid = "ExampleWifi")
+        assertFalse(
+            "the poke list already declines to repair a fence this anchor has not got",
+            GeofencePresenceMonitor.grantPokeSteps(
+                wifiOnly,
+                latched = DegradationCause.LOCATION_SERVICES_OFF,
+            ).contains(GrantPokeStep.RepairFence),
+        )
+        assertEquals(
+            "so the two answer the same question the same way",
+            GeofencePresenceMonitor.marksFenceSuspect(wifiOnly),
+            GeofencePresenceMonitor.grantPokeSteps(
+                wifiOnly,
+                latched = DegradationCause.LOCATION_SERVICES_OFF,
+            ).contains(GrantPokeStep.RepairFence),
+        )
+    }
+
+    @Test
     fun `a duration-only anchor watches no grant`() {
         // Nothing about it reads location, so there is no signal a revoked
         // grant could corrupt — and no recheck alarm armed to ever re-ask,
