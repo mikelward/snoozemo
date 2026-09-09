@@ -209,6 +209,29 @@ internal class TestSnoozeService : SnoozeService() {
         super.exitForeground()
     }
 
+    /**
+     * Refuses the rule-status receiver's registration, which Robolectric
+     * otherwise always accepts.
+     *
+     * Injected here rather than behind a new production seam so the *real*
+     * `runCatching` in `onCreate` is what fails and the *real*
+     * `ruleStatusReceiverRegistered` is what records it. That flag is half the
+     * condition guarding the restore read, and a fake of it would let the
+     * guard pass a test while the service it stands for was never blind.
+     */
+    override fun registerReceiver(
+        receiver: android.content.BroadcastReceiver?,
+        filter: android.content.IntentFilter?,
+        flags: Int,
+    ): Intent? {
+        if (refuseRuleStatusReceiver &&
+            filter?.hasAction(NotificationManager.ACTION_AUTOMATIC_ZEN_RULE_STATUS_CHANGED) == true
+        ) {
+            throw SecurityException("rule-status registration refused by the test")
+        }
+        return super.registerReceiver(receiver, filter, flags)
+    }
+
     override fun pokeWatchRepair() {
         repairPokes++
     }
@@ -223,6 +246,9 @@ internal class TestSnoozeService : SnoozeService() {
 
         /** Grant-recheck pokes the service sent through the flavor seam. */
         var grantPokes: Int = 0
+
+        /** Makes the rule-status receiver's registration throw. */
+        var refuseRuleStatusReceiver: Boolean = false
 
         /** Arbitrary but plausible: the fixture device booted 30 h ago. */
         const val FIXTURE_UPTIME_MILLIS: Long = 30L * 60 * 60 * 1000
@@ -277,6 +303,7 @@ internal class TestSnoozeService : SnoozeService() {
         fun reset(now: Instant) {
             refuseForeground = false
             refuseForegroundExit = false
+            refuseRuleStatusReceiver = false
             foregroundExits = 0
             zen = RefusingZen()
             captureRequests = mutableListOf()

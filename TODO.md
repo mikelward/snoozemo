@@ -6967,9 +6967,9 @@ what sets it off.
   Disable Snoozemo's rule in Settings under a running snooze and confirm the snooze ends
   rather than lingering. Tracked under *Hardware verification*.
 
-## Choosing an end time can end the snooze (found in PR #238, still open)
+## Choosing an end time can end the snooze — fixed (PR #243)
 
-- [ ] **`ACTION_SET_CAP` is treated as a restore, so refining a live snooze reads the rule back
+- [x] **`ACTION_SET_CAP` was treated as a restore, so refining a live snooze reads the rule back
   and can end it as `DND_TURNED_OFF`.** `onStartCommand` reads `ruleActivation` on every start
   that is not an arm or an explicit ending; `SET_CAP` falls to that `else` branch. So choosing
   an end time on a snooze that is *running*, in a live process, with its state already in
@@ -6979,27 +6979,44 @@ what sets it off.
   but it ended the snooze now") in a way the broadcast path never could, since that path was
   dead until PR #242.
 
-  **Demonstrated, not inferred: `RestoreReadDiagnosticTest`.** A running snooze (armed *and*
+  **Demonstrated before it was fixed: `RestoreReadDiagnosticTest`.** A running snooze (armed *and*
   past `ARMING`) plus a `SET_CAP` start plus an `INACTIVE` reading produces
   `restore read: start=SET_CAP rule=INACTIVE record=ARMED verdict=DND_TURNED_OFF`. The record's
   lifecycle is load-bearing and was nearly missed: `endingFor` refuses to classify an `ARMING`
   record at all, so a fixture left in that state reports "nothing to do" for every activation
-  and would have passed while proving nothing. Those expectations are what the fix must change,
-  loudly.
+  and would have passed while proving nothing. That case is now the *cold wake-up* case, where
+  the read is still right; the held-snooze case is what the fix changed.
+
+  A second thing the test had to get right: the fake follows the platform in remembering that
+  a restore drove the rule on, so an `INACTIVE` set before the restore is overwritten by it.
+  The reading has to be armed *after* the snooze is held, or the test passes because the
+  reading was benign rather than because the read was skipped.
 
   **Not any of the three rapid-toggle mechanisms** (fix the veto / inert buttons / an operation
   queue). Those address two user operations racing; this is one user operation triggering a
   state read that should not apply to it.
 
-  **And not simply adding `SET_CAP` to the not-restoring list.** `restoring` also decides
-  `restoreIfNeeded()` versus `adoptIfNeeded()`, and a `SET_CAP` after process death does need
-  the restore — skipping the read there would let a stale record re-assert the rule over a
-  phone the user deliberately un-silenced, which is the failure the surrounding comment already
-  warns about. The condition that separates them is `controller.active != null`: the controller
-  is built in `onCreate` and the service only stops itself when no snooze is running, so a live
-  controller means *this process never stopped watching* — there is nothing to reconcile, and
-  the rule-status broadcast covers that case instead now that PR #242 has made it live. That
-  ordering is why #242 went first.
+  **Not simply adding `SET_CAP` to the not-restoring list**, which is why the fix reads the
+  way it does. `restoring` also decides `restoreIfNeeded()` versus `adoptIfNeeded()`, and a
+  `SET_CAP` after process death does need the restore — skipping the read there would let a
+  stale record re-assert the rule over a phone the user deliberately un-silenced. So the
+  condition is about the *snooze*, not the action: `controller.active != null &&
+  ruleStatusReceiverRegistered`, which is the exact negation of the two gaps the read is
+  justified by (registration can be refused; the process only lives between wake-ups). The
+  receiver half is not decoration — a process whose registration was refused is awake and
+  blind, and the read is then the only thing that can notice. `RestoreReadDiagnosticTest`
+  covers all three: a held snooze skips, a cold wake-up still reads, and a held snooze whose
+  registration was refused reads anyway.
+
+  **Why #242 went first.** The claim "the broadcast would have told us" was false while the
+  receiver read the wrong extra, so narrowing the read before that landed would have opened a
+  hole rather than closed one.
+
+  **Still owed: the device capture.** What the fix closes is a path proven reachable by test,
+  not one proven to have fired on the handset. The report it matches ("I snooze now, then tap
+  until 10:30 … but it ended the snooze now") is still unexplained *by evidence* — a capture on
+  versionCode 493 or higher, where both this and #242's logging ship, is what settles it.
+  Tracked under *Hardware verification*.
 
 ## Coverage gap: the trampoline's refused-start recovery (PR #238)
 
