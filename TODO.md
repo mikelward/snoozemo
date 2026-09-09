@@ -2807,11 +2807,13 @@ the point is that every other line of the app is worthless if it isn't true.
 
       Two follow-ups this leaves, both owned by the maintainer rather than the code:
 
-      - [ ] **Create the Firebase project and set `GOOGLE_SERVICES_JSON`.** Until the
-            secret is set in the `production` environment, the released AAB ships with
-            crash reporting dormant — a green build that reports nothing, which is worth
-            knowing rather than discovering from an empty console. Steps:
-            `docs/crashlytics.md`.
+      - [x] **Create the Firebase project and set `GOOGLE_SERVICES_JSON`.** Done — the
+            secret is in the `production` environment. `Materialize Firebase config` in
+            `release-build` gates on `HAS_FIREBASE_CONFIG == 'true'` and has been
+            *succeeding*, not skipping, on `main` pushes (e.g. run 34342045104), so every
+            released AAB now ships with crash reporting live rather than dormant. That is
+            what makes `PLAY_DATA_SAFETY_DECLARED` apply to every build here. Steps, for
+            re-doing it: `docs/crashlytics.md`.
       - [ ] **Decide whether a failed delete of queued crash reports needs its own
             warning on the switch** (Codex, PR #113, P2 — **deferred, not declined**).
             `deleteUnsentReports()` returns a `Task` whose completion this code discards, so
@@ -2897,7 +2899,11 @@ the point is that every other line of the app is worthless if it isn't true.
             nothing in this repo can read. Check what it is actually set to, and if it is not
             the default, say so in the policy rather than leaving the reader to assume.
 
-      - [ ] **Update the Play Console Data Safety form before the next `play` upload.**
+      - [x] **Update the Play Console Data Safety form before the next `play` upload.**
+            Done (maintainer, 2026-09-09), recorded by their setting the
+            `PLAY_DATA_SAFETY_DECLARED` repository variable — which is exactly the promise
+            that the Console form carries all five types below, since CI checks the variable
+            and never the form.
             It moved from "no data collected, no data shared" to *crash logs,
             diagnostics, device or other IDs, app interactions, and approximate location
             — collected, not shared, optional* (`docs/play-store-declarations.md`). Shipping crash
@@ -3020,14 +3026,73 @@ the point is that every other line of the app is worthless if it isn't true.
       testing tracks" only) and secrets-table entry. Every added step gates on
       `PLAY_SERVICE_ACCOUNT_JSON` being present, so the PR is safe to merge on its own — nothing
       uploads until the secret exists.
-      **Deliberately held un-merged pending a maintainer check** (maintainer, 2026-08-23): the Play
-      Console declarations this doc's own "App content declarations" section describes (Data
-      safety, content rating, target audience) and the permissions declaration form once the
-      demonstration video lands, plus confirming the service account is actually granted only
-      "Release to testing tracks" and never a production-track scope. Merging the workflow change
-      itself doesn't publish anything — only adding `PLAY_SERVICE_ACCOUNT_JSON` afterward does —
-      but the check is on the PR, not the secret, so a reviewer doesn't have to re-derive from the
-      diff what to verify before flipping it on.
+      **That code is on `main` and has been running — and skipping — on every push since.**
+      `Build the release AAB` signs a bundle, `Publish a GitHub release` tags it
+      `v<versionCode>`, and the three Play steps after it (`Compose Play Store release notes`,
+      `Check the Data Safety declaration covers crash reporting`, `Upload to Play Store
+      internal track`) all skip for want of `PLAY_SERVICE_ACCOUNT_JSON`. Nothing further is
+      owed in the workflow; what remains is Console-side and the maintainer's:
+
+      - [x] **Add `PLAY_SERVICE_ACCOUNT_JSON`** to the `production` environment (maintainer,
+            2026-09-09) — set, together with the variable below, so the next push to `main`
+            is the first automated upload. The prerequisites it was gated on, kept for the
+            record and because one of them is not separately verifiable from here: the
+            maintainer reports the rest were already in place, and the background-location
+            permissions form was **not** re-confirmed in this session. If it turns out not to
+            be filed, the symptom is unmistakable — every automated upload fails, on every
+            push, rather than shipping anything undeclared (setup steps 4-6,
+            `docs/play-store-internal-track.md`). The gates were:
+            - **every App content declaration in `docs/play-store-declarations.md` is filed
+              and confirmed in Console** — that doc is the list, deliberately not restated
+              here. Three rounds of review on PR #241 each found a different declaration
+              missing from a copy of it kept in this file (app interactions and approximate
+              location, then the background-location permissions form, then the
+              foreground-service type), because the declarations have changed three times
+              since August and a hand-copied list goes stale in one direction only: it
+              silently shrinks the prerequisites. Read the source instead. Two of its rows
+              carry work the code cannot do — the background-location permissions form and
+              the foreground-service justification both need a demonstration video, and
+              those filming steps are still open in Phase 3, so check there rather than
+              inferring from Play's approval of the listing that they are done;
+            - the service account is granted "Release to testing tracks" only, never a
+              production-track scope.
+
+            The permissions form is the one whose absence bites hardest: the Publishing API
+            enforces it as a hard precondition, so the secret added before it makes every
+            automated upload fail on every push to `main` rather than merely shipping
+            undeclared.
+      - [x] **Set the repository variable `PLAY_DATA_SAFETY_DECLARED` to `true`** (maintainer,
+            2026-09-09), once the Console's Data Safety form carries all five types this build
+            collects — crash logs, diagnostics, app interactions, device or other IDs, and
+            approximate location (`docs/play-store-declarations.md`). Analytics ships beside
+            Crashlytics, so the two crash-reporting types alone under-declare it, and CI
+            checks the variable rather than the form.
+            `GOOGLE_SERVICES_JSON` is set here, so every `main` build has
+            reporting compiled in and the gate applies to all of them: with the secret added
+            and the variable unset, `deploy` stays green and uploads nothing but a warning.
+      - [x] **Decide what the first Play "What's new" card should say.** **Decided: accept the
+            one wrong card** (maintainer, 2026-09-09) — the internal track is two testers, so
+            a stale first card costs nothing worth building a mechanism to avoid, and it
+            self-corrects on the second release. No first-adoption base is being added; the
+            paragraph below records what that card will look like so nobody re-diagnoses it
+            as a bug. Nothing has ever
+            published, so the range base falls back to the oldest run the Actions API returns,
+            which at one 100-run page per workflow id against ~116 `main` runs to date lands
+            near the start of the project.
+            The GitHub prereleases show the result today: `v488`'s notes open with "Turn Do Not
+            Disturb on and off with Snoozemo's own rule" and truncate at eight bullets, because
+            the 500-character budget drops trailing subjects and keeps the oldest. So the first
+            automated upload would put the project's earliest bullets on the card, and only the
+            second one onward reads correctly — after a publish exists, the base is found and
+            it self-corrects. Two ways out: accept the one wrong card, or teach the walk an
+            explicit first-adoption base — a repository variable naming the SHA to start
+            from, read only while no run has published. A manual Console upload is **not** a
+            third option (Codex, PR #241): publication is discovered solely by querying
+            Actions runs for a `Build and release` job whose `Upload to Play Store internal
+            track` step concluded success, and a Console upload creates no run, so the next
+            push would fall back to the same oldest visible run and print the same stale
+            card. That option was ruled out on its merits before the decision above was
+            taken, not by it.
 - [x] **No Firebase App Distribution here.** Dropped before it was ever built — the sibling
       repos ran it alongside the Play internal track, publishing every push to the same
       testers, and have all since retired it. The internal track is the only channel this
@@ -3075,9 +3140,13 @@ the point is that every other line of the app is worthless if it isn't true.
       appear, it needs a decision before upload rather than a form filled in on the spot, since
       `SPEC.md` §3.3's whole argument is that Snoozemo must not enter a foreground-service review.
       Reasoning and the options are in `docs/play-store-declarations.md`.
-- [ ] Data Safety declaration: **crash logs, diagnostics, device or other IDs, app
+- [x] Data Safety declaration: **crash logs, diagnostics, device or other IDs, app
       interactions, and approximate location — collected, not shared, optional**
-      (`SPEC.md` §12). This item used to read
+      (`SPEC.md` §12). Filed (maintainer, 2026-09-09), recorded by their setting
+      `PLAY_DATA_SAFETY_DECLARED`. **This covers the Data Safety form only** — the
+      background-location permissions declaration this item also points at is a separate
+      form, not confirmed here, and the Phase 6 turn-on item says what happens if it is
+      not on file. This item used to read
       "no data collected, no data shared"; that answer was correct until crash reporting landed
       and is now false of a reporting-enabled `play` build, so filing it would be a policy
       violation rather than a stale note (Codex, PR #113 — it was still standing here after the
