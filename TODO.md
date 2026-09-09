@@ -6936,54 +6936,70 @@ what sets it off.
   behavior? A cinema and a walk in a park want opposite answers.
 - Thirty seconds is a guess. It wants a handset in an actual cinema.
 
-## The rule-status broadcast reads the wrong extra (found in PR #238)
+## The rule-status broadcast read the wrong extra — fixed (PR #242)
 
-- [ ] **`SnoozeService`'s rule-status receiver reads `NotificationManager.EXTRA_AUTOMATIC_RULE_ID`,
+- [x] **`SnoozeService`'s rule-status receiver read `NotificationManager.EXTRA_AUTOMATIC_RULE_ID`,
   but `ACTION_AUTOMATIC_ZEN_RULE_STATUS_CHANGED` carries `EXTRA_AUTOMATIC_ZEN_RULE_ID`.** Two
   near-identically-named constants with different values: `android.app.extra.AUTOMATIC_RULE_ID`
   (API 29, an optional extra on the `ACTION_AUTOMATIC_ZEN_RULE` *configuration* intent) versus
-  `android.app.extra.AUTOMATIC_ZEN_RULE_ID` (API 30, documented as the extra for this broadcast).
+  `android.app.extra.AUTOMATIC_ZEN_RULE_ID` (API 30, the extra this broadcast carries).
+  Fixed in PR #242.
 
-  If the reference documentation is right about the field, `ruleId` is always `null` here, so
-  `RuleOwnership.isOurs` returns false on its first line, `ours` is always false, and
-  `ZenRuleStatusChange.resolve` can never reach `EndSnooze` — **the entire §5.8 broadcast path,
-  read-back veto included, is unreachable in the field.** That would also mean the
-  `DND_TURNED_OFF` endings in the 2026-09-09 capture came from somewhere else, and the
-  candidate is `onStartCommand`'s restore read: `observedActivation` → `endingFor` →
-  `DND_TURNED_OFF`, which runs whenever `restoring` is true — and `ACTION_SET_CAP` falls to
-  the `else` branch, so **choosing an end time takes that path**. That fits the report exactly
-  ("I snooze now, then tap until 10:30 … but it ended the snooze now") in a way the stale-broadcast
-  hypothesis does not.
+  `ruleId` was null on every delivery, so `RuleOwnership.isOurs` returned false on its first
+  line, `ours` could never be true, and `ZenRuleStatusChange.resolve` never reached an action —
+  **the entire §5.8 broadcast path was unreachable in the field.** What that cost was not the
+  stale-broadcast veto, which guards a path that could not run, but the path itself: a rule the
+  user disabled or deleted under a running snooze went unnoticed, and the snooze ran to its cap
+  believing it was enforcing a rule the platform had stopped honoring — the failure the
+  receiver's own registration comment says it exists to prevent.
 
-  **No longer a code reading: `RestoreReadDiagnosticTest` demonstrates it.** A running snooze
-  (armed *and* past `ARMING`) plus an `ACTION_SET_CAP` start plus an `INACTIVE` rule reading
-  produces `restore read: start=SET_CAP rule=INACTIVE record=ARMED verdict=DND_TURNED_OFF`.
-  The record's lifecycle is load-bearing and was nearly missed: `endingFor` refuses to classify
-  an `ARMING` record at all, so a fixture left in that state reports "nothing to do" for every
-  activation and would have passed while proving nothing. Those expectations are what a fix has
-  to change, loudly.
+  Nothing tested the wiring, which is why a swapped constant survived. `RuleStatusReceiverTest`
+  is the guard now, and it goes through a real broadcast rather than around one: on the old
+  constant it reports `rule status: DISABLED rule=unnamed … → None`. It covers all three
+  answers — ours, another app's, and a broadcast naming none — because a receiver that
+  hard-coded "ours" would pass the first alone. `RefusingZen.ownsRule` had to be made honest
+  first: it answered `true` unconditionally, so no test built on it could fail for the one bug
+  ownership can have.
 
-  **The fix is not settled and is not any of the three rapid-toggle mechanisms.** Those address
-  two user operations racing; this is one user operation triggering a state read that should not
-  apply to it. The narrow shape is that a start which refines a *live* snooze is not a restore —
-  the same argument the code already makes for `ACTION_ARM` and `ACTION_END` ("reading its state
-  first buys nothing and costs the user a policy IPC between their tap and their phone making
-  noise again"). It cannot simply move to the not-restoring list, because `restoring` also
-  decides `restoreIfNeeded()` versus `adoptIfNeeded()`, and a `SET_CAP` after process death does
-  need the restore. Separating the two is the work.
+  The same near-name pair took `MainActivity.openFilters` on the Settings side (Codex, PR #88).
 
-  Nothing in the tree tests the receiver's extra-reading, so this has never been exercised.
-  This repo has been bitten by the same near-name pair once before, on the Settings side
-  (`MainActivity.openFilters`, Codex PR #88), where the fix needed AOSP read directly rather
-  than the javadoc.
+  **Still owed: a handset check.** This turns on a path that has never run in the field.
+  Disable Snoozemo's rule in Settings under a running snooze and confirm the snooze ends
+  rather than lingering. Tracked under *Hardware verification*.
 
-  **Not fixed in PR #238**, which is diagnostics only and must not change behavior — swapping
-  the constant would make a dormant ending path live, which is a behavior change that wants
-  its own PR, its own test, and a device check. Confirm on a device first: with the new tap
-  and rule-status lines installed, a capture settles it directly: the line reports
-  `rule=unnamed` when the broadcast carried no id this app could read, which is the third
-  answer `ours=false` used to hide (Codex found that too, on `745b841`, and the rendering
-  now distinguishes them).
+## Choosing an end time can end the snooze (found in PR #238, still open)
+
+- [ ] **`ACTION_SET_CAP` is treated as a restore, so refining a live snooze reads the rule back
+  and can end it as `DND_TURNED_OFF`.** `onStartCommand` reads `ruleActivation` on every start
+  that is not an arm or an explicit ending; `SET_CAP` falls to that `else` branch. So choosing
+  an end time on a snooze that is *running*, in a live process, with its state already in
+  memory, asks the platform whether Do Not Disturb is still on — and an `INACTIVE` answer, for
+  any reason including racing an arm that has only just completed, is read as the user having
+  reached the switch. That matches the device report ("I snooze now, then tap until 10:30 …
+  but it ended the snooze now") in a way the broadcast path never could, since that path was
+  dead until PR #242.
+
+  **Demonstrated, not inferred: `RestoreReadDiagnosticTest`.** A running snooze (armed *and*
+  past `ARMING`) plus a `SET_CAP` start plus an `INACTIVE` reading produces
+  `restore read: start=SET_CAP rule=INACTIVE record=ARMED verdict=DND_TURNED_OFF`. The record's
+  lifecycle is load-bearing and was nearly missed: `endingFor` refuses to classify an `ARMING`
+  record at all, so a fixture left in that state reports "nothing to do" for every activation
+  and would have passed while proving nothing. Those expectations are what the fix must change,
+  loudly.
+
+  **Not any of the three rapid-toggle mechanisms** (fix the veto / inert buttons / an operation
+  queue). Those address two user operations racing; this is one user operation triggering a
+  state read that should not apply to it.
+
+  **And not simply adding `SET_CAP` to the not-restoring list.** `restoring` also decides
+  `restoreIfNeeded()` versus `adoptIfNeeded()`, and a `SET_CAP` after process death does need
+  the restore — skipping the read there would let a stale record re-assert the rule over a
+  phone the user deliberately un-silenced, which is the failure the surrounding comment already
+  warns about. The condition that separates them is `controller.active != null`: the controller
+  is built in `onCreate` and the service only stops itself when no snooze is running, so a live
+  controller means *this process never stopped watching* — there is nothing to reconcile, and
+  the rule-status broadcast covers that case instead now that PR #242 has made it live. That
+  ordering is why #242 went first.
 
 ## Coverage gap: the trampoline's refused-start recovery (PR #238)
 

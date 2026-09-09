@@ -12,6 +12,7 @@ import app.snoozemo.core.ClockReading
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.PresenceMonitor
 import app.snoozemo.core.PresenceUpdate
+import app.snoozemo.core.RuleOwnership
 import app.snoozemo.core.SnoozeIdentity
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenController
@@ -45,6 +46,9 @@ import org.robolectric.android.controller.ServiceController
  * matters, because two of the five bugs were *in* an extra and a notification
  * id, which a fake of either would have hidden rather than caught.
  */
+/** The rule id the fake zen controller holds, and the fixture record names. */
+internal const val OWN_RULE_ID = "rule-under-test"
+
 internal class RefusingZen : ZenController {
 
     /** Every state change this was asked for, in order, as (snoozed, trigger). */
@@ -77,7 +81,21 @@ internal class RefusingZen : ZenController {
         return ruleId?.let(activationById::get) ?: activation
     }
 
-    override fun ownsRule(ruleId: String?, enforcing: String?): Boolean = true
+    /** The rule id this fake believes it currently holds. */
+    var ownRuleId: String? = OWN_RULE_ID
+
+    /**
+     * Delegates to the real rule-ownership decision instead of answering
+     * `true`.
+     *
+     * It used to answer `true` unconditionally, which made this fake unable to
+     * fail for the one bug ownership can have: the receiver reading the wrong
+     * extra off the status broadcast, so `ruleId` arrives null and nothing is
+     * ever ours. A fake that says yes to every id reports success for a
+     * question the app never actually got to ask.
+     */
+    override fun ownsRule(ruleId: String?, enforcing: String?): Boolean =
+        RuleOwnership.isOurs(ruleId, current = ownRuleId, enforcing = enforcing)
     override fun ensureRule(): ZenRuleState = ZenRuleState.READY
 
     override fun setSnoozed(
@@ -293,6 +311,8 @@ internal fun snoozeFixture(
     capExpiresAt = now.plus(capIn),
     mode = TrackingMode.FULL,
     placeName = "Home",
+    // Named, so ownership is a real comparison rather than a fake's yes.
+    ruleId = OWN_RULE_ID,
     // Stamped as the harness's frozen device would have stamped it, so the
     // fixture's two frames agree and the cap reads the same either way.
     bootReference = now.toEpochMilli() - TestSnoozeService.FIXTURE_UPTIME_MILLIS,
