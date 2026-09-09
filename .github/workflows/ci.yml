@@ -1756,8 +1756,13 @@ jobs:
         #
         # So publishing a reporting-enabled build additionally requires the
         # repository variable PLAY_DATA_SAFETY_DECLARED to be "true", set by
-        # hand once the Console form actually carries crash logs, diagnostics
-        # and device or other IDs. Builds with reporting dormant are unaffected,
+        # hand once the Console form actually carries all five types this build
+        # collects — crash logs, diagnostics, app interactions, device or other
+        # IDs, and approximate location (docs/play-store-declarations.md).
+        # Analytics ships beside Crashlytics, so the two crash-reporting types
+        # alone under-declare it, and nothing here can check the form: the
+        # variable is a promise, not a verified fact.
+        # Builds with reporting dormant are unaffected,
         # and the signed AAB is still produced and uploaded as an artifact
         # either way — so the device checks TODO.md owes are not blocked.
         #
@@ -1781,7 +1786,7 @@ jobs:
             exit 0
           fi
           echo "PLAY_UPLOAD_BLOCKED=true" >> "${GITHUB_ENV}"
-          echo "::warning::Not publishing to Play: this build has crash reporting enabled, but the repository variable PLAY_DATA_SAFETY_DECLARED is not \"true\". Update the Play Console Data Safety form to declare crash logs, diagnostics and device or other IDs (docs/play-store-declarations.md), then set that variable. The signed AAB is still attached to this run as an artifact."
+          echo "::warning::Not publishing to Play: this build has crash reporting enabled, but the repository variable PLAY_DATA_SAFETY_DECLARED is not \"true\". Update the Play Console Data Safety form to declare all five types this build collects — crash logs, diagnostics, app interactions, device or other IDs, and approximate location (docs/play-store-declarations.md) — then set that variable. The signed AAB is still attached to this run as an artifact."
 
       - name: Upload to Play Store internal track
         # Gated so it only runs with both the upload key and service account
