@@ -1361,10 +1361,10 @@ the point is that every other line of the app is worthless if it isn't true.
       and its rollback), and it targets the record's own `capCeilingAt` rather than a time the
       screen computed.
 
-- [ ] **Fix where the end-condition controls sit, and what the exit is called**
+- [x] **Fix where the end-condition controls sit, and what the exit is called**
       (maintainer, 2026-09-08, on seeing the first screenshot). Three of the four
-      landed in their own PR after the one that added the rows; the fourth is what
-      keeps this item open.
+      landed in their own PR after the one that added the rows; the fourth followed
+      on 2026-09-09 once the maintainer chose the mechanism.
 
       - [x] **`Until I leave` goes first**, above the time row and the meetings — it
         is the product's own thesis and the default a snooze is armed on, so it read
@@ -1383,15 +1383,15 @@ the point is that every other line of the app is worthless if it isn't true.
         filled row *schedules* an end and this one *performs* one, and a wall of
         identical cards ending in the irreversible one is what a hurried tap gets
         wrong.
-      - [ ] **The exit at a fixed position, whatever the calendar contributes.** Not
-        done. It is last in the list, which is not the same thing: it still sits
-        inside the scrolling column, so on a landscape window with both meeting rows
-        it goes below the fold — `main-screen-end-condition-short-window.png` records
-        exactly that. This item asked for a position that does not move with the
-        meeting count and said the position was not in question, so it stays unchecked
-        rather than being reframed as satisfied; what *is* genuinely undecided is
-        whether pinning is the right way to buy it, and that is under *Decisions
-        needing review* below with the argument on both sides.
+      - [x] **The exit at a fixed position, whatever the calendar contributes.**
+        Being last in the list was not that — it still sat inside the scrolling
+        column, so on a landscape window with both meeting rows it went below the
+        fold. **Pinned outside the scroll** (maintainer, 2026-09-09: "let's try
+        pinned outside the scroll, i.e. pinned at the bottom"). `MainScreen` is now
+        two containers: the content takes the height the pinned row leaves and
+        scrolls within it. `Snooze` deliberately did not move — only the exit carries
+        §7's guarantee, and bottom-anchoring the arm button would put it at the foot
+        of an otherwise empty idle screen.
 
       No new string in the end: the ongoing notification's action already said
       `End now`, already translated, and the two end the same snooze the same way —
@@ -4688,29 +4688,21 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
-- [ ] **How should `End now` get a position that does not move with the meeting
-      count — pinned outside the scroll, or something else?** The requirement itself
-      is not in question and its Phase 4 item stays unchecked until it is met; what is
-      open is the mechanism. The maintainer asked for the exit "at the bottom, so
-      their locations are always fixed, no matter how many meetings there are".
-      Shipped so far: *last in order*, which fixes where it sits in the list and does
-      not fix where it sits on the screen. That much was worth landing on its own —
-      the reorder is what stops the meeting rows shifting `Until I leave` too — but it
-      is a step toward the item, not the item.
+- [x] **How should `End now` get a position that does not move with the meeting
+      count?** **Answered** (maintainer, 2026-09-09): pinned outside the scroll, at the
+      bottom. Shipped that way; the Phase 4 item above closes with it.
 
-      The two readings differ only when the list is long enough to scroll, so
-      `main-screen-end-condition-short-window.png` is the evidence: every row a snooze
-      can offer, on a landscape window. There, reaching `End now` costs a scroll, and
-      that scroll carries the settings gear off the top. So "always fixed" is *not*
-      what the current build delivers on that window — it is fixed in the list, not
-      on the screen.
+      What shipped before the answer was *last in order* — the reversible half — with
+      the requirement left explicitly unmet rather than reframed as satisfied. Codex
+      caught an earlier revision doing the latter, which is why the distinction is
+      written down: the requirement was never the open part, the mechanism was.
 
-      Against pinning, and why this was not simply done: `SPEC.md` §4.2 declined to
-      pin the title row precisely because a pinned band takes height off the viewport
-      in the short-window and large-font cases — the same cases that make pinning look
-      necessary here. That argument cut against pinning something secondary; whether
-      it cuts the other way for the exit is the maintainer's call, since it trades a
-      guaranteed position for less room to read the choices in.
+      The cost is real and now visible in the recordings rather than argued about: a
+      pinned row spends viewport permanently, so on a tall phone with few refinements
+      there is space between the last row and the exit. Taken knowingly — `SPEC.md`
+      §4.2 declines the same trade for the title row precisely on the grounds that the
+      height belongs to the exit. Whether that gap reads as deliberate on a real
+      handset is a device check, not a design question.
 
 - [ ] **Whether a checked item may defer pieces to another item** — specifically the Phase 3
   debug-log entry, which is `[x]` while two of the records it describes (the wake-up-source and

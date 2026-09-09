@@ -540,10 +540,11 @@ class MainScreenScreenshotTest {
         assertEquals(1, chosenDeparture)
         composeRule.onNodeWithContentDescription("Half an hour later").performScrollTo().performClick()
         assertEquals(1, stepped)
-        // And the exit is still the bottom-most control: refining a snooze
-        // must never push the one guaranteed way out of it off the screen
-        // (SPEC.md §7).
-        composeRule.onNodeWithText("End now").performScrollTo().assertIsEnabled()
+        // And the exit is displayed without a scroll, because it is pinned
+        // below the scrolling half rather than sitting at the end of it: no
+        // number of refinements can push the one guaranteed way out of a
+        // snooze off the screen (SPEC.md §7).
+        composeRule.onNodeWithText("End now").assertIsDisplayed()
     }
 
     @Test
@@ -1837,13 +1838,15 @@ class MainScreenScreenshotTest {
     @Test
     fun `a short window still reaches the way out`() {
         // Landscape, which is the constrained case: title, banner, the status
-        // line and three controls do not fit, and an unscrolled column clips
-        // whatever is last — which is `End now`. Manual exit is "always
-        // available, always instant" (SPEC.md §7), so losing it to a window
-        // shape is the one failure this screen may not have. The status line
-        // is included (not null) so this covers the worst case honestly —
-        // real content, not an empty stand-in that scrolls easier than the
-        // real screen ever will.
+        // line and three controls do not fit in the height available. Manual
+        // exit is "always available, always instant" (SPEC.md §7), so losing
+        // it to a window shape is the one failure this screen may not have —
+        // and it no longer can, since the exit sits outside the scroll. What
+        // this case still proves is that the content above it stays reachable
+        // when the pinned row has taken its height. The status line is
+        // included (not null) so this covers the worst case honestly — real
+        // content, not an empty stand-in that scrolls easier than the real
+        // screen ever will.
         RuntimeEnvironment.setQualifiers("w914dp-h411dp-420dpi")
 
         capture("main-screen-short-window.png", widthPx = 2400, heightPx = 1080) {
@@ -1870,9 +1873,9 @@ class MainScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("End now").performScrollTo().assertIsEnabled()
-        // And the gear is up here without scrolling back, which is the claim
-        // this move actually makes: it is where the screen opens, not pinned
+        composeRule.onNodeWithText("End now").assertIsDisplayed()
+        // And the gear is up here without scrolling, which is the claim that
+        // move actually makes: it is where the screen opens, not pinned
         // against the scroll (SPEC.md §4.2). Asserted in the constrained case
         // because that is the one where its old position at the foot — below
         // the exit — cost the most to reach.
@@ -1884,16 +1887,14 @@ class MainScreenScreenshotTest {
         // The worst case the refinements can make, in the window shape that
         // has least room for it: every row a snooze can offer — departure,
         // the adjustable time with its steppers, and both meeting ends — over
-        // a landscape window. Four rows plus the exit is more than the earlier
-        // short-window case ever put on screen, and it is the arrangement that
-        // decides whether `End now` being *last* is the same thing as `End
-        // now` being *reachable*.
+        // a landscape window. Four rows plus the exit is more than any other
+        // case here puts on screen, and it is the arrangement that decides
+        // whether the exit keeps a fixed position.
         //
-        // It is reachable, but only after a scroll: the exit is bottom-most in
-        // order and is not pinned outside it (`TODO.md`). That is stated here
-        // rather than asserted away, so the recorded image shows what a full
-        // offer actually costs the exit — the evidence the pinning question
-        // needs, instead of a claim about it.
+        // This case is why the exit is pinned. Recorded when it was merely
+        // *last*, the same image showed it below the fold and a scroll away;
+        // it is now displayed on the first frame with the rows scrolling
+        // behind it, which is what the maintainer asked for on 2026-09-09.
         RuntimeEnvironment.setQualifiers("w914dp-h411dp-420dpi")
 
         capture("main-screen-end-condition-short-window.png", widthPx = 2400, heightPx = 1080) {
@@ -1937,16 +1938,19 @@ class MainScreenScreenshotTest {
             )
         }
 
-        // The gear first, and *before* any scroll — that is the whole of
-        // §4.2's claim: it is where the screen opens. Asserted here rather
-        // than after the scroll below, because with four rows on this window
-        // reaching the exit does carry the gear off the top, and asserting
-        // both at once would have claimed a screen that fits when it doesn't.
+        // Both ends of the screen at once, with no scrolling between them:
+        // the gear where the screen opens (SPEC.md §4.2) and the exit fixed
+        // below the rows (§7). Asserting them together is the point — before
+        // the pin, reaching one carried the other off the opposite edge, so a
+        // single frame holding both is exactly what changed.
         composeRule.onNodeWithContentDescription("Settings").assertIsDisplayed()
-        // The exit is still reachable, and a scroll is what it costs. Both
-        // halves matter: unreachable would break SPEC.md §7 outright, and
-        // free would mean there was never a pinning question to answer.
-        composeRule.onNodeWithText("End now").performScrollTo().assertIsEnabled()
+        composeRule.onNodeWithText("End now").assertIsDisplayed()
+        // Enabled as well as drawn: a pinned control that cannot be tapped
+        // would satisfy the layout claim and none of the promise behind it.
+        composeRule.onNodeWithText("End now").assertIsEnabled()
+        // And the rows above it are still reachable — pinning took height
+        // from the content, so the content has to still scroll to all of it.
+        composeRule.onNodeWithText("Until 2:45 PM").performScrollTo().assertIsEnabled()
     }
 
     @Test
