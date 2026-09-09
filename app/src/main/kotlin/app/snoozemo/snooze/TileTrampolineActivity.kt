@@ -98,6 +98,7 @@ class TileTrampolineActivity : ComponentActivity() {
      */
     @VisibleForTesting
     internal val sheet = EndChoiceController(
+        surface = "the sheet from the tile",
         // Loaded here rather than kept warm: this activity exists for one tap
         // and reads it only after the service start, so a load is the honest
         // shape — and the sheet is off by default, so most taps never reach it.
@@ -480,8 +481,40 @@ class TileTrampolineActivity : ComponentActivity() {
         }.onFailure {
             Log.e(TAG, "Starting the snooze service from the tile was refused.", it)
         }.getOrNull() != null
-        if (!started) recoverFromRefusedStart(action)
         startAccepted = started
+
+        // **After the start, before the recovery** (Codex, PR #238, both
+        // halves). This activity is the door for both the tile and the shade,
+        // so without this line a capture cannot tell an intended `End now` from
+        // a tile tap that toggled a state the user thought was something else
+        // (maintainer, device capture 2026-09-09) — but nothing goes between
+        // the tap and `startService`, which is the rule the block below states
+        // for everything else here and the reason arming feels instant. Logged
+        // for every action, since the same ambiguity applies to an arm the user
+        // read as a second tap on something else, and it carries whether the
+        // start was accepted: a refused one is already the difference between a
+        // tap that did nothing and a tap that did the wrong thing.
+        //
+        // The other bound is `recoverFromRefusedStart` below, which for
+        // `ACTION_END` and `ACTION_RELEASE_STUCK` releases the snooze here and
+        // now and writes its own `no-service release` line doing it. Recovering
+        // first put that ending *above* the tap that asked for it, in the one
+        // log whose whole job is establishing that order.
+        //
+        // Synchronous on purpose, and affordable: `DebugFileSink.log` is a
+        // compare-and-set plus a debounced hand-off to the sink's own executor,
+        // so no disk and no IPC touch this thread — the same reasoning
+        // `SnoozeService.onStateChanged` records for the `ARMING` delivery,
+        // which sits closer to the rule than this does. Posting it off the
+        // looper would buy nothing and cost the ordering above, since a line
+        // whose position is non-deterministic cannot establish which came
+        // first (Codex, PR #238; declined with the reasoning on the thread).
+        SnoozeDebugLog.event(
+            "tap: $action from " +
+                (intent?.getStringExtra(SnoozeService.EXTRA_REQUESTED_FROM) ?: "the tile") +
+                if (started) "" else " (the service refused to start)",
+        )
+        if (!started) recoverFromRefusedStart(action)
 
         // Everything else is queued, not called. `startService` does not *run*
         // the service — it is a binder round trip into `ActivityManagerService`,

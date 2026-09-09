@@ -288,7 +288,17 @@ way, how far from the anchor a location fix said you were **in meters** and how 
 that fix claimed to be, whether the anchor's Wi-Fi was still connected as a yes or no — and, when the answer is no, whether Snoozemo confirmed the network was absent or simply could not tell and assumed the worst, which are very different reasons for a snooze to end —
 whether your phone's location setting was switched off and when it came back on,
 whether the ringer was turned down for a snooze and to which of the phone's three
-settings — ring, vibrate or silent — along with the one it was put back to afterwards, and
+settings — ring, vibrate or silent — along with the one it was put back to afterwards,
+**which control you tapped** — the Quick Settings tile, a button on the ongoing
+notification, a button in the app, or an end time you chose — and, **while a snooze is
+running**, what the system said when a Do Not Disturb rule changed: what it reported,
+whether it was Snoozemo's own rule, what Snoozemo saw when it checked back, and how long
+the snooze had been running at that moment. Never *which* rule it was — whether it was
+Snoozemo's is the useful part, its identity is not — and nothing at all when no snooze is
+running, so a rule of yours or another app's turning on at bedtime is not recorded. Those
+fields are there for one specific failure — a snooze ending on news that arrived late,
+seconds after a different snooze was armed — which is otherwise indistinguishable from you
+having turned Do Not Disturb off yourself. Also
 the app, Android version, and device model. Entries carry real times, because *when*
 something fired is usually the question.
 

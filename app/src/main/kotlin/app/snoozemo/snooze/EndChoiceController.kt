@@ -50,6 +50,19 @@ internal class EndChoiceController(
      * the same snooze can outlive the ceiling the offer was built with (Codex,
      * PR #155).
      */
+    /**
+     * What to call this host in the debug log — "the app screen" or "the
+     * sheet".
+     *
+     * Every other tap that reaches the service names its own surface
+     * (SPEC.md §4.6), and a refinement is a tap like any other: the rapid
+     * arm/end/refine sequence this log exists to reconstruct runs through
+     * here, and an `end-condition` line that says only *what* was chosen
+     * cannot say which control the user touched to choose it (Codex, PR
+     * #238). The controller cannot know this for itself — it is shared by
+     * both hosts — so the host says.
+     */
+    private val surface: String,
     private val currentRecord: () -> ActiveSnooze?,
     /**
      * Hands the chosen time to the service. False means it never dispatched,
@@ -169,7 +182,7 @@ internal class EndChoiceController(
      * before dismissing. A second tap while one is out is ignored.
      */
     fun commit(endsAt: Instant) =
-        dispatch { requestId, forSnooze -> chooseEnd(endsAt, requestId, forSnooze) }
+        dispatch("an end time") { requestId, forSnooze -> chooseEnd(endsAt, requestId, forSnooze) }
 
     /**
      * Chooses "until I leave" as a real end condition rather than as a
@@ -186,7 +199,7 @@ internal class EndChoiceController(
      * the row to a dismissal instead.
      */
     fun commitDeparture() =
-        dispatch { requestId, forSnooze -> restoreDeparture(requestId, forSnooze) }
+        dispatch("until I leave") { requestId, forSnooze -> restoreDeparture(requestId, forSnooze) }
 
     /**
      * The commit lifecycle both choices share: one request out at a time, and
@@ -208,7 +221,10 @@ internal class EndChoiceController(
      * on the cap it had, so nothing is stranded, and the offer is the one place
      * the user is certain to be looking.
      */
-    private fun dispatch(start: (requestId: Long, forSnooze: Instant?) -> Boolean) {
+    private fun dispatch(
+        choice: String,
+        start: (requestId: Long, forSnooze: Instant?) -> Boolean,
+    ) {
         if (committing) return
         committing = true
         commitFailed = false
@@ -222,7 +238,18 @@ internal class EndChoiceController(
         // The identity travels with the choice. The check here is redraw-time
         // hygiene; this is what makes it binding, since the service applies the
         // cap and validates the claim in the same pass (Codex, PR #155).
-        if (!start(committingRequestId, offerFor)) {
+        val started = start(committingRequestId, offerFor)
+        // The tap, named like every other one (SPEC.md §4.6), and carrying
+        // whether the service took it. After the start for the reason the
+        // trampoline's is: nothing goes between a tap and the work it asks
+        // for. Only a tap the controller accepted is recorded — the early
+        // return above is a second tap while one is still out, which the user
+        // made but the app deliberately ignored, and logging it as a commit
+        // would credit a refinement that never happened.
+        SnoozeDebugLog.event(
+            "tap: $choice from $surface" + if (started) "" else " (the service refused to start)",
+        )
+        if (!started) {
             SnoozeDebugLog.warning("the service refused to start for a chosen end time")
             onOutcome(EndChoiceResult.REFUSED)
         }

@@ -1398,6 +1398,42 @@ the point is that every other line of the app is worthless if it isn't true.
       so the screen's own `End snooze` was retired rather than reworded into a second
       key saying it again. The mark's `contentDescription` is the one addition.
 
+- [ ] **Rapid arm/end/refine must not silently do the wrong thing** (maintainer, device
+      capture 2026-09-09). Toggling quickly between states produced two endings the user did
+      not ask for. The requirement is not in question — "we should make it work, or maybe make
+      the buttons inert, or have an operation queue, or some better solution than silently
+      doing the wrong thing" — only the mechanism is.
+
+      What the capture showed, on 487. Four snoozes armed inside 27 seconds. In two of them
+      the chosen end applied correctly (`capAt` 58 minutes out, exactly as tapped) and the
+      snooze then ended `MANUAL` about 2.4s later — which in this app means the app screen's
+      `End now` or a tile tap, since the tile sends `ACTION_END` whenever it believes a snooze
+      is running. In the other two it ended `DND_TURNED_OFF` *before* the chosen end arrived,
+      once only 1.5s after arming and 2.5s after the previous snooze's release had deactivated
+      the same rule.
+
+      That second shape is the suspect: a stale deactivation broadcast from the snooze that
+      just ended, landing on the one just armed. `reconcileRuleStatus` already re-reads
+      `ruleActivation` to veto exactly this, and the veto did not hold — meaning the read-back
+      did not see the rule active on a snooze armed 1.5s earlier. **Not yet proven**; the
+      logging landed first, deliberately, because tightening that veto the wrong way means
+      ignoring a real "the user turned Do Not Disturb off" and leaving the phone silent, which
+      is principle 1's failure.
+
+      Mechanisms the maintainer named, none chosen:
+      - **Make it work** — fix the veto so a late broadcast cannot end a newer snooze. Narrowest,
+        and does nothing about a genuine double-tap.
+      - **Inert controls** while a transition is in flight. The end-condition rows already do
+        this (`committing` disables them); the tile and the arm/end button do not, and the tile
+        is the one that flips meaning between two taps.
+      - **An operation queue**, so arms, ends and cap changes serialize instead of racing.
+        Largest, and the only one that covers taps arriving from three surfaces at once.
+
+      Whatever is chosen, `DND_TURNED_OFF` is currently a *silent* ending — no notification,
+      because the user is assumed to have done it themselves (`SnoozeNotifications`). If it can
+      fire spuriously, that assumption is what makes it silently wrong, and the ending needs to
+      say something either way.
+
 - [ ] **Consider deleting the bottom sheet** (maintainer, 2026-09-08, asked for alongside the
       entry above). The main screen now offers everything the sheet does and two things it does
       not — meeting rows, and a departure choice that actually commits — so the sheet is no
@@ -6830,6 +6866,60 @@ what sets it off.
 - Is it a per-snooze end condition the user picks (§4.4's sheet), or a global
   behavior? A cinema and a walk in a park want opposite answers.
 - Thirty seconds is a guess. It wants a handset in an actual cinema.
+
+## The rule-status broadcast reads the wrong extra (found in PR #238)
+
+- [ ] **`SnoozeService`'s rule-status receiver reads `NotificationManager.EXTRA_AUTOMATIC_RULE_ID`,
+  but `ACTION_AUTOMATIC_ZEN_RULE_STATUS_CHANGED` carries `EXTRA_AUTOMATIC_ZEN_RULE_ID`.** Two
+  near-identically-named constants with different values: `android.app.extra.AUTOMATIC_RULE_ID`
+  (API 29, an optional extra on the `ACTION_AUTOMATIC_ZEN_RULE` *configuration* intent) versus
+  `android.app.extra.AUTOMATIC_ZEN_RULE_ID` (API 30, documented as the extra for this broadcast).
+
+  If the reference documentation is right about the field, `ruleId` is always `null` here, so
+  `RuleOwnership.isOurs` returns false on its first line, `ours` is always false, and
+  `ZenRuleStatusChange.resolve` can never reach `EndSnooze` — **the entire §5.8 broadcast path,
+  read-back veto included, is unreachable in the field.** That would also mean the
+  `DND_TURNED_OFF` endings in the 2026-09-09 capture came from somewhere else, and the
+  candidate is `onStartCommand`'s restore read: `observedActivation` → `endingFor` →
+  `DND_TURNED_OFF`, which runs whenever `restoring` is true — and `ACTION_SET_CAP` falls to
+  the `else` branch, so **choosing an end time takes that path**. That fits the report exactly
+  ("I snooze now, then tap until 10:30 … but it ended the snooze now") in a way the stale-broadcast
+  hypothesis does not.
+
+  Nothing in the tree tests the receiver's extra-reading, so this has never been exercised.
+  This repo has been bitten by the same near-name pair once before, on the Settings side
+  (`MainActivity.openFilters`, Codex PR #88), where the fix needed AOSP read directly rather
+  than the javadoc.
+
+  **Not fixed in PR #238**, which is diagnostics only and must not change behavior — swapping
+  the constant would make a dormant ending path live, which is a behavior change that wants
+  its own PR, its own test, and a device check. Confirm on a device first: with the new tap
+  and rule-status lines installed, a capture settles it directly: the line reports
+  `rule=unnamed` when the broadcast carried no id this app could read, which is the third
+  answer `ours=false` used to hide (Codex found that too, on `745b841`, and the rendering
+  now distinguishes them).
+
+## Coverage gap: the trampoline's refused-start recovery (PR #238)
+
+- [ ] **Nothing tests `recoverFromRefusedStart`, and nothing can today.** It is what runs
+  when `startService` refuses the tap — the branch that shows `Couldn't snooze` /
+  `Couldn't extend` / `Couldn't set the end`, and for `ACTION_END` and
+  `ACTION_RELEASE_STUCK` releases the snooze inline through `releaseDirectly`. That last
+  one is the user's exit taken without a service behind it, which makes it the branch
+  least affordable to have wrong and the only one with no coverage.
+
+  The obstacle is the platform: Robolectric's shadow accepts every `startService`, so the
+  refusal cannot be produced from a test, exactly as it accepts every `startForeground`.
+  `SnoozeService.enterForeground` is the precedent for the answer — a narrow overridable
+  seam, injected by `TestSnoozeService` in `ReleaseHarness.kt`, added because "the
+  production path cannot be driven to do off a device". The trampoline wants the same: an
+  overridable start, and a test subclass that refuses it.
+
+  Not taken in PR #238, which found the gap while fixing a log-ordering bug in this same
+  block (the tap line landed *below* the `no-service release` it caused, because recovery
+  ran first). Adding a production seam to assert statement order was disproportionate to
+  that fix. The seam is worth having for the recovery branch's own behavior, which is a
+  bigger and better-motivated piece of work than the ordering that surfaced it.
 
 ## Deferred review findings (Codex, PR #229)
 

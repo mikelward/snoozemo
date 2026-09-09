@@ -386,6 +386,26 @@ data class ActiveSnooze(
     }
 
     /**
+     * How long this snooze has been running, in whole seconds — **on the
+     * elapsed clock**, never the wall one.
+     *
+     * The diagnostic this exists for is a snooze ending on a rule-status
+     * broadcast seconds after it was armed (SPEC.md §4.6), where the whole
+     * signal is the smallness of the number. `Duration.between(startedAt, …)`
+     * cannot carry it: [startedAt] is the unrestated wall-time identity while
+     * a wall reading moves with the user and the network, so the two mix
+     * frames and the answer can be hours out, or negative — hiding the very
+     * case it was added to show (Codex, PR #238).
+     *
+     * **Null when there is no frame to measure in**, rather than falling back
+     * to "now". That fallback is right where it errs toward dropping a stale
+     * observation, and wrong here: it would read as `0s` and manufacture
+     * evidence for a race instead of admitting the record cannot date itself.
+     */
+    fun armedForSeconds(now: ClockReading): Long? =
+        armedAtElapsedRealtimeMs()?.let { (now.uptimeMillis - it) / 1000 }
+
+    /**
      * Where the cap lands if the notification's `+30 min` is tapped (SPEC.md
      * §4.3), clamped to [capCeilingAt] — repeated taps may not walk a snooze
      * past the backstop.

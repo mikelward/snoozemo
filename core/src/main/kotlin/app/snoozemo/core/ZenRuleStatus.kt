@@ -183,3 +183,27 @@ object ZenRuleStatusChange {
         }
     }
 }
+
+/**
+ * How a rule-status broadcast's subject reads in the debug log: **whether it
+ * named a rule at all**, and only then whether that rule was ours.
+ *
+ * A plain `ours=false` cannot tell those apart, and the difference is the whole
+ * question. `ownsRule` returns false both for somebody else's rule *and* for a
+ * broadcast this app read no id out of — so a log that only says `false`
+ * reports "another app's rule" for a field that may simply be missing, which is
+ * evidence pointing the wrong way rather than absent evidence (Codex, PR #238).
+ *
+ * `unnamed` is not hypothetical: the receiver reads
+ * `NotificationManager.EXTRA_AUTOMATIC_RULE_ID` while this broadcast is
+ * documented to carry `EXTRA_AUTOMATIC_ZEN_RULE_ID`, so it is what a device
+ * capture is expected to show, and seeing it is what settles that (`TODO.md`).
+ *
+ * Never the identifier itself: whether the rule was ours is the diagnostic,
+ * which one it was is not (SPEC.md §4.6).
+ */
+fun ruleSubject(ruleId: String?, ours: Boolean): String = when {
+    ruleId.isNullOrEmpty() -> "unnamed"
+    ours -> "ours"
+    else -> "another"
+}

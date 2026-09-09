@@ -50,6 +50,7 @@ class EndChoiceControllerTest {
     fun clearChannel() = EndChoiceOutcome.reset()
 
     private fun controller(seams: Seams) = EndChoiceController(
+        surface = "a test host",
         currentRecord = { seams.live },
         chooseEnd = { at, requestId, forSnooze ->
             seams.sent = at
