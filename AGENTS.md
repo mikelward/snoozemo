@@ -336,7 +336,9 @@ it in the same commit.
   after a push — that means it never picked the push up.
 - **Address Codex comments automatically — don't wait to be asked.** When a Codex review
   lands, treat each comment like a real review note: read it, decide whether it's a real
-  issue or a false positive, and if it's real, fix it in the same PR. Fold the fix into the
+  issue or a false positive, and if it's real, fix it in the same PR — the one exception
+  being a real finding that's genuinely out of scope for this PR, which you defer instead
+  (see *Deferring a finding* below). Fold the fix into the
   commit it belongs to (rebase / `--fixup`) rather than tacking on an "address review"
   commit, per the logical-commits rule under *Git workflow*. Group several small fixes into
   one commit when they share a topic.
@@ -360,7 +362,8 @@ it in the same commit.
   review is the attributable form, naming the commit it read. Findings arrive as review
   comments, as a top-level comment, or as a review — read `get_review_comments`,
   `get_comments` and `get_reviews` to the last page, since all three page oldest first — and
-  they block the merge until fixed or rebutted; an acknowledgement is not an answer. Nothing
+  they block the merge until fixed, rebutted, or deferred (see *Deferring a finding* above);
+  an acknowledgement is not an answer. Nothing
   from Codex since the push, five minutes on, means it never picked it up — comment `@codex
   review`, once. Reading the verdict is a protocol, not a glance: a state report draws on
   ALL the sources — the PR-body reactions, the reviews, the review comments and issue
