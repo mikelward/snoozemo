@@ -537,8 +537,17 @@ class GeofencePresenceMonitor(
                 servicesDegradation.getAndSet(null) != null
             ) {
                 SnoozeDebugLog.event("a fix arrived; services-off level cleared")
-                registrationDegradation.set(DegradationCause.LOCATION_SERVICES_OFF)
-                repairOnRecovery()
+                // Only where there is a fence to be suspicious of. Marking one
+                // that was never registered latches a level nothing can clear:
+                // `registerFence` declines without a usable fix, so the repair
+                // below is a no-op and the snooze reports degraded for the rest
+                // of its life over a subsystem it does not use (TODO.md, Phase
+                // 3). Clearing services-off above is right either way — that
+                // level is about the platform, not about this anchor.
+                if (marksFenceSuspect(anchor)) {
+                    registrationDegradation.set(DegradationCause.LOCATION_SERVICES_OFF)
+                    repairOnRecovery()
+                }
             }
             val update: PresenceUpdate
             val duty: LocationDuty
@@ -2277,6 +2286,31 @@ class GeofencePresenceMonitor(
 
         internal fun watchesGrants(anchor: Anchor): Boolean =
             anchor.hasUsableFix || needsWifiRecheck(anchor)
+
+        /**
+         * Whether a services-outage recovery should mark the fence suspect and
+         * re-register it.
+         *
+         * A fix arriving after a services outage proves the subsystem is back,
+         * but not that the *registration* survived it — the platform may drop
+         * fences while services are off — so recovery normally latches
+         * `LOCATION_SERVICES_OFF` against the registration and lets a
+         * successful re-register clear it (Codex, PR #75).
+         *
+         * That whole exchange presumes a fence. A Wi-Fi-only anchor has none:
+         * [registerFence] declines without a usable fix, so the repair answers
+         * nothing and the latch it was supposed to lift stays set for the rest
+         * of the snooze — the card reporting degraded tracking over a
+         * subsystem this anchor never used. Nothing else clears it either; only
+         * a restore rebuilding the monitor does, which is not something a
+         * running snooze can wait for (TODO.md, Phase 3).
+         *
+         * Pure, and named rather than written inline, because the decision
+         * lives in a `callbackFlow` closure no test can reach — the same reason
+         * [published] and [grantPokeSteps] are out here. [grantPokeSteps]
+         * already gates its own `RepairFence` on exactly this question.
+         */
+        internal fun marksFenceSuspect(anchor: Anchor): Boolean = anchor.hasUsableFix
 
         /** Serializes claim-and-register with owner-checked removal. */
         private val registrationLock = Any()
