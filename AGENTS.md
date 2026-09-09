@@ -196,8 +196,10 @@ it in the same commit.
 - Write every subject for end users, sentence case, plain English, no internal symbol
   names, ≤ ~70 characters; engineering detail goes in the body. This repo follows the
   sibling repos' release pipeline: every release-worthy commit subject in a push to `main`
-  ships as a bullet in the Play "What's new" list (once the `deploy` job
-  lands — `TODO.md` Phase 8).
+  ships as a bullet in the GitHub prerelease `deploy` publishes, and in the Play "What's
+  new" list once **both** `PLAY_SERVICE_ACCOUNT_JSON` and the `PLAY_DATA_SAFETY_DECLARED`
+  variable are set — the second gates every reporting-enabled build, which is all of them
+  here (`docs/play-store-internal-track.md`).
 - Because the repo rebase-merges, the PR title never lands on `main` — each commit's own
   subject does. Title **every** commit on the branch by these rules, not just the PR.
 - Keep non-user-facing commits out of release notes with a subject prefix, used precisely

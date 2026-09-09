@@ -314,12 +314,35 @@ clever; it does not stop working, and it never gets less safe.
 ### 3.7 How a build reaches a tester
 
 **The Play internal track is the channel this repo is building toward, and Firebase App
-Distribution is deliberately not a second one.** Today `deploy` builds the signed AAB and publishes
-it two ways — as a workflow artifact, and attached to a **GitHub prerelease** named by its
-`versionCode` — while the internal-track upload step is wired but gates on
-`PLAY_SERVICE_ACCOUNT_JSON`, which stays unset until the Play Console declarations are filed
-(`docs/play-store-internal-track.md`), so a build currently reaches a tester through a hand seed
-upload. **Neither artifact is published on every push, and the prerelease answers "what is the
+Distribution is deliberately not a second one.** `deploy` builds the signed AAB and publishes it
+two ways — as a workflow artifact, and attached to a **GitHub prerelease** named by its
+`versionCode` — and, **since 2026-09-09, uploads it to the Play internal track on every
+release-worthy push to `main`**. That is the channel now; the hand seed upload described below was
+the path while the upload step was wired but dormant.
+
+**A stand-down is not an invitation to upload by hand.** When the pipeline declines to publish a
+bundle it has already built, it is enforcing something — an unconfirmed data declaration, or a
+newer release that has superseded this one — and a Console upload defeats that rather than
+working around it: it ships the build the guard withheld, or lands a bundle Play has already
+moved past. It is also invisible to the release-notes range, which counts only what the pipeline
+itself published, so the notes it should have carried stay queued and repeat on the next
+release. The hand upload is therefore reserved for the one case with no API path at all — the
+**seed** upload a listing needs before the Publishing API will accept anything — and for
+recovery a human has reasoned about explicitly. Fixing the cause and pushing again is the route
+back for everything
+else.
+
+**Two settings gate the upload, not one**, and both are the maintainer's to set once the Play
+Console declarations are filed: `PLAY_SERVICE_ACCOUNT_JSON` authenticates to Play, and the
+`PLAY_DATA_SAFETY_DECLARED` repository variable asserts that the Console's Data Safety form covers
+what the build actually collects. The second exists because `GOOGLE_SERVICES_JSON` is set here, so
+every shipped build has Crashlytics and Analytics compiled in; without that assertion the pipeline
+would automate a policy violation rather than merely a release. Neither is checkable from CI — the
+variable is a promise about a form nothing here can read — which is why they are two deliberate
+human acts and not a single switch (`docs/play-store-internal-track.md`,
+`docs/play-store-declarations.md`).
+
+**Neither artifact is published on every push, and the prerelease answers "what is the
 latest release-worthy build" rather than "what is at the tip of `main`"** (Codex, 2026-09-03) — the
 two diverge exactly when the commits since the last release carry no user-visible change, which is
 what a reader doing the seed upload has to know. Which pushes produce which artifact is CI
@@ -328,8 +351,9 @@ the hand seed practical rather than a scramble: the artifact expires and is reac
 run, so "which build shipped, and where is it" had no durable answer. It is not a second distribution channel — nobody installs an AAB — but a permanent,
 linkable record of what shipped, carrying the same "What's new" text the Play card will. Its
 condition is the Play upload's without the service account, which is a strict subset, so the
-invariant runs one way: every Play upload will be preceded by a prerelease, never the reverse, and
-this repo's present keystore-only state is exactly the case that buys. For that record to answer
+invariant runs one way: every Play upload is preceded by a prerelease, never the reverse. That was
+what a keystore-only repo bought before the service account was set; it still holds now that both
+gates are live, and it is what a fork without any Play credentials gets. For that record to answer
 "which build is the latest release-worthy one" it has to be read top-down, so a build whose deploy runs late — the shared
 queue is not ordered by push — publishes nothing rather than landing an older `versionCode` at the
 top of the list. **Nothing**, not just no prerelease: it stands its Play upload down too, since Play

@@ -4,9 +4,10 @@ name: ci
 # is Phase 6's release plumbing (TODO.md, `docs/play-store-internal-track.md`):
 # a signed AAB built on every push to `main`, published as a downloadable
 # workflow artifact for the one-time manual seed upload Play requires, and —
-# once `PLAY_SERVICE_ACCOUNT_JSON` is configured — uploaded automatically to
-# the Play internal testing track with release notes built from the push's
-# own qualifying commit subjects.
+# once `PLAY_SERVICE_ACCOUNT_JSON` and the `PLAY_DATA_SAFETY_DECLARED`
+# variable are both set — uploaded automatically to the Play internal testing
+# track with release notes built from every qualifying commit subject still
+# queued for release.
 
 on:
   # No paths filter on pull_request, deliberately: the main ruleset requires
@@ -1154,7 +1155,8 @@ jobs:
     name: Build and release
     # Production publish job (TODO.md Phase 6, docs/play-store-internal-track.md).
     # Publishes the signed AAB that `release-build` produced: it composes the
-    # release notes and — once PLAY_SERVICE_ACCOUNT_JSON is configured —
+    # release notes and — once PLAY_SERVICE_ACCOUNT_JSON and the
+    # PLAY_DATA_SAFETY_DECLARED variable are both set —
     # uploads to the Play internal track. It runs no Gradle at all; the build
     # moved to `release-build` so it could overlap the tests. Gated three ways:
     #   1. `if:` — a push to main, never a PR. `workflow_dispatch` on this
