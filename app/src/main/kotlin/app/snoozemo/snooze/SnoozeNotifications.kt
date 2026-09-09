@@ -511,8 +511,18 @@ class SnoozeNotifications(private val context: Context) {
         if (reading?.qualifies == true) return context.getString(R.string.ongoing_distance_leaving)
         if (atAnchorWifi) return context.getString(R.string.ongoing_distance_wifi)
         if (reading == null) return null
+        // A reading whose numbers are not numbers has no row, for the same
+        // reason it has no sentence on the screen: the alternative is
+        // formatting a value that throws, on a card being rebuilt under a
+        // snooze that has to keep running (Codex, PR #244).
+        if (!reading.isReportable) return null
         val unit = distanceUnitFor(context.resources.configuration)
-        return distanceText(context, unit, unit.toGo(reading.remainingM))
+        // Rounded no finer than this fix can resolve, the same rule and the
+        // same step the main screen's sentence uses — the user sees both at
+        // once, so a row disagreeing with the screen about how sharp the same
+        // reading is would be worse than either being coarse.
+        val step = unit.step(reading.uncertaintyM)
+        return distanceText(context, unit, unit.toGo(reading.remainingM, step), step)
     }
 
     /**

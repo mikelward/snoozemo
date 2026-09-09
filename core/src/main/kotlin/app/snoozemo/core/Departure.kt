@@ -171,6 +171,42 @@ data class DepartureObservation(
     val qualifies: Boolean get() = marginM > Departure.HYSTERESIS_M
 
     /**
+     * Whether these numbers can be put in front of anyone at all.
+     *
+     * A non-finite coordinate or accuracy — a mock provider, a driver
+     * returning garbage — poisons the whole record rather than one field of
+     * it: the haversine yields NaN, so [marginM], [remainingM] and the
+     * combined [uncertaintyM] are all NaN, and [qualifies] reads false only
+     * because every NaN comparison does. A readout then hands `roundToInt` a
+     * value it throws on, on the composition thread (Codex, PR #244).
+     *
+     * The observation is deliberately **kept** rather than refused where it is
+     * built: PR #233 settled that such a fix must still fall out inconclusive,
+     * still count toward degradation, and still write its `distance=unknown`
+     * line, because a throw on the fix path leaves the snooze armed with
+     * nothing running to end it. Deleting the observation deletes all three.
+     * So what is wanted is not a rejection but a question a formatter can ask
+     * — here, once, rather than at each surface that renders a number.
+     *
+     * Asked of the two stored fields a readout renders; everything else it
+     * shows is derived from them, and `radiusM` is an `Int`.
+     *
+     * **And of whether the rounding ladder can describe it at all.** A step is
+     * chosen as the finest rung not finer than the uncertainty, and that
+     * ladder has to stop somewhere because it returns an `Int` — so above
+     * [DistanceUnit.CEILING_M] the only answers available are to saturate,
+     * which understates, or to decline. Declining here is what makes the
+     * understatement unreachable rather than merely unlikely: the same three
+     * findings in review were each a different boundary of that ceiling, and
+     * a reading a quarter of the Earth's circumference wide is not a reading
+     * about a place.
+     */
+    val isReportable: Boolean
+        get() = distanceM.isFinite() &&
+            uncertaintyM.isFinite() &&
+            uncertaintyM <= DistanceUnit.CEILING_M
+
+    /**
      * Whether this reading is recent enough to put in front of someone.
      *
      * The duty cycle asks every 90 seconds while a departure is being tested

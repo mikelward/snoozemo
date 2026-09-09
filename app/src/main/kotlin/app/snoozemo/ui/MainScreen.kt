@@ -635,7 +635,8 @@ private fun SnoozeStatus(
         // Only under `FULL`. The other modes are not measuring a distance —
         // showing one from the last fix before tracking degraded would explain
         // a threshold that is no longer what ends this snooze.
-        readout = departure.takeIf { mode == TrackingMode.FULL }?.let { departureText(it) },
+        readout = departure?.takeIf { mode == TrackingMode.FULL && it.isReportable }
+            ?.let { departureText(it) },
     )
 }
 
@@ -659,13 +660,22 @@ private fun SnoozeStatus(
  */
 @Composable
 private fun departureText(observation: DepartureObservation): String {
+    // Callers gate on `isReportable` first: a non-finite reading has no
+    // sentence, and the screen already knows how to show no distance.
     val unit = rememberDistanceUnit()
-    val away = distanceText(unit, unit.away(observation.distanceM))
     // The two confidence radii combined, which is what the test thresholds —
     // so the readout quotes the decision rather than describing one term of
     // it. A single figure on purpose: the components are diagnostic, and the
     // card is the tightest copy surface in the app.
-    val uncertain = distanceText(unit, unit.uncertainty(observation.uncertaintyM))
+    //
+    // It is also the ruler for everything beside it: the step is the finest
+    // rung this fix has earned, so the separation is rounded to it and the
+    // figure itself is printed *as* that rung. `150 m away ±25 m` is one
+    // reading described consistently; `142 m away ±18 m` was the same reading
+    // claiming two digits of sharpness the second number denies.
+    val step = unit.step(observation.uncertaintyM)
+    val away = distanceText(unit, unit.snap(observation.distanceM, step), step)
+    val uncertain = distanceText(unit, step)
     return if (observation.qualifies) {
         // Far enough on this fix, but a departure still needs a second one
         // thirty seconds later, so this reports the wait rather than the end.
@@ -675,7 +685,10 @@ private fun departureText(observation: DepartureObservation): String {
             R.string.main_distance_to_go,
             away,
             uncertain,
-            distanceText(unit, unit.toGo(observation.remainingM)),
+            // On the same step as the rest of the line, rounded down — see
+            // `DistanceUnit.toGo` for why down, and why leaving this at whole
+            // units was wrong.
+            distanceText(unit, unit.toGo(observation.remainingM, step), step),
         )
     }
 }
@@ -684,6 +697,11 @@ private fun departureText(observation: DepartureObservation): String {
 @Composable
 private fun distanceText(unit: DistanceUnit, value: Int): String =
     distanceText(LocalContext.current, unit, value)
+
+/** The same, for a value that may not reach one whole [step] (`< 5 m`). */
+@Composable
+private fun distanceText(unit: DistanceUnit, value: Int?, step: Int): String =
+    distanceText(LocalContext.current, unit, value, step)
 
 /**
  * The unit this phone measures distance in — [distanceUnitFor], which the

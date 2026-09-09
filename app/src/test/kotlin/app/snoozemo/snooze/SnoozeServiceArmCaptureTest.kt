@@ -253,11 +253,12 @@ class SnoozeServiceArmCaptureTest {
         )
 
         // 60 m inside a 100 m anchor: 18.0 m of combined uncertainty, so 108.0 m
-        // of ground left once the 50 m hysteresis is counted — 355 ft on this
-        // US-locale test device, ceiled after the conversion rather than from a
-        // rounded meter figure.
+        // of ground left once the 50 m hysteresis is counted — 354.4 ft on this
+        // US-locale test device, snapped down onto the 100 ft rung its own ±59
+        // ft earns. Converted before rounding rather than derived from a
+        // rounded meter figure, which would have given 328.
         assertEquals(
-            appContext.getString(R.string.distance_feet, 355),
+            appContext.getString(R.string.distance_feet, 300),
             ongoingSubText(),
         )
     }
@@ -282,7 +283,7 @@ class SnoozeServiceArmCaptureTest {
             ),
         )
         assertEquals(
-            appContext.getString(R.string.distance_feet, 355),
+            appContext.getString(R.string.distance_feet, 300),
             ongoingSubText(),
         )
 
@@ -294,7 +295,7 @@ class SnoozeServiceArmCaptureTest {
         emitAnchorWifi(false)
 
         assertEquals(
-            appContext.getString(R.string.distance_feet, 355),
+            appContext.getString(R.string.distance_feet, 300),
             ongoingSubText(),
         )
     }

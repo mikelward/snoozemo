@@ -125,4 +125,58 @@ class DepartureObservationTest {
 
         assertFalse(observation.isFresh(Duration.ofMinutes(9).toMillis()))
     }
+
+    /**
+     * A reading whose numbers are not numbers is not reportable.
+     *
+     * The observation is still built — PR #233 settled that a NaN fix must
+     * still fall out inconclusive, count toward degradation and write its
+     * `distance=unknown` line — so this is the question a formatter asks
+     * instead of a rejection it would otherwise have to make (Codex, PR #244).
+     * Without it a readout hands `roundToInt` a NaN and throws on the
+     * composition thread, under a snooze that has to keep running.
+     */
+    @Test
+    fun `a non-finite reading is not reportable`() {
+        val brokenDistance = DepartureObservation(
+            distanceM = Double.NaN,
+            accuracyM = 10f,
+            anchorAccuracyM = 20f,
+            radiusM = 150,
+            elapsedRealtimeMs = 0L,
+        )
+        val brokenAccuracy = DepartureObservation(
+            distanceM = 200.0,
+            accuracyM = Float.NaN,
+            anchorAccuracyM = 20f,
+            radiusM = 150,
+            elapsedRealtimeMs = 0L,
+        )
+
+        assertFalse(brokenDistance.isReportable)
+        assertFalse(brokenAccuracy.isReportable)
+        // And an uncertainty the ladder cannot describe. Refusing it here is
+        // what makes the ladder's own saturation unreachable rather than
+        // merely unlikely — the ceiling being the last place a step could
+        // still understate (Codex, PR #244).
+        assertFalse(
+            DepartureObservation(
+                distanceM = 200.0,
+                accuracyM = (DistanceUnit.CEILING_M * 2).toFloat(),
+                anchorAccuracyM = 20f,
+                radiusM = 150,
+                elapsedRealtimeMs = 0L,
+            ).isReportable,
+        )
+        // And the guard rejects only garbage — an ordinary reading still reports.
+        assertTrue(
+            DepartureObservation(
+                distanceM = 200.0,
+                accuracyM = 10f,
+                anchorAccuracyM = 20f,
+                radiusM = 150,
+                elapsedRealtimeMs = 0L,
+            ).isReportable,
+        )
+    }
 }

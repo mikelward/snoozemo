@@ -5078,14 +5078,74 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   priced and declined, and worth pricing before assuming the choice is still
   between half an hour and a battery bill.
 
-- [ ] **Round the displayed distance by its own confidence** (maintainer,
-  2026-09-08). `355 ft to go` beside a `±60 ft` is four significant figures of
-  precision the reading does not have, and reads as false authority. The
-  uncertainty is already carried on every `DepartureObservation`, so the number of
-  significant figures could come from it rather than from a fixed rule — a sharp
-  fix keeping its tens, a vague one rounding to the nearest fifty. Applies to both
-  surfaces, since `DistanceUnit`'s rounding is what they share (`away`, `toGo` and
-  `uncertainty` each round differently today, which is the seam to change).
+- [x] **Round the displayed distance by its own confidence** (maintainer,
+  2026-09-08) — **done, PR #244.** One rule, settled with the maintainer
+  2026-09-09: *never show a step finer than your uncertainty.* The step is the
+  smallest rung at least as coarse as the fix's combined confidence radius —
+  the rung **above** it, not below, since a rung below the uncertainty is
+  exactly what the rule forbids. Two ladders, chosen rather than converted:
+  metric `5 · 10 · 25 · 50 · 100 · 250 · 500 · …`, imperial
+  `15 · 25 · 50 · 100 · 250 · 500 · 1000 · …` — **neither with a top**, each
+  repeating its shape by decade, because the `±` is printed *as* the step and a
+  ladder that stopped would understate the uncertainty rather than merely round
+  it (Codex, PR #244; reachable, since the anchor is capped at 200 m but a fix's
+  own accuracy is not). Above the floor they agree, so one
+  rule serves both; the floors differ because a floor is a claim about
+  resolution and 5 ft (1.5 m) would claim a sharpness the metric ladder
+  refuses. Snapping in meters and converting was rejected — it produces steps
+  nobody recognizes, like 82 ft.
+
+  **All three numbers ride the ladder**, the to-go rounded *down* rather than
+  to nearest so it never over-states what is left — the wrong direction for an
+  app whose ambiguity resolves toward ending the snooze. An earlier draft
+  exempted it, arguing that its deficit already has the uncertainty subtracted
+  and snapping would subtract the vagueness twice; **that argument was wrong**
+  (Codex, PR #244) — subtracting uncertainty and choosing a display resolution
+  are different operations — and it left `109 m to go` beside a `±25 m`, a
+  one-meter step in the very number the rule was written for.
+
+  **The floor became a bound rather than a number**, which is what the
+  maintainer actually wanted from this ("`1 m` isn't great because it implies
+  precision we don't have"): below one step the readout says `< 5 m`, wrapping
+  the step itself. That generalizes — there is no special floor label to
+  design, and `0 m away` beside a running snooze is gone with it.
+
+- [ ] **Should `DistanceUnit.step` be able to decline?** (Codex, PR #244 — three
+  findings, one mechanism.) The rounding ladder returns an `Int`, so it has to
+  stop somewhere, and above its last rung the only answers are to saturate —
+  which understates the uncertainty, the one thing the ladder exists to prevent
+  — or to refuse. Review found three different edges of that same boundary in
+  one PR: a clamped top rung, a terminator that discarded valid rungs a cycle at
+  a time, and a ceiling that meant 10,000 km in meters but 3,048 km in feet.
+
+  Each was fixed, and the saturation is now unreachable from anything a surface
+  renders: `MAX_REPRESENTABLE_RUNG` is about the return type alone (not a
+  distance, so it cannot be the wrong distance in the wrong unit), and
+  `DepartureObservation.isReportable` declines anything past `CEILING_M`, set
+  well inside every unit's ladder. So the class is closed *by a predicate
+  standing beside the function* rather than by the function's own signature.
+
+  The design that would close it in the type is `step(): Int?` — the ladder
+  itself declining what it cannot describe, with no reachable-or-not argument to
+  make. Not taken: `AGENTS.md` reserves design changes for the maintainer even
+  under autopilot, and three findings in one mechanism is exactly the evidence
+  that rule wants a human to read rather than an agent to act on.
+
+- [ ] **Should the imperial ladder gain a 75 ft rung?** Found while writing the
+  screenshot expectations for the entry above, and visible in
+  `MainScreenScreenshotTest`: the same fix (±22.36 m) reads `±25 m` on a metric
+  phone and `±100 ft` on a US one, because 25 m is 82 ft and the imperial ladder
+  jumps 50 → 100. So the imperial form is about a fifth coarser than the metric
+  one for the same reading, and a US user is told less than a UK user about an
+  identical fix. A `75` rung (22.9 m) would track the metric ladder closely and
+  is a number a US reader recognizes, so the cost looks like one more rung and
+  nothing else.
+
+  Not taken, because the ladder shipped as the maintainer settled it
+  (2026-09-09, choosing 15/25/50/100 over 10/20/50, 15/30/50 and 20/50/100), and
+  this divergence was not on the table when they chose. Their call, not
+  autopilot's — the ladders never have to agree, and "recognizable numbers" is a
+  reason to accept some divergence rather than to chase it away.
 
 
 - [x] **The settling copy is keyed on which capture half is still outstanding, not on
@@ -6526,7 +6586,10 @@ What is left open:
 - [x] **Honor the system's units.** Done: `LocaleData.getMeasurementSystem`
       picks meters or feet, and the value is formatted with its unit into a
       single placeholder, so one pair of sentences covers both.
-- [ ] **Is whole-unit rounding right, in either system?** Every form rounds to
+- [x] **Is whole-unit rounding right, in either system?** **No — answered by
+      PR #244**, which put every form on a step drawn from the fix's own
+      uncertainty. The entry below is kept as the reasoning that led there.
+      Every form used to round to
       whole units, which is what the meters-only version shipped with rather
       than a decision anyone made. None of them is meaningful below a fix's own
       accuracy — ±10 m is a *good* reading — so `656 ft away ±73 ft · 74 ft to go`
@@ -6544,6 +6607,12 @@ What is left open:
       than for changing either rule: at 25 ft both read 75. A coarser step in
       both would read more honestly; it wants a handset before choosing, since
       it trades honesty against looking like the number has stopped moving.
+
+      The collision it describes is resolved by the coarser step, exactly as
+      predicted: the `±` is now printed *as* the step, and a to-go below one
+      step reads `< 25 ft` rather than a number three feet away from it. What
+      it flagged as still owed — the handset check that the number does not
+      look frozen — is real and stands, under *Hardware verification*.
 - [ ] **Does a visible threshold imply a settable one?** (maintainer, 2026-09-06:
       "maybe it implies we need to add a distance threshold or something".) Showing
       how far there is left to go invites the next question — *why that far?* — and
