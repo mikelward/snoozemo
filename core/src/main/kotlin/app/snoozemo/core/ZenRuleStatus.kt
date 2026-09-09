@@ -194,10 +194,13 @@ object ZenRuleStatusChange {
  * reports "another app's rule" for a field that may simply be missing, which is
  * evidence pointing the wrong way rather than absent evidence (Codex, PR #238).
  *
- * `unnamed` is not hypothetical: the receiver reads
- * `NotificationManager.EXTRA_AUTOMATIC_RULE_ID` while this broadcast is
- * documented to carry `EXTRA_AUTOMATIC_ZEN_RULE_ID`, so it is what a device
- * capture is expected to show, and seeing it is what settles that (`TODO.md`).
+ * `unnamed` means a delivery this app read no id out of — an implementation
+ * that does not populate the extra, or a malformed broadcast. **In a capture
+ * taken before PR #242 it means something else and far more common**, which is
+ * worth knowing when reading one: the receiver read the near-namesake
+ * `EXTRA_AUTOMATIC_RULE_ID` until then, so every line reads `unnamed` and none
+ * of them was acted on. On a build carrying that fix, `unnamed` is the genuine
+ * case again and is evidence about the platform, not about this app.
  *
  * Never the identifier itself: whether the rule was ours is the diagnostic,
  * which one it was is not (SPEC.md §4.6).

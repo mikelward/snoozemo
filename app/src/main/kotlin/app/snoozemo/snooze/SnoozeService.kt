@@ -590,7 +590,25 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent == null) return
             reconcileRuleStatus(
-                ruleId = intent.getStringExtra(NotificationManager.EXTRA_AUTOMATIC_RULE_ID),
+                // **`EXTRA_AUTOMATIC_ZEN_RULE_ID`, not `EXTRA_AUTOMATIC_RULE_ID`.**
+                // Near-identical names, different constants: this broadcast
+                // carries the first (API 30), while the second (API 29) belongs
+                // to the `ACTION_AUTOMATIC_ZEN_RULE` *configuration* intent and
+                // is simply absent here. Reading it gave `ruleId = null` on
+                // every delivery, so `RuleOwnership.isOurs` returned false on
+                // its first line and nothing was ever ours — the whole of
+                // §5.8, its stale-broadcast veto included, could not run. What
+                // that cost was not the veto but the thing the veto guards: a
+                // rule disabled or deleted under a running snooze went
+                // unnoticed, and the snooze ran to its cap believing it was
+                // enforcing a rule the platform had stopped honoring.
+                //
+                // The status extra beside it was always right, which is how
+                // this survived review: the pair reads as deliberate. The same
+                // near-name trap took `openFilters` on the Settings side
+                // (Codex, PR #88). `RuleStatusReceiverTest` is the guard now —
+                // there was no test of this wiring at all.
+                ruleId = intent.getStringExtra(NotificationManager.EXTRA_AUTOMATIC_ZEN_RULE_ID),
                 status = intent.getIntExtra(
                     NotificationManager.EXTRA_AUTOMATIC_ZEN_RULE_STATUS,
                     NotificationManager.AUTOMATIC_RULE_STATUS_UNKNOWN,
