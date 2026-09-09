@@ -774,7 +774,16 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      */
     private fun recordState(): SnoozeRecordState =
         runCatching { store.state() }
-            .onFailure { Log.w(TAG, "Reading the record's lifecycle failed; assuming armed.", it) }
+            .onFailure {
+                Log.w(TAG, "Reading the record's lifecycle failed; assuming armed.", it)
+                // Assuming `ARMED` is what makes a failed read able to *end* a
+                // snooze: paired with an inactive rule that is the combination
+                // `endingFor` reads as the user reaching the switch. So the
+                // assumption is recorded where the decision it feeds is
+                // (SPEC.md §4.6), not only in logcat — a capture that shows a
+                // `DND_TURNED_OFF` on a guess should say it was a guess.
+                SnoozeDebugLog.warning("the record's lifecycle was unreadable; assuming armed")
+            }
             .getOrDefault(SnoozeRecordState(SnoozeLifecycle.ARMED))
 
     /**
@@ -1015,7 +1024,39 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // says (SPEC.md §5.8) — including the arm that never finished, which
         // is not the user turning Do Not Disturb off and must be completed
         // rather than read as an ending.
-        val observedEnding = observedActivation?.let { endingFor(recordState(), it) }
+        val observedEnding = observedActivation?.let { activation ->
+            val state = recordState()
+            val verdict = endingFor(state, activation)
+            // **The other way a snooze ends as `DND_TURNED_OFF`, and the one
+            // that explained nothing** (maintainer, device capture
+            // 2026-09-09). Until now this read wrote only to logcat, which
+            // does not reach the report a user shares — so a capture showed
+            // the tap, then the ending, with no way to tell this path from the
+            // rule-status broadcast, and no way to see what it read.
+            //
+            // `start` is the field the whole question turns on: this read runs
+            // on every wake-up that is not an arm or an explicit ending, and
+            // `SET_CAP` is one of them — so *choosing an end time* takes it,
+            // on a snooze that is running and being refined. Whether the user
+            // asked for this read is the difference between a restore doing
+            // its job and a refinement tripping over one.
+            //
+            // `verdict`, never "ended": this is a classification of what was
+            // read, and whether an ending followed depends on whether anything
+            // was actually running by the time it was acted on. The `state →`
+            // line records that, so claiming it here would be a second, less
+            // reliable copy of it — and one that lies on an idle wake-up.
+            //
+            // Coarse state and reasons only (`AGENTS.md`, *Privacy*): the
+            // action's own name, two enums and an end reason. No rule
+            // identifier, and nothing about the snooze beyond its lifecycle.
+            SnoozeDebugLog.event(
+                "restore read: start=${intent?.action?.substringAfterLast('.') ?: "none"} " +
+                    "rule=$activation record=${state.lifecycle} " +
+                    "verdict=${verdict ?: "nothing to do"}",
+            )
+            verdict
+        }
 
         when (intent?.action) {
             ACTION_ARM, ACTION_ERASE_RETRY -> Unit

@@ -1466,6 +1466,14 @@ happened:
   afterwards, so a tap that toggled a state they thought was something else reads identically to one
   they meant. Only the surfaces that carry a tap say so: an ending with no such line is the app's
   own, which is why the automatic ones name themselves too.
+- **What the restore read saw**, on every wake-up that takes it: which start ran it, what the
+  rule read as, what lifecycle the record was in, and what those two together were taken to
+  mean — including "nothing to do", since a snooze that survives a read is as informative as
+  one that does not. This is the *second* producer of a `DND_TURNED_OFF` ending and the one
+  that explained nothing: its decision went to logcat, which no shared report carries, so a
+  capture could not tell it from the rule-status broadcast. The verdict is named as a
+  classification rather than an ending, because whether one followed depends on what was
+  running when it was acted on, and the transition line already records that.
 - **How a `DND_TURNED_OFF` ending was decided**, and only while a snooze is running: the
   broadcast is not filtered to our own rule, so an idle line would timestamp some other rule's
   transition while explaining no ending — a user's bedtime schedule is not this log's business.

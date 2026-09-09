@@ -6886,6 +6886,23 @@ what sets it off.
   ("I snooze now, then tap until 10:30 … but it ended the snooze now") in a way the stale-broadcast
   hypothesis does not.
 
+  **No longer a code reading: `RestoreReadDiagnosticTest` demonstrates it.** A running snooze
+  (armed *and* past `ARMING`) plus an `ACTION_SET_CAP` start plus an `INACTIVE` rule reading
+  produces `restore read: start=SET_CAP rule=INACTIVE record=ARMED verdict=DND_TURNED_OFF`.
+  The record's lifecycle is load-bearing and was nearly missed: `endingFor` refuses to classify
+  an `ARMING` record at all, so a fixture left in that state reports "nothing to do" for every
+  activation and would have passed while proving nothing. Those expectations are what a fix has
+  to change, loudly.
+
+  **The fix is not settled and is not any of the three rapid-toggle mechanisms.** Those address
+  two user operations racing; this is one user operation triggering a state read that should not
+  apply to it. The narrow shape is that a start which refines a *live* snooze is not a restore —
+  the same argument the code already makes for `ACTION_ARM` and `ACTION_END` ("reading its state
+  first buys nothing and costs the user a policy IPC between their tap and their phone making
+  noise again"). It cannot simply move to the not-restoring list, because `restoring` also
+  decides `restoreIfNeeded()` versus `adoptIfNeeded()`, and a `SET_CAP` after process death does
+  need the restore. Separating the two is the work.
+
   Nothing in the tree tests the receiver's extra-reading, so this has never been exercised.
   This repo has been bitten by the same near-name pair once before, on the Settings side
   (`MainActivity.openFilters`, Codex PR #88), where the fix needed AOSP read directly rather
