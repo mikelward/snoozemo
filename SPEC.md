@@ -658,11 +658,12 @@ the screen opens and where a user already looks for it, and the arm/end button g
 itself.
 
 The row still scrolls with the column, deliberately. Pinning it would guarantee the gear at the
-cost of the scroll viewport in exactly the constrained cases — short window, large font — where
-`End now` is already tight, and this section ranks those the other way round: the manual exit is
-"always available, always instant" (§7), Settings is touched rarely and usually never. So the
-guarantee stays with the exit, and Settings gets the better position rather than a reserved one
-(Codex, PR #202).
+cost of the scroll viewport in exactly the constrained cases — short window, large font — and this
+section ranks those the other way round: the manual exit is "always available, always instant"
+(§7), Settings is touched rarely and usually never. So the guarantee goes to the exit, and Settings
+gets the better position rather than a reserved one (Codex, PR #202). Since 2026-09-09 that is
+literal rather than notional: the exit is pinned (§4.4) and the height a pinned row costs has been
+spent there, which is exactly where this section said it belonged.
 
 The trade in the icon itself is that it says less than a word: it carries `Settings` as its
 accessible name rather than a tooltip, since an icon-only control is nameless to a screen reader
@@ -746,9 +747,9 @@ place for two reasons: reaching either meant scrolling past everything including
 under, and each took the full width immediately beneath the one control that has to be unmissable
 (§7). In the title row they are where the screen opens and where a user already looks, and the
 arm/end button gets the width to itself. The row still scrolls with the column — pinning it would
-buy a guarantee for the two rarely-touched controls by spending viewport that `End now` may
-need in exactly the short-window and large-font cases, and this section ranks those the other way
-round. Each icon carries its label as its accessible name, since an icon-only control is nameless
+buy a guarantee for the two rarely-touched controls out of viewport the exit has since been given
+(§4.4), in exactly the short-window and large-font cases where that height is scarcest, and this
+section ranks those the other way round. Each icon carries its label as its accessible name, since an icon-only control is nameless
 to a screen reader otherwise; the help icon lands with the flow it opens, not before it.
 
 **Both `SettingsScreen` and `MainScreen` carry the update banner** (landed 2026-08-23, extended
@@ -1212,18 +1213,23 @@ cards ending in the irreversible one is the arrangement a hurried tap gets wrong
 ongoing notification's own `End now` wording, so one action carries one name wherever the user meets
 it (§4.3).
 
-**It is last, but it is not yet at a fixed position, and that is outstanding work rather than a
-settled design** (Codex, PR #234). The rows sit in the same scrolling column, so on a short window,
-at a large font, or under a banner, up to four of them stand between the top of the screen and the
-exit — reaching it there costs a scroll that also carries the settings gear off the top. It stays
-reachable, which is what §7's "always available" rests on, but "reachable by scrolling past the
-refinements" is weaker than what this screen owes the one guaranteed way back to a ringing phone,
-and weaker than what was asked for: a position that does not move with the meeting count. The
-requirement stands; only the mechanism is undecided, and `TODO.md` carries both. Pinning is the
-obvious candidate and is not free — it buys the guaranteed position by spending viewport height in
-exactly the short-window and large-font cases that make it look necessary, which is the same trade
-§4.2 declined for the title row and the reason this is the maintainer's call rather than a
-one-line fix.
+**`End now` is pinned below the scroll; everything above it scrolls** (maintainer, 2026-09-09).
+The status line and the refinements scroll within whatever height the exit leaves them; the exit
+does not scroll and is drawn on the first frame at the same place every time, whatever the calendar
+contributed. That is what §7's "always available, always instant" asks for and what merely being
+*last* could not deliver, since up to four rows stood above it and on a short window carried it off
+the bottom of the screen.
+`Snooze` is not pinned: only the exit carries that guarantee, arming is something the user came
+here to do and can hunt for, and bottom-anchoring `Snooze` would put it at the foot of an otherwise
+empty idle screen — a worse reach on a tall phone, not a better one.
+
+**What it costs, stated rather than hidden**: a pinned row spends viewport height permanently, so
+the scrolling half is shorter than the screen in every state, and on a tall phone with few
+refinements there is now visible space between the last row and the exit. That is the same trade
+§4.2 declines for the title row, taken the other way here on purpose — §4.2's own reasoning is that
+the height belongs to the exit, and this is that height being spent on it. The result the maintainer
+asked to try; a device pass is what confirms the gap reads as deliberate rather than as an unfinished
+screen.
 
 **The stepper still only shortens.** Its ceiling is the cap the snooze currently carries, so a user
 who has shortened to an hour cannot step back to two — they choose `Until I leave` and step down

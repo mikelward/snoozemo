@@ -179,239 +179,276 @@ internal fun MainScreen(
     onAnswerTelemetry: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    // **The exit is pinned; everything else scrolls** (maintainer,
+    // 2026-09-09). Two containers rather than one, because those are two
+    // different promises: the refinements are content and may run past the
+    // bottom of a short window, while manual exit is "always available, always
+    // instant" (SPEC.md §7) and a position that depends on how many meetings
+    // the calendar happened to contribute is not that.
     Column(
         modifier = modifier
             .fillMaxSize()
-            // Outside the scroll, so the whole column — not just its resting
+            // Outside both, so the whole screen — not just a resting scroll
             // position — stays clear of the status bar, the navigation bar and
             // any display cutout. Inside the scroll it would only pad the
             // content, leaving a row to slide under the status bar as soon as
-            // the user scrolled.
-            .safeDrawingPadding()
-            // Scrolls, and this is not cosmetic. Manual exit is "always
-            // available, always instant" (SPEC.md §7), and a user who cannot
-            // reach it because their font is large or their window is short
-            // has lost the exit from this screen entirely.
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            // the user scrolled; and the pinned row below would sit on the
+            // navigation bar.
+            .safeDrawingPadding(),
     ) {
-        SnoozemoTitleRow(
-            title = stringResource(R.string.app_name),
-            // Settings rides the title row rather than a button at the foot of
-            // the screen. Down there it sat *below* the exit, so a long screen
-            // put it behind a scroll past everything else — and it competed for
-            // width with the one control that has to be unmissable (SPEC.md
-            // §7's "always available, always instant"). Up here it is where the
-            // screen opens, and the arm/end button gets the width to itself.
+        Column(
+            modifier = Modifier
+                // Takes the height the pinned row leaves. A short window
+                // therefore shrinks the *content*, which scrolls, rather than
+                // the exit, which cannot.
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                // Bottom is 12 rather than 16 because it is no longer an outer
+                // margin: it is the gap to the pinned row, so it matches the
+                // 12dp these rows already keep between each other rather than
+                // adding a second margin on top of the footer's own.
+                .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SnoozemoTitleRow(
+                title = stringResource(R.string.app_name),
+                // Settings rides the title row rather than a button at the foot of
+                // the screen. Down there it sat *below* the exit, so a long screen
+                // put it behind a scroll past everything else — and it competed for
+                // width with the one control that has to be unmissable (SPEC.md
+                // §7's "always available, always instant"). Up here it is where the
+                // screen opens, and the arm/end button gets the width to itself.
+                //
+                // Still inside the scroll, deliberately: pinning the row would take
+                // its height off the viewport in exactly the short-window and
+                // large-font cases where `End snooze` is already tight, and the
+                // exit outranks Settings (SPEC.md §4.2).
+                actions = {
+                    // Help before settings, in logical order rather than physical:
+                    // the app supports RTL, where the row mirrors, so "left" would
+                    // pin them against the direction the layout is meant to flip.
+                    SnoozemoTitleAction(
+                        icon = R.drawable.ic_help,
+                        label = R.string.welcome_replay,
+                        onClick = onOpenWelcome,
+                    )
+                    SnoozemoTitleAction(
+                        icon = R.drawable.ic_settings_gear,
+                        label = R.string.settings_title,
+                        onClick = onOpenSettings,
+                    )
+                },
+            )
+            // First, above even the access banner: this is the screen the user
+            // actually lands on, so a crashed run is surfaced where it will be
+            // seen rather than tucked away on SettingsScreen (SPEC.md §4.6,
+            // maintainer, 2026-08-23).
+            if (crashPending) {
+                CrashBanner(
+                    onShare = onShareDebugLog,
+                    onDismiss = onDismissCrash,
+                    shareFailed = shareFailed,
+                    dismissFailed = dismissFailed,
+                    sharing = sharing,
+                )
+            }
+            // The one required capability, stated as a problem rather than listed
+            // as a row: nothing on this screen can arm without it, so it is a
+            // banner, not a setup row waiting its turn beside the others on
+            // PermissionsScreen. Null-guarded like every other reading here —
+            // unread is not "missing".
+            if (access != null && access != PolicyAccess.GRANTED) {
+                RequiredPermissionBanner(onFix = onOpenPermissions)
+            }
+            // The second required capability, and it had no banner at all until
+            // the tile tap started routing people here for it (Codex, PR #215):
+            // `MainScreen` has stated missing Do Not Disturb access since it
+            // existed, so a user sent to the setup screen by a dead tap and then
+            // backing out to Main found nothing here saying why. Below the access
+            // banner, because without access nothing arms at all — this only
+            // silences the reports about it.
             //
-            // Still inside the scroll, deliberately: pinning the row would take
-            // its height off the viewport in exactly the short-window and
-            // large-font cases where `End snooze` is already tight, and the
-            // exit outranks Settings (SPEC.md §4.2).
-            actions = {
-                // Help before settings, in logical order rather than physical:
-                // the app supports RTL, where the row mirrors, so "left" would
-                // pin them against the direction the layout is meant to flip.
-                SnoozemoTitleAction(
-                    icon = R.drawable.ic_help,
-                    label = R.string.welcome_replay,
-                    onClick = onOpenWelcome,
+            // Separate from the banner above rather than merged with it: two
+            // required capabilities with two different remedies, and one banner
+            // would have to say both things at once.
+            //
+            // The *wider* of the two questions, not the tile's (Codex, PR #216).
+            // The tile skips an askable permission because the tap itself shows the
+            // prompt; nothing here does, and Snooze arms immediately — so sharing
+            // that predicate hid this banner in exactly the state a user reaches by
+            // granting the permission and later revoking it in system settings, and
+            // let the app arm with its ongoing card silently dropped.
+            if (notificationsMissing(notifications, activeChannelEnabled)) {
+                RequiredNotificationsBanner(onFix = onOpenPermissions)
+            }
+            // Above the buttons and louder than a row, because the screen leads
+            // with the tile rather than offering a symmetrical choice (SPEC.md
+            // §4.2): the tile is easier and is where people already go to silence
+            // a phone. Dismissible for good, which only works because the
+            // permanent tile row on SettingsScreen outlives it.
+            if (tileAdded == false && !tileBannerDismissed) {
+                TileBanner(
+                    onAdd = onAddTile,
+                    onDismiss = onDismissTileBanner,
+                    failure = stringResource(R.string.failure_could_not_add_tile)
+                        .takeIf { settingsFailure == SetupRowId.TILE },
                 )
-                SnoozemoTitleAction(
-                    icon = R.drawable.ic_settings_gear,
-                    label = R.string.settings_title,
-                    onClick = onOpenSettings,
+            }
+            // Below both of the above, and above the update banner. A missing
+            // tile or missing Do Not Disturb access stops the product working;
+            // this only degrades it, so it must not push either of those down
+            // the screen — but it outranks an available update, which costs the
+            // user nothing to ignore.
+            if (backgroundLocationMissing && !backgroundLocationBannerDismissed) {
+                BackgroundLocationBanner(
+                    onAllow = onAllowBackgroundLocation,
+                    onDismiss = onDismissBackgroundLocationBanner,
                 )
-            },
-        )
-        // First, above even the access banner: this is the screen the user
-        // actually lands on, so a crashed run is surfaced where it will be
-        // seen rather than tucked away on SettingsScreen (SPEC.md §4.6,
-        // maintainer, 2026-08-23).
-        if (crashPending) {
-            CrashBanner(
-                onShare = onShareDebugLog,
-                onDismiss = onDismissCrash,
-                shareFailed = shareFailed,
-                dismissFailed = dismissFailed,
-                sharing = sharing,
-            )
-        }
-        // The one required capability, stated as a problem rather than listed
-        // as a row: nothing on this screen can arm without it, so it is a
-        // banner, not a setup row waiting its turn beside the others on
-        // PermissionsScreen. Null-guarded like every other reading here —
-        // unread is not "missing".
-        if (access != null && access != PolicyAccess.GRANTED) {
-            RequiredPermissionBanner(onFix = onOpenPermissions)
-        }
-        // The second required capability, and it had no banner at all until
-        // the tile tap started routing people here for it (Codex, PR #215):
-        // `MainScreen` has stated missing Do Not Disturb access since it
-        // existed, so a user sent to the setup screen by a dead tap and then
-        // backing out to Main found nothing here saying why. Below the access
-        // banner, because without access nothing arms at all — this only
-        // silences the reports about it.
-        //
-        // Separate from the banner above rather than merged with it: two
-        // required capabilities with two different remedies, and one banner
-        // would have to say both things at once.
-        //
-        // The *wider* of the two questions, not the tile's (Codex, PR #216).
-        // The tile skips an askable permission because the tap itself shows the
-        // prompt; nothing here does, and Snooze arms immediately — so sharing
-        // that predicate hid this banner in exactly the state a user reaches by
-        // granting the permission and later revoking it in system settings, and
-        // let the app arm with its ongoing card silently dropped.
-        if (notificationsMissing(notifications, activeChannelEnabled)) {
-            RequiredNotificationsBanner(onFix = onOpenPermissions)
-        }
-        // Above the buttons and louder than a row, because the screen leads
-        // with the tile rather than offering a symmetrical choice (SPEC.md
-        // §4.2): the tile is easier and is where people already go to silence
-        // a phone. Dismissible for good, which only works because the
-        // permanent tile row on SettingsScreen outlives it.
-        if (tileAdded == false && !tileBannerDismissed) {
-            TileBanner(
-                onAdd = onAddTile,
-                onDismiss = onDismissTileBanner,
-                failure = stringResource(R.string.failure_could_not_add_tile)
-                    .takeIf { settingsFailure == SetupRowId.TILE },
-            )
-        }
-        // Below both of the above, and above the update banner. A missing
-        // tile or missing Do Not Disturb access stops the product working;
-        // this only degrades it, so it must not push either of those down
-        // the screen — but it outranks an available update, which costs the
-        // user nothing to ignore.
-        if (backgroundLocationMissing && !backgroundLocationBannerDismissed) {
-            BackgroundLocationBanner(
-                onAllow = onAllowBackgroundLocation,
-                onDismiss = onDismissBackgroundLocationBanner,
-            )
-        }
-        // Same banner `SettingsScreen` shows, for the same reason `CrashBanner`
-        // is on every screen: which screen the user happens to land on is not
-        // something this feature should have to reason about, and this is the
-        // one they land on by default. Below the tile banner rather than above
-        // it — a missing tile blocks the product's whole first impression,
-        // where an update is worth acting on but nothing is broken without it.
-        (playUpdate as? PlayUpdateState.Available)?.takeIf { it.shouldPrompt }?.let { update ->
-            PlayUpdateBanner(
-                progress = update.progress,
-                restartFailed = playUpdateRestartFailed,
-                onUpdate = onStartPlayUpdate,
-                onRestart = onCompletePlayUpdate,
-                onDismiss = onDismissPlayUpdate,
-            )
-        }
-        // Everything above either blocks the product (Do Not Disturb access,
-        // the tile) or offers to repair something the user is missing; this
-        // asks for a favor, so it yields to all of them.
-        if (telemetryUnanswered) {
-            TelemetryInviteCard(onAnswer = onAnswerTelemetry)
-        }
-        // Last of the banners, below even the one that asks a favor. It blocks
-        // nothing, repairs nothing and asks nothing — it points at an icon
-        // already on this screen — so anything with something at stake outranks
-        // it. Written first and moved here (Codex, PR #206): above the tile it
-        // pushed the one action that makes the product work down the scroll,
-        // which is the opposite of `SPEC.md` §4.2's lead.
-        if (showReplayHint) {
-            ReplayHintBanner(onDismiss = onDismissReplayHint)
-        }
-        // One slot, always saying which of the two states the screen is in
-        // once the record has been read — a running snooze reports what would
-        // end it and when, and an idle one says so outright. Leaving idle
-        // blank made "not snoozing" and "hasn't been read yet" render
-        // identically, so the only thing distinguishing them was whether the
-        // Snooze button happened to be enabled, which is principle 2's
-        // failure: the safe state, stated nowhere.
-        //
-        // The record's own place name is left out on purpose: it is always
-        // literally "Here" today (`ActiveSnooze.DEFAULT_PLACE_NAME`) since
-        // saved/named places are unbuilt (`TODO.md`, "Saved places"), and the
-        // ongoing notification doesn't show it either, so surfacing it here
-        // first would only read as filler.
-        when {
-            snoozing == true && trackingMode != null && remaining != null ->
-                SnoozeStatus(trackingMode, remaining, degradation, departure)
-            snoozing == false -> NotSnoozingStatus()
-            // Nothing yet: either the record is still being read, or it read
-            // as running but without the mode and cap the line reports. Same
-            // "unread is not zero" discipline as the banners above — an idle
-            // claim over a snooze this screen hasn't finished reading is the
-            // one wrong thing this line could say, and it is exactly the
-            // wrong direction to be wrong in.
-            else -> Unit
-        }
-        // Above the button block rather than below it, so the screen reads
-        // status, then how to change it, then how to end it. `End now` keeps
-        // the last word — it is the guaranteed way back to a ringing phone
-        // (SPEC.md §7) and the thing a user reaches for in a hurry, so it
-        // stays the bottom-most control rather than sitting above a stack of
-        // refinements. Bottom-most in *order*: it is not pinned outside the
-        // scroll, so a snooze offering both meeting rows on a short screen
-        // can still put it below the fold (`TODO.md`).
-        endChoice?.let { choice ->
-            EndConditionRows(
-                condition = choice.condition,
-                formattedTime = choice.formattedTime,
-                meetingLabels = choice.meetings.map { it.label },
-                onChooseTime = onChooseEndTime,
-                onChooseMeeting = onChooseEndMeeting,
-                onChooseDeparture = onChooseDeparture,
-                onStepDown = onStepEndDown,
-                onStepUp = onStepEndUp,
-                committing = choice.committing,
-                failed = choice.failed,
-                tracksDeparture = choice.tracksDeparture,
-            )
-        }
-        // Gated behind access being allowed, same as the old DebugScreen.
-        //
-        // **Exactly one of the two shows** (maintainer, 2026-08-22). The split
-        // is on `snoozing == false` rather than on `snoozing == true`, and the
-        // asymmetry is the whole design: `End snooze` is the one guaranteed
-        // way to un-silence the phone, so it may only disappear where the
-        // screen is *confident* nothing is running. Unknown — the record not
-        // read yet — keeps it, because a stale or unread belief must never be
-        // what stops someone turning their phone back on (SPEC.md §7: manual
-        // exit is always available, always instant, and `endSnooze` is
-        // idempotent, so offering it when nothing is running costs nothing).
-        //
-        // `Snooze` takes the opposite treatment for the same reason: it needs
-        // a confident "nothing is running" to appear at all, since offering to
-        // arm over a snooze the screen has not read yet is how a user loses
-        // the deadline they were promised. It used to render disabled in that
-        // state; showing the safety net instead says more with one button.
-        if (access == PolicyAccess.GRANTED) {
-            if (snoozing == false) {
+            }
+            // Same banner `SettingsScreen` shows, for the same reason `CrashBanner`
+            // is on every screen: which screen the user happens to land on is not
+            // something this feature should have to reason about, and this is the
+            // one they land on by default. Below the tile banner rather than above
+            // it — a missing tile blocks the product's whole first impression,
+            // where an update is worth acting on but nothing is broken without it.
+            (playUpdate as? PlayUpdateState.Available)?.takeIf { it.shouldPrompt }?.let { update ->
+                PlayUpdateBanner(
+                    progress = update.progress,
+                    restartFailed = playUpdateRestartFailed,
+                    onUpdate = onStartPlayUpdate,
+                    onRestart = onCompletePlayUpdate,
+                    onDismiss = onDismissPlayUpdate,
+                )
+            }
+            // Everything above either blocks the product (Do Not Disturb access,
+            // the tile) or offers to repair something the user is missing; this
+            // asks for a favor, so it yields to all of them.
+            if (telemetryUnanswered) {
+                TelemetryInviteCard(onAnswer = onAnswerTelemetry)
+            }
+            // Last of the banners, below even the one that asks a favor. It blocks
+            // nothing, repairs nothing and asks nothing — it points at an icon
+            // already on this screen — so anything with something at stake outranks
+            // it. Written first and moved here (Codex, PR #206): above the tile it
+            // pushed the one action that makes the product work down the scroll,
+            // which is the opposite of `SPEC.md` §4.2's lead.
+            if (showReplayHint) {
+                ReplayHintBanner(onDismiss = onDismissReplayHint)
+            }
+            // One slot, always saying which of the two states the screen is in
+            // once the record has been read — a running snooze reports what would
+            // end it and when, and an idle one says so outright. Leaving idle
+            // blank made "not snoozing" and "hasn't been read yet" render
+            // identically, so the only thing distinguishing them was whether the
+            // Snooze button happened to be enabled, which is principle 2's
+            // failure: the safe state, stated nowhere.
+            //
+            // The record's own place name is left out on purpose: it is always
+            // literally "Here" today (`ActiveSnooze.DEFAULT_PLACE_NAME`) since
+            // saved/named places are unbuilt (`TODO.md`, "Saved places"), and the
+            // ongoing notification doesn't show it either, so surfacing it here
+            // first would only read as filler.
+            when {
+                snoozing == true && trackingMode != null && remaining != null ->
+                    SnoozeStatus(trackingMode, remaining, degradation, departure)
+                snoozing == false -> NotSnoozingStatus()
+                // Nothing yet: either the record is still being read, or it read
+                // as running but without the mode and cap the line reports. Same
+                // "unread is not zero" discipline as the banners above — an idle
+                // claim over a snooze this screen hasn't finished reading is the
+                // one wrong thing this line could say, and it is exactly the
+                // wrong direction to be wrong in.
+                else -> Unit
+            }
+            // The last thing in the scrolling half, so the screen reads status,
+            // then how to change it — and then, below the scroll and fixed
+            // there, how to end it. These rows are what made pinning the exit
+            // necessary: there can be four of them, and while the exit sat
+            // underneath, its position moved with whatever the calendar
+            // contributed.
+            endChoice?.let { choice ->
+                EndConditionRows(
+                    condition = choice.condition,
+                    formattedTime = choice.formattedTime,
+                    meetingLabels = choice.meetings.map { it.label },
+                    onChooseTime = onChooseEndTime,
+                    onChooseMeeting = onChooseEndMeeting,
+                    onChooseDeparture = onChooseDeparture,
+                    onStepDown = onStepEndDown,
+                    onStepUp = onStepEndUp,
+                    committing = choice.committing,
+                    failed = choice.failed,
+                    tracksDeparture = choice.tracksDeparture,
+                )
+            }
+            // Gated behind access being allowed, same as the old DebugScreen.
+            //
+            // **`Snooze` scrolls; the exit does not.** They are split across
+            // the two containers rather than kept as one if/else because only
+            // one of them carries §7's guarantee. Arming is something the user
+            // came here to do and can hunt for; ending is something they may
+            // need in a hurry with the phone already silent. Pinning `Snooze`
+            // too would also push it to the foot of an otherwise empty idle
+            // screen, which is a worse reach on a tall phone, not a better one.
+            //
+            // It needs a confident "nothing is running" to appear at all,
+            // since offering to arm over a snooze the screen has not read yet
+            // is how a user loses the deadline they were promised. It used to
+            // render disabled in that state; showing the safety net instead
+            // says more with one button.
+            if (access == PolicyAccess.GRANTED && snoozing == false) {
                 Button(
                     onClick = onArm,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(stringResource(R.string.arm))
                 }
-            } else {
-                // **The same size as the choices above it, outlined rather
-                // than filled** (maintainer, 2026-09-08). Same size because it
-                // is the guaranteed way back to a ringing phone (SPEC.md §7)
-                // and must stay the easiest thing on the screen to hit;
-                // outlined because it is the one row that acts rather than
-                // schedules, and a stack of identical cards ending in the
-                // irreversible one invites the wrong tap.
-                EndChoiceRow(
-                    label = stringResource(R.string.action_end_now),
-                    onClick = onRelease,
-                    outlined = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+            }
+            // Above the exit rather than below it, which is where it used to
+            // sit: the exit is the bottom-most thing on the screen now, and a
+            // result line under a pinned row would either be pinned itself —
+            // spending height that belongs to the content — or float free of
+            // the button whose tap it reports.
+            lastOutcome?.let {
+                Text(text = it, style = MaterialTheme.typography.bodySmall)
             }
         }
-        lastOutcome?.let {
-            Text(text = it, style = MaterialTheme.typography.bodySmall)
+
+        // **Pinned, outside the scroll** (maintainer, 2026-09-09: "let's try
+        // pinned outside the scroll, i.e. pinned at the bottom"). Refinements
+        // are variable in number — a snooze can offer a departure row, a time
+        // row and two meeting ends — and while the exit sat below them its
+        // position moved with whatever the calendar contributed, on a short
+        // window off the bottom of the screen entirely.
+        //
+        // **The split is on `snoozing == false`, not on `snoozing == true`**,
+        // and the asymmetry is the whole design (maintainer, 2026-08-22): this
+        // is the one guaranteed way to un-silence the phone, so it may only
+        // disappear where the screen is *confident* nothing is running.
+        // Unknown — the record not read yet — keeps it, because a stale or
+        // unread belief must never be what stops someone turning their phone
+        // back on (SPEC.md §7: manual exit is always available, always
+        // instant, and `endSnooze` is idempotent, so offering it when nothing
+        // is running costs nothing).
+        //
+        // The whole footer is absent rather than empty when it has nothing to
+        // draw, so its padding does not reserve a strip of blank screen on the
+        // idle and access-missing states.
+        if (access == PolicyAccess.GRANTED && snoozing != false) {
+            // **The same size as the choices above it, outlined rather than
+            // filled** (maintainer, 2026-09-08). Same size because it is the
+            // guaranteed way back to a ringing phone and must stay the easiest
+            // thing on the screen to hit; outlined because it is the one row
+            // that acts rather than schedules, and a stack of identical cards
+            // ending in the irreversible one invites the wrong tap.
+            EndChoiceRow(
+                label = stringResource(R.string.action_end_now),
+                onClick = onRelease,
+                outlined = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+            )
         }
     }
 }
