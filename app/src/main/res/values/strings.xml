@@ -350,6 +350,13 @@
     <!-- TODO: translate -->
     <string name="distance_feet" tools:ignore="MissingTranslation">%1$d ft</string>
     <!-- TODO: translate -->
+    <!-- Closer than this fix can resolve. Wraps an already-formatted distance
+         so there is one string rather than a metric and an imperial copy, and
+         so a translator can move the bound to wherever their language puts it.
+         The value it wraps is the rounding step itself, which is the smallest
+         distance the current reading is entitled to name. -->
+    <string name="distance_under" tools:ignore="MissingTranslation">&lt; %1$s</string>
+    <!-- TODO: translate -->
     <!-- The departure test's own arithmetic, live: how far the last fix put the
          phone from where the snooze started, how uncertain that separation is,
          and how much further a fix this accurate would have to be before it

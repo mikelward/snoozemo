@@ -895,10 +895,43 @@ takes feet; the UK's is `UK` rather than `SI` — it keeps miles for road distan
 the street is read in meters there, so it falls in with everyone else. The distance and its unit are
 formatted together and interpolated as a single placeholder, so there is one pair of sentences
 rather than a metric and an imperial copy of each — which is also the shape a translator needs,
-since where a unit sits in a sentence is not the same in every language. Both forms round to whole
-units, which is the precision the meters-only version shipped with rather than a second decision:
-neither is meaningful below a fix's own accuracy, and the line is replaced only when a fix arrives,
-ninety seconds apart at the fastest.
+since where a unit sits in a sentence is not the same in every language.
+
+**Rounded no finer than the fix itself** (maintainer, 2026-09-09). One rule — *never show a step
+finer than your uncertainty* — replaces the whole-unit rounding the meters-only version shipped
+with, which was never a decision anyone made and put four significant figures in front of a `±`
+that denied them. The step is the smallest rung **at least** as coarse as the combined confidence
+radius; a rung below it would be precisely what the rule forbids, so the ladder rounds up. Metric
+climbs `5 · 10 · 25 · 50 · 100 · 250 · 500 · …`, imperial `15 · 25 · 50 · 100 · 250 · 500 · 1000 ·
+…`, and above the floor they agree. **Neither has a top a reader can reach**: each repeats its shape by
+decade, because the `±` is printed *as* the step, so a ladder that stopped would state an
+uncertainty smaller than the real one — the very failure this rule exists to prevent. It is
+reachable, too: the anchor is capped at 200 m but a fix's own accuracy is not, so a cell-tower fix
+combines past 500 m with nothing refusing it. A ladder returning a whole number has to stop
+*somewhere*, so the two questions are kept apart — how far the numbers can go is about the type,
+and how wide an uncertainty is worth describing at all is about the product. The second is the
+readout's ceiling, set well inside the first, so a step always exists for any reading a surface
+will show. **Two ladders rather than one converted**: snapping in meters and
+converting yields steps nobody recognizes (25 m is 82 ft), and the floors differ because a floor is
+a claim about resolution — 5 ft is 1.5 m, sharper than the metric ladder refuses to claim.
+
+The separation and the `±` ride that step, and the `±` is printed *as* it, so the pair describes
+one reading consistently. **So do the meters still to go**, rounded *down* rather than to
+nearest — the reader is asking "am I nearly there?", and rounding up would answer by over-stating
+what is left, the wrong direction for an app whose ambiguity resolves toward ending the snooze
+(D7). An earlier draft left that figure at whole units, arguing that its deficit already has the
+uncertainty subtracted; that confused subtracting uncertainty with choosing a display resolution,
+and left the number the whole rule was written for showing a one-meter step. **Below one step the readout gives a bound rather than a
+number** — `< 5 m`, the step itself — because that is the one true thing a fix that coarse can say;
+`0 m` contradicts a snooze that has not ended and `1 m` is a rounding artifact wearing a unit.
+
+**A reading whose numbers are not numbers has no readout at all.** A non-finite coordinate or
+accuracy poisons the whole observation rather than one field of it, so both surfaces ask one
+question — is this reportable — before formatting anything. The observation itself is deliberately
+kept: a fix like that must still fall out inconclusive, still count toward degradation and still
+write its `distance=unknown` line (§4.6), because a throw on the fix path leaves the snooze armed
+with nothing running to end it. So the guard is a question a formatter asks, not a rejection where
+the reading is built.
 
 **In memory only — and, since 2026-09-08, no longer only on the screen.** It is never written to
 disk, and it lives in memory for as long as the process does, which means a snooze that outlives a

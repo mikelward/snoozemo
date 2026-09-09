@@ -56,14 +56,20 @@ class SnoozeNotificationsDistanceTest {
         //
         // 60 m inside a 100 m anchor, with 15 m and 10 m accuracies: the
         // combined uncertainty is 18.0 m, so the margin is -58.0 m and the
-        // ground still to cover is that plus the 50 m hysteresis — 108.0 m,
-        // ceiled to 109. Spelled out because the number is the point: it is a
-        // property of *this* reading, not of the anchor, so a vaguer fix would
-        // legitimately print a bigger one.
+        // ground still to cover is that plus the 50 m hysteresis — 108.0 m.
+        // ±18.0 m takes the 25 m rung, so it reads 100. Spelled out because
+        // the number is the point: it is a property of *this* reading, not of
+        // the anchor, so a vaguer fix would legitimately print a bigger one on
+        // a coarser step.
+        //
+        // It used to read 109 — the raw deficit at whole meters, which showed
+        // a one-meter step off a reading whose own `±` says it cannot resolve
+        // one (Codex, PR #244). Rounded **down**, so the number never
+        // over-states what is left.
         publish(distanceM = 60.0)
 
         assertEquals(
-            appContext.getString(R.string.distance_meters, 109),
+            appContext.getString(R.string.distance_meters, 100),
             subText(TrackingMode.FULL),
         )
     }
@@ -76,13 +82,14 @@ class SnoozeNotificationsDistanceTest {
         // differently from the screen would be worse than either being wrong,
         // since the user can see both at once.
         //
-        // 355, not the 358 that converting a rounded 109 m would give: the
-        // conversion runs before the ceiling, so the foot figure is ceiled from
-        // 354.4 rather than derived from the meter one.
+        // 300, not the 328 that converting a rounded 100 m would give: the
+        // conversion runs before the rounding, so the foot figure is snapped
+        // from 354.4 ft onto the 100 ft rung its own ±59 ft earns, rather than
+        // being derived from the meter figure.
         publish(distanceM = 60.0)
 
         assertEquals(
-            appContext.getString(R.string.distance_feet, 355),
+            appContext.getString(R.string.distance_feet, 300),
             subText(TrackingMode.FULL),
         )
     }
@@ -167,7 +174,7 @@ class SnoozeNotificationsDistanceTest {
         publish(distanceM = 60.0)
 
         assertEquals(
-            appContext.getString(R.string.distance_meters, 109),
+            appContext.getString(R.string.distance_meters, 100),
             subText(TrackingMode.FULL),
         )
     }

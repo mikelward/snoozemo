@@ -672,7 +672,13 @@ class MainScreenScreenshotTest {
         }
 
         composeRule.onNodeWithText("Snoozing until you leave").assertExists()
-        composeRule.onNodeWithText("200 m away ±22 m · 23 m to go").assertExists()
+        // A 10 m fix against a 20 m anchor combines to ±22.36 m, so the step is
+        // 25 m — the smallest rung not finer than that. The `±` is printed as
+        // the step, the separation is snapped to it, and the 23 m still to go
+        // does not reach one step, so it reads as the bound it is. The old line
+        // said `200 m away ±22 m · 23 m to go`: three numbers to the meter off a
+        // reading whose own second number says it cannot resolve one.
+        composeRule.onNodeWithText("200 m away ±25 m · < 25 m to go").assertExists()
     }
 
     // Pinned to a metric locale: the readout follows the phone's own
@@ -766,8 +772,13 @@ class MainScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("225 m away ±25 m · 1 m to go").assertExists()
+        // Still never zero — that is what this case has always been for — but
+        // the way it avoids zero changed. `1 m to go` was a fake meter standing
+        // in for a floor; the bound says the true thing instead, and says it
+        // about a reading whose ±25 m could not have resolved a meter anyway.
+        composeRule.onNodeWithText("225 m away ±25 m · < 25 m to go").assertExists()
         composeRule.onNodeWithText("225 m away ±25 m · 0 m to go").assertDoesNotExist()
+        composeRule.onNodeWithText("225 m away ±25 m · 1 m to go").assertDoesNotExist()
         composeRule.onNodeWithText("225 m away ±25 m · confirming").assertDoesNotExist()
     }
 
@@ -808,9 +819,17 @@ class MainScreenScreenshotTest {
             )
         }
 
-        // 200 m is 656.17 ft; 10 m still to go rounds up to 33 ft.
-        composeRule.onNodeWithText("656 ft away ±73 ft · 74 ft to go").assertExists()
-        composeRule.onNodeWithText("200 m away ±22 m · 23 m to go").assertDoesNotExist()
+        // The same reading as the metric case, on the imperial ladder: ±22.36 m
+        // is 73.4 ft, whose smallest not-finer rung is 100 ft, and 656.17 ft
+        // snaps to 700 on it.
+        //
+        // Worth seeing rather than only reading: the two ladders do not track
+        // each other exactly here. 25 m is 82 ft, so the same fix is described
+        // as ±25 m on one phone and ±100 ft on another — the imperial form a
+        // fifth coarser. That is the price of rungs a US reader recognizes, and
+        // whether a 75 ft rung should close it is open in `TODO.md`.
+        composeRule.onNodeWithText("700 ft away ±100 ft · < 100 ft to go").assertExists()
+        composeRule.onNodeWithText("200 m away ±25 m · < 25 m to go").assertDoesNotExist()
     }
 
     @Test
@@ -849,7 +868,7 @@ class MainScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("200 m away ±22 m · 23 m to go").assertDoesNotExist()
+        composeRule.onNodeWithText("200 m away ±25 m · < 25 m to go").assertDoesNotExist()
     }
 
     @Test

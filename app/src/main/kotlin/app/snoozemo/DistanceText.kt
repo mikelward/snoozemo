@@ -50,3 +50,24 @@ internal fun distanceText(context: Context, unit: DistanceUnit, value: Int): Str
         },
         value,
     )
+
+/**
+ * A snapped distance, or the bound below which this fix cannot resolve one.
+ *
+ * `null` is what [DistanceUnit.snap] returns for a value that does not reach a
+ * whole [step], and it is rendered `< 5 m` rather than rounded to something.
+ * The alternative is a number the reading has not earned: `0 m` contradicts a
+ * snooze that has not ended, and `1 m` under a ±25 m fix is a rounding artifact
+ * wearing a unit.
+ *
+ * Wrapping the formatted distance rather than taking the number keeps one
+ * string for the bound instead of a metric and an imperial copy, which is the
+ * same shape the pair it wraps already has.
+ */
+internal fun distanceText(
+    context: Context,
+    unit: DistanceUnit,
+    value: Int?,
+    step: Int,
+): String = value?.let { distanceText(context, unit, it) }
+    ?: context.getString(R.string.distance_under, distanceText(context, unit, step))
