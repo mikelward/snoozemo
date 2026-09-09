@@ -1028,11 +1028,45 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             ACTION_END, ACTION_CAP_LOST, ACTION_RELEASE_STUCK -> false
             else -> true
         }
+
+        // **And not on a snooze this process has been watching all along.**
+        //
+        // `onReleasing`'s doc names the two gaps this read exists to cover,
+        // and they are the only two: registration "can be refused", and "the
+        // process only lives between wake-ups, so a snooze can outlive the
+        // only thing watching it". Neither is open here. `controller` is
+        // built in `onCreate`, so a live `active` means *this* process picked
+        // the record up and has not died since — and `onCreate` registered
+        // the rule-status receiver before any `onStartCommand` ran, so it has
+        // been listening for longer than the snooze has existed. A status
+        // change would already have arrived as a broadcast; the read can only
+        // repeat what was heard, or contradict it.
+        //
+        // Contradict it is what it did. Every wake-up that is not an arm or
+        // an explicit ending takes this read, and `ACTION_SET_CAP` is one of
+        // them — so **choosing an end time asked the platform whether the
+        // user had turned Do Not Disturb off**, on a snooze the user was at
+        // that moment refining, and an inactive answer ended it. That is the
+        // classification working exactly as written on a question that should
+        // never have been put to it.
+        //
+        // The receiver's registration is the other half of the condition
+        // rather than an afterthought: if it was refused, the process is
+        // alive but blind, which is the first gap above and the read is the
+        // only thing left. Skipping on liveness alone would assume a watch
+        // that `onCreate` already recorded as absent.
+        //
+        // PR #242 is what makes this safe to lean on. The receiver read the
+        // wrong extra until then, so "the broadcast would have told us" was a
+        // false claim about a path that could not run, and narrowing the read
+        // would have opened a hole rather than closed one.
+        val watchedThroughout = controller.active != null && ruleStatusReceiverRegistered
+
         // Read against the rule the record names, not the one the app holds
         // now (SPEC.md §5.8): after the user deletes the rule and the tile
         // mints a replacement, the current id reads as enabled and off — the
         // user's doing — when the truth is that the enforcing rule is gone.
-        val observedActivation = if (restoring) {
+        val observedActivation = if (restoring && !watchedThroughout) {
             zen.ruleActivation(runCatching { store.enforcingRuleId() }.getOrNull())
         } else {
             null
@@ -1085,6 +1119,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // below turns it off again — would be a visible flicker and two
             // spurious transitions in the Modes UI, in service of a snooze
             // that is about to end anyway.
+            //
+            // A `watchedThroughout` wake-up has no reading, so it always takes
+            // the second branch — and `restoreIfNeeded` returns immediately on
+            // a live `controller.active`, which is the same condition. So
+            // skipping the read moves nothing here: both branches were already
+            // no-ops on a snooze this process is holding.
             else ->
                 if (observedEnding != null) {
                     adoptIfNeeded()

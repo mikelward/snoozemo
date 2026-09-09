@@ -2061,6 +2061,18 @@ it, because a marker stored separately is wiped by the next ordinary update of t
 describes, and a running snooze that reads back as an unfinished arm gets its rule re-asserted over a
 Do Not Disturb the user switched off.
 
+**And never on a snooze the app has been holding all along** (maintainer, PR #243). The read exists
+for exactly two situations, both of which are about *not having heard the broadcast*: the receiver's
+registration can be refused, and the process only lives between wake-ups, so a snooze can outlive
+the only thing watching it. Where neither holds — the service still holds the snooze it picked up,
+and its receiver is registered — a status change would already have arrived as a broadcast, and the
+read can only repeat that or contradict it. It contradicted it: every wake-up that is not an arm or
+an explicit ending took the read, and *choosing an end time* is one of those, so refining a running
+snooze asked the platform whether the user had reached the Do Not Disturb switch and ended the
+snooze when the answer was no longer "on". Liveness alone is not the test — a process whose
+registration was refused is awake and blind, which is the first situation, so the read still runs
+there.
+
 **The read has to happen before the restore.** A process that died before the user turned Do Not
 Disturb off never heard the broadcast, so the next wake-up's state read is the only thing that can
 notice — and restoring a persisted snooze re-asserts the rule, which overwrites exactly that
