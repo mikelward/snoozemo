@@ -10,6 +10,7 @@ import app.snoozemo.core.Anchor
 import app.snoozemo.core.CapabilityLossCause
 import app.snoozemo.core.ClockReading
 import app.snoozemo.core.DegradationCause
+import app.snoozemo.core.Departure
 import app.snoozemo.core.DepartureObservation
 import app.snoozemo.core.LocationDuty
 import app.snoozemo.core.PresenceEvent
@@ -859,6 +860,12 @@ class GeofencePresenceMonitor(
                 servicesDegradation.set(DegradationCause.LOCATION_SERVICES_OFF)
                 send(PresenceUpdate(event = null, degradation = null))
             },
+            // The rate the burst asks at, taken from the gap the §6.6 test
+            // accepts fixes across, so shortening one paces the other. Named
+            // here rather than defaulted inside the burst because this is the
+            // per-snooze construction site, and a gap that later varies by
+            // anchor replaces this expression and nothing else (`TODO.md`).
+            confirmationGapMs = Departure.CONFIRMATION_GAP.toMillis(),
         )
 
         var bridge: AutoCloseable? = null

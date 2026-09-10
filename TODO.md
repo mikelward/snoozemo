@@ -1315,14 +1315,23 @@ the point is that every other line of the app is worthless if it isn't true.
         PR #222).
       - `SPEC.md` §6.6 carries what the 200 m walk was actually made of, which is what makes this
         worth revisiting rather than guessing at again.
-- [ ] **Pace the checking burst at the anchor's confirmation gap before shortening it.** The engine
-      accepts two qualifying fixes `CONFIRMATION_GAP` apart, but on `play` the burst asks for one
-      every `CheckingCadence.CONFIRM_SPACING_MS` — a hard-coded 30 s — so a shorter *accepted* gap
-      is inert on its own, and a first attempt at one was withdrawn from PR #222 rather than
-      shipped as a latency win that never happens (Codex, PR #222). The cadence is constructed per
-      snooze, inside `start()`'s `callbackFlow` along with `CheckingFixes`, so this is passing the
-      anchor's gap into it rather than any lifecycle change. Cover it end to end rather than as a
-      model property.
+- [x] **Pace the checking burst at the confirmation gap before shortening it.** The engine
+      accepted two qualifying fixes `CONFIRMATION_GAP` apart while the `play` burst asked for one
+      every `CheckingCadence.CONFIRM_SPACING_MS` — a hard-coded 30 s beside a
+      `Duration.ofSeconds(30)` in `:core`. Two copies of one number, in different modules, whose
+      divergence nothing reported: a shorter *accepted* gap would have been inert, which is why a
+      first attempt at shortening it was withdrawn from PR #222 rather than shipped as a latency
+      win that never happens (Codex, PR #222).
+      **Landed**: `CheckingCadence` takes the gap, `CheckingFixes` takes it and builds the cadence
+      with it, and `GeofencePresenceMonitor` names `Departure.CONFIRMATION_GAP` at the per-snooze
+      construction site. The constant that remains is derived from `Departure` rather than
+      restating it. Covered end to end, not as a model property — the burst-level test asserts
+      what the scheduler was told to wait, since the cadence returning the right number while the
+      burst asked at another is exactly what "inert" looked like.
+      **What this does not do is make the gap vary by anchor.** There is one gap today; the
+      wording that anticipated a per-anchor one is left to the shortening decision that would
+      introduce it, which is still open above. What the seam buys is that such a gap replaces one
+      expression at the construction site and nothing else.
 - [ ] **Decide whether a check should spend a higher-accuracy fix.** The confirming burst asks for
       no better a fix than the resting probe does — both take the platform default — so the accuracy
       term in `SPEC.md` §6.6's decomposition is whatever the platform felt like giving — one of
