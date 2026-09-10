@@ -3,6 +3,7 @@ package app.snoozemo.ui
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,6 +14,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -24,6 +26,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import app.snoozemo.R
@@ -235,6 +238,65 @@ internal fun EndChoiceRow(
 }
 
 /**
+ * The `When I move` row (SPEC.md §4.4) — the one control on this screen that
+ * carries a *state* rather than performing a choice.
+ *
+ * **A switch, not another card.** Every other row here answers the question
+ * once and is done: tapping `Until 14:30` sets a deadline and the row has
+ * nothing further to say. This one is on or off for the life of the snooze and
+ * the user has to be able to see which, so it takes the affordance that shows
+ * a state and can be reversed — the same reason `End now` is outlined rather
+ * than filled: the shape is what says which kind of answer this is.
+ *
+ * The whole card toggles and the switch itself takes no click of its own, so
+ * there is one target rather than two overlapping ones — a switch is a small
+ * target next to a full-width row, and a miss that lands on the card would
+ * otherwise do nothing.
+ */
+@Composable
+internal fun MotionEndRow(
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val stateLabel = stringResource(R.string.main_when_i_move_on)
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .toggleable(
+                    value = checked,
+                    enabled = enabled,
+                    role = Role.Switch,
+                    onValueChange = onCheckedChange,
+                )
+                .fillMaxWidth()
+                .padding(16.dp)
+                // What the label alone cannot say: `When I move` names the
+                // choice either way, and a screen reader announcing only that
+                // leaves a user unable to tell an armed snooze from an
+                // unarmed one without toggling it to find out.
+                .semantics { if (checked) stateDescription = stateLabel },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.main_when_i_move),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            // Null, so the row above owns the gesture and the semantics; the
+            // switch is the picture of the state, not a second control.
+            Switch(checked = checked, onCheckedChange = null, enabled = enabled)
+        }
+    }
+}
+
+/**
  * One of the `−` / `+` steppers.
  *
  * The symbol is drawn, but the name announced is the whole phrase: "minus"
@@ -357,6 +419,53 @@ internal fun endChoiceUiState(
         tracksDeparture = offerRecord?.mode?.tracksDeparture == true,
     )
 }
+
+/**
+ * The `When I move` switch, as the screen draws it — or null when there is
+ * nothing to draw.
+ *
+ * **Deliberately not part of [EndChoiceUiState]**, and that separation is the
+ * whole point (Codex, PR #252). That state answers "is there a *time* left to
+ * choose", and withholds the whole offer once the cap comes inside `MIN_CAP` —
+ * correct for rows that set a deadline, and wrong for this one, which carries
+ * a state the user must be able to revoke. Bundled in, the switch vanished for
+ * the final thirty minutes of every snooze while the sensor stayed armed:
+ * an exit the user had turned on and could no longer turn off.
+ *
+ * So this asks only its own questions — is a snooze running, can the hardware
+ * answer, can this build hold the service it needs — and none of the
+ * time-choice ones.
+ *
+ * @param record the running snooze, or null while the screen has not read one.
+ * @param deviceHasMotionSensor whether the phone has one at all; false offers
+ *   nothing rather than a switch the service would roll straight back.
+ *   **A lambda, and asked last**, because answering it is a `SensorManager`
+ *   lookup: taken eagerly at the call site it ran during composition on every
+ *   first frame, including an idle screen with no snooze and including
+ *   `direct`, where the answer cannot matter (Codex, PR #252). Deferred, the
+ *   two free checks below settle the common cases and the platform is only
+ *   asked when its answer actually decides something.
+ */
+internal fun motionEndUiState(
+    record: ActiveSnooze?,
+    deviceHasMotionSensor: () -> Boolean,
+): MotionEndUiState? {
+    if (record == null) return null
+    // A build with no foreground service cannot keep the process alive to hear
+    // a one-shot sensor, so the promotion is refused and the exit never fires.
+    // `direct` was excluded by accident until the tracking-mode gate came off
+    // — it runs duration-only snoozes, which that gate also caught.
+    if (!buildHoldsForegroundService) return null
+    if (!deviceHasMotionSensor()) return null
+    return MotionEndUiState(enabled = record.endsOnMotion)
+}
+
+/** Everything [MotionEndRow] draws, as one value. */
+@Immutable
+internal data class MotionEndUiState(
+    /** Whether the running snooze already ends on movement (SPEC.md §4.4). */
+    val enabled: Boolean,
+)
 
 /**
  * How many meeting ends the screen offers.

@@ -190,6 +190,36 @@ internal class TestSnoozeService : SnoozeService() {
     override fun createPresenceMonitor(): PresenceMonitor = presence
 
     /**
+     * The record store, with [refuseRecordUpdates] able to make every write
+     * fail — which Robolectric's SharedPreferences never does on its own.
+     */
+    override fun createRecordStore(): ActiveSnoozeStore =
+        object : ActiveSnoozeStore(applicationContext) {
+            // **Writes, then reports failure** — which is what a refused
+            // `commit()` actually does: the new values are already in the
+            // preferences' in-process map, and only the disk write failed. A
+            // fake that skipped the write instead made every "the record is
+            // unchanged" assertion pass without the code under test having put
+            // anything back (Codex, PR #252).
+            override fun update(snooze: ActiveSnooze): Boolean {
+                val wrote = super.update(snooze)
+                return if (refuseRecordUpdates) false else wrote
+            }
+        }
+
+    /**
+     * The motion seam. A trigger sensor cannot be fired from a JVM test — or
+     * from an emulator — so the test *is* the registrar, and a firing is a
+     * method call.
+     */
+    override fun createMotionEndWatch(onMoved: () -> Unit): app.snoozemo.presence.MotionEndWatch =
+        app.snoozemo.presence.MotionEndWatch(
+            motionRegistrar,
+            { testReading.uptimeMillis },
+            onMoved,
+        ).also { motionWatchesBuilt++ }
+
+    /**
      * Robolectric's shadow accepts every `startForeground`, so a test that
      * needs the platform's refusal has to inject it here — the one thing the
      * production path cannot be driven to do off a device.
@@ -241,6 +271,61 @@ internal class TestSnoozeService : SnoozeService() {
     }
 
     companion object {
+        /**
+         * Stands in for `TYPE_SIGNIFICANT_MOTION`. `fire()` is one movement;
+         * `armed` says whether the service is currently listening, which is
+         * what a test asserts about a snooze that did or did not ask for the
+         * watch.
+         */
+        class FakeMotionRegistrar : app.snoozemo.presence.TriggerRegistrar {
+            /** The live registration's callback, or null when nothing is armed. */
+            private var pending: (() -> Unit)? = null
+
+            /** Registrations this registrar has been asked for, ever. */
+            var arms: Int = 0
+
+            /**
+             * False stands in for a device with no significant-motion sensor,
+             * and for a platform that refuses the registration — the two cases
+             * `PlatformMotionTrigger` collapses into a null handle.
+             */
+            var available: Boolean = true
+
+            val armed: Boolean get() = pending != null
+
+            override fun arm(onFired: () -> Unit): AutoCloseable? {
+                arms++
+                if (!available) return null
+                pending = onFired
+                // Identity-checked, so cancelling a spent registration cannot
+                // disarm the one that replaced it — the same hazard the real
+                // trigger's generation counter exists for.
+                return AutoCloseable { if (pending === onFired) pending = null }
+            }
+
+            /** One movement, as the platform would deliver it. */
+            fun fire() {
+                // Cleared first: a real trigger sensor disarms itself in
+                // firing, and a fake that stayed armed would let a test pass
+                // against a lifecycle the platform does not have.
+                val callback = pending ?: return
+                pending = null
+                callback()
+            }
+        }
+
+        var motionRegistrar: FakeMotionRegistrar = FakeMotionRegistrar()
+
+        /** How many motion watches the service built — one per snooze, at most. */
+        var motionWatchesBuilt: Int = 0
+
+        /**
+         * Makes every `ActiveSnoozeStore.update` refuse, as a full disk would —
+         * having already updated the in-process map, exactly as a refused
+         * `commit()` leaves it.
+         */
+        var refuseRecordUpdates: Boolean = false
+
         /** Fence-repair pokes the service sent through the flavor seam. */
         var repairPokes: Int = 0
 
@@ -311,6 +396,9 @@ internal class TestSnoozeService : SnoozeService() {
             repairPokes = 0
             grantPokes = 0
             presence = FakePresenceMonitor()
+            motionRegistrar = FakeMotionRegistrar()
+            motionWatchesBuilt = 0
+            refuseRecordUpdates = false
             testReading = ClockReading(
                 wallMillis = now.toEpochMilli(),
                 uptimeMillis = FIXTURE_UPTIME_MILLIS,

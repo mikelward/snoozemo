@@ -1462,6 +1462,87 @@ calendar-derived reaches the debug log either (§12's floor); and the offer ends
 does **not** chain into the next one — chaining is how you end up silenced all afternoon by a
 calendar you forgot about.
 
+#### "When I move" — on trial, off by default
+
+**The problem it exists for is the meeting room.** A room is smaller than everything else Snoozemo
+can measure. The office Wi-Fi covers the whole floor, so association says nothing about which room
+you are in; §6.6's departure test works against a 100 m radius, so walking out of a meeting and
+down a corridor never clears it. A snooze armed to cover a meeting therefore has no *place* answer
+at all — only a time, which is the thing the user has to guess in advance and the thing this whole
+product exists to stop them guessing.
+
+**The rule: a snooze may additionally end the moment the phone moves, if the user asks for it on
+that snooze.** Off unless chosen, chosen per snooze rather than as a setting, and it *adds* an exit
+rather than replacing one — the cap still bounds the snooze (§7) and the departure test still runs
+where there is one, so whichever comes first wins, exactly as the three existing exits already do.
+
+**The signal is `TYPE_SIGNIFICANT_MOTION`, and the honest description of it is "coarse".** The same
+sensor already feeds §6.7's duty cycle, and there it is deliberately *not* a verdict: motion is a
+reason to take a location fix, because standing up for coffee is not leaving. Here the user has
+said, for this one snooze, that moving is what they mean by leaving. Nothing about the automatic
+path changes; what changes is that one snooze has opted into a cruder test because the crude test
+is the only one that can see the thing it cares about.
+
+**Why it is safe to try before it is known to be good** (maintainer, 2026-09-10). The worry is that
+it is too eager — that it ends a snooze when the user shifts in their seat or walks to the
+whiteboard, not when they leave the room. That is a real risk and it is unmeasured. But it fails in
+the *annoying* direction rather than principle 1's: an over-eager sensor rings a phone early, which
+is a small cost, where the failure this app cannot afford is a phone that stays silent. Combined
+with being off by default and chosen per snooze, that makes it cheap to put on a device and find
+out, which is what `TODO.md`'s trial item is for. **It is not established, and the decision to keep
+it is not made.**
+
+**It requires the foreground service, and takes one of its own** (maintainer, 2026-09-10).
+Android delivers no one-shot sensor events to a background app, and the remedy the platform names
+is a foreground service. Snoozemo already holds one while a snooze is tracking (§6.10) — but
+gating the row on *that* put the exit out of reach exactly where it is most useful, since a
+meeting room is where location can see nothing and the snooze is duration-only. So an armed motion
+exit keeps the process resident on its own account: `wantsForeground()` is true whenever the
+snooze carries the flag, whatever the tracking mode says. The row is offered on every snooze.
+
+An earlier version instead *cleared* the flag when a snooze degraded below a mode that holds the
+service. That is rejected: it took an exit away mid-snooze for a reason the user never asked
+about. The exit now outlives the tracking it never depended on.
+
+**The service is typed `location`, and on a motion-only snooze that is an approximation**
+(maintainer, 2026-09-10: "correct for when I leave and near enough for when I move"). It is
+accurate while something is tracking; on a snooze doing no location work it names a capability the
+service is not using. The alternative — declaring `location|specialUse` and promoting with the
+accurate one per snooze — is honest but buys a Play-reviewed justification, and the compromise was
+taken deliberately with that trade in view rather than by omission.
+
+**That choice is why both end conditions now check the location grant at the tap.** A
+`location`-typed foreground service has platform prerequisites, and a missing or withdrawn
+location grant is one of them — the promotion simply throws. So a motion exit armed without the
+grant would be a promise the platform declines to let us keep. `Until I leave` needs the grant
+substantively; `When I move` needs it for the service it rides on. Tapping either asks for it
+where the system will still ask, and says `Needs location access` where it will not. Turning
+`When I move` **off** never asks: withdrawing a choice must not be met with a permission prompt.
+
+**No new permission for the sensor itself, and none is authorized.** `TYPE_SIGNIFICANT_MOTION` needs none, which is most
+of why this is the cheap thing to try first. Play Services' activity-recognition transitions would
+discriminate "started walking" from "the phone moved" far better and would survive a dead process —
+but they need the `ACTIVITY_RECOGNITION` runtime grant and a Data Safety answer, which is a
+distribution decision and §3's kind of question. It is **not ruled out and not decided**; the trial
+is what would justify asking. The code is shaped so that swapping the signal source is a different
+`TriggerRegistrar`, not a redesign.
+
+**`play` only, and now for its own reason.** The row needs a foreground
+service, and `direct` declares none — it runs duration-only snoozes until Phase 7, so it has
+nothing to outlive. That used to fall out of the tracking-mode gate by accident; with the gate
+gone it is its own question, answered by a flavor constant rather than inferred.
+
+**The switch outlives the time choices.** The other rows are withheld once the cap comes inside
+`MIN_CAP` (§7), because there is no time left to choose. This one is not: it carries a state the
+user has to be able to revoke for as long as the sensor is armed, and bundling it with the time
+offer made it vanish for the final thirty minutes of every snooze while the exit stayed live.
+
+**The user can always see it.** The ongoing notification names the second exit alongside the first
+(`Ends when you leave, or when you move`), and the ending says which one fired (`Snooze ended — you
+moved`, never "you left"). Principle 2: an exit the user cannot predict is one they cannot trust,
+and telling a movement-ending apart from a departure is also the only way an over-eager firing is
+legible as one.
+
 ### 4.5 Ending
 
 When a snooze ends by departure or by cap, post a one-shot dismissible notification:
@@ -3319,7 +3400,7 @@ Nothing here has to be decided now.
 
 ## 7. Exits
 
-All three exits converge on one `endSnooze(reason)` path that sets the rule state `STATE_FALSE`,
+Every exit converges on one `endSnooze(reason)` path that sets the rule state `STATE_FALSE`,
 stops the service, unregisters callbacks, cancels the cap alarm, and posts the ended-notification.
 Idempotent; safe to call twice.
 
@@ -3328,6 +3409,12 @@ Idempotent; safe to call twice.
 | **Departure** | §6.6 confirmation | The intended path |
 | **Duration cap** | Default 8 h, configurable 30 min – 24 h | Backstop for every sensor failure |
 | **Manual** | Tile tap, notification action, or in-app | Always available, always instant |
+| **Movement** | `TYPE_SIGNIFICANT_MOTION`, opt-in per snooze | §4.4's `When I move`; on trial, off by default |
+
+**Movement is the one genuinely additional exit, and it is opt-in.** It adds to the three above
+rather than replacing any of them — the cap still bounds the snooze and departure tracking is
+untouched — so a snooze that has it on has four ways to end and whichever comes first wins. A
+snooze that has not asked for it behaves exactly as this table read before.
 
 A time chosen in the §4.4 sheet does not add a fourth exit — it *lowers the cap*. Picking 14:00 sets
 `capExpiresAt` to 14:00 while departure tracking stays fully armed, so whichever comes first wins and

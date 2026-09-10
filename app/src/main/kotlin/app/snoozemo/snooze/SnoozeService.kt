@@ -49,6 +49,7 @@ import app.snoozemo.core.logSummary
 import app.snoozemo.core.ruleSubject
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.presence.AnchorCaptureRunner
+import app.snoozemo.presence.MotionEndWatch
 import app.snoozemo.presence.defaultPresenceMonitor
 import com.mikelward.androidlog.safe
 import java.time.Duration
@@ -311,6 +312,115 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      */
     internal open fun createPresenceMonitor(): PresenceMonitor =
         defaultPresenceMonitor(applicationContext)
+
+    /**
+     * The `When I move` watch (SPEC.md §4.4), or null until a snooze asks for
+     * one. Built on demand rather than lazily like the monitor, because the
+     * common snooze never arms it and a `SensorManager` lookup is not free.
+     */
+    private var motionEnd: MotionEndWatch? = null
+
+    /**
+     * The motion seam, like [createPresenceMonitor] and for the same reason: a
+     * real one registers a trigger sensor, which no JVM test can fire, while
+     * *what a firing does to the snooze* is exactly what a test must cover.
+     */
+    internal open fun createMotionEndWatch(onMoved: () -> Unit): MotionEndWatch =
+        app.snoozemo.presence.motionEndWatch(applicationContext, onMoved)
+
+    /**
+     * Matches the motion watch to the running record — armed exactly while a
+     * snooze carrying [ActiveSnooze.endsOnMotion] is live, torn down
+     * otherwise.
+     *
+     * Restated on every transition rather than driven from the toggle, which
+     * is what makes a restored snooze re-arm without a second code path: the
+     * flag comes back on the record, `restore` reports a transition like any
+     * other, and this reads it. Idempotent both ways, so restating the same
+     * value spends nothing.
+     */
+    private fun reconcileMotionEnd() {
+        // Re-entrant by construction: the rollback below clears the flag
+        // through the controller, which reports a transition, which lands back
+        // here. The second pass has nothing left to do — the flag is already
+        // false and the watch already closed — so it is dropped rather than
+        // allowed to recurse.
+        if (reconcilingMotionEnd) return
+        reconcilingMotionEnd = true
+        try {
+            val wanted = controller.active?.endsOnMotion == true
+            if (!wanted) {
+                motionEnd?.close()
+                motionEnd = null
+                return
+            }
+            val watch = motionEnd
+                ?: createMotionEndWatch(::onMovedWhileSnoozing).also { motionEnd = it }
+            watch.reconcile(true)
+            // **Validated here rather than at the tap**, which is the whole
+            // point of it being here (Codex, PR #252, third finding in this
+            // mechanism). A watch is created on three paths — the toggle, an
+            // arm carrying the flag, and a restore after process death — and
+            // checking `listening` at the toggle alone left the other two able
+            // to bring a snooze back promising `or when you move` with nothing
+            // registered. One function creates every watch, so one function
+            // validates every watch.
+            if (!watch.listening) {
+                watch.close()
+                motionEnd = null
+                // Persisted, not just cleared in memory: a restore is one of
+                // the paths that reaches here, so a flag left on disk would
+                // make the next one repeat this.
+                //
+                // **The record first, then the controller** — the tap path's
+                // ordering, for the tap path's reason, and this is the second
+                // place the same mechanism needed it (Codex, PR #252). Moving
+                // the controller first made two writes of one transition: the
+                // `ARMED`/`CHECKING` branch of [onStateChanged] commits inside
+                // that call, so an explicit write afterwards could fail over a
+                // record that already said `false`, and putting memory back
+                // then split the two apart in the other direction.
+                val running = controller.active
+                if (running != null && running.endsOnMotion) {
+                    if (!updateRecordOrUndo(running.copy(endsOnMotion = false), running)) {
+                        // Nothing moves, so nothing disagrees: the record is
+                        // back where it was and the controller never left it —
+                        // both still `true`. The cap and the departure test
+                        // still bound the snooze, and the next transition finds
+                        // `motionEnd` null, builds a fresh watch and retries the
+                        // registration. What it costs is an exit that is not
+                        // listening yet — said in the log, since a "it never
+                        // ended" report is where that has to be visible.
+                        Log.w(TAG, "Clearing when-i-move could not be recorded; left as stored.")
+                        SnoozeDebugLog.warning("when-i-move could not be cleared; left as stored, will retry")
+                        return
+                    }
+                    controller.setEndsOnMotion(false)
+                }
+                SnoozeDebugLog.warning("no motion sensor listening; when-i-move cleared")
+            }
+        } finally {
+            reconcilingMotionEnd = false
+        }
+    }
+
+    /** Guards [reconcileMotionEnd] against its own rollback re-entering it. */
+    private var reconcilingMotionEnd = false
+
+    /**
+     * A firing of `TYPE_SIGNIFICANT_MOTION` on a snooze that asked to end that
+     * way (SPEC.md §4.4).
+     *
+     * Paired with [ensureCapAfterRefusedEnd] like every other automatic
+     * ending: nothing else is coming after this — the watch reports once and
+     * the sensor is one-shot — so if the zen write is refused, this is the
+     * only caller left to make sure a cap still bounds the snooze.
+     */
+    private fun onMovedWhileSnoozing() {
+        if (controller.active == null) return
+        controller.end(EndReason.MOVED)
+        ensureCapAfterRefusedEnd(EndReason.MOVED)
+    }
 
     /**
      * Starts watching [snooze]'s anchor and feeds every report to the
@@ -839,9 +949,19 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     internal open fun createZenController(): ZenController =
         AndroidZenController.default(applicationContext)
 
+    /**
+     * The record store, as a seam like [createZenController] and for the same
+     * reason: a `commit()` to SharedPreferences always succeeds under
+     * Robolectric, so what this service does when a write is *refused* — the
+     * refusal [applyMotionEndChoice] handles being the newest — cannot
+     * otherwise be driven by a test at all.
+     */
+    internal open fun createRecordStore(): ActiveSnoozeStore =
+        ActiveSnoozeStore(applicationContext)
+
     override fun onCreate() {
         super.onCreate()
-        store = ActiveSnoozeStore(applicationContext)
+        store = createRecordStore()
         pendingFailure = PendingFailureStore(applicationContext)
         controller = SnoozeController(zen, readClock, this)
 
@@ -1231,6 +1351,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             }
             ACTION_EXTEND -> extend()
             ACTION_SET_CAP -> setCap(intent)
+            ACTION_SET_MOTION_END -> applyMotionEndChoice(intent)
             ACTION_CLOCK_CHANGED -> reconcileClock()
             // A cold start already did everything through the restore on the
             // way in. Warm, this action is the retry ladder arriving with the
@@ -1919,6 +2040,85 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     }
 
     /**
+     * Writes [target], returning whether it landed and putting [original] back
+     * when it did not.
+     *
+     * **A refused `commit` still leaves the new values in the preferences'
+     * in-process map** — only the disk write failed — so anything reading the
+     * record in this process, a service recreation included, would find a
+     * change that never landed. Writing the original back is what actually
+     * undoes it. [extend] has documented that detail since PR #63; both of
+     * this feature's write sites needed it, and having it in one place is what
+     * stops the next one from being written without it (Codex, PR #252).
+     */
+    private fun updateRecordOrUndo(target: ActiveSnooze, original: ActiveSnooze): Boolean {
+        if (store.update(target)) return true
+        if (!store.update(original)) {
+            Log.w(TAG, "Undoing a refused record write failed too; the restore path re-checks it.")
+        }
+        return false
+    }
+
+    /**
+     * [ACTION_SET_MOTION_END]: the `When I move` row toggling (SPEC.md §4.4).
+     *
+     * **Identity-guarded like [setCap], when the caller makes a claim.** That
+     * is a reversal: this used to be unguarded on the argument that it carries
+     * no time, so the worst a stale tap could do was arm or clear the exit on
+     * the snooze the user was looking at anyway. Two findings in a row showed
+     * the argument was about an *immediate* tap and this one need not be —
+     * the permission gate can hold it behind a dialog for as long as the user
+     * sits on it, and the screen's own record is refreshed asynchronously, so
+     * "the snooze the user was looking at" and "the snooze running when this
+     * arrives" can be two different snoozes (Codex, PR #252).
+     *
+     * [EXTRA_MOTION_FOR_SNOOZE] absent means no claim and applies to whatever
+     * is running — a tile tap has no record to name and wants exactly that.
+     * A claim that does not match is dropped: the snooze it was for is over.
+     *
+     * A no-op — nothing running, or the value unchanged — simply changes
+     * nothing; the screen keeps rendering the record, so it stays truthful
+     * either way. A device with no sensor is not refused here but rolled back
+     * inside [reconcileMotionEnd], which is the one place that knows whether
+     * the platform actually took the registration.
+     */
+    private fun applyMotionEndChoice(intent: Intent?) {
+        val wanted = intent?.getBooleanExtra(EXTRA_ENDS_ON_MOTION, false) ?: return
+        val snooze = controller.active ?: return
+        val claimedMillis = intent?.getLongExtra(EXTRA_MOTION_FOR_SNOOZE, 0L) ?: 0L
+        if (claimedMillis > 0L && Instant.ofEpochMilli(claimedMillis) != snooze.startedAt) {
+            SnoozeDebugLog.event("when-i-move: the tap was for a snooze that is no longer running")
+            return
+        }
+        if (snooze.endsOnMotion == wanted) return
+
+        // **The record first, and only then the controller** — [extend]'s
+        // ordering, for [extend]'s reason. The record is what the restore path
+        // re-arms the watch from, so nothing may claim this exit until the copy
+        // that survives a process death carries it.
+        //
+        // That ordering is the fix rather than a tidy-up: writing memory first
+        // and reverting it on a failed write assumed the write below was the
+        // only one, and it is not — `setEndsOnMotion` delivers a transition,
+        // and the `ARMED`/`CHECKING` branch of [onStateChanged] commits the
+        // record inside that call. So a failure here proved nothing about what
+        // was on disk, and the revert could throw away a choice already saved
+        // (Codex, PR #252). Memory never leads disk now, so there is nothing
+        // left to revert.
+        if (!updateRecordOrUndo(snooze.copy(endsOnMotion = wanted), snooze)) {
+            Log.w(TAG, "Recording the when-I-move choice failed; the stored choice stands.")
+            SnoozeDebugLog.warning("when-i-move not persisted; the stored choice stands")
+            return
+        }
+
+        // Only now does anything in memory believe it. `reconcileMotionEnd`
+        // runs inside this call and may roll the choice straight back for want
+        // of a sensor; that rollback is itself a transition, so disk follows it
+        // down through the same write rather than needing one here.
+        controller.setEndsOnMotion(wanted)
+    }
+
+    /**
      * A row committed in the end-condition sheet (SPEC.md §4.4).
      *
      * Choosing a time **lowers the cap**; it does not add a fourth exit and it
@@ -2258,6 +2458,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 stopPresence()
             }
         }
+        // The motion watch follows the record, so it is restated here with
+        // everything else a transition changes: an arm that carries the flag
+        // arms it, a restore re-arms it after process death, and every ending
+        // — `RELEASED`, `IDLE`, or a snooze simply gone — tears it down,
+        // because `controller.active` is null by the time this runs.
+        reconcileMotionEnd()
         // Every transition except `ARMING`, which is the one that sits between
         // the tile tap and the rule going on. Nothing is lost by skipping it:
         // a refused arm reaches `IDLE`, which refreshes here, and a successful
@@ -2827,16 +3033,26 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * killed is precisely how the phone stays quiet. Both are principle 1
      * cases; only [TrackingMode.DURATION_ONLY] genuinely has nothing running.
      */
-    private fun wantsForeground(): Boolean =
-        when (controller.active?.mode) {
-            TrackingMode.FULL,
-            TrackingMode.WIFI_ONLY,
-            TrackingMode.WIFI_GRACE,
-            TrackingMode.SETTLING,
-            -> true
-
-            TrackingMode.DURATION_ONLY, null -> false
-        }
+    private fun wantsForeground(): Boolean {
+        val snooze = controller.active ?: return false
+        // **`When I move` keeps the process on its own** (maintainer,
+        // 2026-09-10). A background app receives no one-shot sensor events, so
+        // an armed motion exit needs this whatever the tracking mode says —
+        // including on a duration-only snooze, which is precisely the case the
+        // row exists for: a meeting room where location can see nothing.
+        //
+        // This replaces the mode gate that used to decide both. Making the
+        // *row* follow tracking capability meant the exit was unavailable
+        // exactly where it was most useful, and clearing the flag on a degrade
+        // (the first shape of this) took the exit away mid-snooze for a
+        // reason the user never asked about.
+        //
+        // The service is typed `location`, which is accurate while something
+        // is tracking and is a stated compromise on a motion-only snooze —
+        // `TODO.md` carries it as release-blocking rather than as a note to
+        // remember.
+        return snooze.mode.keepsProcessResident || snooze.endsOnMotion
+    }
 
     /**
      * Whether the platform may still consider this service foreground.
@@ -3036,6 +3252,22 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         SnoozeDebugLog.event(
             "tracking → ${snooze.mode}" + (degradation?.let { " ($it)" } ?: " (recovered)"),
         )
+        // A mode move is a record change, and this callback is the one that
+        // carries it when no state transition does — so the motion watch is
+        // restated here as well as in `onStateChanged` (Codex, PR #252).
+        // Between them, every path that changes the running record reconciles
+        // the watch, which is what stops a registration outliving the flag
+        // that justifies it.
+        reconcileMotionEnd()
+        // **Re-read after reconciling, because reconciling can change the
+        // record.** This callback is handed the snooze as it was *before* it
+        // ran, and clearing a motion exit whose sensor is refused persists
+        // `endsOnMotion = false` from inside it — so writing the argument back
+        // below would undo that on disk and put the exit back on the card,
+        // with memory saying the opposite (Codex, PR #252). Identity-checked
+        // rather than trusted: if the controller has moved on to some other
+        // snooze, this callback is still about the one it was given.
+        val current = controller.active?.takeIf { it.startedAt == snooze.startedAt } ?: snooze
         // Nothing is measuring a distance outside FULL, so the last reading
         // stops describing anything the moment the mode drops (Codex, PR
         // #210). The screen already hides it, but hiding is not forgetting: a
@@ -3043,11 +3275,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // FULL on a level-only update carrying no fix, and the pre-outage
         // number would reappear as if it were current — where the phone
         // *was*, presented as where it is.
-        if (snooze.mode != TrackingMode.FULL) DepartureObservations.clear()
-        if (!store.update(snooze)) {
+        if (current.mode != TrackingMode.FULL) DepartureObservations.clear()
+        if (!store.update(current)) {
             Log.w(TAG, "Recording the tracking mode failed; a restart would misstate tracking.")
         }
-        notifications.showOngoing(snooze)
+        notifications.showOngoing(current)
         // The tile renders the mode too — its subtitle drops to `timer only`
         // (Codex, PR #33). It renders from the record, so without this an open
         // shade keeps the old subtitle until it is closed and reopened. Every
@@ -3106,6 +3338,13 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         presenceJob?.cancel()
         presenceJob = null
         presenceScope.cancel()
+        // Unlike the geofence, this one is *not* meant to outlive the process:
+        // a trigger sensor registration dies with it either way, and the flag
+        // on the record is what re-arms the watch on the next restore. Closed
+        // explicitly so a service that is replaced rather than killed leaves
+        // no registration behind for the new instance to double up on.
+        motionEnd?.close()
+        motionEnd = null
         // Each gated on its **own** flag, and neither on the other's (Codex, PR
         // #36). A registration the platform refused is a state this class knows
         // about, so unregistering it is not something to attempt and then
@@ -3170,6 +3409,17 @@ open class SnoozeService : Service(), SnoozeController.Listener {
          * above, the thirty-minute floor below.
          */
         const val ACTION_SET_CAP = "app.snoozemo.action.SET_CAP"
+
+        /**
+         * Turn `When I move` on or off for the running snooze (SPEC.md §4.4),
+         * carrying [EXTRA_ENDS_ON_MOTION].
+         *
+         * Its own action rather than a third shape of [ACTION_SET_CAP],
+         * because it is not a cap at all: it adds an exit instead of moving
+         * the one the alarm already watches, so it has no time to clamp, no
+         * ceiling to check and nothing to reseed on refusal.
+         */
+        const val ACTION_SET_MOTION_END = "app.snoozemo.action.SET_MOTION_END"
         const val ACTION_RESTORE = "app.snoozemo.action.RESTORE"
         const val ACTION_CAP_LOST = "app.snoozemo.action.CAP_LOST"
         const val ACTION_REFRESH = "app.snoozemo.action.REFRESH"
@@ -3273,7 +3523,17 @@ open class SnoozeService : Service(), SnoozeController.Listener {
          * be answered while its snooze is being replaced, and the tile's sheet
          * never redraws at all (Codex, PR #155).
          */
+        /**
+         * Which snooze an [ACTION_SET_MOTION_END] was tapped for, as epoch
+         * millis of its `startedAt` — absent when the caller has no claim to
+         * make (a tile tap, say, which is about whatever is running).
+         */
+        const val EXTRA_MOTION_FOR_SNOOZE = "app.snoozemo.extra.MOTION_FOR_SNOOZE"
+
         const val EXTRA_CHOICE_FOR_SNOOZE = "app.snoozemo.extra.CHOICE_FOR_SNOOZE"
+
+        /** [ACTION_SET_MOTION_END]'s new value for `When I move`. */
+        const val EXTRA_ENDS_ON_MOTION = "app.snoozemo.extra.ENDS_ON_MOTION"
 
         /**
          * Which surface a tap came from, for the debug log and nothing else.
@@ -3390,6 +3650,31 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 it.putExtra(EXTRA_CHOICE_REQUEST_ID, requestId)
                 forSnooze?.let { startedAt ->
                     it.putExtra(EXTRA_CHOICE_FOR_SNOOZE, startedAt.toEpochMilli())
+                }
+            }
+
+        /**
+         * Turn `When I move` on or off for the running snooze (SPEC.md §4.4),
+         * returning false if the service would not start.
+         *
+         * Reports nothing back beyond that. The other end-condition rows go
+         * through the request/outcome machinery because they can be *declined*
+         * — a time inside the floor, a ceiling a clock change has moved — and
+         * a row that silently kept the old deadline would be the app quietly
+         * doing the wrong thing. This one cannot be declined on any ground the
+         * screen could not already see: the mode gates it, the screen reads
+         * the same mode, and the answer comes straight back on the record the
+         * screen is already observing.
+         */
+        fun setMotionEnd(
+            context: Context,
+            endsOnMotion: Boolean,
+            forSnooze: Instant?,
+        ): Boolean =
+            start(context, ACTION_SET_MOTION_END) {
+                it.putExtra(EXTRA_ENDS_ON_MOTION, endsOnMotion)
+                forSnooze?.let { startedAt ->
+                    it.putExtra(EXTRA_MOTION_FOR_SNOOZE, startedAt.toEpochMilli())
                 }
             }
 

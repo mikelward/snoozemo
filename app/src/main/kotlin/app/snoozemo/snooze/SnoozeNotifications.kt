@@ -608,7 +608,17 @@ class SnoozeNotifications(private val context: Context) {
         // Only where a mode is claimed that this could falsify. `Timer only`
         // promises nothing a dead process would break, and asks for no
         // foreground service in the first place.
-        val withProtection = if (unprotected && snooze.mode != TrackingMode.DURATION_ONLY) {
+        // **Or a motion exit, whatever the mode says.** `Timer only` promises
+        // nothing a dead process would break — which was the whole reason
+        // duration-only was excluded — but that stops being true the moment
+        // `When I move` is armed on one: the exit then depends on a foreground
+        // service, and a `location`-typed promotion is refused outright when
+        // the location grant is missing or location services are off (see
+        // `SnoozeService.foregroundHost`). That is exactly the snooze where
+        // this row is the only answer, so it is exactly the one that must say
+        // the watch is unprotected rather than promise an exit twice over.
+        val protectionMatters = snooze.mode != TrackingMode.DURATION_ONLY || snooze.endsOnMotion
+        val withProtection = if (unprotected && protectionMatters) {
             context.getString(
                 R.string.ongoing_degraded_reason,
                 withRinger,
@@ -617,10 +627,23 @@ class SnoozeNotifications(private val context: Context) {
         } else {
             withRinger
         }
+        // The fourth axis, and the only one the user *chose*: `When I move`
+        // (SPEC.md §4.4) is a second exit, so a card that named only the first
+        // would be hiding an ending the user has to be able to predict —
+        // principle 2, the same reason a degraded mode says so here.
+        //
+        // Last, after the degradations. Those explain how well the promise
+        // above is being kept; this adds a promise of its own, so it reads
+        // wrong wedged between a claim and its caveat.
+        val withMotion = if (snooze.endsOnMotion) {
+            context.getString(R.string.ongoing_or_when_you_move, withProtection)
+        } else {
+            withProtection
+        }
         val notification = android.app.Notification.Builder(context, CHANNEL_ACTIVE)
             .setSmallIcon(TileR.drawable.ic_tile_snooze)
             .setContentTitle(context.getString(R.string.ongoing_title))
-            .setContentText(withProtection)
+            .setContentText(withMotion)
             // The top row, beside the app name and the countdown below
             // (maintainer, 2026-09-08). Null leaves the row as it was, which is
             // the honest rendering of "no reading yet" — an empty string would
@@ -1000,6 +1023,14 @@ class SnoozeNotifications(private val context: Context) {
         dropOngoing()
         val text = when (reason) {
             EndReason.DEPARTURE -> R.string.ended_departure
+            // Its own line rather than sharing `ended_departure`'s. The
+            // user asked for this ending, so the card is not explaining a
+            // judgment the app made — but they asked for it possibly hours
+            // ago, and "you left" over a phone that has not left anywhere is
+            // the app describing something that did not happen. Naming the
+            // movement is also what makes an over-eager firing legible as
+            // one, which is the whole point of the trial (`TODO.md`).
+            EndReason.MOVED -> R.string.ended_moved
             EndReason.DURATION_CAP -> R.string.ended_cap
             EndReason.LOST_CAPABILITY -> R.string.ended_lost_capability
             // Neither of these needs a notification: the user just did it and

@@ -9,8 +9,15 @@ import app.snoozemo.core.SnoozeDebugLog
  * Null means the device has no such sensor at all — a permanent answer, not a
  * failure to retry. [PlatformMotionTrigger] is the real one; tests substitute
  * a manual registrar, which is what makes the lifecycle below JVM-testable.
+ *
+ * **Public, and that is the seam this module means to offer.** Two things need
+ * it from outside: `:app`'s service test, which drives a firing that no
+ * emulator can produce; and any future signal source that answers the same
+ * question better than the raw sensor does — an activity-recognition
+ * transition, say — which becomes a different implementation of this rather
+ * than a redesign of [MotionEndWatch] (`TODO.md`, the on-device trial).
  */
-internal fun interface TriggerRegistrar {
+fun interface TriggerRegistrar {
     fun arm(onFired: () -> Unit): AutoCloseable?
 }
 
@@ -75,6 +82,18 @@ internal class MotionTrigger(
     private var unavailable = false
 
     private var dead = false
+
+    /**
+     * Whether a registration is live right now — the platform actually
+     * listening, not merely having been asked.
+     *
+     * False for a device with no such sensor and for a platform that refused,
+     * which is what lets a caller whose whole feature *is* the sensor tell an
+     * armed watch from a silent one (Codex, PR #252). The duty cycle does not
+     * need it: motion is an escalation there, and its absence costs latency
+     * the backstop already bounds.
+     */
+    val listening: Boolean get() = armed != null
 
     /**
      * Matches the platform to [needed] — armed while the engine is resting

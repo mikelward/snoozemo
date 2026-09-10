@@ -117,6 +117,20 @@ internal const val EXTRA_OPEN_PERMISSIONS = "app.snoozemo.OPEN_PERMISSIONS"
 internal const val EXTRA_BLOCKED_TAP_ID = "app.snoozemo.BLOCKED_TAP_ID"
 
 private const val KEY_SCREEN = "screen"
+
+/**
+ * The end-condition tap waiting on a location grant, across a recreation
+ * (Codex, PR #252).
+ *
+ * The permission dialog is a window over this activity, so a rotation behind
+ * it recreates the activity while the request is still out. The Activity
+ * Result API delivers to the *new* instance, which would find nothing pending
+ * and silently drop the tap that asked — the user grants location and the row
+ * they touched does nothing.
+ */
+private const val KEY_PENDING_LOCATION_ACTION = "pending_location_action"
+private const val KEY_PENDING_LOCATION_FOR = "pending_location_for"
+private const val KEY_BACKGROUND_RATIONALE = "background_location_rationale"
 private const val KEY_PERMISSIONS_ORIGIN = "permissionsOrigin"
 private const val KEY_ROUTED_TO_PERMISSIONS_ONCE = "routedToPermissionsOnce"
 private const val KEY_WELCOME_TAP_BLOCKED = "welcomeTapBlocked"
@@ -162,6 +176,39 @@ internal enum class Screen { WELCOME, MAIN, PERMISSIONS, SETTINGS, LICENSES }
  * TODO entry — so this class holds the one piece of navigation state itself.
  */
 class MainActivity : ComponentActivity() {
+
+    /**
+     * Whether this device has a significant-motion sensor, for the `When I
+     * move` row (SPEC.md §4.4).
+     *
+     * Asked once and kept: it is a permanent property of the hardware, and
+     * composition is no place for a `SensorManager` lookup — warm it ahead of
+     * the frame that needs it, like everything else this screen reads
+     * (principle 4).
+     *
+     * **Warmed off the main thread, not deferred behind a lambda** (Codex,
+     * PR #252). A lambda decides *whether* the lookup happens, not *where*:
+     * on a screen that does have a running snooze it landed in that first
+     * composition anyway, which is the frame it was supposed to stay out of.
+     * `false` until the answer lands, so the row is withheld for at most a
+     * frame rather than the frame being held for the row (principle 5).
+     */
+    private var hasMotionSensor by mutableStateOf(false)
+
+    /**
+     * Reads [hasMotionSensor] once, off the main thread, at startup.
+     *
+     * Through the same seam every other startup read uses, so a test runs it
+     * inline and asserts on a settled screen rather than racing a thread.
+     */
+    private fun warmMotionSensor() {
+        val context = applicationContext
+        runOffMainThread {
+            val present = app.snoozemo.presence.deviceHasMotionSensor(context)
+            runOnUiThread { hasMotionSensor = present }
+        }
+    }
+
 
     /**
      * Which of the four screens is on top.
@@ -688,7 +735,10 @@ class MainActivity : ComponentActivity() {
      * been read, and a frame late is the harmless direction here.
      */
     private var telemetryUnanswered by mutableStateOf(false)
-    private var lastOutcome by mutableStateOf<String?>(null)
+    // Internal, like [rows] and [showBackgroundLocationRationale], so a test can
+    // assert what the screen told the user — including, for the pending-tap
+    // paths, that it told them nothing.
+    internal var lastOutcome by mutableStateOf<String?>(null)
 
     /**
      * What Play last told us about a waiting update, before [dismissedPlayUpdateVersionCode]
@@ -1055,9 +1105,57 @@ class MainActivity : ComponentActivity() {
      * production.
      */
     internal fun onForegroundLocationResult(fineGranted: Boolean) {
-        refreshLocation()
-        if (fineGranted && locationTrackingNeedsBackgroundPermission) {
-            showBackgroundLocationRationale = true
+        val asking = pendingLocationAction
+        val permission = refreshLocation()
+        // The rationale is owed when the foreground half has just landed and
+        // the background half has not. **Not** after a `When I move` tap: that
+        // exit is satisfied by coarse-or-fine and will never use a background
+        // grant, so following it with the rationale is a detour for a
+        // permission it does not need. And not when the background half is
+        // already held, which the old unconditional version showed anyway
+        // (Codex, PR #252).
+        val askingBackgroundNext = fineGranted &&
+            locationTrackingNeedsBackgroundPermission &&
+            permission != LocationPermission.GRANTED &&
+            asking != PendingLocationAction.MOTION_END
+        // A departure tap is **not finished** while that half is still to
+        // come: it needs the whole grant, so answering it here would report a
+        // failure the user is one dialog away from fixing — and then apply
+        // nothing when they fix it, since the background callback only
+        // refreshed state (Codex, PR #252). Held, and resumed by
+        // [onBackgroundLocationResult].
+        //
+        // Anything else is answered now rather than behind a dialog the user
+        // may sit on.
+        if (!(askingBackgroundNext && asking == PendingLocationAction.DEPARTURE)) {
+            resumePendingLocationAction(permission)
+        }
+        if (askingBackgroundNext) showBackgroundLocationRationale = true
+    }
+
+    /**
+     * The background half's answer, whatever it was — the other end of the
+     * hold above.
+     *
+     * A denial is an answer too: [resumePendingLocationAction] reads the fresh
+     * permission and reports that the tap could not be applied, rather than
+     * leaving a row that silently did nothing.
+     */
+    internal fun onBackgroundLocationResult() {
+        resumePendingLocationAction(refreshLocation())
+    }
+
+    /**
+     * The rationale closed without continuing.
+     *
+     * Whatever tap was waiting on the whole grant cannot be honored, so it is
+     * reported and dropped here — a pending action left behind would be
+     * replayed by an unrelated grant later.
+     */
+    internal fun dismissBackgroundLocationRationale() {
+        showBackgroundLocationRationale = false
+        if (takePendingLocationTap() != null) {
+            lastOutcome = getString(R.string.failure_needs_location)
         }
     }
 
@@ -1070,7 +1168,7 @@ class MainActivity : ComponentActivity() {
      */
     private val backgroundLocationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-            refreshLocation()
+            onBackgroundLocationResult()
         }
 
     /**
@@ -1166,6 +1264,20 @@ class MainActivity : ComponentActivity() {
         store = ActiveSnoozeStore(applicationContext)
         savedInstanceState?.let {
             screen = Screen.entries.firstOrNull { s -> s.name == it.getString(KEY_SCREEN) } ?: screen
+            pendingLocationAction = PendingLocationAction.entries
+                .firstOrNull { a -> a.name == it.getString(KEY_PENDING_LOCATION_ACTION) }
+            // Its snooze rides with it, or the recreation would resume the tap
+            // against whatever is running when the grant lands.
+            pendingLocationFor = it.getLong(KEY_PENDING_LOCATION_FOR, -1L)
+                .takeIf { millis -> millis >= 0L }
+                ?.let(Instant::ofEpochMilli)
+            // And the dialog it is waiting behind. A rotation while the
+            // rationale is up recreates this activity *after* the foreground
+            // result has been consumed, so nothing would ever put the dialog
+            // back — and the pending departure would sit there with no
+            // callback left to resume or reject it, silently unapplied
+            // (Codex, PR #252).
+            showBackgroundLocationRationale = it.getBoolean(KEY_BACKGROUND_RATIONALE, false)
             // Through `WelcomeCardMemory`, exactly as the `WelcomeStore`
             // breadcrumb is (Codex, PR #226): this bundle is held by the system
             // rather than by the process, so it survives an app update too, and
@@ -1269,6 +1381,9 @@ class MainActivity : ComponentActivity() {
         // The same read, reused: the hint exists only for someone who has been
         // through the flow and not yet dismissed it.
         showReplayHint = welcomeSeen && !welcomeStore.replayHintDismissed()
+        // Before the first frame is composed, and off this thread — a
+        // `SensorManager` lookup belongs to neither.
+        warmMotionSensor()
         setContent {
             // Created here rather than left to the theme's own default, so the
             // Settings slider and the pinch move one value (`SPEC.md` §4.8):
@@ -1362,6 +1477,18 @@ class MainActivity : ComponentActivity() {
                             committing = rows.committing,
                             failed = rows.commitFailed,
                             format = formatTime,
+                        )
+                        // Its own state, read from the record rather than from
+                        // the offer: the switch has to outlive the time
+                        // choices, which are withheld once the cap comes
+                        // inside `MIN_CAP` (Codex, PR #252).
+                        val motionEnd = motionEndUiState(
+                            record = activeSnooze,
+                            // Warmed at startup and read here as state, so
+                            // this is a field read rather than the
+                            // `SensorManager` lookup it used to be. Still a
+                            // lambda, so the two free checks answer first.
+                            deviceHasMotionSensor = { hasMotionSensor },
                         )
                         MainScreen(
                             access = access,
@@ -1460,6 +1587,8 @@ class MainActivity : ComponentActivity() {
                                 endChoice?.meetings?.getOrNull(index)?.let { rows.commit(it.at) }
                             },
                             onChooseDeparture = ::chooseDepartureFromScreen,
+                            motionEnd = motionEnd,
+                            onToggleMotionEnd = ::toggleMotionEndFromScreen,
                             onStepEndDown = rows::stepDown,
                             onStepEndUp = rows::stepUp,
                             onShareDebugLog = ::shareDebugLog,
@@ -1601,7 +1730,7 @@ class MainActivity : ComponentActivity() {
                         // dismissal (maintainer, 2026-09-07).
                         AlertDialog(
                             modifier = Modifier.pinchFontSizeHost(),
-                            onDismissRequest = { showBackgroundLocationRationale = false },
+                            onDismissRequest = ::dismissBackgroundLocationRationale,
                             title = {
                                 FontSizeWindow {
                                     Text(stringResource(R.string.location_background_rationale_title))
@@ -1621,7 +1750,7 @@ class MainActivity : ComponentActivity() {
                             },
                             dismissButton = {
                                 FontSizeWindow {
-                                    TextButton(onClick = { showBackgroundLocationRationale = false }) {
+                                    TextButton(onClick = ::dismissBackgroundLocationRationale) {
                                         Text(stringResource(R.string.location_background_rationale_dismiss))
                                     }
                                 }
@@ -1637,6 +1766,13 @@ class MainActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putString(KEY_SCREEN, screen.name)
+        // Null when nothing is waiting, which reads back as nothing waiting —
+        // a grant arriving with no tap behind it must not replay one.
+        outState.putString(KEY_PENDING_LOCATION_ACTION, pendingLocationAction?.name)
+        // -1 for "no snooze", which reads back as null — the same shape the
+        // action's own null takes.
+        outState.putLong(KEY_PENDING_LOCATION_FOR, pendingLocationFor?.toEpochMilli() ?: -1L)
+        outState.putBoolean(KEY_BACKGROUND_RATIONALE, showBackgroundLocationRationale)
         // Only the current key — the legacy one is read, never written, which
         // is what spends the rewind after the first save.
         outState.putString(WelcomeCardMemory.KEY, welcomeCard.name)
@@ -2065,6 +2201,11 @@ class MainActivity : ComponentActivity() {
                 // the calendar answers for the new one.
                 if (loaded?.startedAt != activeSnooze?.startedAt) meetingOffers = emptyList()
                 activeSnooze = loaded
+                // Whatever it found, the question "is a snooze running?" now
+                // has an answer. [takePendingLocationTap] needs that apart
+                // from `activeSnooze` itself, which reads null both before
+                // this lands and when nothing is running.
+                recordLoaded = true
                 reconcileSheet(loaded, sheetAt)
                 refreshRows(loaded)
                 // Reconciling policy access reads whether a snooze is running,
@@ -3262,8 +3403,214 @@ class MainActivity : ComponentActivity() {
      * while it is out, and the refusal shown where the tap happened rather
      * than only in a notification the user may have denied (SPEC.md §4.2).
      */
-    private fun chooseDepartureFromScreen() {
+    internal fun chooseDepartureFromScreen() {
+        if (!requireLocationFor(PendingLocationAction.DEPARTURE)) return
         rows.commitDeparture()
+    }
+
+    /**
+     * What a location grant, once it lands, should go on to do — or null when
+     * no tap is waiting on one.
+     *
+     * Cleared by whatever consumes it, so a grant arriving from somewhere else
+     * (the Permissions screen, a trip to Settings) does not replay a tap the
+     * user made minutes ago and has forgotten about.
+     */
+    private enum class PendingLocationAction { DEPARTURE, MOTION_END }
+
+    private var pendingLocationAction: PendingLocationAction? = null
+
+    /**
+     * Which snooze the pending tap was made on, so a grant cannot apply it to
+     * a different one (Codex, PR #252).
+     *
+     * The wait is unbounded — the user can sit on the permission dialog — and
+     * a snooze can end and another be armed from the shade underneath it. The
+     * record observer reseeds the rows for the new one, so without this the
+     * enum alone would carry an old tap onto a snooze that never asked for it:
+     * `Until I leave` would put the new one's cap back to its ceiling, and
+     * `When I move` would give it a movement exit out of nowhere.
+     */
+    private var pendingLocationFor: Instant? = null
+
+    /**
+     * Whether the record read has landed at least once, whatever it found.
+     *
+     * `activeSnooze` is null in two different situations — before the first
+     * read completes, and when no snooze is running — and a recreation
+     * restores a pending tap while that read is still in flight. Reading the
+     * first as the second dropped a perfectly good tap, so the two are told
+     * apart here rather than conflated (Codex, PR #252).
+     */
+    private var recordLoaded = false
+
+    /** A tap waiting on a location grant, and the snooze it was made on. */
+    private data class PendingLocationTap(
+        val action: PendingLocationAction,
+        val forSnooze: Instant?,
+    )
+
+    /**
+     * Whether [action] may proceed now, asking for the location grant when it
+     * may not (maintainer, 2026-09-10).
+     *
+     * **Both end conditions need it, for different reasons.** `Until I leave`
+     * needs location to measure a departure at all. `When I move` does not use
+     * location — the sensor needs no permission — but it needs the process kept
+     * alive to hear a one-shot sensor, and the foreground service that does
+     * that is typed `location`, which the platform refuses to start without the
+     * grant (`SnoozeService.foregroundHost`). So a motion exit armed without it
+     * would be a promise the platform declines to let us keep.
+     *
+     * **How much of the grant differs, though**, which is what [satisfies]
+     * carries. Returns false having *asked* where the system will still ask,
+     * and having said so where the tap was when it will not. Never silently: a
+     * row that did nothing is the failure this whole feature keeps running
+     * into.
+     */
+    private fun requireLocationFor(action: PendingLocationAction): Boolean {
+        val permission = refreshLocation()
+        if (satisfies(permission, action)) return true
+        if (permission == LocationPermission.ASKABLE) {
+            pendingLocationAction = action
+            pendingLocationFor = activeSnooze?.startedAt
+            beginLocationRequest()
+        } else {
+            // Asked as often as the system allows, so there is nothing left to
+            // prompt with and the Permissions screen is the only route. Said
+            // here rather than opening Settings unasked — the tap was for an
+            // end condition, not for a detour.
+            pendingLocationAction = null
+            pendingLocationFor = null
+            lastOutcome = getString(R.string.failure_needs_location)
+        }
+        return false
+    }
+
+    /**
+     * How much of the location grant [action] actually needs.
+     *
+     * Two different questions, and collapsing them into one cost the motion
+     * row more than it needed (Codex, PR #252). `Until I leave` needs the
+     * grant the presence engine can *use* — fine, plus the background half on
+     * a flavor that declares it — which is exactly what [refreshLocation]
+     * answers. `When I move` needs only what the platform demands to start a
+     * `location`-typed foreground service: "the app must be granted at least
+     * one of ACCESS_COARSE_LOCATION, ACCESS_FINE_LOCATION"
+     * (developer.android.com, foreground service types). Background location
+     * is not among its prerequisites, and the sensor itself needs no location
+     * permission at all — so holding the motion row to the departure
+     * aggregate refused it to everyone on approximate location, and made a
+     * background grant it will never use look like part of the price.
+     */
+    private fun satisfies(permission: LocationPermission, action: PendingLocationAction): Boolean =
+        when (action) {
+            PendingLocationAction.DEPARTURE -> permission == LocationPermission.GRANTED
+            PendingLocationAction.MOTION_END -> holdsAnyLocationGrant()
+        }
+
+    /** Either half of the runtime location grant — the foreground service's own floor. */
+    private fun holdsAnyLocationGrant(): Boolean =
+        checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PERMISSION_GRANTED ||
+            checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PERMISSION_GRANTED
+
+    /**
+     * Takes the pending tap and clears it, or answers null when there is none
+     * — or when it belongs to a snooze that is no longer running.
+     *
+     * **One place, because both endings need the same check** (Codex,
+     * PR #252). A tap can end two ways: the grant arrives and resumes it, or
+     * the rationale is dismissed and abandons it. The wait between is
+     * unbounded, so the snooze can end and another be armed underneath it, and
+     * either ending then concerns a snooze the user never touched — applying
+     * it would change the wrong one, and *reporting* it would tell the user
+     * the running one's row failed when it never tried.
+     *
+     * Silent to the user either way, since the row they are looking at is
+     * already showing the running snooze's own truth. It goes to the debug
+     * log, which is where a snooze that behaved unexpectedly gets explained.
+     */
+    private fun takePendingLocationTap(): PendingLocationTap? {
+        val action = pendingLocationAction ?: return null
+        val forSnooze = pendingLocationFor
+        pendingLocationAction = null
+        pendingLocationFor = null
+        // Only once the record is actually known — see [recordLoaded]. Until
+        // then this screen cannot tell a snooze that ended from one it has not
+        // read yet, and the service can: both commits carry the tapped
+        // snooze's identity and are validated against the record there, which
+        // is the authoritative check either way.
+        if (recordLoaded && forSnooze != activeSnooze?.startedAt) {
+            SnoozeDebugLog.event("a tap waiting on location outlived its snooze; dropped")
+            return null
+        }
+        return PendingLocationTap(action, forSnooze)
+    }
+
+    /**
+     * Runs whatever tap was waiting on the grant, or reports that it failed.
+     *
+     * Judged from [permission] and the grant itself rather than from the
+     * dialog's answer: approximate location denies fine and still satisfies
+     * the motion row, so a boolean about what the prompt returned is the wrong
+     * question to ask on this side.
+     */
+    private fun resumePendingLocationAction(permission: LocationPermission) {
+        val tap = takePendingLocationTap() ?: return
+        if (!satisfies(permission, tap.action)) {
+            lastOutcome = getString(R.string.failure_needs_location)
+            return
+        }
+        when (tap.action) {
+            PendingLocationAction.DEPARTURE -> rows.commitDeparture()
+            // The snooze the user actually tapped, not this screen's cached
+            // reading of what is running — the service validates it against
+            // the record, which is the copy that cannot be stale.
+            PendingLocationAction.MOTION_END -> commitMotionEnd(true, tap.forSnooze)
+        }
+    }
+
+    /**
+     * The `When I move` row toggling (SPEC.md §4.4).
+     *
+     * Deliberately *not* through [rows] — the end-choice controller — even
+     * though it sits among that controller's rows. That machinery exists for
+     * commits that can be declined and have to be reseeded when they are: it
+     * holds a request id, blocks the other rows while one is in flight, and
+     * shows the refusal where the tap happened. None of that applies here,
+     * because this carries no time to be out of date. Routing it through
+     * anyway would make the whole row group inert for the round trip of a tap
+     * that cannot fail on anything the screen has not already read.
+     *
+     * The screen renders the record, so the switch follows what actually
+     * landed rather than what was asked for: a service that refuses to start
+     * leaves the row where it was, which is the truth.
+     */
+    /**
+     * Internal, like [onForegroundLocationResult] and for the same test-only
+     * reason: the permission gate in front of this is the part worth pinning,
+     * and no composable click can reach it under Robolectric.
+     */
+    internal fun toggleMotionEndFromScreen(endsOnMotion: Boolean) {
+        val forSnooze = activeSnooze?.startedAt
+        // Turning it **off** never asks for anything. A user withdrawing a
+        // choice must not be met with a permission prompt, and there is no
+        // foreground service to keep for an exit being given up.
+        if (endsOnMotion && !requireLocationFor(PendingLocationAction.MOTION_END)) return
+        commitMotionEnd(endsOnMotion, forSnooze)
+    }
+
+    private fun commitMotionEnd(endsOnMotion: Boolean, forSnooze: Instant?) {
+        // Two literals rather than one formatted line, matching the other tap
+        // lines here: nothing user-supplied goes near this, so there is
+        // nothing to route through `safe`.
+        SnoozeDebugLog.event(
+            if (endsOnMotion) "tap: when I move on, from the app screen"
+            else "tap: when I move off, from the app screen",
+        )
+        if (!SnoozeService.setMotionEnd(this, endsOnMotion, forSnooze)) {
+            lastOutcome = getString(R.string.failure_could_not_set_end)
+        }
     }
 
     private fun endFromScreen() {

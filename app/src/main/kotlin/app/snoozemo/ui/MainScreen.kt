@@ -149,6 +149,7 @@ internal fun MainScreen(
      * pinning any other state need not state an opinion about this one.
      */
     endChoice: EndChoiceUiState? = null,
+    motionEnd: MotionEndUiState? = null,
     onOpenPermissions: () -> Unit,
     onOpenSettings: () -> Unit,
     /**
@@ -167,6 +168,7 @@ internal fun MainScreen(
     onChooseEndMeeting: (Int) -> Unit = {},
     /** Puts the cap back to its ceiling, so the snooze runs until departure again. */
     onChooseDeparture: () -> Unit = {},
+    onToggleMotionEnd: (Boolean) -> Unit = {},
     onStepEndDown: () -> Unit = {},
     onStepEndUp: () -> Unit = {},
     onShareDebugLog: () -> Unit,
@@ -379,6 +381,25 @@ internal fun MainScreen(
                     committing = choice.committing,
                     failed = choice.failed,
                     tracksDeparture = choice.tracksDeparture,
+                )
+            }
+            // **Last of the whens, directly above the pinned `End now`**
+            // (maintainer, 2026-09-10). Every row above replaces the one
+            // deadline the cap alarm watches; this one *adds* an exit and
+            // leaves that deadline alone.
+            //
+            // Outside `endChoice` rather than inside it, because it outlives
+            // the offer: once the cap comes inside `MIN_CAP` there is no time
+            // left to choose and those rows go, but a switch the user turned
+            // on has to stay revocable for as long as the sensor is armed
+            // (Codex, PR #252). The 12dp the parent column puts between them
+            // — against the 8dp inside the group — reads as the boundary it
+            // now is: a different kind of answer, not a fourth *when*.
+            motionEnd?.let { motion ->
+                MotionEndRow(
+                    checked = motion.enabled,
+                    enabled = true,
+                    onCheckedChange = onToggleMotionEnd,
                 )
             }
             // Gated behind access being allowed, same as the old DebugScreen.

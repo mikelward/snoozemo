@@ -30,7 +30,7 @@ import java.time.Instant
  * few, and a hand-written schema here is easier to migrate than a serializer's
  * output when `Anchor` grows saved-place fields.
  */
-class ActiveSnoozeStore(
+open class ActiveSnoozeStore(
     context: Context,
     /**
      * Wall-clock now, injected so the one time-dependent read here is
@@ -164,6 +164,11 @@ class ActiveSnoozeStore(
             // Null falls back to the id the app holds now — the inference this
             // field replaces — so such a record keeps the behavior it had.
             ruleId = prefs.getString(KEY_RULE_ID, null),
+            // Restored rather than defaulted, because the watch is re-armed
+            // from this: a snooze the user asked to end on movement would
+            // otherwise come back from a process death running silently to its
+            // cap instead.
+            endsOnMotion = prefs.getBoolean(KEY_ENDS_ON_MOTION, false),
         )
     }
 
@@ -336,7 +341,10 @@ class ActiveSnoozeStore(
      * now rather than in each caller's head: a caller that could not say which
      * write it was making is the bug this split removes.
      */
-    fun update(snooze: ActiveSnooze): Boolean =
+    // `open` for the seam in `SnoozeService`: a `commit()` to SharedPreferences
+    // always succeeds under Robolectric, so a refused record write — and what
+    // the service does about one — is otherwise unreachable by any test.
+    open fun update(snooze: ActiveSnooze): Boolean =
         prefs.edit().putAll(snooze, allowLookup = true, newArm = false).commit()
 
     private fun SharedPreferences.Editor.putAll(
@@ -416,6 +424,7 @@ class ActiveSnoozeStore(
         // Null clears the key for the same reason: a record that has not yet
         // been confirmed on a rule must not keep naming the previous one's.
         .putString(KEY_RULE_ID, snooze.ruleId)
+        .putBoolean(KEY_ENDS_ON_MOTION, snooze.endsOnMotion)
         .putString(KEY_PLACE, snooze.placeName)
         .putString(KEY_SSID, snooze.anchor.ssid)
         // Recorded alongside the SSID and acted on by nothing (SPEC.md §6.2);
@@ -611,6 +620,13 @@ class ActiveSnoozeStore(
         const val KEY_RELEASING_REASON = "releasing_reason"
         const val KEY_ARMED = "armed"
         const val KEY_RULE_ID = "rule_id"
+
+        /**
+         * `When I move` (SPEC.md §4.4). Absent on a record written before the
+         * choice existed, which reads as off — the honest answer, since
+         * nothing armed a watch for it.
+         */
+        const val KEY_ENDS_ON_MOTION = "ends_on_motion"
         const val KEY_CAP_EXPIRES_AT = "cap_expires_at"
         const val KEY_BOOT_REFERENCE = "boot_reference"
         const val KEY_CAP_CEILING_AT = "cap_ceiling_at"
