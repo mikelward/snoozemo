@@ -4,7 +4,9 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import app.snoozemo.core.SnoozeDebugLog
+import app.snoozemo.presence.deviceHasMotionSensor
 import app.snoozemo.storage.SerializedPreferences
+import app.snoozemo.ui.motionEndUnavailability
 import com.mikelward.androidlog.android.DebugFileSink
 import com.mikelward.androidlog.android.PreviousRun
 import java.io.File
@@ -648,6 +650,45 @@ internal object DebugLogging {
             "run start; app=${appVersion(app)} android=${Build.VERSION.RELEASE} " +
                 "(api ${Build.VERSION.SDK_INT}) device=${Build.MANUFACTURER} ${Build.MODEL}",
         )
+        logMotionEndCapability(app)
+    }
+
+    /**
+     * Whether `When I move` can work on this build and this phone (SPEC.md
+     * §4.4) — part of the run context, and said for the same reason.
+     *
+     * The row is withheld on a build with no foreground service and on a phone
+     * with no significant-motion sensor, and those two look identical from the
+     * outside — identical, too, to a version that predates the feature. A user
+     * who went looking for the switch had nothing to tell them apart, which is
+     * principle 2's failure even though nothing has gone wrong.
+     *
+     * **Here rather than where the screen asks** (Codex, PR #253). Said once
+     * per process from the activity, it was spent by a run that started with
+     * recording off: the gate above empties the buffer, and a user who then
+     * turns logging on to find out why the row is missing would get a log that
+     * still could not say. The run-context line has exactly that problem and
+     * exactly this answer, so this rides with it.
+     *
+     * The sensor lookup is contained, because [logRunContext]'s callers are
+     * not: at the install site a throw would be caught as "installing the
+     * debug log failed" over an install that had in fact finished, and at the
+     * re-enable site it would skip the switch's own outcome and leave Settings
+     * looking stuck. A refusal says so in the log rather than going quiet.
+     *
+     * The strings are fixed and name no device; nothing is read from the
+     * sensor, only whether one exists (`docs/PRIVACY.md`).
+     */
+    private fun logMotionEndCapability(app: Context) {
+        val line = runCatching {
+            motionEndUnavailability { deviceHasMotionSensor(app) }
+                ?.let { "when I move is unavailable: $it" }
+                ?: "when I move is available"
+        }.getOrElse { thrown ->
+            runCatching { Log.w(TAG, "Reading the significant-motion sensor threw.", thrown) }
+            "whether when I move can work here could not be determined"
+        }
+        SnoozeDebugLog.event(line)
     }
 
     private fun appVersion(context: Context): String = runCatching {

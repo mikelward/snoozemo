@@ -293,6 +293,12 @@ settings — ring, vibrate or silent — along with the one it was put back to a
 and whether Snoozemo's own Do Not Disturb rule was in effect immediately before and after
 that change, which is there to answer whether turning the ringer down is what stops some
 phones staying snoozed at all,
+whether this build and this phone can offer the `When I move` end condition at all —
+recorded alongside the run details above — once per run, and again if you turn the log
+back on — and only as which of the two reasons it is: that this build of
+Snoozemo carries no foreground service, or that this phone has no significant-motion
+sensor. It names no device and reads nothing from the sensor; it is there so a missing
+row can be told apart from a version of Snoozemo that predates it,
 **which control you tapped** — the Quick Settings tile, a button on the ongoing
 notification, a button in the app, or an end time you chose — what Snoozemo found when it
 checked whether its rule was still holding the phone quiet, and what it concluded from that;

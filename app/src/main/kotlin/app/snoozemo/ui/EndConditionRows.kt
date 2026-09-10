@@ -451,13 +451,40 @@ internal fun motionEndUiState(
     deviceHasMotionSensor: () -> Boolean,
 ): MotionEndUiState? {
     if (record == null) return null
-    // A build with no foreground service cannot keep the process alive to hear
-    // a one-shot sensor, so the promotion is refused and the exit never fires.
-    // `direct` was excluded by accident until the tracking-mode gate came off
-    // — it runs duration-only snoozes, which that gate also caught.
-    if (!buildHoldsForegroundService) return null
-    if (!deviceHasMotionSensor()) return null
+    if (motionEndUnavailability(deviceHasMotionSensor) != null) return null
     return MotionEndUiState(enabled = record.endsOnMotion)
+}
+
+/**
+ * Why this build or this phone cannot offer `When I move` at all, or null
+ * when it can (SPEC.md §4.4).
+ *
+ * **Separate from [motionEndUiState] so the reason can be said, not only
+ * acted on** (maintainer, 2026-09-10). A row that is simply absent tells the
+ * user nothing: "this build does not have the feature" and "this phone cannot
+ * do it" look identical on screen, and neither reached the log that exists to
+ * explain a snooze after the fact. This is the one place either answer is
+ * decided, so the screen and the log cannot drift apart about it.
+ *
+ * The log's caller is `DebugLogging`, which says it with the run context. It
+ * lives here, beside the row it governs and beside the flavor constant it
+ * reads, rather than moving down to the layer that logs it: both callers are
+ * in this module, and `buildHoldsForegroundService` is already a `ui` file
+ * per flavor.
+ *
+ * A build with no foreground service cannot keep the process alive to hear a
+ * one-shot sensor, so the promotion is refused and the exit never fires;
+ * `direct` was excluded by accident until the tracking-mode gate came off, and
+ * is excluded on purpose now. The sensor question is asked second and through
+ * a lambda, so the flavor that can never offer the row never asks it.
+ *
+ * The strings are fixed and name no device, so they are safe for a log the
+ * user shares (AGENTS.md, *Privacy*).
+ */
+internal fun motionEndUnavailability(deviceHasMotionSensor: () -> Boolean): String? = when {
+    !buildHoldsForegroundService -> "this build holds no foreground service"
+    !deviceHasMotionSensor() -> "this device has no significant-motion sensor"
+    else -> null
 }
 
 /** Everything [MotionEndRow] draws, as one value. */
