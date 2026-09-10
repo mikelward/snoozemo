@@ -233,6 +233,33 @@ class EndChoiceUiStateTest {
     }
 
     @Test
+    fun `an unavailable motion row says which of the two reasons it is`() {
+        // The row's absence used to be silent, so "this build does not have
+        // the feature" and "this phone cannot do it" looked identical from the
+        // outside (maintainer, 2026-09-10). Asserted against the same function
+        // the screen acts on, so the reason and the behavior cannot drift.
+        //
+        // Flavor-aware rather than hard-coded: `direct` never gets past the
+        // first clause, so pinning either answer would be a test that agrees
+        // with itself on one flavor.
+        if (buildHoldsForegroundService) {
+            assertNull("nothing is wrong when both hold", motionEndUnavailability { true })
+            assertEquals(
+                "this device has no significant-motion sensor",
+                motionEndUnavailability { false },
+            )
+        } else {
+            assertEquals(
+                "the build is answered first, and the sensor never asked",
+                "this build holds no foreground service",
+                // `throw`, not `Assert.fail`: a Java `void` method is `Unit`
+                // to Kotlin, so `fail` does not satisfy a `() -> Boolean`.
+                motionEndUnavailability { throw AssertionError("the sensor must not be asked") },
+            )
+        }
+    }
+
+    @Test
     fun `the motion switch needs a running snooze, and asks the platform nothing`() {
         // The sensor lookup is a `SensorManager` call made from composition,
         // so an idle screen must not reach it — the common first frame has no

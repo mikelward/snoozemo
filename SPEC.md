@@ -1532,6 +1532,22 @@ service, and `direct` declares none — it runs duration-only snoozes until Phas
 nothing to outlive. That used to fall out of the tracking-mode gate by accident; with the gate
 gone it is its own question, answered by a flavor constant rather than inferred.
 
+**Where the row cannot be offered, the log says which reason it is** (maintainer, 2026-09-10).
+Absence is not an explanation: a build that carries no foreground service and a phone with no
+significant-motion sensor look identical from the outside, and so does a version of Snoozemo that
+predates the feature. The screen has nothing useful to draw in that state — there is no row to
+disable, and a permanent notice about hardware the user cannot change is noise on the one screen
+they open to act — so the answer goes where an unexplained snooze is already explained. It names no
+device and reads nothing from the sensor (`docs/PRIVACY.md`). Principle 2 applied to a *capability*
+rather than to a snooze: the app knows why, so it should not be the user's job to guess.
+
+**It rides with the run context, not with the screen** (Codex, PR #253). Said once per process
+where the screen asks the question, it is spent by a run that starts with recording off — the gate
+empties the buffer — so a user who then turns logging on precisely because the row is missing gets
+a log that still cannot say. It is a property of this build and this phone, like the app version
+and the device the run context already carries, and it is restated on a re-enable for the same
+reason that line is (§4.6).
+
 **The switch outlives the time choices.** The other rows are withheld once the cap comes inside
 `MIN_CAP` (§7), because there is no time left to choose. This one is not: it carries a state the
 user has to be able to revoke for as long as the sensor is armed, and bundling it with the time

@@ -4,6 +4,8 @@ import android.content.Context
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import app.snoozemo.core.SnoozeDebugLog
+import app.snoozemo.presence.deviceHasMotionSensor
+import app.snoozemo.ui.motionEndUnavailability
 import java.io.File
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -103,6 +105,32 @@ class DebugLoggingTest {
         DebugLogging.awaitIdleForTest()
 
         assertTrue(SnoozeDebugLog.snapshot().any { it.contains("run start") })
+    }
+
+    @Test
+    fun `re-enabling restates whether when I move can work here`() {
+        // The answer the row's absence cannot give (SPEC.md §4.4), and the
+        // reason it rides with the run context rather than being said once
+        // from the screen (Codex, PR #253): a run that starts with recording
+        // off spends a once-per-process line into a buffer the gate then
+        // empties, so the user who turns logging *on* to find out why the
+        // switch is missing gets a log that still cannot say.
+        DebugLogging.install(context)
+        DebugLogging.setEnabled(context, false) {}
+        DebugLogging.setEnabled(context, true) {}
+        DebugLogging.awaitIdleForTest()
+
+        // Whichever way this flavor and this device answer — a line that only
+        // appeared on failure would leave the working case just as
+        // unexplained. `motionEndUnavailability` is the same function the
+        // screen acts on, so the reason and the behavior cannot drift.
+        val expected = motionEndUnavailability { deviceHasMotionSensor(context) }
+            ?.let { "when I move is unavailable: $it" }
+            ?: "when I move is available"
+        assertTrue(
+            "the log settles which it is; said: " + SnoozeDebugLog.snapshot(),
+            SnoozeDebugLog.snapshot().any { it.contains(expected) },
+        )
     }
 
     @Test
