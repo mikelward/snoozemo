@@ -32,6 +32,32 @@ class SnoozeDebugLogTest {
 
     private val t0: Instant = Instant.parse("2026-01-01T12:00:00Z")
 
+    /**
+     * The last line's **message**, with the log's own timestamp prefix off.
+     *
+     * Asserting `contains` against the whole formatted line asserts against
+     * the clock as well as the app, and it fails in both directions. A line
+     * carries `MM-DD HH:MM:SS.mmm L ` in front of what the app wrote, so
+     * `assertFalse(line.contains("02:00"))` — the BSSID floor below — is red
+     * for the three minutes a day the clock reads `x2:00`, which is how this
+     * suite came to fail at 02:00 UTC on 2026-09-10 with nothing changed near
+     * it. The same prefix satisfies an `assertTrue` for free: `12.5` is in
+     * `…:12.5xx` whether or not the value reached the log, so the positive
+     * assertions were passing on the timestamp too.
+     *
+     * Both are the same bug — an assertion aimed at the app hitting the clock
+     * — so both are fixed the same way, by asserting on what the app wrote.
+     */
+    private fun lastMessage(): String {
+        val line = SnoozeDebugLog.snapshot().last { !it.contains("timezone offset") }
+        val message = line.replaceFirst(TIMESTAMPED_PREFIX, "")
+        assertTrue(
+            "the line should carry the log's timestamp prefix: $line",
+            message != line,
+        )
+        return message
+    }
+
     // --- the privacy floor (SPEC.md §4.6: absolute, and tested on its own) ---
 
     @Test
@@ -94,7 +120,7 @@ class SnoozeDebugLogTest {
         // second half is asserted through the boundary directly.
         SnoozeDebugLog.event("candidate=%s", "candidate-1")
 
-        val line = SnoozeDebugLog.snapshot().last { !it.contains("timezone offset") }
+        val line = lastMessage()
         assertTrue("this device's own log keeps it", line.contains("candidate-1"))
         assertFalse("and does not hide it", line.contains(OFF_DEVICE_PLACEHOLDER))
 
@@ -135,7 +161,7 @@ class SnoozeDebugLogTest {
         // The mistake case: the record itself, with nothing to make it safe.
         SnoozeDebugLog.event("state → %s", snooze)
 
-        val direct = SnoozeDebugLog.snapshot().last { !it.contains("timezone offset") }
+        val direct = lastMessage()
         assertFalse("the SSID is banned", direct.contains("ExampleWifi"))
         assertFalse("the BSSID is banned", direct.contains("02:00"))
         assertFalse("the place name is banned", direct.contains("Cinema"))
@@ -148,7 +174,7 @@ class SnoozeDebugLogTest {
         // And the sanctioned route still yields the diagnostic it exists for.
         SnoozeDebugLog.event("state → %s", snooze.logSummary())
 
-        val summarized = SnoozeDebugLog.snapshot().last { !it.contains("timezone offset") }
+        val summarized = lastMessage()
         assertFalse("the SSID is banned", summarized.contains("ExampleWifi"))
         assertFalse("the place name is banned", summarized.contains("Cinema"))
         assertFalse("latitude is banned", summarized.contains("12.345678"))
@@ -273,8 +299,13 @@ class SnoozeDebugLogTest {
         // to explain its own failures.
         SnoozeDebugLog.event("mode=%s accuracy=%sm", TrackingMode.FULL, 12.5f)
 
-        val line = SnoozeDebugLog.snapshot().last { !it.contains("timezone offset") }
+        val line = lastMessage()
         assertTrue("an enum is carried", line.contains("FULL"))
         assertTrue("a number is carried", line.contains("12.5"))
+    }
+
+    private companion object {
+        /** `MM-DD HH:MM:SS.mmm L `, the shared logger's own line prefix. */
+        val TIMESTAMPED_PREFIX = Regex("""^\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [A-Z] """)
     }
 }
