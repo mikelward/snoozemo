@@ -1,6 +1,7 @@
 package app.snoozemo.crash
 
 import android.content.Context
+import app.snoozemo.storage.SerializedPreferences
 
 /**
  * Remembers the user's answer to the telemetry question (`SPEC.md` §12):
@@ -20,8 +21,7 @@ import android.content.Context
  */
 internal class CrashReportingStore(context: Context) {
 
-    private val prefs = context.applicationContext
-        .getSharedPreferences(FILE_NAME, Context.MODE_PRIVATE)
+    private val prefs = SerializedPreferences(context, FILE_NAME)
 
     fun isEnabled(): Boolean = prefs.getBoolean(KEY_ENABLED, false)
 
@@ -62,23 +62,28 @@ internal class CrashReportingStore(context: Context) {
      * collection off, which is at least what the durable state says, and the
      * caller reports the refusal on the switch's own failure line.
      */
-    fun setAnswered(): Boolean {
+    fun setAnswered(): Boolean = prefs.write {
         // Already answered is already done, so there is nothing to write and
         // nothing that can fail (Codex, PR #166). Both surfaces call this on
         // every change, so for anyone past the card this is the common path,
         // and skipping it is what keeps a redundant write from ever being able
         // to un-answer them.
-        if (hasAnswered()) return true
-        val persisted = prefs.edit().putBoolean(KEY_ANSWERED, true).commit()
+        //
+        // Inside the write scope with the rest: the early return is what makes
+        // the rollback below know it is putting `false` back rather than
+        // guessing, so a concurrent write landing between the two would make
+        // that reasoning false.
+        if (hasAnswered()) return@write true
+        val persisted = prefs.putBoolean(KEY_ANSWERED, true)
         if (!persisted) {
             // `false` is the value that was there, not a guess: the early
             // return above is what makes that true. Without it this rollback
             // would un-answer an already-answered user whose redundant write
             // happened to fail — the card back, collection stopped, over a
             // choice they had already made.
-            prefs.edit().putBoolean(KEY_ANSWERED, false).commit()
+            prefs.putBoolean(KEY_ANSWERED, false)
         }
-        return persisted
+        persisted
     }
 
     /**
@@ -108,13 +113,13 @@ internal class CrashReportingStore(context: Context) {
      * restore's own disk write may fail too; the map is restored regardless,
      * which is the part every reader sees.
      */
-    fun setEnabled(enabled: Boolean): Boolean {
+    fun setEnabled(enabled: Boolean): Boolean = prefs.write {
         val before = isEnabled()
-        val persisted = prefs.edit().putBoolean(KEY_ENABLED, enabled).commit()
+        val persisted = prefs.putBoolean(KEY_ENABLED, enabled)
         if (!persisted) {
-            prefs.edit().putBoolean(KEY_ENABLED, before).commit()
+            prefs.putBoolean(KEY_ENABLED, before)
         }
-        return persisted
+        persisted
     }
 
     /**
@@ -127,7 +132,14 @@ internal class CrashReportingStore(context: Context) {
         hasAnswered()
     }
 
-    private companion object {
+    internal companion object {
+        /**
+         * Test seam: runs [block] holding this file's write lock, so a write
+         * from another thread can be seen to wait for it.
+         */
+        internal fun holdWritesForTest(block: () -> Unit) =
+            SerializedPreferences.holdWritesForTest(FILE_NAME, block)
+
         const val FILE_NAME = "crash_reporting"
         const val KEY_ENABLED = "enabled"
         const val KEY_ANSWERED = "answered"

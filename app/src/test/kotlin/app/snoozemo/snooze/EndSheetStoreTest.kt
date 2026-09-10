@@ -6,11 +6,48 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 @RunWith(RobolectricTestRunner::class)
 class EndSheetStoreTest {
 
     private val store get() = EndSheetStore(ApplicationProvider.getApplicationContext())
+
+    @Test
+    fun `writes from two threads take turns`() {
+        // The same serialization `DebugLogStore` was given after the
+        // `ProcessExitReasonsTest` stall (TODO.md), and for the same exposure:
+        // `EndSheetSetting` writes this file on its own long-lived worker while
+        // tests write it from the test thread. Two overlapping commits send
+        // the second through the platform's QueuedWork, whose pending work
+        // Robolectric drops between tests, and the worker is then parked on a
+        // latch nothing will open for the rest of the JVM.
+        val holding = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val done = CountDownLatch(1)
+        val holder = thread {
+            EndSheetStore.holdWritesForTest {
+                holding.countDown()
+                release.await(30, TimeUnit.SECONDS)
+            }
+        }
+        assertTrue("precondition: the lock is held", holding.await(5, TimeUnit.SECONDS))
+        val writer = thread {
+            store.setEnabled(true)
+            done.countDown()
+        }
+        try {
+            assertFalse("a write waits for the one in flight", done.await(500, TimeUnit.MILLISECONDS))
+        } finally {
+            release.countDown()
+        }
+        assertTrue("and goes through once that one has finished", done.await(5, TimeUnit.SECONDS))
+        holder.join()
+        writer.join()
+        assertTrue(store.isEnabled())
+    }
 
     @Test
     fun `the tile does not ask by default`() {

@@ -8,6 +8,7 @@ import androidx.compose.runtime.setValue
 import app.snoozemo.core.DEFAULT_FONT_SCALE
 import app.snoozemo.core.FontSizeSettings
 import app.snoozemo.core.clampFontScale
+import app.snoozemo.storage.SerializedPreferences
 import java.util.concurrent.Executors
 
 /**
@@ -44,8 +45,7 @@ internal class FontSizeStore(
     @VisibleForTesting
     fileName: String = FILE_NAME,
 ) : FontSizeWriter {
-    private val prefs = context.applicationContext
-        .getSharedPreferences(fileName, Context.MODE_PRIVATE)
+    private val prefs = SerializedPreferences(context, fileName)
 
     /** The stored settings, or the defaults where nothing has been chosen. */
     override fun read(): FontSizeSettings = FontSizeSettings(
@@ -62,27 +62,23 @@ internal class FontSizeStore(
      * later read would return a size that was neither applied nor stored — text
      * at one size until a process restart put it back at another.
      */
-    override fun setScale(scale: Float): Boolean = write(KEY_SCALE) {
-        putFloat(KEY_SCALE, clampFontScale(scale))
+    override fun setScale(scale: Float): Boolean = prefs.write {
+        val before = read()
+        val persisted = prefs.putFloat(KEY_SCALE, clampFontScale(scale))
+        if (!persisted) {
+            prefs.putFloat(KEY_SCALE, before.scale)
+        }
+        persisted
     }
 
     /** Persists the pinch switch, returning whether the write reached disk. */
-    override fun setPinchEnabled(enabled: Boolean): Boolean = write(KEY_PINCH) {
-        putBoolean(KEY_PINCH, enabled)
-    }
-
-    private fun write(key: String, edit: android.content.SharedPreferences.Editor.() -> Unit): Boolean {
+    override fun setPinchEnabled(enabled: Boolean): Boolean = prefs.write {
         val before = read()
-        val persisted = prefs.edit().apply(edit).commit()
+        val persisted = prefs.putBoolean(KEY_PINCH, enabled)
         if (!persisted) {
-            prefs.edit().apply {
-                when (key) {
-                    KEY_SCALE -> putFloat(KEY_SCALE, before.scale)
-                    else -> putBoolean(KEY_PINCH, before.pinchEnabled)
-                }
-            }.commit()
+            prefs.putBoolean(KEY_PINCH, before.pinchEnabled)
         }
-        return persisted
+        persisted
     }
 
     /**

@@ -2905,10 +2905,16 @@ the point is that every other line of the app is worthless if it isn't true.
             siblings, so a stop/start while a tap's write is still queued cannot put an
             answered card back up (Codex, PR #166). All three gates are currently held by
             **inspection and symmetry, not by a test**: the class such a test belongs in is
-            `MainActivityLifecycleTest`, which is one of the two known-flaky suites below,
-            and there is no seam to hold a consent write in flight the way the debug log's
-            `awaitIdleForTest` holds its worker. So this waits on the flake and on a seam,
-            and is recorded rather than quietly counted as covered.
+            `MainActivityLifecycleTest`. **The flake half of this is gone** — that suite
+            was the second victim of the wedged worker fixed on 2026-09-05, not a flake of
+            its own — so what is left is only the seam: there is no way to hold a consent
+            write in flight the way the debug log's `awaitIdleForTest` holds its worker.
+            `CrashReportingStore.holdWritesForTest` now holds the *store's* write lock,
+            which is a start but not the seam this needs: it blocks the write on
+            `CrashReporting`'s worker, and what the test has to hold open is the window
+            between the tap and the completion callback, which is where
+            `crashReportingWrites` is non-zero. Recorded rather than quietly counted as
+            covered.
 
       - [ ] **Confirm the Firebase project's Analytics data-retention setting before the next
             `play` upload.** `docs/PRIVACY.md` now tells users how long usage statistics are
@@ -4811,6 +4817,25 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
+- [ ] **Where should the preference-write lock live?** Autopilot put
+      `PreferenceWriteLock` in `:core` (PR #246) after Codex found a fifth exposed store,
+      `SnoozeRingerStore`, sitting in `:dnd` where `:app`'s `SerializedPreferences` cannot
+      reach it. `:core` is the only module every other one already depends on, and the lock
+      needs no Android type — the file name is a string and the platform work happens inside
+      the block — so nothing about `SPEC.md` §11's plain-Kotlin `:core` had to give.
+
+      **What it costs**: the "a store never holds a raw `SharedPreferences`, so it cannot
+      forget the lock" property only holds inside `:app`, since `SerializedPreferences` lives
+      there. `SnoozeRingerStore` names the lock directly, correctly today and by discipline
+      rather than by construction.
+
+      **The alternative was a new `:storage` Android library** owning the wrapper, which every
+      module could depend on and which would extend that property everywhere. That is a change
+      to the module graph, which `AGENTS.md` makes the maintainer's call rather than
+      autopilot's, so it was not taken. Reversible either way: moving one file and one
+      `implementation(project(...))` line is the whole migration, and no store's behavior
+      changes with it.
+
 - [x] **How should `End now` get a position that does not move with the meeting
       count?** **Answered** (maintainer, 2026-09-09): pinned outside the scroll, at the
       bottom. Shipped that way; the Phase 4 item above closes with it.
@@ -6470,28 +6495,56 @@ Not blocking the PR on its own reading: the window predates this change for cras
 reports and cannot reach Analytics. Worth deciding before a wide rollout rather than
 before merge.
 
-## Flaky: `ProcessExitReasonsTest` and `MainActivityLifecycleTest` — still unfixed (PR #166)
+## Flaky: `ProcessExitReasonsTest` and `MainActivityLifecycleTest` — fixed (2026-09-05)
 
-**Not fixed by PR #166, despite an earlier claim here that half of it was.** The full
-diagnosis, both wrong theories, and what the latest evidence rules out are in the Phase 6
-checklist item *`ProcessExitReasonsTest`'s drain times out under full-suite load*. Kept as
-one account there rather than two here.
+**This section said "still unfixed (PR #166)" for five days after the fix landed.** The
+root cause, the fix, and the three wrong diagnoses that preceded them are in the Phase 6
+checklist item *`ProcessExitReasonsTest`'s drain times out under full-suite load*, which
+was checked off on 2026-09-05 while this heading was left saying the opposite. Kept as one
+account there rather than two here — which is exactly why this one is a pointer now and not
+a second copy.
 
 The short version: six `ProcessExitReasonsTest` cases and one `MainActivityLifecycleTest`
-case fail together at a flat ~10.03 s under full-suite load and pass in isolation. PR #166
-changed the drain from a skippable production API to the unconditional test seam — a real
-fix to a real defect, and **not** a fix to this. The task is queued and not executed, and
-the stack now shows what is ahead of it: an install's legacy purge, blocked in a commit.
+case failed together at a flat ~10.03 s under full-suite load and passed in isolation —
+one wedged worker, two victims, not two flakes. A `SharedPreferences` `commit()` on the
+debug log's worker overlapped a test's own write to the same file, so it took the
+platform's `QueuedWork` branch; Robolectric's per-test reset drops that queue, and the
+worker was parked on a latch nothing would open for the rest of the JVM. `DebugLogStore`
+now serializes its writes, which keeps every commit on the inline path.
 
-They fail **together because it is one fault, not two**: a single wedged worker, with
-`MainActivityLifecycleTest` the second victim rather than a separate flake. Both waits now
-print the worker's own stack when they time out. That was expected to name the class that
-queued the blocking task; it names the task itself, not its submitter — see below.
+**The mechanism was never specific to that store, and four more had it.**
+`CrashReportingStore`, `EndSheetStore`, `FontSizeStore` and `:dnd`'s `SnoozeRingerStore`
+are the same shape — a long-lived FIFO worker writing one preferences file that another
+thread can write too — and none was covered by a lock living in a fifth store's companion
+object. The lock itself is `PreferenceWriteLock` in `:core`, the one module every other
+one already depends on; `:app`'s four reach it through `SerializedPreferences`, which owns
+the preferences so a store cannot commit around the lock by not knowing it exists, and
+`SnoozeRingerStore` names it directly because `:dnd` cannot see `:app`. The rule that
+falls out of it: **a preference store whose writes reach a background worker is written
+under `PreferenceWriteLock`**.
 
-**2026-09-04: it occurred and the stack printed.** It names the blocking task — an install's
-legacy purge, parked in a `SharedPreferences` commit — but not which class submitted it, so
-the sibling-class hypothesis stays open. Recorded in the Phase 6 item with the rest, per the
-note above.
+**The survey that found the first three missed the last one**, because it grepped `app`,
+`core` and `presence` and not `dnd` or `tile` (Codex, PR #246). The full list of
+preferences files is what that grep should have been: `:app`'s nine, `:dnd`'s three,
+`:presence`'s two, `:tile`'s two, plus Crashlytics' and the measurement SDK's own.
+
+**And the unit is the operation, not the commit** (Codex, PR #246). Every one of these
+writes reads the old value, commits the new one, and puts the old one back when that commit
+is refused. Serializing only the commits leaves the rollback in its own critical section,
+so two threads interleave as *read, write (refused), [another thread writes and is told it
+stuck], roll back* — the second caller's setting lost the instant it was made, with a
+success returned for it. `SerializedPreferences.write { }` is that scope; the reentrant put
+methods inside it are what let a store read as it did before.
+
+**The rest are unconverted, and the criterion is overlap, not caution.** The remaining
+preference stores — `:app`'s `ActiveSnoozeStore`, `WelcomeStore`, the three prompt stores,
+`PlayUpdateStore` and `PendingFailureStore`; `:dnd`'s `PrefsZenRuleIdStore` and
+`RingerLoanStore`; `:presence`'s `CapabilityLossStore` and `GraceDeadlineStore`; and
+`:tile`'s two — are written from the caller's own thread, so no commit can overlap another
+and there is nothing to serialize. `ActiveSnoozeStore` and `WelcomeStore` do use a
+background thread, but for `warm()`, which only reads, and `TilePresenceStore` writes with
+`apply()`, which never parks on the latch at all. Convert one when it gains a second
+*writer*: `PreferenceWriteLock` is in `:core`, so every module can reach it.
 
 ## Analytics turns on a Crashlytics breadcrumb channel — accepted (PR #166)
 
