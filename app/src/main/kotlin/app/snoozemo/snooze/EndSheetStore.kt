@@ -1,7 +1,8 @@
 package app.snoozemo.snooze
 
-import androidx.annotation.VisibleForTesting
 import android.content.Context
+import androidx.annotation.VisibleForTesting
+import app.snoozemo.storage.SerializedPreferences
 import java.util.concurrent.Executors
 
 /**
@@ -20,8 +21,7 @@ import java.util.concurrent.Executors
  * about how the app behaves.
  */
 internal class EndSheetStore(context: Context) {
-    private val prefs = context.applicationContext
-        .getSharedPreferences(FILE_NAME, Context.MODE_PRIVATE)
+    private val prefs = SerializedPreferences(context, FILE_NAME)
 
     fun isEnabled(): Boolean = prefs.getBoolean(KEY_ENABLED, false)
 
@@ -54,16 +54,23 @@ internal class EndSheetStore(context: Context) {
      * flipped it back. The restore's own write may fail too; the map is restored
      * regardless, which is the part every reader sees.
      */
-    fun setEnabled(enabled: Boolean): Boolean {
+    fun setEnabled(enabled: Boolean): Boolean = prefs.write {
         val before = isEnabled()
-        val persisted = prefs.edit().putBoolean(KEY_ENABLED, enabled).commit()
+        val persisted = prefs.putBoolean(KEY_ENABLED, enabled)
         if (!persisted) {
-            prefs.edit().putBoolean(KEY_ENABLED, before).commit()
+            prefs.putBoolean(KEY_ENABLED, before)
         }
-        return persisted
+        persisted
     }
 
-    private companion object {
+    internal companion object {
+        /**
+         * Test seam: runs [block] holding this file's write lock, so a write
+         * from another thread can be seen to wait for it.
+         */
+        internal fun holdWritesForTest(block: () -> Unit) =
+            SerializedPreferences.holdWritesForTest(FILE_NAME, block)
+
         const val FILE_NAME = "end_sheet"
         const val KEY_ENABLED = "enabled"
     }

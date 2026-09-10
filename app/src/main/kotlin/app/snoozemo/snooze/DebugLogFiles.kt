@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import app.snoozemo.core.SnoozeDebugLog
+import app.snoozemo.storage.SerializedPreferences
 import com.mikelward.androidlog.android.DebugFileSink
 import com.mikelward.androidlog.android.PreviousRun
 import java.io.File
@@ -38,8 +39,7 @@ private const val TAG = "SnoozemoDebugLog"
 private const val LEGACY_DIR_NAME = "debuglog"
 
 internal class DebugLogStore(context: Context) {
-    private val prefs = context.applicationContext
-        .getSharedPreferences(FILE_NAME, Context.MODE_PRIVATE)
+    private val prefs = SerializedPreferences(context, FILE_NAME)
 
     fun isEnabled(): Boolean = prefs.getBoolean(KEY_ENABLED, true)
 
@@ -54,11 +54,11 @@ internal class DebugLogStore(context: Context) {
      * Codex on PR #68). The restore's own disk write may fail too; the map is
      * restored regardless, which is the part every reader sees.
      */
-    fun setEnabled(enabled: Boolean): Boolean = synchronized(writeLock) {
+    fun setEnabled(enabled: Boolean): Boolean = prefs.write {
         val before = isEnabled()
-        val persisted = prefs.edit().putBoolean(KEY_ENABLED, enabled).commit()
+        val persisted = prefs.putBoolean(KEY_ENABLED, enabled)
         if (!persisted) {
-            prefs.edit().putBoolean(KEY_ENABLED, before).commit()
+            prefs.putBoolean(KEY_ENABLED, before)
         }
         persisted
     }
@@ -91,34 +91,15 @@ internal class DebugLogStore(context: Context) {
      * write is synchronous and its failure is reported rather than assumed away.
      * Safe to block here: every caller is already on the debug log's worker.
      */
-    fun markLegacyLogsPurged(): Boolean = synchronized(writeLock) {
-        prefs.edit().putBoolean(KEY_DIRECTORY_PURGED, true).commit()
-    }
+    fun markLegacyLogsPurged(): Boolean = prefs.putBoolean(KEY_DIRECTORY_PURGED, true)
 
     internal companion object {
         const val FILE_NAME = "debug_log"
         const val KEY_ENABLED = "enabled"
 
-        /**
-         * One write to this file at a time, process-wide.
-         *
-         * `commit()` writes inline only while it is the file's sole write in
-         * flight; a second commit overlapping it on another thread is handed
-         * to the platform's `QueuedWork` instead, and the caller waits on a
-         * latch that write counts down. On a device that is routine. Under
-         * Robolectric it is the `ProcessExitReasonsTest` stall (`TODO.md`):
-         * the per-test reset drops whatever `QueuedWork` still holds, so a
-         * commit queued there by the debug log's worker — racing a test's own
-         * `setEnabled` on the test thread during startup — never sees its
-         * latch open, and the process-wide worker is parked in `commit()` for
-         * every test that follows. Production's two writers already serialize
-         * on that worker, so this changes nothing there; it is what makes a
-         * write from any other thread safe to overlap with them.
-         */
-        private val writeLock = Any()
-
         /** Test seam: runs [block] holding the write lock, so a write from another thread can be seen to wait. */
-        internal fun holdWritesForTest(block: () -> Unit) = synchronized(writeLock) { block() }
+        internal fun holdWritesForTest(block: () -> Unit) =
+            SerializedPreferences.holdWritesForTest(FILE_NAME, block)
 
         /**
          * This migration's own marker, deliberately **not** the older

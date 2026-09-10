@@ -1,6 +1,7 @@
 package app.snoozemo.dnd
 
 import android.content.Context
+import app.snoozemo.core.PreferenceWriteLock
 import app.snoozemo.core.SnoozeRinger
 
 /**
@@ -48,18 +49,39 @@ class SnoozeRingerStore(context: Context) {
      * read would return a value that was neither applied nor stored — a row
      * reading one way over behavior going the other, until a process restart
      * flipped it back.
+     *
+     * The read, the write and the rollback are one [PreferenceWriteLock] scope:
+     * `SnoozeRingerSetting` writes this file on its own worker while tests
+     * write it from the test thread, so both halves of that lock's reason bite
+     * here — the wedged commit and the rollback that overwrites a concurrent
+     * write already reported as stuck (Codex, PR #246). `:app`'s stores get
+     * this through `SerializedPreferences`; `:dnd` cannot see that type, so it
+     * names the lock directly.
      */
-    fun setChosen(ceiling: SnoozeRinger): Boolean {
+    fun setChosen(ceiling: SnoozeRinger): Boolean = PreferenceWriteLock.write(FILE_NAME) {
         val before = chosen()
         val persisted = prefs.edit().putString(KEY_CEILING, ceiling.name).commit()
         if (!persisted) {
             prefs.edit().putString(KEY_CEILING, before.name).commit()
         }
-        return persisted
+        persisted
     }
 
-    private companion object {
-        const val FILE_NAME = "snooze_ringer"
-        const val KEY_CEILING = "ceiling"
+    companion object {
+        /**
+         * Test seam: runs [block] holding this file's write lock, so a write
+         * from another thread can be seen to wait for it.
+         *
+         * Public rather than `internal` because the tests that write this
+         * store from a second thread live in `:app` — `SnoozeRingerStoreTest`
+         * and `AudioRingerControllerTest` — and `internal` here does not reach
+         * them. No `@VisibleForTesting`: `:dnd` carries no `androidx.annotation`
+         * dependency, and adding one for a marker is not worth the edge.
+         */
+        fun holdWritesForTest(block: () -> Unit) =
+            PreferenceWriteLock.write(FILE_NAME, block)
+
+        private const val FILE_NAME = "snooze_ringer"
+        private const val KEY_CEILING = "ceiling"
     }
 }
