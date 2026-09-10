@@ -321,26 +321,36 @@ release-worthy push to `main`**. That is the channel now; the hand seed upload d
 the path while the upload step was wired but dormant.
 
 **A stand-down is not an invitation to upload by hand.** When the pipeline declines to publish a
-bundle it has already built, it is enforcing something — an unconfirmed data declaration, or a
-newer release that has superseded this one — and a Console upload defeats that rather than
-working around it: it ships the build the guard withheld, or lands a bundle Play has already
-moved past. It is also invisible to the release-notes range, which counts only what the pipeline
-itself published, so the notes it should have carried stay queued and repeat on the next
+bundle it has already built, it is enforcing something — that a newer release has superseded this
+one — and a Console upload defeats that rather than working around it, landing a bundle Play has
+already moved past. It is also invisible to the release-notes range, which counts only what the
+pipeline itself published, so the notes it should have carried stay queued and repeat on the next
 release. The hand upload is therefore reserved for the one case with no API path at all — the
 **seed** upload a listing needs before the Publishing API will accept anything — and for
-recovery a human has reasoned about explicitly. Fixing the cause and pushing again is the route
-back for everything
+recovery a human has reasoned about explicitly, of which **a Play-side refusal is the one this
+ordering is built for**: the GitHub release is published *before* the upload is attempted, so a
+flagged listing or a rejected bundle still leaves `v<versionCode>` and its signed AAB to hand.
+Fixing the cause and pushing again is the route back for everything
 else.
 
-**Two settings gate the upload, not one**, and both are the maintainer's to set once the Play
-Console declarations are filed: `PLAY_SERVICE_ACCOUNT_JSON` authenticates to Play, and the
-`PLAY_DATA_SAFETY_DECLARED` repository variable asserts that the Console's Data Safety form covers
-what the build actually collects. The second exists because `GOOGLE_SERVICES_JSON` is set here, so
-every shipped build has Crashlytics and Analytics compiled in; without that assertion the pipeline
-would automate a policy violation rather than merely a release. Neither is checkable from CI — the
-variable is a promise about a form nothing here can read — which is why they are two deliberate
-human acts and not a single switch (`docs/play-store-internal-track.md`,
+**One setting gates the upload**: `PLAY_SERVICE_ACCOUNT_JSON`, the maintainer's to add once the
+Play Console declarations are filed (`docs/play-store-internal-track.md`,
 `docs/play-store-declarations.md`).
+
+**There was briefly a second, and removing it is the decision worth recording** (maintainer,
+2026-09-09). A `PLAY_DATA_SAFETY_DECLARED` flag asserted that the Console's Data Safety form
+covered what the build collects, because crash reporting and Analytics landed before the form was
+updated and the pipeline would otherwise have automated a policy violation rather than merely a
+release. It did its job for that transition and was deleted the day after it fired. The reason it
+went is that it could not do the job it appeared to: once set true it stays true, so a *later*
+data-collecting dependency — a new Firebase surface, a geocoder — sails straight through it. It
+guarded one moment in time while reading like a standing check, which is worse than no check,
+and its only remaining effect was to withhold a release when the flag was set in the wrong
+place. What actually holds the line is unchanged and is not a flag: `docs/play-store-declarations.md`
+as the answer of record, `DeclaredPermissionsTest` failing if `AD_ID` reappears, and the no-custom-
+Analytics-events invariant that holds because no call site exists to write one (§12). Anything new
+that leaves the device goes through the product gate in §12 before it ships, which is where a
+declaration change belongs.
 
 **Neither artifact is published on every push, and the prerelease answers "what is the
 latest release-worthy build" rather than "what is at the tip of `main`"** (Codex, 2026-09-03) — the
@@ -4127,9 +4137,11 @@ doesn't mention shows up as a row with no rationale behind it.
   about where the user lives, works or sleeps leaves the phone, and what does leave is under the
   user's control. A crash report carries a stack trace, a device model and a version — no
   coordinate, no SSID/BSSID, no place name, no snooze timing, no debug log — and the user can
-  switch it off. The corollary is that **gates key on whether a feature is on, not on whether a
-  permission is held**, which is why the release pipeline's Data Safety gate asks whether crash
-  reporting is enabled in the build rather than inspecting the manifest.
+  switch it off. The corollary is that **the question to ask is whether a feature is on, not
+  whether a permission is held** — a manifest entry says what the app may do, not what this
+  build does. (The release pipeline briefly enforced that with a Data Safety gate keyed on
+  whether crash reporting was enabled; §3.7 records why the gate went and what holds the line
+  instead. The question it asked is the part worth keeping.)
 
   **Play Data Safety moved with it**, as the bullet above required: from "no data collected,
   no data shared" to **crash logs, diagnostics, device or other IDs, app interactions, and
