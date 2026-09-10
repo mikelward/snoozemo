@@ -3,7 +3,6 @@ package app.snoozemo.ui
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,7 +13,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,7 +24,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import app.snoozemo.R
@@ -80,24 +77,26 @@ internal fun EndConditionRows(
     committing: Boolean = false,
     failed: Boolean = false,
     tracksDeparture: Boolean = true,
+    /**
+     * Whether to offer `Until I move` (SPEC.md §4.4) — false on a build with
+     * no foreground service or a phone with no significant-motion sensor,
+     * where the row would promise an exit that cannot fire.
+     */
+    offersMotionEnd: Boolean = false,
+    /** Commits "ends when you move" — an added exit; the cap stays. */
+    onChooseMotionEnd: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        // **First, above every refinement of it** (maintainer, 2026-09-08).
-        // This is what the product is for and what an arm already does, so it
-        // reads wrong sitting underneath two ways of narrowing it.
-        if (tracksDeparture) {
-            EndChoiceRow(
-                label = stringResource(R.string.main_until_i_leave),
-                onClick = onChooseDeparture,
-                enabled = !committing,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-
+        // **Clock times first, then the two events** (maintainer, 2026-09-10:
+        // "Until time / Until I move / Until I leave"). Reverses 2026-09-08's
+        // "`Until I leave` first, above every refinement of it": with a second
+        // event-shaped row beside it the list reads as *when* — the times a
+        // user can adjust, then the things that can happen — and the row the
+        // product is for still closes the list rather than opening it.
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -137,6 +136,32 @@ internal fun EndConditionRows(
                 enabled = !committing,
                 trailingIcon = R.drawable.ic_calendar,
                 trailingIconDescription = stringResource(R.string.main_from_your_calendar),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
+        // **A choice, not a switch** (maintainer, 2026-09-10: "When I move
+        // means just that, same as when I leave means just that"). It used to
+        // be a toggle with its own card shape, on the argument that it carried
+        // a state the user had to be able to revoke. The maintainer's reading
+        // is the simpler one: it is an end condition like the row below it,
+        // chosen by tapping and no more revocable than `Until I leave` is —
+        // you pick a different row. So it takes the same card, the same
+        // wording, and the same place in the group, and goes with the group
+        // when the cap comes inside `MIN_CAP`.
+        if (offersMotionEnd) {
+            EndChoiceRow(
+                label = stringResource(R.string.main_until_i_move),
+                onClick = onChooseMotionEnd,
+                enabled = !committing,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (tracksDeparture) {
+            EndChoiceRow(
+                label = stringResource(R.string.main_until_i_leave),
+                onClick = onChooseDeparture,
+                enabled = !committing,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -233,65 +258,6 @@ internal fun EndChoiceRow(
                     modifier = Modifier.size(20.dp),
                 )
             }
-        }
-    }
-}
-
-/**
- * The `When I move` row (SPEC.md §4.4) — the one control on this screen that
- * carries a *state* rather than performing a choice.
- *
- * **A switch, not another card.** Every other row here answers the question
- * once and is done: tapping `Until 14:30` sets a deadline and the row has
- * nothing further to say. This one is on or off for the life of the snooze and
- * the user has to be able to see which, so it takes the affordance that shows
- * a state and can be reversed — the same reason `End now` is outlined rather
- * than filled: the shape is what says which kind of answer this is.
- *
- * The whole card toggles and the switch itself takes no click of its own, so
- * there is one target rather than two overlapping ones — a switch is a small
- * target next to a full-width row, and a miss that lands on the card would
- * otherwise do nothing.
- */
-@Composable
-internal fun MotionEndRow(
-    checked: Boolean,
-    enabled: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val stateLabel = stringResource(R.string.main_when_i_move_on)
-    Surface(
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier
-                .toggleable(
-                    value = checked,
-                    enabled = enabled,
-                    role = Role.Switch,
-                    onValueChange = onCheckedChange,
-                )
-                .fillMaxWidth()
-                .padding(16.dp)
-                // What the label alone cannot say: `When I move` names the
-                // choice either way, and a screen reader announcing only that
-                // leaves a user unable to tell an armed snooze from an
-                // unarmed one without toggling it to find out.
-                .semantics { if (checked) stateDescription = stateLabel },
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = stringResource(R.string.main_when_i_move),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.weight(1f),
-            )
-            // Null, so the row above owns the gesture and the semantics; the
-            // switch is the picture of the state, not a second control.
-            Switch(checked = checked, onCheckedChange = null, enabled = enabled)
         }
     }
 }
@@ -421,24 +387,25 @@ internal fun endChoiceUiState(
 }
 
 /**
- * The `When I move` switch, as the screen draws it — or null when there is
- * nothing to draw.
+ * Whether the screen offers `Until I move` at all (SPEC.md §4.4).
  *
- * **Deliberately not part of [EndChoiceUiState]**, and that separation is the
- * whole point (Codex, PR #252). That state answers "is there a *time* left to
- * choose", and withholds the whole offer once the cap comes inside `MIN_CAP` —
- * correct for rows that set a deadline, and wrong for this one, which carries
- * a state the user must be able to revoke. Bundled in, the switch vanished for
- * the final thirty minutes of every snooze while the sensor stayed armed:
- * an exit the user had turned on and could no longer turn off.
+ * A yes/no rather than a state: the row is a choice like `Until I leave`, not
+ * a switch, so there is nothing about the running snooze for it to draw
+ * (maintainer, 2026-09-10).
  *
- * So this asks only its own questions — is a snooze running, can the hardware
- * answer, can this build hold the service it needs — and none of the
- * time-choice ones.
+ * Kept apart from [EndChoiceUiState] because it answers a different question.
+ * That state asks "is there a *time* left to choose", and is rebuilt as the
+ * clock moves; this asks only about the build and the phone — is a snooze
+ * running, can the hardware answer, can this build hold the service it needs
+ * — which does not. The screen draws the row inside the group either way, so
+ * it is withheld with the rest once the cap comes inside `MIN_CAP`; it used
+ * to sit outside as a switch that had to outlive them, and the separation
+ * that once carried that outlives it as plain tidiness.
  *
- * @param record the running snooze, or null while the screen has not read one.
+ * @param record the running snooze, or null while the screen has not read one
+ *   — no snooze, no row.
  * @param deviceHasMotionSensor whether the phone has one at all; false offers
- *   nothing rather than a switch the service would roll straight back.
+ *   nothing rather than a row the service would roll straight back.
  *   **A lambda, and asked last**, because answering it is a `SensorManager`
  *   lookup: taken eagerly at the call site it ran during composition on every
  *   first frame, including an idle screen with no snooze and including
@@ -446,20 +413,16 @@ internal fun endChoiceUiState(
  *   two free checks below settle the common cases and the platform is only
  *   asked when its answer actually decides something.
  */
-internal fun motionEndUiState(
+internal fun offersMotionEnd(
     record: ActiveSnooze?,
     deviceHasMotionSensor: () -> Boolean,
-): MotionEndUiState? {
-    if (record == null) return null
-    if (motionEndUnavailability(deviceHasMotionSensor) != null) return null
-    return MotionEndUiState(enabled = record.endsOnMotion)
-}
+): Boolean = record != null && motionEndUnavailability(deviceHasMotionSensor) == null
 
 /**
  * Why this build or this phone cannot offer `When I move` at all, or null
  * when it can (SPEC.md §4.4).
  *
- * **Separate from [motionEndUiState] so the reason can be said, not only
+ * **Separate from [offersMotionEnd] so the reason can be said, not only
  * acted on** (maintainer, 2026-09-10). A row that is simply absent tells the
  * user nothing: "this build does not have the feature" and "this phone cannot
  * do it" look identical on screen, and neither reached the log that exists to
@@ -486,13 +449,6 @@ internal fun motionEndUnavailability(deviceHasMotionSensor: () -> Boolean): Stri
     !deviceHasMotionSensor() -> "this device has no significant-motion sensor"
     else -> null
 }
-
-/** Everything [MotionEndRow] draws, as one value. */
-@Immutable
-internal data class MotionEndUiState(
-    /** Whether the running snooze already ends on movement (SPEC.md §4.4). */
-    val enabled: Boolean,
-)
 
 /**
  * How many meeting ends the screen offers.

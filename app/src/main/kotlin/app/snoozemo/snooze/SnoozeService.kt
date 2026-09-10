@@ -1351,7 +1351,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             }
             ACTION_EXTEND -> extend()
             ACTION_SET_CAP -> setCap(intent)
-            ACTION_SET_MOTION_END -> applyMotionEndChoice(intent)
+            ACTION_SET_MOTION_END -> setMotionEnd(intent)
             ACTION_CLOCK_CHANGED -> reconcileClock()
             // A cold start already did everything through the restore on the
             // way in. Warm, this action is the retry ladder arriving with the
@@ -2060,7 +2060,34 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     }
 
     /**
-     * [ACTION_SET_MOTION_END]: the `When I move` row toggling (SPEC.md §4.4).
+     * [ACTION_SET_MOTION_END]: the `Until I move` row choosing the exit, or a
+     * caller clearing it (SPEC.md §4.4). Reported like [setCap], and shaped
+     * like it: one total function returns what became of the choice, and the
+     * outcome is reported once, here, so no exit can forget to answer.
+     *
+     * Reported at all because the choice can be declined on grounds the
+     * screen cannot see (Codex, PR #255). It used to answer only through the
+     * record the screen observed, which was enough while the row was a switch
+     * that would visibly stay off; drawn as a plain choice it has no state to
+     * fall back on, and a tap the service accepted then could not keep would
+     * have left the user told nothing.
+     */
+    private fun setMotionEnd(intent: Intent?) {
+        val result = applyMotionEndChoice(intent)
+        if (result == EndChoiceResult.APPLIED) notifications.cancelFailure()
+        val requestId = intent?.getLongExtra(EXTRA_CHOICE_REQUEST_ID, 0L) ?: 0L
+        // No request id means no row behind this — nowhere to show a refusal
+        // inline — so it says so in the shade instead, on the same terms as a
+        // chosen time: `REFUSED` only, since `GONE` has already been reported
+        // by whatever ended the snooze.
+        if (result == EndChoiceResult.REFUSED && requestId == 0L) notifications.showCouldNotSetEnd()
+        EndChoiceOutcome.report(requestId, result)
+    }
+
+    /**
+     * The work behind [setMotionEnd]. Returns what became of the choice:
+     * applied — including a value the record already carried, since doing
+     * nothing there is honoring it — gone, or refused.
      *
      * **Identity-guarded like [setCap], when the caller makes a claim.** That
      * is a reversal: this used to be unguarded on the argument that it carries
@@ -2073,49 +2100,77 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * arrives" can be two different snoozes (Codex, PR #252).
      *
      * [EXTRA_MOTION_FOR_SNOOZE] absent means no claim and applies to whatever
-     * is running — a tile tap has no record to name and wants exactly that.
-     * A claim that does not match is dropped: the snooze it was for is over.
+     * is running. A claim that does not match is `GONE`: the snooze it was
+     * for is over, and whatever ended it has posted its own card.
      *
-     * A no-op — nothing running, or the value unchanged — simply changes
-     * nothing; the screen keeps rendering the record, so it stays truthful
-     * either way. A device with no sensor is not refused here but rolled back
-     * inside [reconcileMotionEnd], which is the one place that knows whether
-     * the platform actually took the registration.
+     * A device with no sensor is not refused up front but rolled back inside
+     * [reconcileMotionEnd], which is the one place that knows whether the
+     * platform actually took the registration. Every path through here ends
+     * in that reconcile — through the transition `setEndsOnMotion` delivers
+     * when the flag changes, directly when it does not — and the answer is
+     * read from the state it leaves, so there is one place the truth is
+     * decided and one place it is reported from.
      */
-    private fun applyMotionEndChoice(intent: Intent?) {
-        val wanted = intent?.getBooleanExtra(EXTRA_ENDS_ON_MOTION, false) ?: return
-        val snooze = controller.active ?: return
-        val claimedMillis = intent?.getLongExtra(EXTRA_MOTION_FOR_SNOOZE, 0L) ?: 0L
+    private fun applyMotionEndChoice(intent: Intent?): EndChoiceResult {
+        val wanted = intent?.getBooleanExtra(EXTRA_ENDS_ON_MOTION, false)
+            ?: return EndChoiceResult.REFUSED
+        val snooze = controller.active ?: run {
+            SnoozeDebugLog.event("until-i-move: the choice arrived with no snooze running")
+            return EndChoiceResult.GONE
+        }
+        val claimedMillis = intent.getLongExtra(EXTRA_MOTION_FOR_SNOOZE, 0L)
         if (claimedMillis > 0L && Instant.ofEpochMilli(claimedMillis) != snooze.startedAt) {
-            SnoozeDebugLog.event("when-i-move: the tap was for a snooze that is no longer running")
-            return
+            SnoozeDebugLog.event("until-i-move: the choice was for a snooze that is no longer running")
+            return EndChoiceResult.GONE
         }
-        if (snooze.endsOnMotion == wanted) return
-
-        // **The record first, and only then the controller** — [extend]'s
-        // ordering, for [extend]'s reason. The record is what the restore path
-        // re-arms the watch from, so nothing may claim this exit until the copy
-        // that survives a process death carries it.
-        //
-        // That ordering is the fix rather than a tidy-up: writing memory first
-        // and reverting it on a failed write assumed the write below was the
-        // only one, and it is not — `setEndsOnMotion` delivers a transition,
-        // and the `ARMED`/`CHECKING` branch of [onStateChanged] commits the
-        // record inside that call. So a failure here proved nothing about what
-        // was on disk, and the revert could throw away a choice already saved
-        // (Codex, PR #252). Memory never leads disk now, so there is nothing
-        // left to revert.
-        if (!updateRecordOrUndo(snooze.copy(endsOnMotion = wanted), snooze)) {
-            Log.w(TAG, "Recording the when-I-move choice failed; the stored choice stands.")
-            SnoozeDebugLog.warning("when-i-move not persisted; the stored choice stands")
-            return
+        if (snooze.endsOnMotion != wanted) {
+            // **The record first, and only then the controller** — [extend]'s
+            // ordering, for [extend]'s reason. The record is what the restore
+            // path re-arms the watch from, so nothing may claim this exit until
+            // the copy that survives a process death carries it.
+            //
+            // That ordering is the fix rather than a tidy-up: writing memory
+            // first and reverting it on a failed write assumed the write below
+            // was the only one, and it is not — `setEndsOnMotion` delivers a
+            // transition, and the `ARMED`/`CHECKING` branch of [onStateChanged]
+            // commits the record inside that call. So a failure here proved
+            // nothing about what was on disk, and the revert could throw away a
+            // choice already saved (Codex, PR #252). Memory never leads disk
+            // now, so there is nothing left to revert.
+            if (!updateRecordOrUndo(snooze.copy(endsOnMotion = wanted), snooze)) {
+                Log.w(TAG, "Recording the until-I-move choice failed; the stored choice stands.")
+                SnoozeDebugLog.warning("until-i-move not persisted; the stored choice stands")
+                return EndChoiceResult.REFUSED
+            }
+            // Only now does anything in memory believe it. `reconcileMotionEnd`
+            // runs inside this call and may roll the choice straight back for
+            // want of a sensor; that rollback is itself a transition, so disk
+            // follows it down through the same write rather than needing one
+            // here.
+            controller.setEndsOnMotion(wanted)
+        } else {
+            // The record already says so — and saying so is not the same as
+            // listening. A rollback whose own write was refused leaves the flag
+            // on with no watch behind it, promising a retry on the next
+            // transition; a second tap on the row *is* that retry, and
+            // answering it from the flag alone reported the exit applied while
+            // nothing could fire it (Codex, PR #255, second finding in this
+            // mechanism). There is no transition to run the reconcile from
+            // here, so it is run directly: it is idempotent, and it builds and
+            // registers the missing watch — or rolls the flag back again — so
+            // the answer below comes from the same place either way.
+            reconcileMotionEnd()
         }
 
-        // Only now does anything in memory believe it. `reconcileMotionEnd`
-        // runs inside this call and may roll the choice straight back for want
-        // of a sensor; that rollback is itself a transition, so disk follows it
-        // down through the same write rather than needing one here.
-        controller.setEndsOnMotion(wanted)
+        // **One answer, from what is true after the reconcile** — never from
+        // the write above or the flag as it stood. A rollback leaves the flag
+        // off; a rollback whose own write was refused leaves it on with nothing
+        // listening; a retry that finally registered leaves it on and listening.
+        // The exit the user asked for is either armed now or it is not, and
+        // that is what they are told. The card follows the record and the log
+        // has the detail; the row is where the tap was.
+        val armed = controller.active?.endsOnMotion == true && motionEnd?.listening == true
+        return if (!wanted || armed) EndChoiceResult.APPLIED else EndChoiceResult.REFUSED
     }
 
     /**
@@ -3654,25 +3709,28 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             }
 
         /**
-         * Turn `When I move` on or off for the running snooze (SPEC.md §4.4),
-         * returning false if the service would not start.
+         * Turn `Until I move` on (or, for a caller that clears it, off) for
+         * the running snooze (SPEC.md §4.4), returning false if the service
+         * would not start.
          *
-         * Reports nothing back beyond that. The other end-condition rows go
-         * through the request/outcome machinery because they can be *declined*
-         * — a time inside the floor, a ceiling a clock change has moved — and
-         * a row that silently kept the old deadline would be the app quietly
-         * doing the wrong thing. This one cannot be declined on any ground the
-         * screen could not already see: the mode gates it, the screen reads
-         * the same mode, and the answer comes straight back on the record the
-         * screen is already observing.
+         * Reported like any other choice, through [requestId]. This used to
+         * report nothing beyond the start, on the argument that it could not
+         * be declined on any ground the screen could not already see — and
+         * that was wrong in two places the screen cannot see at all: the
+         * record write can be refused, and the service rolls the choice back
+         * when the platform will not register the sensor. Drawn as a plain
+         * choice the row has no state to fall back on, so the refusal has to
+         * come back to where the tap happened (Codex, PR #255).
          */
         fun setMotionEnd(
             context: Context,
             endsOnMotion: Boolean,
+            requestId: Long,
             forSnooze: Instant?,
         ): Boolean =
             start(context, ACTION_SET_MOTION_END) {
                 it.putExtra(EXTRA_ENDS_ON_MOTION, endsOnMotion)
+                it.putExtra(EXTRA_CHOICE_REQUEST_ID, requestId)
                 forSnooze?.let { startedAt ->
                     it.putExtra(EXTRA_MOTION_FOR_SNOOZE, startedAt.toEpochMilli())
                 }

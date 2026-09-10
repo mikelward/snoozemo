@@ -42,6 +42,8 @@ class EndChoiceControllerTest {
         var sentForSnooze: Instant? = null
         /** Whether the departure restore was the thing dispatched. */
         var restored = false
+        /** Whether the motion exit was the thing dispatched. */
+        var motion = false
         /** What the host would answer if asked what is running right now. */
         var live: ActiveSnooze? = null
     }
@@ -60,6 +62,12 @@ class EndChoiceControllerTest {
         },
         restoreDeparture = { requestId, forSnooze ->
             seams.restored = true
+            seams.sentRequestId = requestId
+            seams.sentForSnooze = forSnooze
+            seams.accepted
+        },
+        chooseMotionEnd = { requestId, forSnooze ->
+            seams.motion = true
             seams.sentRequestId = requestId
             seams.sentForSnooze = forSnooze
             seams.accepted
@@ -128,6 +136,32 @@ class EndChoiceControllerTest {
 
         assertEquals(1, seams.dismissals)
         assertFalse(controller.committing)
+    }
+
+    @Test
+    fun `choosing until I move goes out like a departure and waits for the answer`() {
+        // A plain choice has no state of its own to fall back on, so a
+        // refusal has to come back here like a declined time's does (Codex,
+        // PR #255): the same request id, the same identity, the same inert
+        // rows until the service answers.
+        val seams = Seams(now)
+        val controller = seeded(seams)
+
+        controller.commitMotionEnd()
+
+        assertTrue(seams.motion)
+        assertNull("no time was sent with it", seams.sent)
+        assertFalse("and it is not the departure restore", seams.restored)
+        assertEquals("it carries the offer's identity", seams.now, seams.sentForSnooze)
+        assertEquals("and the request the watch is on", seams.watchedRequestId, seams.sentRequestId)
+        assertTrue(controller.committing)
+        assertEquals("nothing dismissed until the service answers", 0, seams.dismissals)
+
+        seams.onOutcome!!(EndChoiceResult.REFUSED)
+
+        assertFalse(controller.committing)
+        assertTrue("a refusal is shown where the tap happened", controller.commitFailed)
+        assertEquals("and the rows stay up for a retry", 0, seams.dismissals)
     }
 
     @Test
