@@ -2900,21 +2900,33 @@ the point is that every other line of the app is worthless if it isn't true.
             this sandbox cannot observe it. The claim is only worth making in
             `docs/PRIVACY.md` if that check is actually done.
 
-      - [ ] **Cover `MainActivity`'s three `onStart` store reads with a test.** The
-            consent card's read is gated on `crashReportingWrites == 0` like its two
-            siblings, so a stop/start while a tap's write is still queued cannot put an
-            answered card back up (Codex, PR #166). All three gates are currently held by
-            **inspection and symmetry, not by a test**: the class such a test belongs in is
-            `MainActivityLifecycleTest`. **The flake half of this is gone** — that suite
-            was the second victim of the wedged worker fixed on 2026-09-05, not a flake of
-            its own — so what is left is only the seam: there is no way to hold a consent
-            write in flight the way the debug log's `awaitIdleForTest` holds its worker.
-            `CrashReportingStore.holdWritesForTest` now holds the *store's* write lock,
-            which is a start but not the seam this needs: it blocks the write on
-            `CrashReporting`'s worker, and what the test has to hold open is the window
-            between the tap and the completion callback, which is where
-            `crashReportingWrites` is non-zero. Recorded rather than quietly counted as
-            covered.
+      - [x] **Cover `MainActivity`'s gated `onStart` store reads with a test.** Each of
+            these rows shows the tapped value at once and writes it on a worker, so the
+            read that runs after every start would repaint the *stored* value over a tap
+            that has not landed. The counters are what stop that, and they were held by
+            **inspection and symmetry, not by a test** — there was no way to keep a write
+            in flight across a stop/start.
+            **The seam turned out to be the store locks** (PR #246): holding a file's
+            write lock parks the worker inside the store's own commit, which is exactly
+            the window between the tap and the completion callback. So
+            `MainActivityStoreReadGateTest` covers `askWhenToUnsnoozeWrites`,
+            `snoozeRingerWrites` and `debugLogWrites`, each with **both halves** — a
+            restart with nothing in flight repaints from the store, and one with a write
+            in flight does not. The control is not ceremony: the read sits behind a frame
+            callback and a `post`, so a held-case test alone would pass just as well if
+            the read never ran, and the debug-log control caught a real setup bug in the
+            first draft (its worker writes the store after the tap, so a store value set
+            before that drains is simply overwritten).
+
+      - [ ] **The consent card's read is the fourth of those, and needs more than the
+            seam.** It is gated on `crashReportingWrites == 0` like its three siblings
+            (Codex, PR #166) — but also on `CrashReporting.isAvailable`, which reads false
+            under Robolectric because `FirebaseApp.getApps` is empty, as
+            `CrashReporterTest` documents and asserts. So the branch cannot be entered
+            from a unit test at all, and no write-in-flight seam changes that. Covering it
+            means initializing a `FirebaseApp` in the test, which pulls the real
+            Crashlytics SDK into the JVM suite — worth costing before doing, and not the
+            same size of job as the three above.
 
       - [ ] **Confirm the Firebase project's Analytics data-retention setting before the next
             `play` upload.** `docs/PRIVACY.md` now tells users how long usage statistics are

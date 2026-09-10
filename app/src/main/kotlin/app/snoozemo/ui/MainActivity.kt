@@ -774,7 +774,8 @@ class MainActivity : ComponentActivity() {
      * read, so the row appears stating the truth rather than a default
      * corrected a frame later — the same discipline as every row above.
      */
-    private var debugLogEnabled by mutableStateOf<Boolean?>(null)
+    @androidx.annotation.VisibleForTesting
+    internal var debugLogEnabled by mutableStateOf<Boolean?>(null)
 
     /**
      * Whether the tile asks when to unsnooze (SPEC.md §4.4). Null until the
@@ -782,7 +783,8 @@ class MainActivity : ComponentActivity() {
      * default, so a row that asserted it and corrected itself a frame later
      * would flash the wrong answer at exactly the user who had turned it on.
      */
-    private var askWhenToUnsnooze by mutableStateOf<Boolean?>(null)
+    @androidx.annotation.VisibleForTesting
+    internal var askWhenToUnsnooze by mutableStateOf<Boolean?>(null)
 
     /** Whether the last tap on that switch failed to reach disk. */
     private var askWhenToUnsnoozeSaveFailed by mutableStateOf(false)
@@ -805,7 +807,8 @@ class MainActivity : ComponentActivity() {
      * it and corrected itself a frame later would flash the wrong answer at
      * whoever had chosen either of the others.
      */
-    private var snoozeRinger by mutableStateOf<SnoozeRinger?>(null)
+    @androidx.annotation.VisibleForTesting
+    internal var snoozeRinger by mutableStateOf<SnoozeRinger?>(null)
 
     /** Whether the last tap on that row failed to reach disk. */
     private var snoozeRingerSaveFailed by mutableStateOf(false)
@@ -3312,7 +3315,12 @@ class MainActivity : ComponentActivity() {
      * clean up. Turning the debug log off deletes what it kept; turning this off
      * only stops a sheet appearing, so there is no second failure to report.
      */
-    private fun setAskWhenToUnsnooze(enabled: Boolean) {
+    // Reachable from `MainActivityStoreReadGateTest`, which drives a tap and
+    // then a stop/start while the write is still on the worker — the window
+    // the write counter exists for, and the one no test could open before the
+    // stores gained a way to hold a write in flight.
+    @androidx.annotation.VisibleForTesting
+    internal fun setAskWhenToUnsnooze(enabled: Boolean) {
         if (askWhenToUnsnooze == null) return
         askWhenToUnsnoozeSaveFailed = false
         askWhenToUnsnoozeWrites++
@@ -3347,7 +3355,12 @@ class MainActivity : ComponentActivity() {
      * with the `set` prefix only because `Boolean?` boxes and `Boolean` does
      * not.)
      */
-    private fun chooseSnoozeRinger(ceiling: SnoozeRinger) {
+    // Reachable from `MainActivityStoreReadGateTest`, which drives a tap and
+    // then a stop/start while the write is still on the worker — the window
+    // the write counter exists for, and the one no test could open before the
+    // stores gained a way to hold a write in flight.
+    @androidx.annotation.VisibleForTesting
+    internal fun chooseSnoozeRinger(ceiling: SnoozeRinger) {
         if (snoozeRinger == null) return
         snoozeRingerSaveFailed = false
         snoozeRingerWrites++
@@ -3363,7 +3376,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun setDebugLog(enabled: Boolean) {
+    // Reachable from `MainActivityStoreReadGateTest`, which drives a tap and
+    // then a stop/start while the write is still on the worker — the window
+    // the write counter exists for, and the one no test could open before the
+    // stores gained a way to hold a write in flight.
+    @androidx.annotation.VisibleForTesting
+    internal fun setDebugLog(enabled: Boolean) {
         if (debugLogEnabled == null) return
         debugLogSaveFailed = false
         debugLogCleanupFailed = false
