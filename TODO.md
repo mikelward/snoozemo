@@ -3711,6 +3711,33 @@ that can only be settled on a real device, ordered by risk.
        something else? The answer decides whether there is a bug to fix or only a comment to
        write. Repeat on One UI at Phase 8 — this is the sort of thing Samsung changes.
 
+6a. [ ] **What the rule is doing either side of the ringer write** (the instrumentation PR).
+        Arm ten times with the ringer on normal and read
+        `ringer: rule around the ceiling write — before=… after=… setterCalls=… outcome=… took=…`
+        on every arm, the ones that hold included. **Read `setterCalls` before reading the pair**:
+        only a bare number is a usable sample, so an arm reporting a range (`0..1`) or `+inflight`
+        is dropped rather than counted as either result, and so is one whose `outcome` says *not a
+        usable sample*. Then, on a dying arm, **record these rather than
+        conclude from them**: `before=ACTIVE after=INACTIVE` with `setterCalls` at one or more is
+        the strongest single arm there is and still only suggestive, since an asynchronous
+        transition can land in any window; the same pair with `setterCalls=0` shows the platform
+        moving the rule unprompted, which weakens the suspicion without clearing the write. **`after=ACTIVE` on a dying arm clears nothing** — the
+        capture's deactivation arrived about twenty milliseconds after the write, so the pair
+        catches only a synchronous knock-down; note that arm's `setterCalls` and read on to the
+        broadcast and ending that follow it. Reading the pair without the count is how this
+        checklist would pick the opposite repair. Note the observer effect before calling a clean
+        run a fix: the first read delays the ringer slightly, which makes the failure less likely
+        to reproduce.
+
+        **Then run the same ten arms again with the ringer already on vibrate, and compare the two
+        runs — that comparison is the experiment.** With nothing to take, no arm writes, so the
+        split is assigned by you rather than by the rule. Do not tally write against no-write
+        *within* a run: whether an arm writes depends on the ringer's mode at the time, and a rule
+        that is working has already lowered it, so a slow rule causes both the death and the
+        write and every dying arm carries a setter call whether or not the setter did anything.
+        Deaths in the audible run and a clean vibrate run point at our write; both runs dying
+        alike says a fresh rule is simply slow, and the write is a bystander.
+
 ### Tuning — these change details, not direction
 
 7. [ ] Real battery draw over a 4-hour stationary snooze versus the `SPEC.md` §9 estimates,
@@ -4838,6 +4865,25 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   more, not less.
 
 ## Decisions needing review
+
+- [ ] **Can the ringer-write experiment assign its arms independently, and is it worth a
+      behavior change to do so?** Open question from PR #251, raised by Codex across four
+      review rounds and left for the maintainer rather than iterated on a fifth time.
+      Whether an arm writes the ringer is decided by `currentMode()`, which the zen rule
+      itself lowers when it takes effect promptly — so *within* one capture the rival
+      explanation (a fresh rule slow to take effect) causes both the death and the write,
+      and no accuracy in the count fixes that. The documented answer is a two-run protocol
+      (`TODO.md` 6a): ten arms with the ringer audible, ten with it already on vibrate,
+      the split chosen by the tester. **My reading** is that the between-run death rates
+      still part the hypotheses — a slow rule does not care what the ringer started at, so
+      it should kill both runs alike, while our write can only kill the audible one.
+      **Codex's reading** is that this is still not independent assignment, because the
+      rule state is written before the mode is sampled, and asks for an intervention that
+      forces or suppresses the setter regardless. That intervention is a debug-only
+      override on the arm path — a behavior change added for an experiment, in a change
+      whose whole claim is that arming behaves as it does today. Cheap to add, and not
+      autopilot's call to add. If the two-run capture comes back ambiguous, this is the
+      next lever.
 
 - [ ] **Where should the preference-write lock live?** Autopilot put
       `PreferenceWriteLock` in `:core` (PR #246) after Codex found a fifth exposed store,
@@ -7179,6 +7225,142 @@ what sets it off.
   until 10:30 … but it ended the snooze now") is still unexplained *by evidence* — a capture on
   versionCode 493 or higher, where both this and #242's logging ship, is what settles it.
   Tracked under *Hardware verification*.
+
+## Arming can end its own snooze — measuring the ringer write (device capture, 2026-09-10)
+
+- [ ] **A snooze reported as "tapping snooze did nothing", about two attempts in ten.** The tile
+  goes back to `Snooze here` a second or two after the tap, with the phone never quieted. The
+  capture says what happens; what it does not settle is *why*, and this entry is the experiment
+  that will.
+
+  In a single arm: the rule write is accepted, the ringer moves to the chosen ceiling, and
+  roughly twenty milliseconds later the activation broadcast arrives with the rule's own state
+  reading back as **inactive** — followed at once by a deactivation. The app reads that exactly
+  as designed (the user turned Do Not Disturb off) and ends the snooze as `DND_TURNED_OFF`.
+
+  **The correlation is strong and the causation is not established.** Across two builds, eleven
+  arms: the six that recorded nothing to take for the ceiling all survived; five wrote the
+  ceiling and four of those died this way. The survivors fit the mechanism rather than
+  contradicting it — when the rule really is in effect the platform has already lowered the
+  ringer, so the ceiling finds nothing to take and writes nothing. But "every arm that wrote
+  died" and "every arm that died had written" are both consistent with a third thing making the
+  rule slow to take effect *and* leaving the ringer high, with our write an innocent bystander.
+
+  **So this measures before it changes anything.** The arm now reads the rule's state
+  immediately before and immediately after the ringer write and records both on one line:
+  `ringer: rule around the ceiling write — before=… after=…`. Three readings, and they are not
+  ambiguous:
+
+  **Every one of these is an observation, not a verdict** (Codex, PR #251). Each is a single arm,
+  and a transition that arrives asynchronously can land in any window by coincidence — which is
+  what `took=` is for. The repair is chosen from the two-run comparison below, never from one line.
+
+  - `before=ACTIVE after=INACTIVE setterCalls=1` — the strongest single arm there is: the rule
+    went down across a window that contained our write. Worth more the shorter `took=` is, and
+    still not separable, on one arm, from an unrelated transition landing there.
+  - `before=ACTIVE after=INACTIVE setterCalls=0` — the rule moved across a window with no mode
+    change of any kind in it, so the platform does do this unprompted. That weakens the suspicion.
+    It does not clear the write, which could still contribute on the arms that have one.
+  - `before=INACTIVE after=INACTIVE` — the rule was never in effect and the write changed
+    nothing. The cause is elsewhere — most likely in whatever is making a freshly-written rule
+    take effect late, if at all.
+  - `before=ACTIVE after=ACTIVE` — **neither healthy nor a clear** (Codex, PR #251). The pair
+    catches a *synchronous* knock-down and nothing else, and the failure under investigation is
+    asynchronous: in the capture the deactivation arrived about twenty milliseconds after the
+    write, as a broadcast. A dying arm therefore reads `after=ACTIVE` too, so reading it as
+    healthy would clear the write on nearly every arm. It says only that the rule had not moved
+    yet.
+
+  **So the per-arm `setterCalls` is the load-bearing half, and the pair is a bonus.** An
+  `after=ACTIVE` arm is judged by the lines that follow it in the same capture — the rule-status
+  broadcast, and the `DND_TURNED_OFF` ending if it comes. That is the table this investigation
+  started from, whose write column was inferred by hand; the line makes that column authoritative
+  per arm. Where the knock-down *is* synchronous the pair settles it outright.
+
+  **The write/no-write split inside one capture is not a control, and no accuracy fixes that**
+  (Codex, PR #251). Whether an arm writes is decided by `currentMode()`, and a rule that is
+  working has already lowered the ringer — so the rival explanation, a fresh rule slow to take
+  effect, *causes both* the death and the write. Every dying arm then carries a setter call with
+  the setter innocent, which is the table this investigation started from and exactly why it
+  proved nothing. Measuring that column accurately does not make it independently assigned, so a
+  tally over one capture cannot convict.
+
+  **The assignment has to come from the protocol, and 6a's two runs are it.** The tester fixes
+  the ringer's starting mode before arming — audible, and every arm writes; already on vibrate,
+  and none does — a split chosen by hand and therefore independent of what the rule is doing. The
+  hypotheses part there: if our write knocks the rule down, the deaths sit in the audible run and
+  the vibrate run is clean; if a fresh rule is simply slow, its slowness does not care what the
+  ringer started at and both runs die alike. **Comparing the two runs is the experiment.** The
+  arms inside one run supply the observations above — none of them conclusive on its own, as that
+  list says — and nothing more.
+
+  **The arm is a counted setter call, never an inferred one** (Codex, PR #251, twice). The
+  outcome cannot answer it in either direction: a refusal happens both before the setter and
+  after one whose read-back disagreed, and — worse — a single call can hand an earlier loan back,
+  setter and all, and then report `Untouched` because the new ceiling had nothing to take. That
+  second case would clear a write that happened, which is the one error this experiment cannot
+  survive. So `AudioRingerController` counts every attempt on the platform setter and the line
+  reports the delta across the window; `outcome=` stays beside it as context only. It counts
+  **started and finished separately**, because one number cannot say whether a setter is running
+  right now: a count bumped before the assignment can be sampled, descheduled, and only then reach
+  the setter, landing the write inside a window whose samples already carried it. A window with a
+  write in flight at either edge reads `+inflight` and is dropped; only an exact `setterCalls=0`
+  with no marker is a control.
+
+  **The count is a bound, not a number** (Codex, PR #251). It is sampled twice at each edge — once
+  against the write, once outside the two rule reads — and reported as a range when the two
+  disagree, which is what a setter running in a gap at an edge looks like. Four samples on an
+  unsynchronized timeline cannot give a point, and moving a single pair only ever trades one gap
+  for the other: inside the reads a stray write goes uncounted and a guilty one reads as a
+  control; outside them it is counted and an innocent one reads as a conviction. Read only a bare
+  number; `setterCalls=0..1` and `setterCalls=1+inflight` are both "this window cannot be called".
+
+  **The two arms are not the same length, so the line records it** (Codex, PR #251). A write also
+  persists the loan, checks the fixed-volume policy and reads the mode back, so its interval is the
+  longer one, and a longer interval is likelier to contain a transition that was coming anyway.
+  `took=` in microseconds makes that a thing the capture can rule out: if the deactivations sit
+  with `outcome=<mode>` while the durations are comparable across both arms, duration is not the
+  explanation. If they are not comparable, say so rather than reading the correlation.
+
+  **`took=` spans both reads, not the write between them** (Codex, PR #251). Read it as the window
+  in which a transition could have landed unseen — which closes when the second read returns, so a
+  slow binder query on that read lengthens it exactly as a slow write does. Timed around the write
+  alone it under-reported the very samples this instruction then reads as short, and short is the
+  cue to rule timing out and convict the write.
+
+  **The control is what makes the pair attributable rather than merely suggestive** (Codex, PR
+  #251). An interval that contains a write also contains time, and this failure already involves
+  activations and deactivations arriving asynchronously — so a rule that moves across the write is
+  evidence and not proof until the no-write arms are read beside it. They come free, because the
+  ceiling does not always write: a phone already at or below it is left alone. Read both, and read
+  the counts, not one line.
+
+  **The observer effect is real and small, and it biases the safe way.** The first read sits
+  between the rule write and the ringer write, delaying the ringer by about a binder
+  round-trip. That makes the failure *less* likely to reproduce, not more — so a capture that
+  still shows the failure is strong evidence, and one that does not is weak evidence of a fix.
+  Worth knowing before reading a run of ten as clean.
+
+  **If the write is convicted, deferring is not the only repair, and the maintainer would rather
+  not defer** (2026-09-10). Deferring avoids the write inside the window, at the cost of a
+  long-lived intermediate state that took four review rounds to make safe (PR #250). Two cheaper
+  shapes to weigh first, both of which keep the arm path as it is:
+
+  - **Re-assert the rule after the ringer write.** If the write knocks `STATE_TRUE` back down,
+    setting it again immediately afterwards repairs it rather than avoiding it — one extra rule
+    write on a path that has just made one, and no new state anywhere. It would show up in the
+    log as a second write with `after=ACTIVE` following it. What it cannot fix is a platform that
+    keeps knocking the rule down for as long as the ringer is moving.
+  - **Take the ringer before the rule instead of after.** The ordering exists so that a refused
+    arm has taken nothing to give back (`SPEC.md` §5.9), which is a real property — but it is
+    about failure handling, not about the race, and it may be cheaper to pay for that differently
+    than to defer.
+
+  Neither is worth designing until the reading says the write is guilty at all.
+
+  **Owed: a capture.** Arm ten times with the ringer audible, on the versionCode this lands as
+  or higher, and read the new line on every arm — including the ones that hold. Tracked under
+  *Hardware verification*.
 
 ## Coverage gap: the trampoline's refused-start recovery (PR #238)
 

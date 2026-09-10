@@ -289,6 +289,9 @@ that fix claimed to be, whether the anchor's Wi-Fi was still connected as a yes 
 whether your phone's location setting was switched off and when it came back on,
 whether the ringer was turned down for a snooze and to which of the phone's three
 settings — ring, vibrate or silent — along with the one it was put back to afterwards,
+and whether Snoozemo's own Do Not Disturb rule was in effect immediately before and after
+that change, which is there to answer whether turning the ringer down is what stops some
+phones staying snoozed at all,
 **which control you tapped** — the Quick Settings tile, a button on the ongoing
 notification, a button in the app, or an end time you chose — what Snoozemo found when it
 checked whether its rule was still holding the phone quiet, and what it concluded from that;

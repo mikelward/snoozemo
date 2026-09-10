@@ -1554,6 +1554,44 @@ happened:
   decisions that change nothing are kept because a snooze surviving a broadcast is as informative
   as one that does not. Never the rule's identifier: whether it was ours is the diagnostic, which
   one it was is not.
+- **The rule's state either side of the ringer write**, on an arm that takes the ringer, and only
+  while the log is recording. A field with an expiry: it exists to settle one question, and comes
+  out once that question is settled. A device capture (2026-09-10) has an arm whose rule write was
+  accepted, whose ringer moved to the ceiling, and whose activation broadcast then arrived twenty
+  milliseconds later with the rule reading back as inactive — followed at once by a deactivation
+  that ended the snooze as `DND_TURNED_OFF`, seconds after the tap. Across that capture every arm
+  that wrote the ringer was at risk and most died; every arm that found nothing to take survived.
+  That is consistent with our own write knocking the rule down, and equally consistent with
+  something else making a fresh rule slow to take effect while leaving the ringer high — and the
+  two want opposite fixes. Reading the rule immediately before and immediately after the write
+  separates them where the rule moves at once — active-then-inactive points at the write, and the
+  same answer twice rules out a *synchronous* knock-down without clearing anything, since the
+  failure arrives asynchronously. What decides it either way is a comparison the *capture protocol*
+  makes possible rather than the log alone: whether an arm writes is decided by the ringer's
+  current mode, and a rule that is working has already lowered it — so within one run a slow rule
+  produces both the deaths and the writes, and the correlation proves nothing however accurately
+  it is recorded. Two runs with the ringer's starting mode fixed by hand, audible and already
+  quiet, assign that split independently and part the two explanations.
+  The line also records **how many times the platform's ringer setter was actually called** across
+  that window, which is the control that makes the pair attributable rather than merely
+  suggestive: the ceiling does not always write, so the arms that call it zero times bracket the
+  same two reads with no mode change between them, and a rule that moves across one of those moved
+  on its own. Counted rather than inferred from the call's result, because a result cannot answer
+  it — one call can hand an earlier loan back, setter included, and still report that it took
+  nothing. A window the count cannot settle — the arm shares the setter with the startup
+  reconciler, so one can be running at an edge or land where the count cannot place it — says so
+  and is dropped rather than assigned to an arm. That direction matters both ways: an over-count
+  convicts an innocent write exactly as an under-count clears a guilty one, and the two choose
+  opposite repairs. How the count is taken is implementation, and lives with the code. Rule state
+  and nothing else — never the rule's identifier, for
+  the reason above.
+
+  It is gated on the log actually recording, which is not an optimization but the same principle
+  applied to the measurement itself: the first read sits between the rule write and the ringer
+  write and delays the latter by a binder round-trip, so a user with the log off would pay a change
+  in behavior for evidence nobody collects. That delay is also the one bias to hold in mind when
+  reading a capture — it makes the failure *less* likely to reproduce, so a clean run is weaker
+  evidence than a failing one.
 - Permission and capability state at each decision — notification-policy access, location permission
   and its precision, whether location services are on system-wide, battery-saver state. A denied
   permission is often the whole answer to "why didn't it end".

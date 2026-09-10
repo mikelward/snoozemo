@@ -64,6 +64,9 @@ class AudioRingerController(
 
     override fun forgetCeiling() = synchronized(RINGER) { rememberChoice(null) }
 
+    override val modeWrites: RingerWriteCounts
+        get() = RingerWriteCounts(started = WRITES_STARTED.get(), finished = WRITES_FINISHED.get())
+
     /**
      * Hands the ringer back only if [snoozeRunning] says nothing is holding it.
      *
@@ -397,7 +400,14 @@ class AudioRingerController(
      * each caller prices it, and both of them keep the loan.
      */
     private fun write(manager: AudioManager, mode: RingerMode): Written {
+        // Before the call, not after: the question the count answers is whether
+        // the setter was *reached*, and a throw is still a write attempt.
+        WRITES_STARTED.incrementAndGet()
         val set = runCatching { manager.ringerMode = mode.toPlatform() }
+        // In a `finally`-shaped position rather than on the success path: a
+        // setter that threw still finished, and leaving it counted as started
+        // forever would mark every later window as having a write in flight.
+        WRITES_FINISHED.incrementAndGet()
         if (set.isFailure) {
             SnoozeDebugLog.failure(set.exceptionOrNull()!!, "ringer: setting ${mode.name} was refused")
             return Written.REFUSED
@@ -711,6 +721,32 @@ class AudioRingerController(
          * build one of these against the same file in the same process.
          */
         private val RINGER = Any()
+
+        /**
+         * Every attempt on the platform's ringer setter, monotonic, so a
+         * window's worth is a subtraction — **started** and **finished**
+         * separately, because one count cannot tell an observer whether a
+         * setter is in flight right now (Codex, PR #251).
+         *
+         * A single counter incremented before the assignment can be read,
+         * descheduled, and only then reach the setter — so the write lands
+         * inside an observer's window while both of that observer's samples
+         * already include it. The pair makes that visible: a sample where
+         * started and finished disagree is a window with a write running
+         * through it, whatever the deltas say.
+         *
+         * **Process-wide, like [RINGER], and for the same reason**: more than
+         * one controller exists. The startup reconciler builds its own through
+         * [default], and on a cold tile tap it can reach the setter between the
+         * diagnostic's two reads — an instance counter would report no write
+         * across a window that contained one, which is the false clear this
+         * counter exists to prevent (Codex, PR #251).
+         *
+         * Atomic rather than guarded by [RINGER], because the reader brackets a
+         * call that takes that lock and would deadlock on it.
+         */
+        private val WRITES_STARTED = java.util.concurrent.atomic.AtomicInteger()
+        private val WRITES_FINISHED = java.util.concurrent.atomic.AtomicInteger()
 
         /**
          * How many times a hand-back is retried before the loan is left for a
