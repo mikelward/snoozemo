@@ -85,6 +85,12 @@ internal fun EndConditionRows(
     offersMotionEnd: Boolean = false,
     /** Commits "ends when you move" — an added exit; the cap stays. */
     onChooseMotionEnd: () -> Unit = {},
+    /**
+     * What a refused tap says beside the rows. A refinement that was declined
+     * could not set the end time; a row that offered to *start* a snooze and
+     * was refused has nothing running behind it, and says so.
+     */
+    failureText: String = stringResource(R.string.failure_could_not_set_end),
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -171,7 +177,7 @@ internal fun EndConditionRows(
         // still beside the rows that produced it, which is where the tap was.
         if (failed) {
             Text(
-                text = stringResource(R.string.failure_could_not_set_end),
+                text = failureText,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -327,6 +333,22 @@ internal data class EndChoiceUiState(
      * never work.
      */
     val tracksDeparture: Boolean = true,
+    /**
+     * Whether a tap on these rows starts a snooze rather than refining one —
+     * the idle screen's offer (SPEC.md §4.4). The rows are drawn the same;
+     * what changes is where a tap goes, and that `−`/`+` arm at the stepped
+     * time rather than stepping the row.
+     */
+    val startsASnooze: Boolean = false,
+    /**
+     * Which snooze this offer was drawn for — its `startedAt` — or null for
+     * an offer to start. Carried so a tap can be matched against the offer
+     * the controller holds *now*: the record observer can move it onto a
+     * snooze the tile just armed before the frame that drew these rows is
+     * replaced, and a tap in that gap must not send the drawn time as a
+     * refinement of a snooze it was never offered over (Codex, PR #256).
+     */
+    val offerFor: Instant? = null,
 )
 
 /**
@@ -368,6 +390,30 @@ internal fun endChoiceUiState(
     format: (Instant) -> String,
 ): EndChoiceUiState? {
     if (condition == null) return null
+    // **An offer to start, named by having no snooze to name** (SPEC.md §4.4).
+    // It fails closed the other way round: a record under it means a snooze
+    // arrived while the offer stood — the tile, say — and drawing it would
+    // solicit a tap the service answers `GONE`. The host's next record read
+    // replaces it with the running snooze's own rows.
+    if (offerFor == null) {
+        if (record != null) return null
+        return EndChoiceUiState(
+            condition = condition,
+            formattedTime = format(condition.endsAt),
+            // Bounded by the offer's own ceiling — the cap a snooze started
+            // now would carry — rather than a record's, on the same rules
+            // the running rows use, so the same meeting qualifies on both.
+            meetings = MeetingEnd.offersBefore(condition.ceiling, meetingEnds, now, limit = MEETING_ROWS)
+                .map { MeetingChoice(at = it, label = format(it)) },
+            committing = committing,
+            failed = failed,
+            // No `Until I leave`: the pinned `Snooze` beside these rows is
+            // that choice, and one control per answer.
+            tracksDeparture = false,
+            startsASnooze = true,
+            offerFor = null,
+        )
+    }
     val offerRecord = record?.takeIf { it.startedAt == offerFor }
     // Fails closed on all three at once: no record, another snooze's record,
     // and a cap that has come inside the floor while the screen sat open.
@@ -383,6 +429,7 @@ internal fun endChoiceUiState(
         // never offered where the restore would be declined — and never
         // withheld where it would be taken.
         tracksDeparture = offerRecord?.mode?.tracksDeparture == true,
+        offerFor = offerFor,
     )
 }
 
@@ -395,28 +442,25 @@ internal fun endChoiceUiState(
  *
  * Kept apart from [EndChoiceUiState] because it answers a different question.
  * That state asks "is there a *time* left to choose", and is rebuilt as the
- * clock moves; this asks only about the build and the phone — is a snooze
- * running, can the hardware answer, can this build hold the service it needs
- * — which does not. The screen draws the row inside the group either way, so
- * it is withheld with the rest once the cap comes inside `MIN_CAP`; it used
- * to sit outside as a switch that had to outlive them, and the separation
- * that once carried that outlives it as plain tidiness.
+ * clock moves; this asks only about the build and the phone — can the
+ * hardware answer, can this build hold the service it needs — which does
+ * not. It no longer asks whether a snooze is running either: the idle screen
+ * offers the row as a way to start one (maintainer, 2026-09-10), so whether
+ * there is a group to draw it in is the offer's question, not this one's.
+ * The screen draws the row inside the group, so it is withheld with the rest
+ * once the cap comes inside `MIN_CAP`.
  *
- * @param record the running snooze, or null while the screen has not read one
- *   — no snooze, no row.
  * @param deviceHasMotionSensor whether the phone has one at all; false offers
  *   nothing rather than a row the service would roll straight back.
- *   **A lambda, and asked last**, because answering it is a `SensorManager`
- *   lookup: taken eagerly at the call site it ran during composition on every
- *   first frame, including an idle screen with no snooze and including
- *   `direct`, where the answer cannot matter (Codex, PR #252). Deferred, the
- *   two free checks below settle the common cases and the platform is only
- *   asked when its answer actually decides something.
+ *   **A lambda, and asked last**, because answering it was once a
+ *   `SensorManager` lookup made during composition on every first frame,
+ *   `direct` included, where the answer cannot matter (Codex, PR #252). The
+ *   host warms the answer at startup now, but the order still keeps the
+ *   flavor that can never offer the row from asking.
  */
 internal fun offersMotionEnd(
-    record: ActiveSnooze?,
     deviceHasMotionSensor: () -> Boolean,
-): Boolean = record != null && motionEndUnavailability(deviceHasMotionSensor) == null
+): Boolean = motionEndUnavailability(deviceHasMotionSensor) == null
 
 /**
  * Why this build or this phone cannot offer `When I move` at all, or null

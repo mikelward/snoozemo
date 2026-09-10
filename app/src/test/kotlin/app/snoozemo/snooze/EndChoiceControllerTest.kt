@@ -51,8 +51,9 @@ class EndChoiceControllerTest {
     @org.junit.Before
     fun clearChannel() = EndChoiceOutcome.reset()
 
-    private fun controller(seams: Seams) = EndChoiceController(
+    private fun controller(seams: Seams, offersToStart: Boolean = false) = EndChoiceController(
         surface = "a test host",
+        offersToStart = offersToStart,
         currentRecord = { seams.live },
         chooseEnd = { at, requestId, forSnooze ->
             seams.sent = at
@@ -94,6 +95,165 @@ class EndChoiceControllerTest {
 
     private fun seeded(seams: Seams): EndChoiceController =
         controller(seams).also { it.seed(snoozeAt(seams.now)) }
+
+    /** The idle screen's offer: a host that offers to start, seeded from nothing. */
+    private fun offerToStart(seams: Seams): EndChoiceController =
+        controller(seams, offersToStart = true).also { it.seed(null, seams.now) }
+
+    @Test
+    fun `an offer to start names no snooze and caps at the default`() {
+        // The idle screen's rows (SPEC.md §4.4, maintainer, 2026-09-10): there
+        // is no record to name or to read a cap from, so the offer is the
+        // clock's — bounded by the cap a snooze started now would carry.
+        val seams = Seams(now)
+        val controller = offerToStart(seams)
+
+        assertTrue(controller.startsASnooze)
+        assertNull(controller.offerFor)
+        assertEquals(now.plus(ActiveSnooze.DEFAULT_CAP), controller.endCondition!!.ceiling)
+        assertEquals(now.plus(ActiveSnooze.MIN_CAP), controller.endCondition!!.floor)
+    }
+
+    @Test
+    fun `a host that does not offer to start never holds one`() {
+        // The sheets are offered over a snooze that exists; for them a null
+        // record still means the offer is over, exactly as before.
+        val seams = Seams(now)
+        val controller = controller(seams).also { it.seed(null, seams.now) }
+
+        assertFalse(controller.startsASnooze)
+        controller.reconcile(null, seams.now)
+
+        assertNull("dropped: nothing to refine", controller.endCondition)
+        assertEquals(1, seams.dismissals)
+    }
+
+    @Test
+    fun `an offer to start stands while nothing runs and goes when something does`() {
+        val seams = Seams(now)
+        val controller = offerToStart(seams)
+
+        controller.reconcile(null, seams.now)
+        assertNotNull("nothing running is exactly what it is offered for", controller.endCondition)
+        assertEquals(0, seams.dismissals)
+
+        controller.reconcile(snoozeAt(seams.now), seams.now)
+        assertNull("a snooze arrived — the tile, say — so the host seeds that one's rows instead", controller.endCondition)
+        assertEquals(1, seams.dismissals)
+    }
+
+    @Test
+    fun `an offer to start that has gone stale is reseeded from the clock`() {
+        // Seeded from the clock alone, so the clock is the only thing that
+        // stales it — and a screen left open on a desk is where it does.
+        val seams = Seams(now)
+        val controller = offerToStart(seams)
+        val first = controller.endCondition!!.endsAt
+
+        seams.now = now.plus(Duration.ofMinutes(35))
+        controller.reconcile(null, seams.now)
+
+        assertTrue("moved later, against the clock as it is now", controller.endCondition!!.endsAt.isAfter(first))
+        assertTrue(controller.startsASnooze)
+        assertEquals(0, seams.dismissals)
+    }
+
+    @Test
+    fun `an offer to start is rebuilt whole against the clock, keeping a refusal`() {
+        // Its ceiling has to equal the cap the service would set, and that
+        // moves with the clock — forward a minute a minute, back across a
+        // wall-clock change — so the rebuild is unconditional rather than
+        // waiting for the time to fall inside the floor (Codex, PR #256).
+        // The refusal is the one thing the user has not yet acted on.
+        val seams = Seams(now)
+        val controller = offerToStart(seams)
+        controller.commit(controller.endCondition!!.endsAt)
+        seams.onOutcome!!(EndChoiceResult.REFUSED)
+        seams.now = now.plus(Duration.ofMinutes(5))
+
+        controller.refreshStart(seams.now)
+
+        assertEquals(seams.now.plus(ActiveSnooze.DEFAULT_CAP), controller.endCondition!!.ceiling)
+        assertTrue("the refusal is still showing", controller.commitFailed)
+        assertTrue(controller.startsASnooze)
+    }
+
+    @Test
+    fun `a rebuild leaves a refinement, and a commit in flight, alone`() {
+        val seams = Seams(now)
+        val refining = seeded(seams)
+        val standing = refining.endCondition
+        refining.refreshStart(now.plus(Duration.ofMinutes(5)))
+        assertEquals("a refinement is not clock-derived", standing, refining.endCondition)
+
+        val starting = offerToStart(seams)
+        starting.commit(starting.endCondition!!.endsAt)
+        val out = starting.endCondition
+        starting.refreshStart(now.plus(Duration.ofMinutes(5)))
+        assertEquals("its answer is coming and settles it", out, starting.endCondition)
+    }
+
+    @Test
+    fun `a start goes out with no identity and waits for the answer`() {
+        val seams = Seams(now)
+        val controller = offerToStart(seams)
+
+        controller.commit(controller.endCondition!!.endsAt)
+
+        assertNull("no snooze to claim", seams.sentForSnooze)
+        assertEquals(controller.endCondition!!.endsAt, seams.sent)
+        assertTrue(controller.committing)
+    }
+
+    @Test
+    fun `a start that took, or found a snooze already running, ends the offer`() {
+        // `APPLIED` and `GONE` mean the same simpler thing here: a snooze is
+        // running now, so the offer is over and the host reads the record
+        // that replaces it.
+        for (answer in listOf(EndChoiceResult.APPLIED, EndChoiceResult.GONE)) {
+            val seams = Seams(now)
+            val controller = offerToStart(seams)
+            controller.commit(controller.endCondition!!.endsAt)
+
+            seams.onOutcome!!(answer)
+
+            assertNull("$answer", controller.endCondition)
+            assertEquals("$answer", 1, seams.dismissals)
+        }
+    }
+
+    @Test
+    fun `a refused start leaves the offer standing with the failure showing`() {
+        // Refused means nothing is running, so there is still something to
+        // offer; the rows stay for a retry and say what happened.
+        val seams = Seams(now)
+        val controller = offerToStart(seams)
+        controller.commit(controller.endCondition!!.endsAt)
+
+        seams.onOutcome!!(EndChoiceResult.REFUSED)
+
+        assertTrue(controller.commitFailed)
+        assertTrue(controller.startsASnooze)
+        assertEquals(0, seams.dismissals)
+    }
+
+    @Test
+    fun `a refused start reseeds a stale offer without a record to rebuild from`() {
+        // The running rows rebuild a stale offer from the live record; this
+        // one has none and needs none — the clock seeded it and the clock
+        // reseeds it, so the retry is not the same tap failing forever.
+        val seams = Seams(now)
+        val controller = offerToStart(seams)
+        val first = controller.endCondition!!.endsAt
+        controller.commit(first)
+        seams.now = now.plus(Duration.ofMinutes(35))
+
+        seams.onOutcome!!(EndChoiceResult.REFUSED)
+
+        assertTrue(controller.commitFailed)
+        assertTrue(controller.endCondition!!.endsAt.isAfter(first))
+        assertTrue(controller.startsASnooze)
+    }
 
     @Test
     fun `an accepted choice dismisses the sheet`() {

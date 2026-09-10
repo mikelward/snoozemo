@@ -1290,9 +1290,58 @@ does not scroll and is drawn on the first frame at the same place every time, wh
 contributed. That is what §7's "always available, always instant" asks for and what merely being
 *last* could not deliver, since up to four rows stood above it and on a short window carried it off
 the bottom of the screen.
-`Snooze` is not pinned: only the exit carries that guarantee, arming is something the user came
-here to do and can hunt for, and bottom-anchoring `Snooze` would put it at the foot of an otherwise
-empty idle screen — a worse reach on a tall phone, not a better one.
+**`Snooze` is pinned in the same slot** (maintainer, 2026-09-10), so the footer shows whichever of
+the two applies and nothing else moves. That reverses 2026-09-09's "`Snooze` is not pinned", which
+reasoned that only the exit carries §7's guarantee, that arming is something the user came here to
+do and can hunt for, and that bottom-anchoring `Snooze` would put it at the foot of an otherwise
+empty idle screen. The first two are still true and are not what decided it; the third stopped
+being true when the idle screen gained the rows below. With something above it, `Snooze` at the foot
+is the plain arm under the chosen ones — the same shape the running screen has, where the plain
+exit sits under the refinements — and one slot for both is what makes the screen read as one
+control changing state rather than two controls trading places. §4.2's asymmetry is untouched:
+`End now` shows on anything but a confident "nothing is running", `Snooze` only on that.
+
+**Idle, the same rows are a way to start** (maintainer, 2026-09-10). The screen used to offer one
+thing when nothing was running — arm — and the choice of how it ends only afterwards, in the sheet
+or in these rows. That is "arm, then refine", and the refine step existed only because arming had to
+come first. So the idle screen shows the rows too, and **a tap on one arms immediately with that
+end**: `Until 2:30 PM` starts a snooze that caps there, a meeting row starts one that caps at the
+meeting's end, `Until I move` starts one that also ends on movement. `−` and `+` arm as well, at the
+stepped time, rather than moving a row the user would then have to tap — on the idle screen every
+tap starts. Three things follow:
+
+- **The offer comes from the clock, the default cap and the calendar**, since there is no record to
+  compute it from: the time row is seeded an hour out and rounded as the sheet's is, its ceiling is
+  the cap a snooze started now would carry (§7's default), and the meeting rows are the calendar's
+  ends inside that window on the same rules as the running rows. It is derived from the clock alone
+  — its time, its floor, and a ceiling that has to equal the cap the service would set — so the
+  clock is the only thing that stales it, and it is rebuilt whole on every minute tick rather than
+  patched once its time falls inside the floor: a ceiling left where it was seeded falls a minute
+  behind the service's each minute, and lands ahead of it across a backward clock change, either
+  way letting a row show a time the arm would then bring in silently. Nothing in it is the user's
+  to keep, since its steppers arm rather than step. The calendar's candidates are re-read once the
+  window has moved by the floor, which keeps the far edge within half an hour of true and bounds
+  the cross-process query to twice an hour on a screen left idle. And they are read only while the
+  idle rows can show — the rows exist only under Do Not Disturb access (§8.2), so with access
+  missing or not yet read the calendar is not asked at all rather than asked and hidden: the grant
+  that makes the rows showable reads it, and a revocation takes the times off the screen, the read
+  in flight included. A tap is matched against the offer
+  the controller holds at that moment, not the frame that drew it: the tile can arm a snooze under
+  the idle rows, and the record read that moves the offer onto it lands a frame before the redraw,
+  so a tap in that gap is dropped rather than sent as a refinement of a snooze it was never offered
+  over.
+- **No `Until I leave` on the idle screen.** The pinned `Snooze` is that choice — a plain arm runs
+  until departure on the default cap — and one control per answer.
+- **The arm path's guarantee still governs** (§4.1, §6.9): a row that arms waits on nothing. The
+  chosen end goes into the same cap alarm the plain arm sets, bounded by the same ceiling; a time
+  that has fallen inside the floor is declined *before* anything is armed, not moved. What the row
+  is told is therefore simpler than over a running snooze: `applied` or `gone` means a snooze is
+  running now and the offer is over (`gone` when one was already running — the tile got there first
+  — or when the snooze started but the exit it asked for could not be kept), `refused` means none
+  is, and the rows stand for a retry saying `Couldn't snooze`. `Until I move` is the one choice that
+  can be declined *after* the arm, when the platform will not register the sensor; by then the rows
+  have moved on to the running snooze, so that refusal goes to the shade as a tap with no row behind
+  it does.
 
 **What it costs, stated rather than hidden**: a pinned row spends viewport height permanently, so
 the scrolling half is shorter than the screen in every state, and on a tall phone with few
@@ -1383,8 +1432,10 @@ ends at one event without chaining into the next.
 #### As built
 
 `READ_CALENDAR`, queried against `CalendarContract.Instances` between now and the snooze's own cap
-— the cap bounds it because the service honors a time at or past the cap by doing nothing, so a
-wider window would read more of the user's calendar than the feature could ever use. The bound is
+— or, for the idle screen's offer to start (§4.4), the cap a snooze started now would carry, which
+is the same window a plain arm opens a moment later — the cap bounds it because the service honors
+a time at or past the cap by doing nothing, so a wider window would read more of the user's calendar
+than the feature could ever use. The bound is
 asked for, not filtered for: a range URI selects instances that merely *overlap* it, so a meeting
 straddling the cap would otherwise have its end read and then discarded, which is weaker than what
 `docs/PRIVACY.md` promises. Rows from a calendar the user has

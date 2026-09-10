@@ -95,6 +95,17 @@ internal class EndChoiceController(
     private val watchOutcome: (requestId: Long, onOutcome: (EndChoiceResult) -> Unit) -> AutoCloseable,
     /** Called when the sheet has nothing left to ask and should go away. */
     private val onDismiss: () -> Unit,
+    /**
+     * Whether this host also offers the rows with **no snooze running**, as
+     * a way to start one (SPEC.md §4.4, maintainer, 2026-09-10).
+     *
+     * An offer seeded from a null record is such an offer: its identity is
+     * null, its ceiling is the cap a snooze would start with, and a tap arms
+     * rather than refines. Only a host that says so gets one — the sheets are
+     * offered over a snooze that exists, and for them a null record in
+     * [reconcile] still means the offer is over.
+     */
+    private val offersToStart: Boolean = false,
     /** Now, injectable so the refusal re-seed is reachable from a JVM test. */
     private val clock: () -> Instant = { Instant.ofEpochMilli(System.currentTimeMillis()) },
     /** The zone the offered times are rounded in — the user's own. */
@@ -127,6 +138,13 @@ internal class EndChoiceController(
      */
     var offerFor by mutableStateOf<Instant?>(null)
         @VisibleForTesting internal set
+
+    /**
+     * Whether the standing offer would start a snooze rather than refine one:
+     * it names no snooze, on a host that offers to start ([offersToStart]).
+     * False when nothing is offered at all.
+     */
+    val startsASnooze: Boolean get() = offersToStart && endCondition != null && offerFor == null
 
     /**
      * Whether a chosen time is with the service and unanswered. The rows are
@@ -179,6 +197,27 @@ internal class EndChoiceController(
         offerFor = record?.startedAt
         endCondition = EndCondition.seededAt(now, EndCondition.ceilingFor(record, now), zone())
         commitFailed = false
+    }
+
+    /**
+     * Rebuilds an offer to start against the clock as it is now, keeping a
+     * refusal showing.
+     *
+     * Everything about such an offer is clock-derived — the seeded time, the
+     * floor, the ceiling — and nothing about it is the user's: its steppers
+     * arm rather than step, so there is no chosen position to preserve, and
+     * rebuilding it on every tick costs nothing and keeps its ceiling equal
+     * to the cap the service would actually set, forward through ordinary
+     * time and back across a wall-clock change alike (Codex, PR #256). The
+     * one thing worth keeping is a refusal the user has not yet acted on.
+     * A no-op when nothing is offered, on a host that does not offer to
+     * start, or while a commit is out.
+     */
+    fun refreshStart(now: Instant = clock()) {
+        if (!startsASnooze || committing) return
+        val failed = commitFailed
+        seed(null, now)
+        commitFailed = failed
     }
 
     fun stepUp() {
@@ -268,7 +307,9 @@ internal class EndChoiceController(
         // made but the app deliberately ignored, and logging it as a commit
         // would credit a refinement that never happened.
         SnoozeDebugLog.event(
-            "tap: $choice from $surface" + if (started) "" else " (the service refused to start)",
+            "tap: $choice from $surface" +
+                (if (startsASnooze) " (to start a snooze)" else "") +
+                (if (started) "" else " (the service refused to start)"),
         )
         if (!started) {
             SnoozeDebugLog.warning("the service refused to start for a chosen end time")
@@ -287,6 +328,10 @@ internal class EndChoiceController(
         // under the sheet — a departure, the cap, a capability loss — so there
         // is nothing left to refine and every later tap would fail the same
         // way. Whatever ended it has posted its own card.
+        //
+        // For an offer that starts a snooze the two mean the same simpler
+        // thing — a snooze is running now, so this offer is over — and the
+        // host's dismissal re-reads the record that replaces it.
         if (result != EndChoiceResult.REFUSED) {
             dismiss()
             return
@@ -300,6 +345,13 @@ internal class EndChoiceController(
         val now = clock()
         val standing = endCondition
         if (standing == null || !standing.endsAt.isBefore(now.plus(ActiveSnooze.MIN_CAP))) return
+        // An offer to start needs no record to rebuild from: refused means
+        // nothing is running, and the clock is the whole of what seeded it.
+        if (startsASnooze) {
+            seed(null, now)
+            commitFailed = true
+            return
+        }
         // Rebuilt from the record as it is now, not from the ceiling this offer
         // was built with: a clock change moves `capExpiresAt` under a fixed
         // `startedAt`, so the cached ceiling can name an earlier instant than
@@ -350,7 +402,12 @@ internal class EndChoiceController(
     fun reconcile(record: ActiveSnooze?, now: Instant = clock()) {
         val standing = endCondition ?: return
         if (committing) return
-        if (record?.startedAt != offerFor || !EndCondition.offersAChoice(record, now)) {
+        // An offer to start stands while nothing is running and goes the
+        // moment something is — the host then seeds the running snooze's own.
+        val stillOffered =
+            if (startsASnooze) record == null
+            else record?.startedAt == offerFor && EndCondition.offersAChoice(record, now)
+        if (!stillOffered) {
             SnoozeDebugLog.event("end-condition sheet dropped: it was offering times for another snooze")
             dismiss()
             return

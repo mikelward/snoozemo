@@ -370,7 +370,14 @@ internal fun MainScreen(
             // necessary: there can be four of them, and while the exit sat
             // underneath, its position moved with whatever the calendar
             // contributed.
-            endChoice?.let { choice ->
+            //
+            // **Idle, the same rows are a way to start** (maintainer,
+            // 2026-09-10): a tap arms with that end, and the pinned `Snooze`
+            // below is the plain arm. They are gated exactly as that button
+            // is — access granted, and a confident "nothing is running" — since
+            // a tap here arms too, and arming over a snooze the screen has
+            // not read yet is how a user loses the deadline they were promised.
+            endChoice?.takeIf { !it.startsASnooze || (access == PolicyAccess.GRANTED && snoozing == false) }?.let { choice ->
                 EndConditionRows(
                     condition = choice.condition,
                     formattedTime = choice.formattedTime,
@@ -389,36 +396,19 @@ internal fun MainScreen(
                     // outlive them for.
                     offersMotionEnd = offersMotionEnd,
                     onChooseMotionEnd = onChooseMotionEnd,
+                    // A refused start has nothing running behind it, and says
+                    // that rather than "couldn't set the end time".
+                    failureText = stringResource(
+                        if (choice.startsASnooze) R.string.failure_could_not_start
+                        else R.string.failure_could_not_set_end,
+                    ),
                 )
             }
-            // Gated behind access being allowed, same as the old DebugScreen.
-            //
-            // **`Snooze` scrolls; the exit does not.** They are split across
-            // the two containers rather than kept as one if/else because only
-            // one of them carries §7's guarantee. Arming is something the user
-            // came here to do and can hunt for; ending is something they may
-            // need in a hurry with the phone already silent. Pinning `Snooze`
-            // too would also push it to the foot of an otherwise empty idle
-            // screen, which is a worse reach on a tall phone, not a better one.
-            //
-            // It needs a confident "nothing is running" to appear at all,
-            // since offering to arm over a snooze the screen has not read yet
-            // is how a user loses the deadline they were promised. It used to
-            // render disabled in that state; showing the safety net instead
-            // says more with one button.
-            if (access == PolicyAccess.GRANTED && snoozing == false) {
-                Button(
-                    onClick = onArm,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(stringResource(R.string.arm))
-                }
-            }
-            // Above the exit rather than below it, which is where it used to
-            // sit: the exit is the bottom-most thing on the screen now, and a
-            // result line under a pinned row would either be pinned itself —
-            // spending height that belongs to the content — or float free of
-            // the button whose tap it reports.
+            // Above the footer rather than below it, which is where it used
+            // to sit: the footer is the bottom-most thing on the screen now,
+            // and a result line under a pinned row would either be pinned
+            // itself — spending height that belongs to the content — or float
+            // free of the button whose tap it reports.
             lastOutcome?.let {
                 Text(text = it, style = MaterialTheme.typography.bodySmall)
             }
@@ -431,34 +421,62 @@ internal fun MainScreen(
         // position moved with whatever the calendar contributed, on a short
         // window off the bottom of the screen entirely.
         //
-        // **The split is on `snoozing == false`, not on `snoozing == true`**,
-        // and the asymmetry is the whole design (maintainer, 2026-08-22): this
-        // is the one guaranteed way to un-silence the phone, so it may only
-        // disappear where the screen is *confident* nothing is running.
-        // Unknown — the record not read yet — keeps it, because a stale or
-        // unread belief must never be what stops someone turning their phone
-        // back on (SPEC.md §7: manual exit is always available, always
-        // instant, and `endSnooze` is idempotent, so offering it when nothing
-        // is running costs nothing).
+        // **`Snooze` is pinned here too, in the same slot** (maintainer,
+        // 2026-09-10) — one footer, showing whichever of the two applies.
+        // That reverses 2026-09-09's "`Snooze` scrolls; the exit does not",
+        // which reasoned that only the exit carries §7's guarantee and that
+        // bottom-anchoring `Snooze` would put it at the foot of an otherwise
+        // empty idle screen. The idle screen is no longer empty: the rows
+        // above offer to start a snooze with an end already chosen, and
+        // `Snooze` is the plain arm beside them — the same shape as the
+        // running screen, where the plain exit sits below the choices. One
+        // slot for both is what makes the screen read as one control changing
+        // state rather than two controls trading places.
+        //
+        // **The split is still on `snoozing == false`, not on `snoozing ==
+        // true`**, and the asymmetry is the whole design (maintainer,
+        // 2026-08-22): `End now` is the one guaranteed way to un-silence the
+        // phone, so it may only disappear where the screen is *confident*
+        // nothing is running. Unknown — the record not read yet — keeps it,
+        // because a stale or unread belief must never be what stops someone
+        // turning their phone back on (SPEC.md §7: manual exit is always
+        // available, always instant, and `endSnooze` is idempotent, so
+        // offering it when nothing is running costs nothing). `Snooze` is the
+        // one that waits: arming over a snooze the screen has not read yet is
+        // how a user loses the deadline they were promised. It used to render
+        // disabled in that state; showing the safety net instead says more
+        // with one button.
         //
         // The whole footer is absent rather than empty when it has nothing to
         // draw, so its padding does not reserve a strip of blank screen on the
-        // idle and access-missing states.
-        if (access == PolicyAccess.GRANTED && snoozing != false) {
-            // **The same size as the choices above it, outlined rather than
-            // filled** (maintainer, 2026-09-08). Same size because it is the
-            // guaranteed way back to a ringing phone and must stay the easiest
-            // thing on the screen to hit; outlined because it is the one row
-            // that acts rather than schedules, and a stack of identical cards
-            // ending in the irreversible one invites the wrong tap.
-            EndChoiceRow(
-                label = stringResource(R.string.action_end_now),
-                onClick = onRelease,
-                outlined = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
-            )
+        // access-missing state.
+        if (access == PolicyAccess.GRANTED) {
+            if (snoozing == false) {
+                Button(
+                    onClick = onArm,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                ) {
+                    Text(stringResource(R.string.arm))
+                }
+            } else {
+                // **The same size as the choices above it, outlined rather
+                // than filled** (maintainer, 2026-09-08). Same size because it
+                // is the guaranteed way back to a ringing phone and must stay
+                // the easiest thing on the screen to hit; outlined because it
+                // is the one row that acts rather than schedules, and a stack
+                // of identical cards ending in the irreversible one invites
+                // the wrong tap.
+                EndChoiceRow(
+                    label = stringResource(R.string.action_end_now),
+                    onClick = onRelease,
+                    outlined = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                )
+            }
         }
     }
 }

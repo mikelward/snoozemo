@@ -61,10 +61,27 @@ internal object NextMeetings {
          * one sat blocked (Codex, PR #234).
          */
         cancellation: android.os.CancellationSignal? = null,
+    ): List<Instant> = endsBefore(context, snooze.capExpiresAt, now, cancellation)
+
+    /**
+     * [endsBefore] against a cap named directly rather than read off a record.
+     *
+     * The idle screen offers the calendar's ends as a way to *start* a snooze
+     * (SPEC.md §4.4), and there is no record to bound that read by until it
+     * has — what bounds it is the cap the snooze would start with, the same
+     * window a plain arm opens a moment later. `docs/PRIVACY.md`'s promise is
+     * kept on the same terms: never further into the calendar than the snooze
+     * could reach.
+     */
+    fun endsBefore(
+        context: Context,
+        cap: Instant,
+        now: Instant,
+        cancellation: android.os.CancellationSignal? = null,
     ): List<Instant> {
         if (!isReadable(context)) return emptyList()
         val from = now.toEpochMilli()
-        val until = snooze.capExpiresAt.toEpochMilli()
+        val until = cap.toEpochMilli()
         if (until <= from) return emptyList()
 
         val uri = CalendarContract.Instances.CONTENT_URI.buildUpon()

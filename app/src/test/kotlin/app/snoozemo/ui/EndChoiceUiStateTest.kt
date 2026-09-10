@@ -200,28 +200,17 @@ class EndChoiceUiStateTest {
      * hard-coded one. On `direct` the row is correctly offered nowhere, and
      * these read as "still nowhere".
      */
-    private fun offered(
-        record: ActiveSnooze? = snooze(),
-        hasSensor: Boolean = true,
-    ): Boolean = offersMotionEnd(record, deviceHasMotionSensor = { hasSensor })
+    private fun offered(hasSensor: Boolean = true): Boolean =
+        offersMotionEnd(deviceHasMotionSensor = { hasSensor })
 
     @Test
-    fun `until I move is offered on a running snooze, chosen or not`() {
+    fun `until I move is offered where the build and the phone allow`() {
         // A choice like `Until I leave`, not a switch (maintainer, 2026-09-10):
-        // the row stays offered once chosen, and a second tap changes nothing,
-        // so there is no state for the offer to carry.
+        // nothing about the snooze — whether it already ends on motion, what
+        // it tracks, whether one is running at all — decides the row. The
+        // idle screen offers it as a way to start (maintainer, 2026-09-10),
+        // so the question is only the build and the phone.
         assertEquals(buildHoldsForegroundService, offered())
-        assertEquals(buildHoldsForegroundService, offered(snooze(endsOnMotion = true)))
-    }
-
-    @Test
-    fun `until I move is offered whatever the tracking mode`() {
-        // Where location can see nothing is where this row is the only answer
-        // left, so gating it on tracking withheld it from the snooze that
-        // needed it most (maintainer, 2026-09-10).
-        for (mode in TrackingMode.entries) {
-            assertEquals("$mode", buildHoldsForegroundService, offered(snooze(mode = mode)))
-        }
     }
 
     @Test
@@ -260,23 +249,11 @@ class EndChoiceUiStateTest {
     }
 
     @Test
-    fun `until I move needs a running snooze, and asks the platform nothing`() {
-        // The sensor lookup is a `SensorManager` call made from composition,
-        // so an idle screen must not reach it — the common first frame has no
-        // snooze at all (Codex, PR #252).
-        var asked = 0
-
-        assertFalse(offersMotionEnd(null, deviceHasMotionSensor = { asked++; true }))
-
-        assertEquals("the platform was not asked", 0, asked)
-    }
-
-    @Test
-    fun `a build with no foreground service asks the platform nothing either`() {
+    fun `a build with no foreground service asks the platform nothing`() {
         // `direct` cannot hold one, so the answer could not change the outcome.
         var asked = 0
 
-        val offered = offersMotionEnd(snooze(), deviceHasMotionSensor = { asked++; true })
+        val offered = offersMotionEnd(deviceHasMotionSensor = { asked++; true })
 
         assertEquals(buildHoldsForegroundService, offered)
         assertEquals(if (buildHoldsForegroundService) 1 else 0, asked)
@@ -296,8 +273,64 @@ class EndChoiceUiStateTest {
         assertEquals(
             "while the availability answer is unaffected by that gate",
             buildHoldsForegroundService,
-            offered(nearlyOver),
+            offered(),
         )
+    }
+
+    @Test
+    fun `nothing running offers a way to start`() {
+        // The idle screen's rows (SPEC.md §4.4, maintainer, 2026-09-10): an
+        // offer that names no snooze needs no record, and a tap on it arms.
+        val offer = state(record = null, offerFor = null)!!
+
+        assertTrue(offer.startsASnooze)
+        // No `Until I leave`: the pinned `Snooze` beside the rows is that
+        // choice, and one control per answer.
+        assertFalse(offer.tracksDeparture)
+        assertEquals("at ${condition.endsAt.epochSecond}", offer.formattedTime)
+    }
+
+    @Test
+    fun `a snooze arriving under an offer to start withholds it`() {
+        // Armed from the tile while the idle rows stood: a tap now would be
+        // answered `GONE`, so the rows go until the record read replaces them
+        // with the running snooze's own — the same fail-closed shape as the
+        // unread record above, in the other direction.
+        assertNull(state(record = snooze(), offerFor = null))
+    }
+
+    @Test
+    fun `an offer to start filters meetings against its own ceiling`() {
+        // Bounded by the cap a snooze started now would carry — the offer's
+        // ceiling — since there is no record to read one from. Same rules
+        // as the running rows: later than the floor, earlier than the cap.
+        val ends = listOf(
+            now.plus(Duration.ofMinutes(10)),
+            now.plus(Duration.ofHours(2)),
+            now.plus(Duration.ofHours(1)),
+            condition.ceiling.plus(Duration.ofMinutes(1)),
+        )
+
+        val meetings = state(record = null, offerFor = null, meetingEnds = ends)!!.meetings
+
+        assertEquals(
+            listOf(now.plus(Duration.ofHours(1)), now.plus(Duration.ofHours(2))),
+            meetings.map { it.at },
+        )
+    }
+
+    @Test
+    fun `a refinement never reads as an offer to start`() {
+        assertFalse(state(snooze())!!.startsASnooze)
+    }
+
+    @Test
+    fun `the offer carries the identity it was drawn for`() {
+        // What a tap is matched against the controller's current offer with
+        // (Codex, PR #256): the snooze's own `startedAt`, or null for an offer
+        // to start.
+        assertEquals(now, state(snooze())!!.offerFor)
+        assertNull(state(record = null, offerFor = null)!!.offerFor)
     }
 
     @Test

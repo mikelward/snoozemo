@@ -392,17 +392,29 @@ class MainActivity : ComponentActivity() {
     internal val rows = EndChoiceController(
         surface = "the app screen",
         currentRecord = { activeSnooze },
+        // **An offer naming no snooze starts one** (SPEC.md §4.4, maintainer,
+        // 2026-09-10). These rows stand on the idle screen too, and there a
+        // tap arms with the chosen end rather than refining — so the null
+        // identity, which for a refinement would mean "no claim", is the
+        // whole signal here: with `offersToStart` set below, `seed(null)` is
+        // the only way this controller comes to hold an unnamed offer.
         chooseEnd = { endsAt, requestId, forSnooze ->
-            SnoozeService.chooseEnd(this, endsAt, requestId, forSnooze)
+            if (forSnooze == null) SnoozeService.armUntil(this, endsAt, requestId)
+            else SnoozeService.chooseEnd(this, endsAt, requestId, forSnooze)
         },
+        // Wired but unreached from an offer to start: the idle rows carry no
+        // `Until I leave`, since the pinned `Snooze` beside them is that
+        // choice. Over a running snooze, exactly as before.
         restoreDeparture = { requestId, forSnooze ->
             SnoozeService.restoreEnd(this, requestId, forSnooze)
         },
         chooseMotionEnd = { requestId, forSnooze ->
-            SnoozeService.setMotionEnd(this, true, requestId, forSnooze)
+            if (forSnooze == null) SnoozeService.armUntilMotion(this, requestId)
+            else SnoozeService.setMotionEnd(this, true, requestId, forSnooze)
         },
         watchOutcome = EndChoiceOutcome::watch,
         onDismiss = { refreshSnoozing() },
+        offersToStart = true,
     )
 
     /**
@@ -512,7 +524,69 @@ class MainActivity : ComponentActivity() {
     /** Re-posts itself every [TICK_INTERVAL_MS] while running; see [now]. */
     private val tickRunnable: Runnable = Runnable {
         now = SnoozeClock.read()
+        // The offer to start is derived from the clock alone — its time, its
+        // floor, and the ceiling that has to equal the cap the service would
+        // set — so the clock is the only thing that stales it, and a screen
+        // left open on a desk is exactly where it does. Rebuilt whole on
+        // every tick rather than patched when its time falls inside the
+        // floor: that left the ceiling where it was seeded, a minute further
+        // behind the service's each minute and, across a backward clock
+        // change, ahead of it — so a time the row showed could be brought in
+        // silently on the arm (Codex, PR #256). Nothing here is the user's to
+        // keep — the steppers arm rather than step — so the rebuild costs
+        // nothing. The running rows keep their own rule, since a record read
+        // reconciles those.
+        //
+        // The calendar's candidates are the other clock-derived half. They
+        // are read against the window as it stood, and the window moves; a
+        // meeting entering it at the far edge is not in the list. Re-read
+        // once the window has moved by the floor, which bounds the
+        // cross-process query to twice an hour on a screen left idle and
+        // keeps the far edge within half an hour of true — and re-read at
+        // once when it has moved *backward* at all, since a wall clock set
+        // back has put meetings between the new now and the last query's
+        // start inside the window with nothing else to fetch them (Codex,
+        // PR #256).
+        // Only while the offer can be shown: without Do Not Disturb access
+        // there are no idle rows to draw the meetings on (`MainScreen`), so
+        // the calendar is not asked for them — and not the record either,
+        // which this re-read would otherwise load once a minute for nothing.
+        if (rows.startsASnooze && !rows.committing) {
+            rows.refreshStart(Instant.ofEpochMilli(now.wallMillis))
+            if (
+                access == PolicyAccess.GRANTED &&
+                idleCalendarReadIsStale(readAtMillis = idleCalendarReadAtMillis, nowMillis = now.wallMillis)
+            ) {
+                refreshSnoozing()
+            }
+        }
         tickHandler.postDelayed(tickRunnable, TICK_INTERVAL_MS)
+    }
+
+    /**
+     * When the calendar was last read for the offer to start, wall millis,
+     * so the tick can re-read it once the window has moved enough to matter.
+     */
+    internal var idleCalendarReadAtMillis: Long = 0L
+
+    companion object {
+        /**
+         * Whether the calendar read taken at [readAtMillis] no longer
+         * describes the offer to start's window at [nowMillis].
+         *
+         * Forward, the window has to move by the floor before the far edge
+         * is worth another cross-process query. Backward by *any* amount is
+         * stale at once: the wall clock was set back, and meetings between
+         * the new now and the old query's start are inside the window with
+         * nothing else to fetch them — an elapsed-time test alone would sit
+         * on a negative delta until the clock caught up and moved on another
+         * half hour (Codex, PR #256). Pure, so both directions are pinned on
+         * the JVM.
+         */
+        internal fun idleCalendarReadIsStale(readAtMillis: Long, nowMillis: Long): Boolean {
+            val drift = nowMillis - readAtMillis
+            return drift < 0L || drift >= ActiveSnooze.MIN_CAP.toMillis()
+        }
     }
     /**
      * Null until the platform has been asked, for the same reason [snoozing] is:
@@ -1487,11 +1561,10 @@ class MainActivity : ComponentActivity() {
                             format = formatTime,
                         )
                         val offersMotionEnd = offersMotionEnd(
-                            record = activeSnooze,
                             // Warmed at startup and read here as state, so
                             // this is a field read rather than the
                             // `SensorManager` lookup it used to be. Still a
-                            // lambda, so the two free checks answer first.
+                            // lambda, so the flavor check answers first.
                             deviceHasMotionSensor = { hasMotionSensor },
                         )
                         MainScreen(
@@ -1579,22 +1652,23 @@ class MainActivity : ComponentActivity() {
                             // between the draw and the tap, and the tap would
                             // then commit an instant the user never saw
                             // (Codex, PR #234).
-                            onChooseEndTime = {
-                                endChoice?.let { rows.commit(it.condition.endsAt) }
-                            },
+                            onChooseEndTime = { endChoice?.let { chooseEndTimeFromScreen(it) } },
                             // Indexed rather than carrying the instant back
                             // through the UI, so the time committed is the one
                             // this screen was drawn from and a list that moved
                             // under a tap commits nothing rather than
                             // something else.
                             onChooseEndMeeting = { index ->
-                                endChoice?.meetings?.getOrNull(index)?.let { rows.commit(it.at) }
+                                endChoice?.let { chooseMeetingFromScreen(it, index) }
                             },
                             onChooseDeparture = ::chooseDepartureFromScreen,
                             offersMotionEnd = offersMotionEnd,
-                            onChooseMotionEnd = ::chooseMotionEndFromScreen,
-                            onStepEndDown = rows::stepDown,
-                            onStepEndUp = rows::stepUp,
+                            onChooseMotionEnd = {
+                                endChoice?.let { drawn -> onDrawnOffer(drawn) { chooseMotionEndFromScreen() } }
+                            },
+                            // From what was drawn, for the time row's reason.
+                            onStepEndDown = { endChoice?.let { stepEndFromScreen(it, up = false) } },
+                            onStepEndUp = { endChoice?.let { stepEndFromScreen(it, up = true) } },
                             onShareDebugLog = ::shareDebugLog,
                             onDismissCrash = ::dismissCrash,
                             onStartPlayUpdate = ::startPlayUpdate,
@@ -1935,7 +2009,15 @@ class MainActivity : ComponentActivity() {
     private fun refreshRows(record: ActiveSnooze?) {
         if (rows.committing) return
         val now = Instant.ofEpochMilli(SnoozeClock.read().wallMillis)
-        if (record == null || !EndCondition.offersAChoice(record, now)) {
+        // **Nothing running is an offer too** (SPEC.md §4.4): the rows stand
+        // as a way to start, seeded from the clock alone. Kept, and only
+        // reseeded when its time has gone stale, so the ordinary re-read
+        // behind a settled commit does not move the offer under the user.
+        if (record == null) {
+            if (rows.startsASnooze) rows.refreshStart(now) else rows.seed(null, now)
+            return
+        }
+        if (!EndCondition.offersAChoice(record, now)) {
             if (rows.endCondition != null) rows.dismiss()
             return
         }
@@ -2163,6 +2245,9 @@ class MainActivity : ComponentActivity() {
         meetingOffers = emptyList()
     }
 
+    /** [refreshSnoozing] for a test — the tick's re-read, without the tick. */
+    internal fun refreshSnoozingForTest() = refreshSnoozing()
+
     private fun refreshSnoozing() {
         // The same generation guard the access refresh has, for the same
         // reason: `observe` fires one of these per record change, they finish
@@ -2186,6 +2271,11 @@ class MainActivity : ComponentActivity() {
         // stack that names the worker rather than what ordered the work.
         // Here it fails where the mistake is (Codex, PR #234).
         val records = store
+        // Read here too, and for the same reason plus one: `access` is main
+        // thread state, and the worker below must not read it. Whether the
+        // idle offer can be shown is decided as of this refresh; a grant or
+        // revocation landing later starts its own (`applyAccess`).
+        val offerCanShow = access == PolicyAccess.GRANTED
         // Through the same seam the offer's own read uses, so a test can run
         // it inline and assert on a settled state rather than race a thread.
         runOffMainThread {
@@ -2236,6 +2326,15 @@ class MainActivity : ComponentActivity() {
             // guard is still the one below, on the main thread; this is the
             // one that stops the work from being done at all (Codex, PR #234).
             if (refresh != latestSnoozingRefresh) return@runOffMainThread
+            // **Idle, only while the offer can be shown.** `MainScreen` draws
+            // the idle rows only under Do Not Disturb access, so with access
+            // missing or not yet read there is no button the meeting times
+            // could be drawn on — and `docs/PRIVACY.md` promises the time is
+            // read to draw one. Not read, rather than read and hidden; the
+            // grant that makes the rows showable re-reads (Codex, PR #256).
+            // A *running* snooze's read is unaffected: its rows and the
+            // notification show under any access reading.
+            if (loaded == null && !offerCanShow) return@runOffMainThread
             val wallNow = Instant.ofEpochMilli(SnoozeClock.read().wallMillis)
             // **Every candidate the query found, not the first two.** Which
             // two are offerable is a question about the clock, and the clock
@@ -2249,9 +2348,12 @@ class MainActivity : ComponentActivity() {
             // `applicationContext`, not `this`: the worker outlives a rotation
             // against a slow provider, and holding the activity there is what
             // turns a slow read into a retained destroyed activity.
-            val ends = loaded?.let {
-                NextMeetings.endsBefore(applicationContext, it, wallNow, reading)
-            } ?: emptyList()
+            // With nothing running the read is for the idle screen's offer to
+            // start (SPEC.md §4.4), bounded by the cap a snooze started now
+            // would carry — the window a plain arm opens a moment later, so
+            // no further into the calendar than `docs/PRIVACY.md` promises.
+            val cap = loaded?.capExpiresAt ?: ActiveSnooze.capExpiryFor(wallNow)
+            val ends = NextMeetings.endsBefore(applicationContext, cap, wallNow, reading)
             runOnUiThread {
                 // The same generation guard, plus the record's own identity:
                 // this answer describes `loaded`, and a snooze that arrived
@@ -2259,7 +2361,12 @@ class MainActivity : ComponentActivity() {
                 // for.
                 if (refresh != latestSnoozingRefresh) return@runOnUiThread
                 if (activeSnooze?.startedAt != loaded?.startedAt) return@runOnUiThread
+                // The idle offer's answer is dropped if access went while the
+                // provider was thinking: nothing can draw it now, and the
+                // grant that comes back reads again.
+                if (loaded == null && access != PolicyAccess.GRANTED) return@runOnUiThread
                 meetingOffers = ends
+                if (loaded == null) idleCalendarReadAtMillis = wallNow.toEpochMilli()
             }
         }
     }
@@ -2978,6 +3085,14 @@ class MainActivity : ComponentActivity() {
     internal fun refreshAccessForTest(ruleMayHaveChanged: Boolean = true) =
         refreshAccess(ruleMayHaveChanged)
 
+    /**
+     * [applyAccess] for a test, as the newest reading: the real one lands
+     * from a raw thread a JVM test cannot advance, and what the idle offer
+     * does on a grant or a revocation is decided here, not in the reading.
+     */
+    internal fun applyAccessForTest(current: PolicyAccess) =
+        applyAccess(++latestAccessRefresh, current, running = snoozing == true)
+
     private fun refreshAccess(ruleMayHaveChanged: Boolean = true) {
         val running = snoozing == true
         // Which refresh this is. Several can be in flight at once — `onStart`,
@@ -3121,7 +3236,23 @@ class MainActivity : ComponentActivity() {
             return
         }
         if (refresh != latestAccessRefresh) return
+        val wasGranted = access == PolicyAccess.GRANTED
         access = current
+        // The idle offer's calendar follows this reading (SPEC.md §4.4): it
+        // is read only while the idle rows can show, so a grant with nothing
+        // running has to start the read the record's own refresh skipped, and
+        // a revocation takes the times off a screen that no longer draws them
+        // — the read in flight included, since its answer would be dropped on
+        // arrival regardless. A running snooze's rows show under any reading,
+        // so nothing here touches theirs.
+        if (!running) {
+            if (current == PolicyAccess.GRANTED && !wasGranted) {
+                refreshSnoozing()
+            } else if (current != PolicyAccess.GRANTED && wasGranted) {
+                calendarRead?.cancel()
+                forgetMeetingOffers()
+            }
+        }
         // The one routing decision this screen makes on its own: land a user
         // with no Do Not Disturb access straight on the interstitial the first
         // time that becomes known, rather than on a Main screen whose Arm
@@ -3400,6 +3531,69 @@ class MainActivity : ComponentActivity() {
      * `releaseDirectly` returns whether the rule is confirmed off.
      */
     /**
+     * The rows' `−` / `+`, which do different things on the two screens.
+     *
+     * Over a running snooze they step the time row, and the row commits. On
+     * the idle screen every tap starts a snooze (maintainer, 2026-09-10) — so
+     * a stepper arms at the stepped time rather than moving a row the user
+     * would then have to tap: "arm, then refine" collapsed into one tap is
+     * the whole point of offering the rows there. Nothing to arm when the
+     * step has nowhere to go; the stepper is disabled there anyway.
+     */
+    internal fun stepEndFromScreen(drawn: EndChoiceUiState, up: Boolean) = onDrawnOffer(drawn) {
+        if (!drawn.startsASnooze) {
+            if (up) rows.stepUp() else rows.stepDown()
+            return@onDrawnOffer
+        }
+        val stepped = if (up) drawn.condition.stepUp() else drawn.condition.stepDown()
+        if (stepped.endsAt == drawn.condition.endsAt) return@onDrawnOffer
+        rows.commit(stepped.endsAt)
+    }
+
+    /** The rows' time row: commits the time as drawn, for [onDrawnOffer]'s reason. */
+    internal fun chooseEndTimeFromScreen(drawn: EndChoiceUiState) = onDrawnOffer(drawn) {
+        rows.commit(drawn.condition.endsAt)
+    }
+
+    /** A meeting row: commits the instant drawn at [index], if the list still has one. */
+    internal fun chooseMeetingFromScreen(drawn: EndChoiceUiState, index: Int) = onDrawnOffer(drawn) {
+        drawn.meetings.getOrNull(index)?.let { rows.commit(it.at) }
+    }
+
+    /**
+     * Runs [tap] only if [drawn] is still the offer [rows] holds.
+     *
+     * The frame that drew the rows and the controller's offer can disagree
+     * for the length of one frame: the record observer moves the offer onto
+     * a snooze the tile just armed — or off one that just ended — on the main
+     * thread, and a tap dispatched before the next frame arrives with the old
+     * frame's lambdas. The identity travels with the choice at dispatch
+     * (`EndChoiceController.dispatch`), and it would be the *new* identity, so
+     * a time drawn as a way to start would go out as a refinement of a snooze
+     * it was never offered over (Codex, PR #256). The same gap opens when the
+     * tick rebuilds an offer to start against a clock that moved: the
+     * identity stays null, but the bounds the rows were drawn under are no
+     * longer the controller's, and a meeting drawn below the old ceiling can
+     * sit above the new one, where the arm brings it in silently (Codex, PR
+     * #256, the third finding in this gap). So the match is the *whole*
+     * offer — identity, whether it starts, and the condition it was drawn
+     * under — rather than the fields each finding named: a drawn offer either
+     * is what the controller holds now or it is not, and a mismatch drops the
+     * tap, since the frame already on its way shows what there is to tap now.
+     */
+    private inline fun onDrawnOffer(drawn: EndChoiceUiState, tap: () -> Unit) {
+        if (
+            drawn.offerFor != rows.offerFor ||
+            drawn.startsASnooze != rows.startsASnooze ||
+            drawn.condition != rows.endCondition
+        ) {
+            SnoozeDebugLog.event("tap: on an end-condition offer the screen has already replaced; dropped")
+            return
+        }
+        tap()
+    }
+
+    /**
      * The rows' `Until I leave`: put the cap back to its ceiling.
      *
      * Goes through the controller rather than starting the service directly,
@@ -3473,6 +3667,14 @@ class MainActivity : ComponentActivity() {
      * into.
      */
     private fun requireLocationFor(action: PendingLocationAction): Boolean {
+        // The motion row's floor is either half of the runtime grant, and
+        // that is two package-manager cache hits — asked first, so a tap that
+        // already holds it goes straight to the service. `refreshLocation`
+        // is the full reading with its prompt-history writes, and on the
+        // idle screen this tap is the arm path (SPEC.md §6.9); it is still
+        // what decides between asking and pointing at Settings when the
+        // grant is not held, which is off that path (Codex, PR #256).
+        if (action == PendingLocationAction.MOTION_END && holdsAnyLocationGrant()) return true
         val permission = refreshLocation()
         if (satisfies(permission, action)) return true
         if (permission == LocationPermission.ASKABLE) {
