@@ -2856,7 +2856,9 @@ direction.
 
 It is not the only *decision* in the total, and saying so would hide the others: `HYSTERESIS_M`,
 the confirmation gap and the request cadence are all chosen numbers with their own reasons, and
-each of them is tunable. What separates them from the rest of the list is what they answer to —
+each of them is tunable. Two of those three are now **one** number: on `play` the burst asks at
+the confirmation gap rather than at a rate of its own, so shortening the gap shortens the wait
+between fixes instead of leaving the shorter gap inert. What separates them from the rest of the list is what they answer to —
 a product judgment, rather than how good a reading the platform happened to return. **The
 measurement half is unmeasured**, which is why nothing here ranks the levers against each other:
 that ordering is what the handset traces in `TODO.md` are for.

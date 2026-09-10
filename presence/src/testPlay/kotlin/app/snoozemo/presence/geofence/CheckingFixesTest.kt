@@ -82,6 +82,7 @@ class CheckingFixesTest {
         onSignal = { signals += it },
         onPermissionLost = { permissionLost++ },
         onServicesOff = { servicesOff++ },
+        confirmationGapMs = CheckingCadence.CONFIRM_SPACING_MS,
     )
 
     private fun fix(atMs: Long) = Fix(lat = 0.0, lon = 0.0, accuracyM = 20f, elapsedRealtimeMs = atMs)
@@ -163,6 +164,7 @@ class CheckingFixesTest {
             onSignal = { started?.pause() },
             onPermissionLost = {},
             onServicesOff = {},
+            confirmationGapMs = CheckingCadence.CONFIRM_SPACING_MS,
         )
         started = burst
 
@@ -503,11 +505,48 @@ class CheckingFixesTest {
             onSignal = { signals += it },
             onPermissionLost = { permissionLost++ },
             onServicesOff = { servicesOff++ },
+            confirmationGapMs = CheckingCadence.CONFIRM_SPACING_MS,
         )
 
         burst.start()
 
         assertTrue(signals.single() is PresenceSignal.FixUnavailable)
         assertTrue(scheduler.delayed.any { it.first == CheckingCadence.CONFIRM_SPACING_MS })
+    }
+
+    /**
+     * End to end rather than as a cadence property, which is what the gap
+     * being *inert* looked like: the cadence would have returned the right
+     * number while the burst asked at another (`TODO.md`). So this asserts on
+     * what the scheduler was actually told to wait.
+     */
+    @Test
+    fun `a burst given a shorter confirmation gap asks at that gap`() {
+        val gapMs = 12_000L
+        val burst = CheckingFixes(
+            scheduler,
+            requester,
+            readElapsedRealtimeMs = { elapsedMs },
+            onSignal = { signals += it },
+            onPermissionLost = { permissionLost++ },
+            onServicesOff = { servicesOff++ },
+            confirmationGapMs = gapMs,
+        )
+
+        burst.start()
+        requester.answer(FixOutcome.Delivered(fix(atMs = 101_000)))
+
+        assertTrue(scheduler.delayed.toString(), scheduler.delayed.any { it.first == gapMs })
+        assertTrue(
+            "and not at the default the burst would have used before",
+            scheduler.delayed.none { it.first == CheckingCadence.CONFIRM_SPACING_MS },
+        )
+
+        // The wait it records is the one it is about to serve, too.
+        scheduler.fire(gapMs)
+        assertTrue(
+            loggedWaits().toString(),
+            loggedWaits().last().endsWith("next checking fix in $gapMs ms"),
+        )
     }
 }

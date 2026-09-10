@@ -1,9 +1,38 @@
 package app.snoozemo.presence.geofence
 
+import app.snoozemo.core.Departure
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class CheckingCadenceTest {
+
+    @Test
+    fun `the spacing is the confirmation gap itself, not a copy of its value`() {
+        // The two were a hard-coded `30_000L` here and a `Duration.ofSeconds(30)`
+        // in `:core`, so shortening the gap the engine accepts fixes across
+        // would have left the burst asking at the old rate — a latency win that
+        // never happens (`TODO.md`). Asserted against `Departure` rather than
+        // against 30_000 so a change to the gap moves this test's expectation
+        // with it instead of failing it.
+        assertEquals(Departure.CONFIRMATION_GAP.toMillis(), CheckingCadence().nextDelayMs)
+    }
+
+    @Test
+    fun `a burst built with a different gap paces at that gap`() {
+        val gapMs = 12_000L
+        val cadence = CheckingCadence(gapMs)
+
+        assertEquals(gapMs, cadence.nextDelayMs)
+
+        // And the backoff is unaffected by it: the battery bound is about a
+        // provider answering nothing, not about how close together two
+        // qualifying fixes have to be.
+        repeat(CheckingCadence.BACKOFF_AFTER) { cadence.onNothing() }
+        assertEquals(CheckingCadence.BACKOFF_SPACING_MS, cadence.nextDelayMs)
+
+        cadence.onFixDelivered()
+        assertEquals(gapMs, cadence.nextDelayMs)
+    }
 
     @Test
     fun `confirming fixes come at the confirmation gap`() {

@@ -88,9 +88,19 @@ internal class CheckingFixes(
      * what arms the grace period.
      */
     private val onServicesOff: () -> Unit,
+    /**
+     * The confirmation gap this snooze's burst paces itself at (SPEC.md §6.6).
+     *
+     * Supplied rather than assumed, so the rate the fixes are asked for and
+     * the gap the engine accepts them across are one number instead of two
+     * that could disagree in silence (`TODO.md`). Built here because the burst
+     * is built per snooze, which is also where a gap that later varies by
+     * anchor would arrive.
+     */
+    confirmationGapMs: Long,
 ) : AutoCloseable {
 
-    private val cadence = CheckingCadence()
+    private val cadence = CheckingCadence(confirmationGapMs)
 
     private var running = false
     private var inFlight: AutoCloseable? = null
