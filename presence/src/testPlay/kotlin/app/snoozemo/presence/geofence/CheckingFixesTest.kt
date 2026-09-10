@@ -2,6 +2,7 @@ package app.snoozemo.presence.geofence
 
 import app.snoozemo.core.Fix
 import app.snoozemo.core.PresenceSignal
+import app.snoozemo.core.SnoozeDebugLog
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -13,11 +14,29 @@ import org.junit.Test
  */
 class CheckingFixesTest {
 
-    /** Runs immediates inline; delayed work waits for [advance]. */
-    private class ManualScheduler : BurstScheduler {
+    /**
+     * Runs immediates inline; delayed work waits for [fire].
+     *
+     * [marshalImmediates] models the production scheduler instead: the main
+     * thread's handler *queues* a `post` behind whatever is already running,
+     * so a stop issued from inside a callback lands only once that callback
+     * has finished. Inline is the convenient default and every other test
+     * here wants it, but it cannot see an ordering that exists only once the
+     * post is deferred — which is how a cancelled wait came to be recorded
+     * as a promise (Codex, PR #245).
+     */
+    private class ManualScheduler(private val marshalImmediates: Boolean = false) : BurstScheduler {
         val delayed = mutableListOf<Pair<Long, () -> Unit>>()
+        private val immediates = ArrayDeque<() -> Unit>()
 
-        override fun post(block: () -> Unit) = block()
+        override fun post(block: () -> Unit) {
+            if (marshalImmediates) immediates += block else block()
+        }
+
+        /** Runs every queued immediate, including any they queue themselves. */
+        fun drain() {
+            while (immediates.isNotEmpty()) immediates.removeFirst().invoke()
+        }
 
         override fun postDelayed(delayMs: Long, block: () -> Unit): AutoCloseable {
             val entry = delayMs to block
@@ -66,6 +85,99 @@ class CheckingFixesTest {
     )
 
     private fun fix(atMs: Long) = Fix(lat = 0.0, lon = 0.0, accuracyM = 20f, elapsedRealtimeMs = atMs)
+
+    /**
+     * Every spacing the burst wrote down, in order.
+     *
+     * Read with `last` rather than cleared between tests: the log is one
+     * buffer for the JVM and `:presence` does not depend on the logger's test
+     * artifact, so a sibling test's lines are simply older than this one's.
+     */
+    private fun loggedWaits(): List<String> =
+        SnoozeDebugLog.snapshot().filter { it.contains("next checking fix in") }
+
+    /**
+     * The backoff has to be visible **where the wait is decided**.
+     *
+     * This is the whole reason the record exists rather than being read off a
+     * fix's arrival time (SPEC.md §4.6): `settle` calls `cadence.onFixDelivered()`
+     * before `scheduleNext()`, so the cadence a delivered fix is scheduled from
+     * has already forgiven the backoff — a spacing read at delivery says 30 s
+     * however long the burst has actually been backing off. Here it says
+     * 5 minutes while it is backing off, and 30 s again once a fix lands.
+     *
+     * The number is therefore *captured* where it is decided and *written*
+     * when the wait ends, so each line is a request that actually started —
+     * see the cancellation test below for the half that pins the second part.
+     */
+    @Test
+    fun `the wait before each fix is recorded, and shows the backoff`() {
+        fixes.start()
+
+        repeat(CheckingCadence.BACKOFF_AFTER) { round ->
+            requester.answer(FixOutcome.NothingRecoverable)
+            if (round < CheckingCadence.BACKOFF_AFTER - 1) {
+                scheduler.fire(CheckingCadence.CONFIRM_SPACING_MS)
+            }
+        }
+
+        scheduler.fire(CheckingCadence.BACKOFF_SPACING_MS)
+
+        assertTrue(
+            loggedWaits().toString(),
+            loggedWaits().last().endsWith("next checking fix in ${CheckingCadence.BACKOFF_SPACING_MS} ms"),
+        )
+
+        // And a delivered fix restores the confirmation gap, which is the
+        // reading the old delivery-time approach would have given all along.
+        requester.answer(FixOutcome.Delivered(fix(atMs = 101_000)))
+        scheduler.fire(CheckingCadence.CONFIRM_SPACING_MS)
+
+        assertTrue(
+            loggedWaits().toString(),
+            loggedWaits().last().endsWith("next checking fix in ${CheckingCadence.CONFIRM_SPACING_MS} ms"),
+        )
+    }
+
+    /**
+     * A wait the engine cancels before it elapses is never recorded.
+     *
+     * The engine pauses the burst from inside the fix callback — a delivered
+     * fix that answers the departure question leaves ACTIVE duty — and the
+     * production scheduler only queues that stop, so `scheduleNext` runs
+     * first. Writing the spacing there left a trace promising a fix nobody
+     * ever attempted, which reads as a burst still asking: a wrong answer
+     * quietly given, not a missing one (AGENTS.md, principle 2).
+     */
+    @Test
+    fun `a wait the engine cancels is never recorded`() {
+        val marshaling = ManualScheduler(marshalImmediates = true)
+        val requests = ScriptedRequester()
+        var started: CheckingFixes? = null
+        val burst = CheckingFixes(
+            marshaling,
+            requests,
+            readElapsedRealtimeMs = { elapsedMs },
+            // What `GeofencePresenceMonitor.deliver` does when the fix it just
+            // received takes the duty out of ACTIVE.
+            onSignal = { started?.pause() },
+            onPermissionLost = {},
+            onServicesOff = {},
+        )
+        started = burst
+
+        burst.start()
+        marshaling.drain()
+        val before = loggedWaits().size
+
+        requests.answer(FixOutcome.Delivered(fix(atMs = 101_000)))
+        marshaling.drain()
+
+        // The stop really did cancel a scheduled wait — without this the test
+        // would also pass on a burst that scheduled nothing at all.
+        assertTrue(marshaling.delayed.toString(), marshaling.delayed.isEmpty())
+        assertEquals(loggedWaits().toString(), before, loggedWaits().size)
+    }
 
     @Test
     fun `a delivered fix reaches the engine and the next request is paced at the confirmation gap`() {

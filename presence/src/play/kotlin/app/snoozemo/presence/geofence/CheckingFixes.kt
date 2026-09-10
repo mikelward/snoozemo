@@ -180,7 +180,15 @@ internal class CheckingFixes(
      * a new one. Idempotent.
      */
     fun pause() {
-        scheduler.post { stopWork() }
+        scheduler.post {
+            // Said only when there was a burst to end, and symmetric with
+            // the line `start` writes: without it the trace goes quiet after
+            // the last fix with nothing to say whether the burst is between
+            // requests or over, which is the ambiguity moving the spacing
+            // line above would otherwise have left behind.
+            if (running) SnoozeDebugLog.event("checking: confirming fixes stopped")
+            stopWork()
+        }
     }
 
     /**
@@ -391,7 +399,24 @@ internal class CheckingFixes(
 
     private fun scheduleNext() {
         if (!running) return
-        nextRequest = scheduler.postDelayed(cadence.nextDelayMs) { requestOnce() }
+        // **Read where the wait is decided; written where it ends**
+        // (SPEC.md §4.6). Reading it here is the whole point of recording the
+        // spacing at all — a provider answering nothing must not be asked
+        // twice a minute for eight hours, and the backoff is invisible at
+        // delivery: `settle` calls `cadence.onFixDelivered()` before it gets
+        // here, so a fix that arrives after five minutes of backoff is
+        // scheduled from a cadence that has already forgiven it, and every
+        // reading taken there says 30 s. So the number is captured now and
+        // the line is written when the wait actually elapses, which makes it
+        // a report rather than a promise: the engine pauses the burst from
+        // inside the fix callback above, and the production scheduler only
+        // *queues* that stop, so writing here recorded a spacing for a
+        // request the queued stop then cancelled (Codex, PR #245).
+        val waitMs = cadence.nextDelayMs
+        nextRequest = scheduler.postDelayed(waitMs) {
+            SnoozeDebugLog.event("next checking fix in %s ms", waitMs)
+            requestOnce()
+        }
     }
 
     internal companion object {

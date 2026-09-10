@@ -173,36 +173,14 @@ internal class PlatformWifiWatch(
     }
 
     /**
-     * Every signal leaves through here, so a loss records *why* it is a loss.
+     * Every signal leaves through here, so every one of them can be recorded.
      *
-     * A loss is fail-open (D7), which makes "the anchor's network went away"
-     * and "nothing could answer, so assume it did" arrive as the same signal
-     * — and the three refusing paths all log their own failure while the two
-     * real determinations logged nothing at all, so the log could not tell
-     * them apart either. Two lines rather than one is what lets a bug report
-     * say which kind of loss ended a snooze, which is what the field traces
-     * `TODO.md` asks for are read to answer.
-     *
-     * A boolean and no network name: the SSID never leaves [AnchorWifiTracker]
-     * (AGENTS.md, *Privacy*).
+     * What each says, and why the distinctions are worth their lines, is
+     * [anchorWifiTraceLine] — pure, so the choice is testable, which it was
+     * not while it lived inline in a `ConnectivityManager` callback.
      */
     private fun emit(signal: PresenceSignal) {
-        if (signal is PresenceSignal.AnchorWifiLost) {
-            SnoozeDebugLog.event(
-                if (signal.observed) {
-                    // "Confirmed absent" rather than "seen to go" (Codex,
-                    // PR #222). Both observed paths establish that the anchor
-                    // is not connected, but only one of them watched it
-                    // happen: a seed read on a watch that starts with the
-                    // phone already off Wi-Fi confirms an absence it never saw
-                    // begin. Wording it as a transition would put a claim in
-                    // the trace that the code did not make.
-                    "anchor Wi-Fi lost: absence confirmed"
-                } else {
-                    "anchor Wi-Fi lost: could not tell, failing open to gone"
-                },
-            )
-        }
+        anchorWifiTraceLine(signal)?.let { SnoozeDebugLog.event(it) }
         onSignal(signal)
     }
 

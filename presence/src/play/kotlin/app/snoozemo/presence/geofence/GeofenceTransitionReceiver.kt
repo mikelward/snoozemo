@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
 import app.snoozemo.core.SnoozeDebugLog
+import app.snoozemo.presence.geofenceExitDeliveryNote
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofenceStatusCodes
 import com.google.android.gms.location.GeofencingEvent
@@ -44,10 +45,14 @@ class GeofenceTransitionReceiver : BroadcastReceiver() {
             // The observation keeps the platform's own timing where it offers
             // one: a transition can be delivered late (Doze, batching), and
             // the engine's staleness rules need the moment it *happened*.
-            val atMs = event.triggeringLocation
+            val deliveredAtMs = SystemClock.elapsedRealtime()
+            val crossedAtMs = event.triggeringLocation
                 ?.let { it.elapsedRealtimeNanos / NANOS_PER_MILLI }
-                ?: SystemClock.elapsedRealtime()
-            GeofenceSignalBridge.deliver(GeofenceObservation.Exit(atMs))
+            // Written here because here is the only place the two facts are
+            // still distinguishable — see [geofenceExitDeliveryNote], which
+            // owns the reason and is where it is tested.
+            SnoozeDebugLog.event(geofenceExitDeliveryNote(crossedAtMs, deliveredAtMs))
+            GeofenceSignalBridge.deliver(GeofenceObservation.Exit(crossedAtMs ?: deliveredAtMs))
         }
     }
 

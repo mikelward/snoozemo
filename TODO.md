@@ -497,18 +497,25 @@ the point is that every other line of the app is worthless if it isn't true.
       has since landed (below), closing the recovery half, and so has the §6.7 significant-motion
       trigger — with the resting cadence it pairs with now settled as the backstop's on `play`
       (`SPEC.md` §6.7), so that item is closed too.
-      - [ ] **The departure-arithmetic, Wi-Fi-association and geofence-timing log records**
+      - [x] **The departure-arithmetic, Wi-Fi-association and geofence-timing log records**
         — the piece the Phase 3 debug-log item deferred here, found undelivered by the
         PR #232 audit (Codex, PR #232). **Not the wake-up *source*, which is recorded**
         for all three (`geofence exit observed`, `PlatformWifiWatch`'s two loss lines, the
         backstop's resting-probe line); naming the whole source half as missing was a
         drafting error here and would send a contributor to duplicate existing logs.
-        `docs/PRIVACY.md` already tells the user the log records "how far from the anchor
-        a location fix said you were in meters and how accurate that fix claimed to be",
-        and the debug-log item's own opening sentence said the same — but no accuracy or
-        distance is written anywhere in the tree and `Presence.kt` has no log calls at all.
-        So the user-facing promise is live and undelivered, which is why this is
-        unconditional work rather than something a field trace decides. What it owes: the
+
+        **The departure arithmetic landed with PR #233**, not with this entry, and the
+        text below describing it as missing was stale from then until PR #245 — exactly
+        the drafting error the paragraph above warns about, made a second time.
+        `DepartureObservation.logSummary` writes distance, accuracy, uncertainty, margin,
+        radius, verdict and the matched rule, and `Presence.kt` calls it for every
+        observation. What PR #245 delivered is the rest: the geofence crossing time
+        **and its absence**, the anchor's network turning *present*, and the wait before
+        each checking fix. All three choices are pure functions with JVM tests, because
+        each is written from an Android callback no unit test can reach.
+
+        The original statement of what it owed, kept because each clause is why the
+        corresponding line reads as it does: the
         exit's platform crossing time against its delivery time — and **whether that
         crossing time existed at all**, which is the part a naive subtraction gets wrong
         (Codex, PR #232). `GeofenceTransitionReceiver` reads
@@ -534,6 +541,17 @@ the point is that every other line of the app is worthless if it isn't true.
         All of it is inside the §4.6 floor already, so no policy question and no widening
         of `docs/PRIVACY.md`. See the departure-latency entry for what each number
         diagnoses.
+
+        **What each shipped as** (PR #245): `geofenceExitDeliveryNote` returns either a
+        lag or the sentence that no crossing time was attached, so there is no single
+        field left downstream to subtract from by mistake; `anchorWifiTraceLine` covers
+        all four Wi-Fi cases in one pure mapping — the two losses it already had, and the
+        two presences it did not — which also made the two existing loss lines testable
+        for the first time; and the spacing is read in `scheduleNext`, where the wait
+        is decided, rather than at delivery where the cadence has already forgiven the
+        backoff and every reading says 30 s — but written when the wait ends, so the line
+        reports a request that started rather than promising one a queued pause cancelled
+        (Codex).
       - [x] **The engine above the interface**: `Presence`, a pure state machine in `:core` over
         (state, signal, anchor). Owns escalation and de-escalation, the §6.7 duty cycle, the
         degraded-tracking report, and the §6.6 grace period. Landed with `PresenceTest` (37),
