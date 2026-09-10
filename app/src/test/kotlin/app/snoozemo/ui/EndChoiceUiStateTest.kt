@@ -203,33 +203,33 @@ class EndChoiceUiStateTest {
     private fun offered(
         record: ActiveSnooze? = snooze(),
         hasSensor: Boolean = true,
-    ): MotionEndUiState? = motionEndUiState(record, deviceHasMotionSensor = { hasSensor })
+    ): Boolean = offersMotionEnd(record, deviceHasMotionSensor = { hasSensor })
 
     @Test
-    fun `the motion switch reads the running snooze`() {
-        assertEquals(buildHoldsForegroundService, offered() != null)
-        if (!buildHoldsForegroundService) return
-
-        assertFalse("off until the user asks", offered()!!.enabled)
-        assertTrue(offered(snooze(endsOnMotion = true))!!.enabled)
+    fun `until I move is offered on a running snooze, chosen or not`() {
+        // A choice like `Until I leave`, not a switch (maintainer, 2026-09-10):
+        // the row stays offered once chosen, and a second tap changes nothing,
+        // so there is no state for the offer to carry.
+        assertEquals(buildHoldsForegroundService, offered())
+        assertEquals(buildHoldsForegroundService, offered(snooze(endsOnMotion = true)))
     }
 
     @Test
-    fun `the motion switch is offered whatever the tracking mode`() {
+    fun `until I move is offered whatever the tracking mode`() {
         // Where location can see nothing is where this row is the only answer
         // left, so gating it on tracking withheld it from the snooze that
         // needed it most (maintainer, 2026-09-10).
         for (mode in TrackingMode.entries) {
-            assertEquals("$mode", buildHoldsForegroundService, offered(snooze(mode = mode)) != null)
+            assertEquals("$mode", buildHoldsForegroundService, offered(snooze(mode = mode)))
         }
     }
 
     @Test
-    fun `the motion switch is withheld on a phone with no such sensor`() {
-        // Offering it would produce a switch the service rolls straight back
-        // — a control that undoes itself is worse than one that was never
-        // there (Codex, PR #252).
-        assertNull(offered(hasSensor = false))
+    fun `until I move is withheld on a phone with no such sensor`() {
+        // Offering it would produce a row the service rolls straight back —
+        // a choice that undoes itself is worse than one that was never there
+        // (Codex, PR #252).
+        assertFalse(offered(hasSensor = false))
     }
 
     @Test
@@ -260,13 +260,13 @@ class EndChoiceUiStateTest {
     }
 
     @Test
-    fun `the motion switch needs a running snooze, and asks the platform nothing`() {
+    fun `until I move needs a running snooze, and asks the platform nothing`() {
         // The sensor lookup is a `SensorManager` call made from composition,
         // so an idle screen must not reach it — the common first frame has no
         // snooze at all (Codex, PR #252).
         var asked = 0
 
-        assertNull(motionEndUiState(null, deviceHasMotionSensor = { asked++; true }))
+        assertFalse(offersMotionEnd(null, deviceHasMotionSensor = { asked++; true }))
 
         assertEquals("the platform was not asked", 0, asked)
     }
@@ -276,34 +276,35 @@ class EndChoiceUiStateTest {
         // `direct` cannot hold one, so the answer could not change the outcome.
         var asked = 0
 
-        val state = motionEndUiState(snooze(), deviceHasMotionSensor = { asked++; true })
+        val offered = offersMotionEnd(snooze(), deviceHasMotionSensor = { asked++; true })
 
-        assertEquals(buildHoldsForegroundService, state != null)
+        assertEquals(buildHoldsForegroundService, offered)
         assertEquals(if (buildHoldsForegroundService) 1 else 0, asked)
     }
 
     @Test
-    fun `the motion switch outlives the time choices`() {
+    fun `until I move's availability is answered apart from the time offer`() {
         // Once the cap comes inside `MIN_CAP` there is no time left to choose
-        // and `endChoiceUiState` withholds the whole offer — but a switch the
-        // user turned on has to stay revocable for as long as the sensor is
-        // armed (Codex, PR #252). The two answers are deliberately
-        // independent, and this is the case that proves it.
+        // and `endChoiceUiState` withholds the whole offer. This answer is
+        // about the build and the phone, not the cap, so it does not move —
+        // it is the screen that withholds the row along with the group it now
+        // sits in (maintainer, 2026-09-10), and it does so from that gate, not
+        // from this one.
         val nearlyOver = snooze(capIn = Duration.ofMinutes(5), endsOnMotion = true)
 
         assertNull("no time left to choose", state(nearlyOver))
         assertEquals(
-            "but the switch is unaffected by that gate",
+            "while the availability answer is unaffected by that gate",
             buildHoldsForegroundService,
-            offered(nearlyOver) != null,
+            offered(nearlyOver),
         )
     }
 
     @Test
     fun `neither question is answered from another snooze's record`() {
         // Fails closed the way every other field here does: an offer this
-        // cannot confirm belongs to the running snooze must not draw a switch
-        // claiming that snooze's state.
+        // cannot confirm belongs to the running snooze must not draw a row
+        // over that snooze.
         val state = state(
             record = snooze(startedAt = now, endsOnMotion = true),
             offerFor = now.minus(Duration.ofMinutes(5)),

@@ -490,9 +490,7 @@
     <!-- TODO: translate -->
     <string name="main_until_i_leave" tools:ignore="MissingTranslation">Until I leave</string>
     <!-- TODO: translate -->
-    <string name="main_when_i_move" tools:ignore="MissingTranslation">When I move</string>
-    <!-- TODO: translate -->
-    <string name="main_when_i_move_on" tools:ignore="MissingTranslation">Also ending when you move</string>
+    <string name="main_until_i_move" tools:ignore="MissingTranslation">Until I move</string>
     <!-- Names the calendar mark on a row whose time came from a meeting, for a
          screen reader: the label alone reads the same as the adjustable time,
          so the mark is the only thing saying where that time came from. Not

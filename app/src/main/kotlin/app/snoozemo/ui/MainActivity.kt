@@ -348,6 +348,11 @@ class MainActivity : ComponentActivity() {
         restoreDeparture = { requestId, forSnooze ->
             SnoozeService.restoreEnd(this, requestId, forSnooze)
         },
+        // Wired but unreached, like the departure restore: the sheet offers no
+        // `Until I move` row.
+        chooseMotionEnd = { requestId, forSnooze ->
+            SnoozeService.setMotionEnd(this, true, requestId, forSnooze)
+        },
         watchOutcome = EndChoiceOutcome::watch,
         // Nothing to finish: clearing the offer is what closes this sheet,
         // unlike the trampoline where the activity *is* the sheet.
@@ -392,6 +397,9 @@ class MainActivity : ComponentActivity() {
         },
         restoreDeparture = { requestId, forSnooze ->
             SnoozeService.restoreEnd(this, requestId, forSnooze)
+        },
+        chooseMotionEnd = { requestId, forSnooze ->
+            SnoozeService.setMotionEnd(this, true, requestId, forSnooze)
         },
         watchOutcome = EndChoiceOutcome::watch,
         onDismiss = { refreshSnoozing() },
@@ -1478,11 +1486,7 @@ class MainActivity : ComponentActivity() {
                             failed = rows.commitFailed,
                             format = formatTime,
                         )
-                        // Its own state, read from the record rather than from
-                        // the offer: the switch has to outlive the time
-                        // choices, which are withheld once the cap comes
-                        // inside `MIN_CAP` (Codex, PR #252).
-                        val motionEnd = motionEndUiState(
+                        val offersMotionEnd = offersMotionEnd(
                             record = activeSnooze,
                             // Warmed at startup and read here as state, so
                             // this is a field read rather than the
@@ -1587,8 +1591,8 @@ class MainActivity : ComponentActivity() {
                                 endChoice?.meetings?.getOrNull(index)?.let { rows.commit(it.at) }
                             },
                             onChooseDeparture = ::chooseDepartureFromScreen,
-                            motionEnd = motionEnd,
-                            onToggleMotionEnd = ::toggleMotionEndFromScreen,
+                            offersMotionEnd = offersMotionEnd,
+                            onChooseMotionEnd = ::chooseMotionEndFromScreen,
                             onStepEndDown = rows::stepDown,
                             onStepEndUp = rows::stepUp,
                             onShareDebugLog = ::shareDebugLog,
@@ -3563,54 +3567,32 @@ class MainActivity : ComponentActivity() {
         }
         when (tap.action) {
             PendingLocationAction.DEPARTURE -> rows.commitDeparture()
-            // The snooze the user actually tapped, not this screen's cached
-            // reading of what is running — the service validates it against
-            // the record, which is the copy that cannot be stale.
-            PendingLocationAction.MOTION_END -> commitMotionEnd(true, tap.forSnooze)
+            PendingLocationAction.MOTION_END -> rows.commitMotionEnd()
         }
     }
 
     /**
-     * The `When I move` row toggling (SPEC.md §4.4).
+     * The rows' `Until I move` (SPEC.md §4.4): the snooze also ends when the
+     * phone moves. One direction only — it is a choice, like `Until I leave`,
+     * not a switch with an off (maintainer, 2026-09-10); on a snooze that
+     * already ends on motion the service applies it by changing nothing.
      *
-     * Deliberately *not* through [rows] — the end-choice controller — even
-     * though it sits among that controller's rows. That machinery exists for
-     * commits that can be declined and have to be reseeded when they are: it
-     * holds a request id, blocks the other rows while one is in flight, and
-     * shows the refusal where the tap happened. None of that applies here,
-     * because this carries no time to be out of date. Routing it through
-     * anyway would make the whole row group inert for the round trip of a tap
-     * that cannot fail on anything the screen has not already read.
+     * Through [rows] like the row beside it, and that is a reversal: it used
+     * to go straight to the service on the argument that it carried no time
+     * to be out of date, so nothing about it could be declined. Two things
+     * can decline it that the screen cannot see — a refused record write, and
+     * the service rolling the choice back when the platform will not register
+     * the sensor — and as a plain choice the row has no state to fall back
+     * on, so the refusal is shown where the tap happened, exactly as a
+     * declined time is (Codex, PR #255).
      *
-     * The screen renders the record, so the switch follows what actually
-     * landed rather than what was asked for: a service that refuses to start
-     * leaves the row where it was, which is the truth.
-     */
-    /**
      * Internal, like [onForegroundLocationResult] and for the same test-only
      * reason: the permission gate in front of this is the part worth pinning,
      * and no composable click can reach it under Robolectric.
      */
-    internal fun toggleMotionEndFromScreen(endsOnMotion: Boolean) {
-        val forSnooze = activeSnooze?.startedAt
-        // Turning it **off** never asks for anything. A user withdrawing a
-        // choice must not be met with a permission prompt, and there is no
-        // foreground service to keep for an exit being given up.
-        if (endsOnMotion && !requireLocationFor(PendingLocationAction.MOTION_END)) return
-        commitMotionEnd(endsOnMotion, forSnooze)
-    }
-
-    private fun commitMotionEnd(endsOnMotion: Boolean, forSnooze: Instant?) {
-        // Two literals rather than one formatted line, matching the other tap
-        // lines here: nothing user-supplied goes near this, so there is
-        // nothing to route through `safe`.
-        SnoozeDebugLog.event(
-            if (endsOnMotion) "tap: when I move on, from the app screen"
-            else "tap: when I move off, from the app screen",
-        )
-        if (!SnoozeService.setMotionEnd(this, endsOnMotion, forSnooze)) {
-            lastOutcome = getString(R.string.failure_could_not_set_end)
-        }
+    internal fun chooseMotionEndFromScreen() {
+        if (!requireLocationFor(PendingLocationAction.MOTION_END)) return
+        rows.commitMotionEnd()
     }
 
     private fun endFromScreen() {

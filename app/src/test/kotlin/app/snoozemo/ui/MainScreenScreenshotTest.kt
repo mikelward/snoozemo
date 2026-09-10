@@ -487,7 +487,7 @@ class MainScreenScreenshotTest {
         var chosenMeeting = -1
         var chosenDeparture = 0
         var stepped = 0
-        var toggledMotionEnd: Boolean? = null
+        var chosenMotion = 0
 
         capture("main-screen-end-condition.png") {
             MainScreen(
@@ -510,7 +510,7 @@ class MainScreenScreenshotTest {
                         MeetingChoice(NOON.plus(Duration.ofMinutes(165)), "2:45 PM"),
                     ),
                 ),
-                motionEnd = MotionEndUiState(enabled = false),
+                offersMotionEnd = true,
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
@@ -526,7 +526,7 @@ class MainScreenScreenshotTest {
                 onChooseDeparture = { chosenDeparture++ },
                 onStepEndDown = { stepped-- },
                 onStepEndUp = { stepped++ },
-                onToggleMotionEnd = { toggledMotionEnd = it },
+                onChooseMotionEnd = { chosenMotion++ },
                 onShareDebugLog = {},
                 onDismissCrash = {},
             )
@@ -548,57 +548,10 @@ class MainScreenScreenshotTest {
         // number of refinements can push the one guaranteed way out of a
         // snooze off the screen (SPEC.md §7).
         composeRule.onNodeWithText("End now").assertIsDisplayed()
-        // Last of the whens, and the only one that reports a state rather than
-        // committing a time — so it toggles rather than choosing.
-        composeRule.onNodeWithText("When I move").performScrollTo().performClick()
-        assertEquals(true, toggledMotionEnd)
-    }
-
-    @Test
-    fun `when I move reads as armed once it is on`() {
-        capture("main-screen-when-i-move.png") {
-            MainScreen(
-                access = PolicyAccess.GRANTED,
-                tileAdded = true,
-                tileBannerDismissed = true,
-                snoozing = true,
-                trackingMode = TrackingMode.FULL,
-                remaining = Duration.ofHours(3).plusMinutes(40),
-                degradation = null,
-                endChoice = EndChoiceUiState(
-                    condition = EndCondition(
-                        endsAt = NOON.plus(Duration.ofHours(1)),
-                        floor = NOON.plus(Duration.ofMinutes(30)),
-                        ceiling = NOON.plus(Duration.ofHours(8)),
-                    ),
-                    formattedTime = "1:00 PM",
-                ),
-                motionEnd = MotionEndUiState(enabled = true),
-                lastOutcome = null,
-                crashPending = false,
-                shareFailed = false,
-                dismissFailed = false,
-                onOpenPermissions = {},
-                onOpenSettings = {},
-                onAddTile = {},
-                onDismissTileBanner = {},
-                onArm = {},
-                onRelease = {},
-                onChooseEndTime = {},
-                onChooseEndMeeting = {},
-                onChooseDeparture = {},
-                onStepEndDown = {},
-                onStepEndUp = {},
-                onToggleMotionEnd = {},
-                onShareDebugLog = {},
-                onDismissCrash = {},
-            )
-        }
-
-        // The switch is what a sighted user reads; this is what a screen
-        // reader gets, and without it `When I move` announces identically
-        // armed or not.
-        composeRule.onNodeWithText("When I move").performScrollTo().assertIsDisplayed()
+        // A choice like the rest, worded like `Until I leave` (maintainer,
+        // 2026-09-10) — not the switch it started as.
+        composeRule.onNodeWithText("Until I move").performScrollTo().performClick()
+        assertEquals(1, chosenMotion)
     }
 
     @Test

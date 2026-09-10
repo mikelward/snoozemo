@@ -1263,10 +1263,14 @@ returned rather than from a pair fixed when the record was read. The same gate
 answers a record that has not been read yet: an offer that cannot be confirmed
 against a running, refinable snooze is one the screen must not solicit taps on.
 
-**The order is `Until I leave`, then the adjustable time, then the meeting ends, then `End now`**
-(maintainer, 2026-09-08). Departure leads because it is what the product is for and what an arm
-already does — it read wrong sitting underneath two ways of narrowing it. `End now` keeps the last
-word, below every refinement, because the order is what says which of them is the terminal answer.
+**The order is the adjustable time, then the meeting ends, then `Until I move`, then `Until I
+leave`, then `End now`** (maintainer, 2026-09-10: "Until time / Until I move / Until I leave").
+That reverses 2026-09-08's `Until I leave` first, which led because it is what the product is for
+and what an arm already does, and read wrong sitting underneath two ways of narrowing it. With a
+second event-shaped row beside it (§4.4) the list reads better as *when*: the clock times a user
+can adjust, then the things that can happen — and the row the product is for closes the list
+rather than opening it. `End now` keeps the last word, below every refinement, because the order
+is what says which of them is the terminal answer.
 **A meeting row is marked as one**, by a calendar glyph after its time rather than before it: every
 row's label starts at the same x and the eye scans the times, so the mark qualifies the answer
 instead of categorizing it, and it is named for a screen reader because the label alone reads
@@ -1515,9 +1519,8 @@ taken deliberately with that trade in view rather than by omission.
 `location`-typed foreground service has platform prerequisites, and a missing or withdrawn
 location grant is one of them — the promotion simply throws. So a motion exit armed without the
 grant would be a promise the platform declines to let us keep. `Until I leave` needs the grant
-substantively; `When I move` needs it for the service it rides on. Tapping either asks for it
-where the system will still ask, and says `Needs location access` where it will not. Turning
-`When I move` **off** never asks: withdrawing a choice must not be met with a permission prompt.
+substantively; `Until I move` needs it for the service it rides on. Tapping either asks for it
+where the system will still ask, and says `Needs location access` where it will not.
 
 **No new permission for the sensor itself, and none is authorized.** `TYPE_SIGNIFICANT_MOTION` needs none, which is most
 of why this is the cheap thing to try first. Play Services' activity-recognition transitions would
@@ -1548,10 +1551,24 @@ a log that still cannot say. It is a property of this build and this phone, like
 and the device the run context already carries, and it is restated on a re-enable for the same
 reason that line is (§4.6).
 
-**The switch outlives the time choices.** The other rows are withheld once the cap comes inside
-`MIN_CAP` (§7), because there is no time left to choose. This one is not: it carries a state the
-user has to be able to revoke for as long as the sensor is armed, and bundling it with the time
-offer made it vanish for the final thirty minutes of every snooze while the exit stayed live.
+**It is a choice among the others, not a switch** (maintainer, 2026-09-10: "When I move means
+just that, same as when I leave means just that"). The first version drew it as a toggle with its
+own card shape and kept it outside the time offers, on the argument that it carried a state the
+user had to be able to revoke for as long as the sensor was armed. That argument answered a
+question the user had not asked. `Until I leave` is not revocable either — you choose a different
+row — and this is the same kind of answer: an end condition, chosen by tapping, adding an exit the
+cap still bounds. So the row reads `Until I move`, matching its sibling, is drawn as the same card,
+and sits in the same group, which it leaves with the others once the cap comes inside `MIN_CAP`
+(§7). Tapping it on a snooze that already ends on motion changes nothing; there is no off. Where it
+sits in the group is §4.2's order.
+
+**A refused choice says so where the tap happened, like a declined time** (Codex, PR #255). The
+switch answered only through the record the screen observed, which was enough while a refused tap
+left it visibly off. A plain choice has no state to fall back on, and two things can refuse it that
+the screen cannot see — the record write, and the service rolling the choice back when the platform
+will not register the sensor — so it goes through the same commit lifecycle as every other row:
+inert rows while the service is asked, the refusal shown on them, and the rows left standing for a
+retry. A tap with no row behind it says so in the shade instead, as a chosen time does.
 
 **The user can always see it.** The ongoing notification names the second exit alongside the first
 (`Ends when you leave, or when you move`), and the ending says which one fired (`Snooze ended — you

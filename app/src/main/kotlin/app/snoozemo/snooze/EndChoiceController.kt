@@ -79,6 +79,18 @@ internal class EndChoiceController(
      * ceiling a clock change may already have moved.
      */
     private val restoreDeparture: (requestId: Long, forSnooze: Instant?) -> Boolean,
+    /**
+     * Asks for the snooze to end when the phone moves as well (SPEC.md §4.4).
+     * Same contract as [chooseEnd] — false means it never dispatched.
+     *
+     * Through this lifecycle like the other two, because it can be declined
+     * on grounds the screen cannot see: the record write can be refused, and
+     * the service rolls the choice back when the platform will not register
+     * the sensor (Codex, PR #255). Drawn as a plain choice the row has no
+     * state of its own to fall back on, so a refusal has to be reported where
+     * the tap happened, exactly as a declined time is.
+     */
+    private val chooseMotionEnd: (requestId: Long, forSnooze: Instant?) -> Boolean,
     /** Subscribes to what the service said; closed on every settled commit. */
     private val watchOutcome: (requestId: Long, onOutcome: (EndChoiceResult) -> Unit) -> AutoCloseable,
     /** Called when the sheet has nothing left to ask and should go away. */
@@ -200,6 +212,15 @@ internal class EndChoiceController(
      */
     fun commitDeparture() =
         dispatch("until I leave") { requestId, forSnooze -> restoreDeparture(requestId, forSnooze) }
+
+    /**
+     * Chooses "until I move": an exit added beside whatever bounds the snooze
+     * already, so it names no time and moves no cap. Applied by doing nothing
+     * on a snooze that already ends on motion, like `Until I leave` on one
+     * already running to its ceiling.
+     */
+    fun commitMotionEnd() =
+        dispatch("until I move") { requestId, forSnooze -> chooseMotionEnd(requestId, forSnooze) }
 
     /**
      * The commit lifecycle both choices share: one request out at a time, and

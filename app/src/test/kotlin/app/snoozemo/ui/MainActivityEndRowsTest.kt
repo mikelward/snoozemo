@@ -151,6 +151,29 @@ class MainActivityEndRowsTest {
     }
 
     @Test
+    fun `a refused until I move is shown where the tap happened`() {
+        // The row is a plain choice with no state of its own (maintainer,
+        // 2026-09-10), so the service's answer is the only signal a user gets
+        // that the exit they asked for is not armed (Codex, PR #255). Same
+        // lifecycle as `Until I leave`: inert rows while it is out, the
+        // refusal on the rows, and the rows still standing for a retry.
+        ActiveSnoozeStore(context).arm(snooze())
+        val activity = screen()
+        settle()
+
+        activity.rows.commitMotionEnd()
+        settle()
+        assertTrue("the choice reached the service", sentMotionEnd())
+        assertTrue("and the rows wait on its answer", activity.rows.committing)
+
+        EndChoiceOutcome.report(activity.rows.committingRequestId, EndChoiceResult.REFUSED)
+        settle()
+
+        assertTrue(activity.rows.commitFailed)
+        assertNotNull("still offered, so the user can try again", activity.rows.endCondition)
+    }
+
+    @Test
     fun `an answer that lands during a recreation does not crash the new activity`() {
         // A commit in flight across a rotation is settled by `restore` on the
         // spot, from the result `EndChoiceOutcome` held while no watcher
@@ -288,7 +311,7 @@ class MainActivityEndRowsTest {
         settle()
         forgetServiceStarts()
 
-        activity.toggleMotionEndFromScreen(true)
+        activity.chooseMotionEndFromScreen()
         settle()
 
         assertFalse("the tap armed nothing", sentMotionEnd())
@@ -312,7 +335,7 @@ class MainActivityEndRowsTest {
         settle()
         forgetServiceStarts()
 
-        activity.toggleMotionEndFromScreen(true)
+        activity.chooseMotionEndFromScreen()
         settle()
 
         assertTrue("the tap reached the service", sentMotionEnd())
@@ -332,7 +355,7 @@ class MainActivityEndRowsTest {
         settle()
         forgetServiceStarts()
 
-        activity.toggleMotionEndFromScreen(true)
+        activity.chooseMotionEndFromScreen()
         settle()
 
         assertTrue("the tap reached the service", sentMotionEnd())
@@ -347,7 +370,7 @@ class MainActivityEndRowsTest {
         ActiveSnoozeStore(context).arm(snooze())
         val activity = screen()
         settle()
-        activity.toggleMotionEndFromScreen(true)
+        activity.chooseMotionEndFromScreen()
         settle()
         shadowApp().grantPermissions(
             android.Manifest.permission.ACCESS_FINE_LOCATION,
@@ -373,7 +396,7 @@ class MainActivityEndRowsTest {
         ActiveSnoozeStore(context).arm(snooze())
         val controller = controller()
         settle()
-        controller.get().toggleMotionEndFromScreen(true)
+        controller.get().chooseMotionEndFromScreen()
         settle()
 
         controller.recreate()
@@ -400,7 +423,7 @@ class MainActivityEndRowsTest {
         ActiveSnoozeStore(context).arm(snooze())
         val activity = screen()
         settle()
-        activity.toggleMotionEndFromScreen(true)
+        activity.chooseMotionEndFromScreen()
         settle()
 
         // The one it was tapped on ends; a different one is armed.
@@ -455,7 +478,7 @@ class MainActivityEndRowsTest {
         ActiveSnoozeStore(context).arm(snooze())
         val controller = controller()
         settle()
-        controller.get().toggleMotionEndFromScreen(true)
+        controller.get().chooseMotionEndFromScreen()
         settle()
 
         controller.recreate()
@@ -552,20 +575,5 @@ class MainActivityEndRowsTest {
             locationTrackingNeedsBackgroundPermission,
             controller.get().showBackgroundLocationRationale,
         )
-    }
-
-    @Test
-    fun `turning when I move off never asks for a permission`() {
-        // Withdrawing a choice must not be met with a prompt, and there is no
-        // service to keep for an exit being given up.
-        ActiveSnoozeStore(context).arm(snooze())
-        val activity = screen()
-        settle()
-        forgetServiceStarts()
-
-        activity.toggleMotionEndFromScreen(false)
-        settle()
-
-        assertTrue("the tap reached the service", sentMotionEnd())
     }
 }

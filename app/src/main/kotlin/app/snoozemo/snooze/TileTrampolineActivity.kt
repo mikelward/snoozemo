@@ -116,6 +116,11 @@ class TileTrampolineActivity : ComponentActivity() {
         restoreDeparture = { requestId, forSnooze ->
             SnoozeService.restoreEnd(this, requestId, forSnooze)
         },
+        // Wired but unreached for the same reason: this sheet offers no
+        // `Until I move` row.
+        chooseMotionEnd = { requestId, forSnooze ->
+            SnoozeService.setMotionEnd(this, true, requestId, forSnooze)
+        },
         watchOutcome = EndChoiceOutcome::watch,
         onDismiss = ::finish,
     )

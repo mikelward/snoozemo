@@ -12,6 +12,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -36,16 +37,35 @@ class SnoozeServiceMotionEndTest {
 
     private val now: Instant = Instant.parse("2026-01-01T12:00:00Z")
 
+    /** The commit these intents claim to come from; see [setUp]. */
+    private val REQUEST = 43L
+
+    private var reported: EndChoiceResult? = null
+    private var watch: AutoCloseable? = null
+
     @Before
     fun setUp() {
         TestSnoozeService.reset(now)
         TestSnoozeService.zen.outcome = ZenOutcome.Applied(OWN_RULE_ID)
         TogglableAlarmManager.refuse = false
+        // The row's own channel: every exit from `setMotionEnd` has to answer
+        // through it, or the rows sit inert forever behind a tap that was
+        // accepted and then could not be kept (Codex, PR #255).
+        reported = null
+        EndChoiceOutcome.reset()
+        watch = EndChoiceOutcome.watch(REQUEST) { reported = it }
+    }
+
+    @After
+    fun tearDown() {
+        watch?.close()
+        watch = null
     }
 
     private fun setMotionEnd(record: ActiveSnooze?, value: Boolean) =
         startService(SnoozeService.ACTION_SET_MOTION_END, record) {
             putExtra(SnoozeService.EXTRA_ENDS_ON_MOTION, value)
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
         }
 
     private fun stored(): ActiveSnooze? = ActiveSnoozeStore(appContext).load()
@@ -64,6 +84,107 @@ class SnoozeServiceMotionEndTest {
 
         assertTrue(TestSnoozeService.motionRegistrar.armed)
         assertEquals(true, stored()?.endsOnMotion)
+        assertEquals("and the row is told it took", EndChoiceResult.APPLIED, reported)
+    }
+
+    @Test
+    fun `a choice the record could not keep is reported refused`() {
+        // The screen cannot see a refused write; as a plain choice the row
+        // has no state to fall back on either, so the answer is the only way
+        // the user learns the exit they asked for is not there (Codex, PR
+        // #255).
+        TestSnoozeService.refuseRecordUpdates = true
+
+        setMotionEnd(snoozeFixture(now), value = true)
+
+        assertEquals(EndChoiceResult.REFUSED, reported)
+        assertFalse("and nothing was armed over a record that does not say so", TestSnoozeService.motionRegistrar.armed)
+    }
+
+    @Test
+    fun `a choice rolled back for want of a sensor is reported refused`() {
+        // The rollback lives in the reconcile, which runs inside the choice
+        // being applied — so by the time the answer is decided, the flag the
+        // write set has already been cleared again, and the row hears that
+        // rather than the write.
+        TestSnoozeService.motionRegistrar.available = false
+
+        setMotionEnd(snoozeFixture(now), value = true)
+
+        assertEquals(EndChoiceResult.REFUSED, reported)
+        assertEquals("the record agrees with the answer", false, stored()?.endsOnMotion)
+    }
+
+    @Test
+    fun `a choice the snooze already carries is applied by doing nothing`() {
+        // `Until I leave` on a snooze already running to its ceiling gets the
+        // same answer; a second tap on the row must not read as a failure.
+        setMotionEnd(snoozeFixture(now).copy(endsOnMotion = true), value = true)
+
+        assertEquals(EndChoiceResult.APPLIED, reported)
+    }
+
+    /**
+     * The state a rollback whose own write was refused leaves behind: the
+     * flag on the record, nothing listening, and a promise in the log that
+     * the next transition retries. Reached the way it is reachable in the
+     * field, through a restore.
+     */
+    private fun leaveFlagOnWithNothingListening(): ActiveSnooze {
+        TestSnoozeService.motionRegistrar.available = false
+        TestSnoozeService.refuseRecordUpdates = true
+        val record = snoozeFixture(now, capIn = Duration.ofHours(4)).copy(endsOnMotion = true)
+        startService(SnoozeService.ACTION_RESTORE, record)
+        assertEquals("the setup this rests on: the flag stayed on", true, stored()?.endsOnMotion)
+        assertFalse("with nothing listening", TestSnoozeService.motionRegistrar.armed)
+        TestSnoozeService.refuseRecordUpdates = false
+        return stored()!!
+    }
+
+    @Test
+    fun `a retry over a stale flag is answered from the sensor, not the flag`() {
+        // Answering "already on" from the record alone reported the exit
+        // applied — and cleared the failure card — over a snooze nothing could
+        // end on motion (Codex, PR #255, second finding in this mechanism). A
+        // second tap is the retry the log promised, so it reconciles first and
+        // answers from what that leaves.
+        val stale = leaveFlagOnWithNothingListening()
+
+        setMotionEnd(stale, value = true)
+
+        assertEquals(EndChoiceResult.REFUSED, reported)
+        assertEquals("and the rollback the earlier write refused is recorded now", false, stored()?.endsOnMotion)
+    }
+
+    @Test
+    fun `a retry over a stale flag arms the sensor once it is there`() {
+        // The other direction, so the test above cannot pass by refusing
+        // every retry: with the sensor available again the retry is what
+        // finally registers it.
+        val stale = leaveFlagOnWithNothingListening()
+        TestSnoozeService.motionRegistrar.available = true
+
+        setMotionEnd(stale, value = true)
+
+        assertEquals(EndChoiceResult.APPLIED, reported)
+        assertTrue("because this time something is listening", TestSnoozeService.motionRegistrar.armed)
+        assertEquals(true, stored()?.endsOnMotion)
+    }
+
+    @Test
+    fun `a choice for a snooze that has ended is reported gone`() {
+        val running = snoozeFixture(now, capIn = Duration.ofHours(4))
+
+        startService(SnoozeService.ACTION_SET_MOTION_END, running) {
+            putExtra(SnoozeService.EXTRA_ENDS_ON_MOTION, true)
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+            putExtra(
+                SnoozeService.EXTRA_MOTION_FOR_SNOOZE,
+                running.startedAt.minusSeconds(600).toEpochMilli(),
+            )
+        }
+
+        assertEquals("gone, so the rows dismiss rather than offering a retry", EndChoiceResult.GONE, reported)
     }
 
     @Test
