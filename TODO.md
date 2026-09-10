@@ -2838,8 +2838,7 @@ the point is that every other line of the app is worthless if it isn't true.
             secret is in the `production` environment. `Materialize Firebase config` in
             `release-build` gates on `HAS_FIREBASE_CONFIG == 'true'` and has been
             *succeeding*, not skipping, on `main` pushes (e.g. run 34342045104), so every
-            released AAB now ships with crash reporting live rather than dormant. That is
-            what makes `PLAY_DATA_SAFETY_DECLARED` apply to every build here. Steps, for
+            released AAB now ships with crash reporting live rather than dormant. Steps, for
             re-doing it: `docs/crashlytics.md`.
       - [ ] **Decide whether a failed delete of queued crash reports needs its own
             warning on the switch** (Codex, PR #113, P2 — **deferred, not declined**).
@@ -2896,10 +2895,12 @@ the point is that every other line of the app is worthless if it isn't true.
             code are what keep it honest.
 
             Consequences already applied, and both safe under either answer: the shipped
-            switch already gates the feature, so no behavior changed; and the release
-            pipeline's Data Safety gate keys on whether crash reporting is **enabled in the
-            build**, not on whether the manifest holds a permission
-            (`.github/workflows/ci.yml`, `PLAY_DATA_SAFETY_DECLARED`).
+            switch already gates the feature, so no behavior changed; and the question the
+            release pipeline had to answer was whether crash reporting is **enabled in the
+            build**, not whether the manifest holds a permission. (The CI gate that once
+            enforced that distinction, `PLAY_DATA_SAFETY_DECLARED`, was deleted on
+            2026-09-10 — `SPEC.md` §3.7 records why. The reasoning about *which question to
+            ask* stands; only the flag is gone.)
 
             **What deciding the stronger option would take**, so the choice is costed rather
             than guessed: drive `firebase_data_collection_default_enabled` (verified present
@@ -2945,10 +2946,7 @@ the point is that every other line of the app is worthless if it isn't true.
             the default, say so in the policy rather than leaving the reader to assume.
 
       - [x] **Update the Play Console Data Safety form before the next `play` upload.**
-            Done (maintainer, 2026-09-09), recorded by their setting the
-            `PLAY_DATA_SAFETY_DECLARED` repository variable — which is exactly the promise
-            that the Console form carries all five types below, since CI checks the variable
-            and never the form.
+            Done (maintainer, 2026-09-09).
             It moved from "no data collected, no data shared" to *crash logs,
             diagnostics, device or other IDs, app interactions, and approximate location
             — collected, not shared, optional* (`docs/play-store-declarations.md`). Shipping crash
@@ -3071,16 +3069,22 @@ the point is that every other line of the app is worthless if it isn't true.
       testing tracks" only) and secrets-table entry. Every added step gates on
       `PLAY_SERVICE_ACCOUNT_JSON` being present, so the PR is safe to merge on its own — nothing
       uploads until the secret exists.
-      **That code is on `main` and has been running — and skipping — on every push since.**
-      `Build the release AAB` signs a bundle, `Publish a GitHub release` tags it
-      `v<versionCode>`, and the three Play steps after it (`Compose Play Store release notes`,
-      `Check the Data Safety declaration covers crash reporting`, `Upload to Play Store
-      internal track`) all skip for want of `PLAY_SERVICE_ACCOUNT_JSON`. Nothing further is
-      owed in the workflow; what remains is Console-side and the maintainer's:
+      **That code is on `main` and has been running on every push since.** `Build the release
+      AAB` signs a bundle, `Publish a GitHub release` tags it `v<versionCode>`, and the two
+      Play steps after it (`Compose Play Store release notes`, `Upload to Play Store internal
+      track`) skipped for want of `PLAY_SERVICE_ACCOUNT_JSON` until it was set on 2026-09-09.
+      Nothing further is owed in the workflow; what remains is Console-side and the
+      maintainer's:
 
       - [x] **Add `PLAY_SERVICE_ACCOUNT_JSON`** to the `production` environment (maintainer,
-            2026-09-09) — set, together with the variable below, so the next push to `main`
-            is the first automated upload. The prerequisites it was gated on, kept for the
+            2026-09-09) — set, so the next push to `main` was the first automated upload
+            attempt. It is **failing**: the Play API answers `The caller does not have
+            permission` when the action opens an edit, which is the service account
+            authenticating but holding no access to `app.snoozemo`. That is a Console grant
+            (Users and permissions → invite the service account's email → app access with
+            "Release to testing tracks"), not a workflow fault, and until it is done the
+            internal track stays on whatever was last uploaded by hand. The prerequisites it
+            was gated on, kept for the
             record and because one of them is not separately verifiable from here: the
             maintainer reports the rest were already in place, and the background-location
             permissions form was **not** re-confirmed in this session. If it turns out not to
@@ -3106,15 +3110,13 @@ the point is that every other line of the app is worthless if it isn't true.
             enforces it as a hard precondition, so the secret added before it makes every
             automated upload fail on every push to `main` rather than merely shipping
             undeclared.
-      - [x] **Set the repository variable `PLAY_DATA_SAFETY_DECLARED` to `true`** (maintainer,
-            2026-09-09), once the Console's Data Safety form carries all five types this build
-            collects — crash logs, diagnostics, app interactions, device or other IDs, and
-            approximate location (`docs/play-store-declarations.md`). Analytics ships beside
-            Crashlytics, so the two crash-reporting types alone under-declare it, and CI
-            checks the variable rather than the form.
-            `GOOGLE_SERVICES_JSON` is set here, so every `main` build has
-            reporting compiled in and the gate applies to all of them: with the secret added
-            and the variable unset, `deploy` stays green and uploads nothing but a warning.
+      - [x] **The `PLAY_DATA_SAFETY_DECLARED` gate is gone** (maintainer, 2026-09-10). It was
+            set on 2026-09-09 — as a *secret* rather than a variable, so the first automated
+            run stood the upload down — and deleted the next day rather than corrected, because
+            it could not do the job it appeared to: once true it stays true, so a later
+            data-collecting dependency passes straight through. `SPEC.md` §3.7 carries the
+            reasoning and what holds the line instead. `PLAY_SERVICE_ACCOUNT_JSON` is now
+            the only setting the upload waits on.
       - [x] **Decide what the first Play "What's new" card should say.** **Decided: accept the
             one wrong card** (maintainer, 2026-09-09) — the internal track is two testers, so
             a stale first card costs nothing worth building a mechanism to avoid, and it
@@ -3187,8 +3189,8 @@ the point is that every other line of the app is worthless if it isn't true.
       Reasoning and the options are in `docs/play-store-declarations.md`.
 - [x] Data Safety declaration: **crash logs, diagnostics, device or other IDs, app
       interactions, and approximate location — collected, not shared, optional**
-      (`SPEC.md` §12). Filed (maintainer, 2026-09-09), recorded by their setting
-      `PLAY_DATA_SAFETY_DECLARED`. **This covers the Data Safety form only** — the
+      (`SPEC.md` §12). Filed (maintainer, 2026-09-09). **This covers the Data Safety form
+      only** — the
       background-location permissions declaration this item also points at is a separate
       form, not confirmed here, and the Phase 6 turn-on item says what happens if it is
       not on file. This item used to read
@@ -3202,8 +3204,7 @@ the point is that every other line of the app is worthless if it isn't true.
       keeps true — it removes `AD_ID` and switches the SDK's advertising-ID collection off. The field-by-field answers and their
       reasoning are in `docs/play-store-declarations.md`, together with every other App content
       questionnaire and the drafted text for the background-location permissions declaration;
-      filing them in the Play Console is the maintainer's own step, and publishing a
-      reporting-enabled build is gated on it (`PLAY_DATA_SAFETY_DECLARED`).
+      filing them in the Play Console is the maintainer's own step.
 - [x] In-app prominent disclosure before the location permission prompt (`SPEC.md` §3.2/§12).
       **Landed**, rewritten 2026-08-22 to match the sibling ClothesCast repo's shape — which has
       already cleared Play review with it — after the original full-screen version drew several

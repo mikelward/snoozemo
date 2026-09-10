@@ -4,11 +4,8 @@ CI builds a signed release AAB on every push to `main` that changes something
 shippable, and always publishes it as a downloadable workflow artifact. When
 there are release notes to attach, it also publishes it as a **GitHub
 prerelease** tagged `v<versionCode>` with the bundle attached — and, once
-**both** `PLAY_SERVICE_ACCOUNT_JSON` and the `PLAY_DATA_SAFETY_DECLARED`
-variable are set (see "Required secrets" and "Required variables" below),
-uploads it to the Play internal testing track. Both, not just the secret:
-every build here has crash reporting compiled in, and the variable gates all
-of those. Those two share one condition
+`PLAY_SERVICE_ACCOUNT_JSON` is configured (see "Required secrets" below),
+uploads it to the Play internal testing track. Those two share one condition
 and one set of notes, built from every qualifying commit subject still queued
 for release — usually more than the newest push's, since subjects stay queued
 while no upload lands. Option A under *Upload the first AAB* below has the
@@ -21,9 +18,8 @@ practical rather than a scramble: it is permanent, linkable, and lists every
 build in one place, where the artifact expires and is reachable only from its
 own run.
 
-**Do not add `PLAY_SERVICE_ACCOUNT_JSON` — one half of the switch that turns
-automatic upload on, the other being `PLAY_DATA_SAFETY_DECLARED` — until the
-Play Console declarations below are actually filed**
+**Do not add `PLAY_SERVICE_ACCOUNT_JSON` — the switch that turns automatic
+upload on — until the Play Console declarations below are actually filed**
 (Data safety, content rating, target audience, the permissions declaration
 form once Phase 3/6's demonstration video is ready) **and the service
 account's granted access is confirmed to be the minimum this doc asks for**
@@ -48,22 +44,6 @@ outright, every push to `main`, until the form is submitted. That form is
 gated on filming the departure-in-progress demonstration video (`TODO.md`,
 Phase 3/6) — until that's done, adding the secret has no upside and a real
 downside (a permanently red `deploy` job on every push).
-
-**While crash reporting is live, turning it on is two settings, not one.**
-`GOOGLE_SERVICES_JSON` is configured on this repo, so every AAB `main` builds
-has Crashlytics and Analytics compiled in — and `Check the Data Safety
-declaration covers crash reporting` then refuses to publish it unless the
-repository *variable* `PLAY_DATA_SAFETY_DECLARED` is `true` (see "Required
-variables" below). It skips loudly rather than failing, so forgetting it
-looks like a green `deploy` job that uploaded nothing: the run carries a
-warning, and nothing else says so. Set the variable in the same sitting as
-the secret, once the Console's Data Safety form actually carries **all five**
-types this build collects — crash logs, diagnostics, app interactions, device
-or other IDs, and approximate location. Analytics ships alongside Crashlytics,
-so a form naming only the two crash-reporting types is an under-declaration;
-`play-store-declarations.md` is the authority on the full set and why each is
-there, and nothing in CI can check it — the variable is a promise you are
-making, not a fact it verifies.
 
 ## What gets built
 
@@ -296,17 +276,7 @@ GitHub.
 | `RELEASE_KEYSTORE_PASSWORD` | Random hex string set when the keystore was generated. |
 | `RELEASE_KEY_PASSWORD` | Same value as `RELEASE_KEYSTORE_PASSWORD` (PKCS12 convention). |
 | `RELEASE_KEY_ALIAS` | Key alias inside the keystore. Use `snoozemo` to match the snippet above. |
-| `PLAY_SERVICE_ACCOUNT_JSON` | Full JSON contents of the service account key downloaded in step 5. Necessary but **not sufficient**: `PLAY_DATA_SAFETY_DECLARED` under "Required variables" gates the upload too, on every build here. See the checklist at the top of this doc before adding either. |
-
-## Required variables
-
-One repository **variable** (Settings → Secrets and variables → Actions →
-Variables tab), not a secret — it is a switch, and nothing about it is
-confidential.
-
-| Variable | Description |
-| --- | --- |
-| `PLAY_DATA_SAFETY_DECLARED` | Set to `true` once the Play Console Data Safety form declares all five types this build collects — crash logs, diagnostics, app interactions, device or other IDs, and approximate location (`play-store-declarations.md` has the full set and the reasoning). CI checks the variable's value, never the form, so setting it on a partial declaration silently unlocks an under-declared upload. Until then a build with crash reporting compiled in — any build made with `GOOGLE_SERVICES_JSON` set, which is every `main` build here — is still built, GitHub-released and archived as an artifact, but **not** uploaded to Play. Builds with reporting dormant ignore it. |
+| `PLAY_SERVICE_ACCOUNT_JSON` | Full JSON contents of the service account key downloaded in step 5. Adding this is what turns automatic upload on — see the checklist at the top of this doc before adding it. |
 
 ## Release notes
 
@@ -341,20 +311,18 @@ build a release variant at all when it can't prove that.
   `Publish a GitHub release` set `RELEASE_SUPERSEDED` and stood the Play steps
   down rather than offering Play an older bundle. That last one is the pipeline
   working, not a fault: read the release step's own message above it, and
-  expect the newer run to have shipped these commits already. `Upload to Play
-  Store internal track` skipped with a warning on the step above it means
-  `PLAY_DATA_SAFETY_DECLARED` isn't `true` on a reporting-enabled build.
+  expect the newer run to have shipped these commits already.
 - **Don't hand-upload the artifact from a run that stood down.** `SPEC.md` §3.7 has the
-  rule; the mechanics are here. `PLAY_UPLOAD_BLOCKED` means the Data Safety
-  declaration isn't confirmed, so a Console upload ships exactly the
-  under-declared build the guard exists to stop. `RELEASE_SUPERSEDED` means a
-  later push already published a higher `versionCode`, so a Console upload
-  lands the stale bundle the stand-down withheld. Either way the release-notes
-  walk won't see it: it recognizes a publication only as a `Build and release`
-  job whose `Upload to Play Store internal track` step concluded success, so
-  the queued subjects re-ship on the next release. Fix the cause and push
-  again. The seed upload in step 2 is the one exception — there is no API path
-  until a listing has its first release.
+  rule; the mechanics are here. `RELEASE_SUPERSEDED` means a later push already
+  published a higher `versionCode`, so a Console upload lands the stale bundle
+  the stand-down withheld. The release-notes walk won't see it either: it
+  recognizes a publication only as a `Build and release` job whose `Upload to
+  Play Store internal track` step concluded success, so the queued subjects
+  re-ship on the next release. Fix the cause and push again. Two exceptions:
+  the seed upload in step 2, where no API path exists until a listing has its
+  first release, and a Play-side refusal — a flagged listing, a rejected
+  bundle — which is what publishing the GitHub release *before* attempting the
+  upload exists to leave you a copy for.
 - **`The Android App Bundle was not signed.`** — the release `signingConfig`
   didn't attach. Confirm `RELEASE_KEYSTORE_BASE64` is set and the
   materialize step ran.
