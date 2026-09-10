@@ -150,6 +150,33 @@ class MeetingEndTest {
     }
 
     @Test
+    fun `a cap named directly offers on the same rules as a record`() {
+        // The idle screen's offer to start has no record to read a cap from
+        // (SPEC.md §4.4); what bounds it is the cap the snooze would start
+        // with, and a meeting the running rows would offer must be one the
+        // idle rows offer too.
+        val ends = listOf(at(240), at(90), at(180), now.plus(ActiveSnooze.MIN_CAP))
+        val cap = now.plus(ActiveSnooze.DEFAULT_CAP)
+
+        assertEquals(
+            MeetingEnd.offersFor(snooze(), ends, now, limit = 2),
+            MeetingEnd.offersBefore(cap, ends, now, limit = 2),
+        )
+        assertEquals(listOf(at(90), at(180)), MeetingEnd.offersBefore(cap, ends, now, limit = 2))
+    }
+
+    @Test
+    fun `a cap named directly still excludes the cap itself`() {
+        // At or past the cap is honored by doing nothing, on either path.
+        val cap = at(120)
+
+        assertEquals(
+            listOf(at(90)),
+            MeetingEnd.offersBefore(cap, listOf(at(90), at(120), at(150)), now, limit = 3),
+        )
+    }
+
+    @Test
     fun `asking for none offers none`() {
         assertEquals(
             emptyList<java.time.Instant>(),

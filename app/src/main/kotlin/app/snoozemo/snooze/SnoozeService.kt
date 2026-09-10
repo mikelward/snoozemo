@@ -1336,7 +1336,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                     releaseRecordlessRule()
                 }
             }
-            ACTION_ARM -> arm()
+            ACTION_ARM -> arm(intent)
             ACTION_END -> {
                 controller.end(EndReason.MANUAL)
                 ensureCapAfterRefusedEnd(EndReason.MANUAL)
@@ -1570,7 +1570,28 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         return if (controller.active == null && !recordErased) START_NOT_STICKY else START_STICKY
     }
 
-    private fun arm() {
+    /**
+     * [ACTION_ARM]: a plain arm from the tile or the `Snooze` button, or one
+     * carrying the end condition an idle-screen row chose (SPEC.md §4.4).
+     *
+     * A row is a commit like the running screen's, so it waits on an answer
+     * through [EndChoiceOutcome] — but the answer means something simpler
+     * here than it does over a running snooze, because the offer was for no
+     * snooze at all. `APPLIED` and `GONE` both say *a snooze is running now*
+     * and the offer is over; `REFUSED` says none is, and the rows stand for a
+     * retry. A plain arm carries no request and is told nothing, as before.
+     */
+    private fun arm(intent: Intent?) {
+        val requestId = intent?.getLongExtra(EXTRA_CHOICE_REQUEST_ID, 0L) ?: 0L
+        val result = armAsAsked(intent)
+        if (requestId != 0L) EndChoiceOutcome.report(requestId, result)
+    }
+
+    /**
+     * The work behind [arm], as a total function so no exit can forget to
+     * answer the row that asked — [setCap]'s shape, for [setCap]'s reason.
+     */
+    private fun armAsAsked(intent: Intent?): EndChoiceResult {
         // Never arm over a snooze that is already running. Doing so replaces its
         // record and its cap with a fresh eight hours, so the deadline the user
         // was promised is simply gone and the phone stays quiet past it — the
@@ -1586,7 +1607,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         if (controller.active != null || store.load() != null) {
             restoreIfNeeded()
             controller.active?.let(notifications::showOngoing)
-            return
+            // `GONE`, for a row that asked: it offered to start a snooze and
+            // one is running — armed from the tile between the draw and the
+            // tap, say — so the offer is over, and the screen's next record
+            // read replaces it with the running snooze's own rows. Not
+            // `APPLIED`: the end it chose was not applied to anything.
+            return EndChoiceResult.GONE
         }
 
         // The cap alarm is armed first, before anything that can throw: a snooze
@@ -1601,7 +1627,9 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // milliseconds apart, and an alarm that fires just before its own record
         // counts as expired is spent for nothing.
         val reading = readClock()
-        val capExpiresAt = ActiveSnooze.capExpiryFor(reading)
+        // A row's chosen time, or the default; null is a chosen time the
+        // service will not honor, and then nothing is armed at all.
+        val capExpiresAt = chosenCapFor(intent, reading) ?: return EndChoiceResult.REFUSED
         // As a delay, from the same reading the deadline came from: there is no
         // record to measure against yet, and the delay *is* the cap's duration.
         if (!CapAlarm.armCheckIn(applicationContext, capExpiresAt.toEpochMilli() - reading.wallMillis)) {
@@ -1619,7 +1647,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // while an older rule may still be silencing the phone (flagged by
             // Codex on PR #8). The arm is over, so the reads are affordable now.
             dischargeStuckRuleIfOrphaned()
-            return
+            return EndChoiceResult.REFUSED
         }
 
         lastArmFailure = null
@@ -1629,11 +1657,60 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // must not tear the service down before that decision is made.
         // `onStartCommand` runs the same check on its way out.
         decidingArm = true
-        try {
+        val armed = try {
             armWithCap(capExpiresAt, reading)
         } finally {
             decidingArm = false
         }
+        if (!armed) return EndChoiceResult.REFUSED
+        if (intent?.getBooleanExtra(EXTRA_ENDS_ON_MOTION, false) != true) return EndChoiceResult.APPLIED
+
+        // `Until I move` chosen as the way to start: the same choice the
+        // running rows make, applied to the snooze that now exists, through
+        // the same reconcile — so a phone that cannot hold the sensor rolls
+        // it back here exactly as it would there. What differs is what the
+        // row is told. The snooze is running whether or not the exit took,
+        // so the idle offer is over either way and the rows are replaced by
+        // the running snooze's own; a refusal therefore goes to the shade,
+        // as a tap with no row behind it does, and the answer is `GONE` —
+        // the offer is finished, and not by the choice being applied.
+        val snooze = controller.active ?: return EndChoiceResult.APPLIED
+        SnoozeDebugLog.event("arm: ends on motion as well, as chosen")
+        if (applyMotionEnd(snooze, wanted = true) != EndChoiceResult.APPLIED) {
+            notifications.showCouldNotSetEnd()
+            return EndChoiceResult.GONE
+        }
+        return EndChoiceResult.APPLIED
+    }
+
+    /**
+     * The cap an arm should carry: a row's chosen time, or the default.
+     *
+     * Bounded the way a chosen time over a running snooze is (SPEC.md §4.4):
+     * never past the cap a snooze starts with, since the row was offered
+     * under that ceiling; and **declined, not moved**, when it has fallen
+     * inside the floor — the row is drawn against the clock and can sit
+     * there, and clamping it up would arm a snooze on a deadline the user
+     * was never shown. Declining before anything is armed keeps the two
+     * answers honest: refused means nothing is running, and the rows reseed
+     * against the clock as it is now.
+     */
+    private fun chosenCapFor(intent: Intent?, reading: ClockReading): Instant? {
+        val ceiling = ActiveSnooze.capExpiryFor(reading)
+        val requestedMillis = intent?.getLongExtra(EXTRA_CAP_EXPIRES_AT, 0L) ?: 0L
+        if (requestedMillis <= 0L) return ceiling
+        val now = Instant.ofEpochMilli(reading.wallMillis)
+        val requested = Instant.ofEpochMilli(requestedMillis)
+        if (requested.isBefore(now.plus(ActiveSnooze.MIN_CAP))) {
+            SnoozeDebugLog.event("arm: the chosen end is inside the floor now; nothing armed")
+            return null
+        }
+        // Without the time: an offset beside the entry's own timestamp is the
+        // end itself, and for a meeting row that is the calendar end
+        // `docs/PRIVACY.md` says the log never carries. The running rows'
+        // `end-condition:` lines say no more (Codex, PR #256).
+        SnoozeDebugLog.event("arm: until a chosen end")
+        return requested.coerceAtMost(ceiling)
     }
 
     /**
@@ -1646,8 +1723,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * Split from [arm] only so the flag above has an unmissable scope: every
      * exit from here — refusal, unrecorded snooze, success — passes through the
      * `finally` rather than each `return` remembering to clear it.
+     *
+     * Returns whether a snooze is now running and recorded, so a row that
+     * asked to start one can be told which way it went.
      */
-    private fun armWithCap(capExpiresAt: Instant, at: ClockReading) {
+    private fun armWithCap(capExpiresAt: Instant, at: ClockReading): Boolean {
         val armed = controller.beginArming(
             capExpiresAt,
             at,
@@ -1700,7 +1780,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 // this runs comes back `nothingLeftToRelease` and retires the
                 // flag and its card rather than chasing a rule that is off.
                 dischargeStuckRuleIfOrphaned()
-                return
+                return false
             }
             Log.w(TAG, "The arm was refused with the rule's state unknown; scheduling a release.")
             // Handed to the ladder rather than spelled out here, which is the
@@ -1715,7 +1795,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // the plain wake-up is the one that can drive off a rule nothing
             // describes.
             beginRelease(startedAt = null, reason = EndReason.LOST_CAPABILITY)
-            return
+            return false
         }
 
         // Now that the rule is on and the hot path is over, force the record
@@ -1756,7 +1836,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                     beginRelease(stillOn.startedAt, EndReason.LOST_CAPABILITY, recordOnDisk = false)
                 }
             }
-            return
+            return false
         }
 
         // Nothing left to explain: this arm worked, so an older failure must
@@ -1819,6 +1899,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // re-arm free.
         SnoozeBackstop.schedule(applicationContext)
         beginAnchorCaptureFor(snooze)
+        return true
     }
 
     /**
@@ -2123,6 +2204,16 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             SnoozeDebugLog.event("until-i-move: the choice was for a snooze that is no longer running")
             return EndChoiceResult.GONE
         }
+        return applyMotionEnd(snooze, wanted)
+    }
+
+    /**
+     * Sets `Until I move` on [snooze], the running one, and answers from what
+     * the reconcile leaves. Shared by a choice over a running snooze and by
+     * an arm that carried the choice ([armAsAsked]), so a phone that cannot
+     * hold the sensor is rolled back — and reported — the same way on both.
+     */
+    private fun applyMotionEnd(snooze: ActiveSnooze, wanted: Boolean): EndChoiceResult {
         if (snooze.endsOnMotion != wanted) {
             // **The record first, and only then the controller** — [extend]'s
             // ordering, for [extend]'s reason. The record is what the restore
@@ -3650,6 +3741,33 @@ open class SnoozeService : Service(), SnoozeController.Listener {
          * for starting a service, so this needs no trampoline of its own.
          */
         fun arm(context: Context) = start(context, ACTION_ARM)
+
+        /**
+         * Arm a new snooze that ends at [endsAt] — an idle-screen row chosen
+         * as the way to start rather than as a refinement (SPEC.md §4.4).
+         *
+         * Reported through [requestId] like any other row, on simpler terms:
+         * `APPLIED` or `GONE` means a snooze is running now and the offer is
+         * over; `REFUSED` means none is. Returns false if the service would
+         * not start, which the row reports where the tap happened.
+         */
+        fun armUntil(context: Context, endsAt: Instant, requestId: Long): Boolean =
+            start(context, ACTION_ARM) {
+                it.putExtra(EXTRA_CAP_EXPIRES_AT, endsAt.toEpochMilli())
+                it.putExtra(EXTRA_CHOICE_REQUEST_ID, requestId)
+            }
+
+        /**
+         * Arm a new snooze that also ends when the phone moves — the idle
+         * screen's `Until I move` (SPEC.md §4.4). Reported as [armUntil] is;
+         * a sensor the platform will not register after the arm is said in
+         * the shade, since by then the rows have moved on to the snooze.
+         */
+        fun armUntilMotion(context: Context, requestId: Long): Boolean =
+            start(context, ACTION_ARM) {
+                it.putExtra(EXTRA_ENDS_ON_MOTION, true)
+                it.putExtra(EXTRA_CHOICE_REQUEST_ID, requestId)
+            }
 
         fun end(context: Context) = start(context, ACTION_END)
 

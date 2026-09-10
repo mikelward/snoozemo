@@ -65,8 +65,23 @@ object MeetingEnd {
         candidateEnds: List<Instant>,
         now: Instant,
         limit: Int,
+    ): List<Instant> = offersBefore(snooze?.capExpiresAt ?: return emptyList(), candidateEnds, now, limit)
+
+    /**
+     * [offersFor] against a cap named directly rather than read off a record.
+     *
+     * The idle screen offers the same rows as a way to *start* a snooze
+     * (SPEC.md §4.4), and there is no record to read a cap from until it has —
+     * what bounds that offer is the cap the snooze would start with. One rule
+     * for both, so a meeting the running rows would offer is one the idle rows
+     * offer too, and neither offers one the service would decline.
+     */
+    fun offersBefore(
+        cap: Instant,
+        candidateEnds: List<Instant>,
+        now: Instant,
+        limit: Int,
     ): List<Instant> {
-        val cap = snooze?.capExpiresAt ?: return emptyList()
         if (limit <= 0) return emptyList()
         val floor = now.plus(ActiveSnooze.MIN_CAP)
         return candidateEnds

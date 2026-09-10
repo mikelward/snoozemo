@@ -240,8 +240,9 @@ already listed — and for nothing else.
 ## Calendar
 
 If you allow it, Snoozemo reads your calendar for one thing: **when your next meeting
-ends**, so the snooze notification can offer a button that ends the snooze at that time —
-`Until 17:00`.
+ends**, so the snooze notification and the app's own screen can offer a button that ends
+the snooze at that time — `Until 17:00` — or, when nothing is snoozed yet, starts one that
+ends then.
 
 **Only end times.** Snoozemo does not read the title, the organizer, the location, the
 guests, or any identifier of any event. It asks your calendar for one column, the time an
@@ -250,9 +251,13 @@ invitations you have declined, canceled meetings, and blocks marked "free" are s
 
 **Only as far ahead as the snooze can last.** The question is bounded by the snooze's own
 time limit, because an end time past it could not change anything anyway — so Snoozemo
-never reads further into your calendar than the running snooze could reach. That limit is
-part of the question your calendar is asked, not a filter applied to the answer: a meeting
-running past the limit is not returned at all, rather than returned and then ignored.
+never reads further into your calendar than the snooze could reach: the running one, or,
+when nothing is snoozed yet, the one the screen is offering to start, whose limit is the
+same default a plain `Snooze` tap would set — and that offer is only made, and your calendar
+only asked for it, while Snoozemo holds Do Not Disturb access, since without it there is
+nothing to start. That limit is part of the question your
+calendar is asked, not a filter applied to the answer: a meeting running past the limit is
+not returned at all, rather than returned and then ignored.
 
 **Nothing about it leaves your phone, and nothing about it is written down.** The time is
 used to draw one button and is not sent anywhere, not in a crash report, not stored, and —

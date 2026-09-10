@@ -1,14 +1,22 @@
 package app.snoozemo.ui
 
+import android.content.ContentProvider
+import android.content.ContentValues
+import android.database.Cursor
+import android.database.MatrixCursor
+import android.net.Uri
 import android.os.Bundle
+import android.provider.CalendarContract
 import android.os.Looper.getMainLooper
 import androidx.test.core.app.ApplicationProvider
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.Anchor
+import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.snooze.ActiveSnoozeStore
 import app.snoozemo.snooze.EndChoiceOutcome
 import app.snoozemo.snooze.EndChoiceResult
+import app.snoozemo.snooze.SnoozeService
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -20,6 +28,7 @@ import org.robolectric.Robolectric
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.ShadowContentResolver
 import java.time.Duration
 import java.time.Instant
 
@@ -92,13 +101,249 @@ class MainActivityEndRowsTest {
     }
 
     @Test
-    fun `no snooze means nothing to refine`() {
+    fun `no snooze offers a way to start`() {
+        // The idle screen's rows (SPEC.md §4.4, maintainer, 2026-09-10): the
+        // same offer, naming no snooze, and a tap on it arms.
         ActiveSnoozeStore(context).clear()
 
         val activity = screen()
         settle()
 
-        assertNull(activity.rows.endCondition)
+        assertNotNull(activity.rows.endCondition)
+        assertNull(activity.rows.offerFor)
+        assertTrue(activity.rows.startsASnooze)
+    }
+
+    @Test
+    fun `a snooze arriving replaces the offer to start with its own`() {
+        ActiveSnoozeStore(context).clear()
+        val activity = screen()
+        settle()
+        assertTrue(activity.rows.startsASnooze)
+
+        val running = snooze()
+        ActiveSnoozeStore(context).arm(running)
+        settle()
+
+        assertEquals(running.startedAt, activity.rows.offerFor)
+        assertFalse(activity.rows.startsASnooze)
+    }
+
+    @Test
+    fun `the idle time row starts a snooze that ends there`() {
+        ActiveSnoozeStore(context).clear()
+        val activity = screen()
+        settle()
+        forgetServiceStarts()
+        val chosen = activity.rows.endCondition!!.endsAt
+
+        activity.rows.commit(chosen)
+        settle()
+
+        assertEquals("an arm, carrying the chosen end", chosen.toEpochMilli(), sentArm()?.getLongExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, 0L))
+        assertTrue("and the rows wait on its answer", activity.rows.committing)
+    }
+
+    @Test
+    fun `a stepper on the idle screen starts a snooze at the stepped time`() {
+        // Every tap on the idle screen starts (maintainer, 2026-09-10): `−`
+        // and `+` arm at the stepped time rather than moving a row the user
+        // would then have to tap.
+        ActiveSnoozeStore(context).clear()
+        val activity = screen()
+        settle()
+        forgetServiceStarts()
+        val drawn = EndChoiceUiState(
+            condition = activity.rows.endCondition!!,
+            formattedTime = "",
+            startsASnooze = true,
+        )
+
+        activity.stepEndFromScreen(drawn, up = true)
+        settle()
+
+        assertEquals(
+            drawn.condition.stepUp().endsAt.toEpochMilli(),
+            sentArm()?.getLongExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, 0L),
+        )
+        assertEquals("the row itself did not move", drawn.condition.endsAt, activity.rows.endCondition!!.endsAt)
+    }
+
+    @Test
+    fun `a stepper over a running snooze steps the row rather than arming`() {
+        // The other direction: the running rows keep "step, then tap".
+        ActiveSnoozeStore(context).arm(snooze())
+        val activity = screen()
+        settle()
+        forgetServiceStarts()
+        val drawn = EndChoiceUiState(
+            condition = activity.rows.endCondition!!,
+            formattedTime = "",
+            offerFor = activity.rows.offerFor,
+        )
+
+        activity.stepEndFromScreen(drawn, up = false)
+        settle()
+
+        assertEquals(drawn.condition.stepDown().endsAt, activity.rows.endCondition!!.endsAt)
+        assertNull("nothing was sent", sentArm())
+        assertFalse(activity.rows.committing)
+    }
+
+    @Test
+    fun `until I move on the idle screen starts a snooze that ends on motion`() {
+        // The same location gate as over a running snooze, then an arm
+        // carrying the choice rather than a choice over nothing.
+        shadowApp().grantPermissions(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+        ActiveSnoozeStore(context).clear()
+        val activity = screen()
+        settle()
+        forgetServiceStarts()
+
+        activity.chooseMotionEndFromScreen()
+        settle()
+
+        val arm = sentArm()
+        assertNotNull("an arm, not a choice over a snooze that does not exist", arm)
+        assertTrue(arm!!.getBooleanExtra(SnoozeService.EXTRA_ENDS_ON_MOTION, false))
+        assertFalse(sentMotionEnd())
+    }
+
+    @Test
+    fun `a tap on an offer the tile has replaced is dropped, not applied to the new snooze`() {
+        // The record observer moves the rows onto the tile's snooze on the
+        // main thread; the frame that drew the idle rows is replaced a frame
+        // later, and a tap in between arrives with the old frame's offer. Sent
+        // as it stood, the drawn time would go out under the *new* identity —
+        // a refinement shortening a snooze it was never offered over (Codex,
+        // PR #256).
+        ActiveSnoozeStore(context).clear()
+        val activity = screen()
+        settle()
+        val drawnIdle = EndChoiceUiState(
+            condition = activity.rows.endCondition!!,
+            formattedTime = "",
+            meetings = listOf(MeetingChoice(at(3600), "")),
+            startsASnooze = true,
+            offerFor = null,
+        )
+        val running = snooze()
+        ActiveSnoozeStore(context).arm(running)
+        settle()
+        assertEquals("the setup this rests on: the rows moved on", running.startedAt, activity.rows.offerFor)
+        forgetServiceStarts()
+
+        activity.chooseEndTimeFromScreen(drawnIdle)
+        activity.chooseMeetingFromScreen(drawnIdle, 0)
+        activity.stepEndFromScreen(drawnIdle, up = true)
+        settle()
+
+        // Neither a start nor a refinement. Not "nothing at all": under
+        // Robolectric the screen's own refresh can send `ACTION_END` on its
+        // schedule, which is the harness's business rather than the tap's.
+        val sent = serviceActions()
+        assertTrue("$sent", sent.none { it == SnoozeService.ACTION_ARM || it == SnoozeService.ACTION_SET_CAP })
+        assertFalse(activity.rows.committing)
+    }
+
+    @Test
+    fun `a tap on an offer the clock has rebuilt is dropped, not brought in silently`() {
+        // The tick rebuilds the offer to start whole; a backward clock change
+        // lowers its ceiling, and a meeting drawn below the old one can sit
+        // above the new one, where the arm would bring it in silently. The
+        // identity is null both before and after, so the match has to be the
+        // whole offer (Codex, PR #256, the third finding in this gap).
+        ActiveSnoozeStore(context).clear()
+        val activity = screen()
+        settle()
+        val drawn = EndChoiceUiState(
+            condition = activity.rows.endCondition!!,
+            formattedTime = "",
+            meetings = listOf(MeetingChoice(at(7 * 3600), "")),
+            startsASnooze = true,
+            offerFor = null,
+        )
+        activity.rows.refreshStart(at(-3 * 3600))
+        assertTrue("the setup this rests on: the ceiling moved", activity.rows.endCondition != drawn.condition)
+        forgetServiceStarts()
+
+        activity.chooseMeetingFromScreen(drawn, 0)
+        activity.chooseEndTimeFromScreen(drawn)
+        settle()
+
+        assertNull("nothing was sent", sentArm())
+        assertFalse(activity.rows.committing)
+    }
+
+    @Test
+    fun `a tap on the offer still standing goes out`() {
+        // The other direction, so the guard above cannot pass by dropping
+        // every tap.
+        ActiveSnoozeStore(context).arm(snooze())
+        val activity = screen()
+        settle()
+        forgetServiceStarts()
+        val drawn = EndChoiceUiState(
+            condition = activity.rows.endCondition!!,
+            formattedTime = "",
+            offerFor = activity.rows.offerFor,
+        )
+
+        activity.chooseEndTimeFromScreen(drawn)
+        settle()
+
+        assertTrue(serviceActions().contains(SnoozeService.ACTION_SET_CAP))
+        assertTrue(activity.rows.committing)
+    }
+
+    @Test
+    fun `the offer to start follows the clock whole`() {
+        // Its ceiling is the cap the service would set, and that moves with
+        // the clock (Codex, PR #256) — so a tick rebuilds it rather than
+        // waiting for its time to fall inside the floor.
+        ActiveSnoozeStore(context).clear()
+        val activity = screen()
+        settle()
+        val seeded = activity.rows.endCondition!!
+
+        val later = at(300)
+        activity.rows.refreshStart(later)
+
+        assertEquals(later.plus(ActiveSnooze.DEFAULT_CAP), activity.rows.endCondition!!.ceiling)
+        assertTrue(activity.rows.endCondition!!.ceiling.isAfter(seeded.ceiling))
+    }
+
+    @Test
+    fun `the idle calendar is re-read once the window has moved by the floor, or back at all`() {
+        // Both directions of the clock (Codex, PR #256, twice in this
+        // mechanism): forward, a re-read every half hour is what bounds the
+        // cross-process query; backward by any amount, the window now holds
+        // meetings the last query never asked for.
+        val readAt = at().toEpochMilli()
+        val floor = ActiveSnooze.MIN_CAP.toMillis()
+
+        assertFalse(MainActivity.idleCalendarReadIsStale(readAt, readAt))
+        assertFalse(MainActivity.idleCalendarReadIsStale(readAt, readAt + floor - 1))
+        assertTrue(MainActivity.idleCalendarReadIsStale(readAt, readAt + floor))
+        assertTrue("set back a minute", MainActivity.idleCalendarReadIsStale(readAt, readAt - 60_000L))
+        assertTrue("set back three hours", MainActivity.idleCalendarReadIsStale(readAt, readAt - 3 * 3_600_000L))
+    }
+
+    @Test
+    fun `a refused start leaves the offer standing where the tap happened`() {
+        // Refused means nothing is running, so there is still something to
+        // offer; the rows stay for a retry and say so.
+        ActiveSnoozeStore(context).clear()
+        val activity = screen()
+        settle()
+        activity.rows.commit(activity.rows.endCondition!!.endsAt)
+        settle()
+
+        EndChoiceOutcome.report(activity.rows.committingRequestId, EndChoiceResult.REFUSED)
+        settle()
+
+        assertTrue(activity.rows.commitFailed)
+        assertTrue(activity.rows.startsASnooze)
     }
 
     @Test
@@ -114,16 +359,22 @@ class MainActivityEndRowsTest {
     }
 
     @Test
-    fun `a snooze ending underneath takes the rows with it`() {
-        ActiveSnoozeStore(context).arm(snooze())
+    fun `a snooze ending underneath takes its rows with it, and the offer to start stands`() {
+        // The running rows named that snooze; with it gone they go, and the
+        // idle screen's offer to start takes their place (SPEC.md §4.4) — a
+        // tap now arms rather than refining a snooze that no longer exists.
+        val running = snooze()
+        ActiveSnoozeStore(context).arm(running)
         val activity = screen()
         settle()
-        assertNotNull(activity.rows.endCondition)
+        assertEquals(running.startedAt, activity.rows.offerFor)
 
         ActiveSnoozeStore(context).clear()
         settle()
 
-        assertNull(activity.rows.endCondition)
+        assertNull(activity.rows.offerFor)
+        assertTrue(activity.rows.startsASnooze)
+        assertNotNull(activity.rows.endCondition)
     }
 
     @Test
@@ -200,6 +451,83 @@ class MainActivityEndRowsTest {
 
         // Reaching here at all is the assertion: `onCreate` used to throw.
         assertFalse(activity.isFinishing)
+    }
+
+    @Test
+    fun `the idle calendar is asked only while the idle rows can show`() {
+        // `MainScreen` draws the idle rows only under Do Not Disturb access,
+        // and `docs/PRIVACY.md` says the time is read to draw a button — so
+        // with access missing or unread the calendar is not asked, the grant
+        // that makes the rows showable is what asks it, and a revocation
+        // takes the answer off the screen (Codex, PR #256).
+        val end = oneMeetingEnding(at().plus(Duration.ofHours(1)))
+        ActiveSnoozeStore(context).clear()
+        val activity = screen()
+        settle()
+
+        // Unread, or read as missing — the startup reading lands on its own
+        // thread's schedule, and neither answer can show the rows.
+        assertTrue("the setup this rests on", activity.access != PolicyAccess.GRANTED)
+        assertEquals("not asked while access is unread or missing", emptyList<Instant>(), activity.meetingOffers)
+        assertEquals(0L, activity.idleCalendarReadAtMillis)
+
+        activity.applyAccessForTest(PolicyAccess.GRANTED)
+        settle()
+        assertEquals("the grant asks", listOf(end), activity.meetingOffers)
+        assertTrue(activity.idleCalendarReadAtMillis > 0L)
+
+        activity.applyAccessForTest(PolicyAccess.DENIED)
+        settle()
+        assertEquals("a revocation takes the times off", emptyList<Instant>(), activity.meetingOffers)
+
+        activity.refreshSnoozingForTest()
+        settle()
+        assertEquals("and a later re-read does not ask again", emptyList<Instant>(), activity.meetingOffers)
+    }
+
+    @Test
+    fun `a running snooze's meeting rows do not wait on Do Not Disturb access`() {
+        // The gate is the idle offer's alone: the running rows and the
+        // notification show under any access reading, and their calendar
+        // read stays as it was.
+        val end = oneMeetingEnding(at().plus(Duration.ofHours(1)))
+        ActiveSnoozeStore(context).arm(snooze())
+
+        val activity = screen()
+        settle()
+
+        assertTrue("the setup this rests on", activity.access != PolicyAccess.GRANTED)
+        assertEquals(listOf(end), activity.meetingOffers)
+    }
+
+    /**
+     * Grants the calendar and answers every `Instances` query with one end,
+     * so whether the calendar was asked shows in [MainActivity.meetingOffers]
+     * rather than having to be inferred.
+     */
+    private fun oneMeetingEnding(end: Instant): Instant {
+        shadowApp().grantPermissions(android.Manifest.permission.READ_CALENDAR)
+        ShadowContentResolver.registerProviderInternal(CalendarContract.AUTHORITY, OneMeetingProvider(end))
+        return end
+    }
+
+    private class OneMeetingProvider(private val end: Instant) : ContentProvider() {
+        override fun onCreate() = true
+
+        override fun query(
+            uri: Uri,
+            projection: Array<out String>?,
+            selection: String?,
+            selectionArgs: Array<out String>?,
+            sortOrder: String?,
+        ): Cursor = MatrixCursor(arrayOf(CalendarContract.Instances.END)).apply {
+            addRow(arrayOf<Any>(end.toEpochMilli()))
+        }
+
+        override fun getType(uri: Uri): String? = null
+        override fun insert(uri: Uri, values: ContentValues?): Uri? = null
+        override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?) = 0
+        override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?) = 0
     }
 
     @Test
@@ -299,6 +627,15 @@ class MainActivityEndRowsTest {
 
     private fun sentMotionEnd(): Boolean =
         serviceActions().contains(app.snoozemo.snooze.SnoozeService.ACTION_SET_MOTION_END)
+
+    /** The arm sent since the last drain, or null — an idle row's tap goes out as one. */
+    private fun sentArm(): android.content.Intent? {
+        var found: android.content.Intent? = null
+        while (true) {
+            val next = shadowApp().nextStartedService ?: return found
+            if (next.action == SnoozeService.ACTION_ARM) found = next
+        }
+    }
 
     @Test
     fun `when I move asks for location rather than arming without it`() {

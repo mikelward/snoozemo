@@ -4721,9 +4721,15 @@ Nothing here is scheduled; each is a sequel that follows from something already 
       either way. Off by default, chosen per snooze, additive to the cap.
       **The trial is below and the decision is not made.** `until Wi-Fi goes` is
       untouched by this and stays deferred on the original terms.
-- [ ] **Move `Snooze now` to the footer, and offer the `Until …` rows when idle**
+- [x] **Move `Snooze now` to the footer, and offer the `Until …` rows when idle**
       (maintainer, 2026-09-10). Two halves of one restructure, both the maintainer's
-      call:
+      call. **Landed 2026-09-10**: `Snooze` shares the pinned footer slot with `End now`,
+      the idle screen carries the time row and steppers, the meeting rows and
+      `Until I move` — no `Until I leave`, since the pinned `Snooze` is that choice — and
+      each arms in one tap through `SnoozeService.armUntil` / `armUntilMotion`, reported
+      to the rows on simpler terms than a refinement (`SPEC.md` §4.4). The label stays
+      `Snooze`; a rewording is the maintainer's copy to approve. What is left is the device
+      pass the pinned-exit entry above already owes.
       - **`Snooze now` pinned beside `End now`**, only one of the two showing at a
         time. That reverses the recorded reasoning in `MainScreen` — ending is urgent
         and arming is not, and a pinned `Snooze` sat at the foot of an otherwise empty

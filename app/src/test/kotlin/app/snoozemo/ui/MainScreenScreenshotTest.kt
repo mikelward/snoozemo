@@ -364,6 +364,11 @@ class MainScreenScreenshotTest {
 
     @Test
     fun `granted and idle offers to arm`() {
+        var chosenTime = 0
+        var chosenMeeting = -1
+        var stepped = 0
+        var chosenMotion = 0
+
         capture("main-screen-idle.png") {
             MainScreen(
                 access = PolicyAccess.GRANTED,
@@ -373,6 +378,74 @@ class MainScreenScreenshotTest {
                 trackingMode = null,
                 remaining = null,
                 degradation = null,
+                // The idle screen's own offer (maintainer, 2026-09-10): the
+                // same rows, as a way to start, without `Until I leave` —
+                // the pinned `Snooze` is that choice.
+                endChoice = idleOffer(),
+                offersMotionEnd = true,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onChooseEndTime = { chosenTime++ },
+                onChooseEndMeeting = { chosenMeeting = it },
+                onStepEndDown = { stepped-- },
+                onStepEndUp = { stepped++ },
+                onChooseMotionEnd = { chosenMotion++ },
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Do Not Disturb access needed").assertDoesNotExist()
+        // The point of this test: idle is stated, not left to be inferred
+        // from which button happens to be enabled.
+        composeRule.onNodeWithText("Not snoozing").assertExists()
+        // Pinned beside where `End now` sits when running (maintainer,
+        // 2026-09-10): displayed without a scroll, whatever the calendar
+        // contributed above it.
+        composeRule.onNodeWithText("Snooze").assertIsEnabled()
+        composeRule.onNodeWithText("Snooze").assertIsDisplayed()
+        // The mirror of the running case (maintainer, 2026-08-22): confidently
+        // idle is the one state where the way out is hidden, because there is
+        // provably nothing to get out of.
+        composeRule.onNodeWithText("End now").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Settings").assertExists()
+        // The rows are wired the same as over a running snooze; what a tap
+        // does with them is the activity's business.
+        composeRule.onNodeWithText("Until 1:00 PM").performScrollTo().performClick()
+        assertEquals(1, chosenTime)
+        composeRule.onNodeWithText("Until 1:30 PM").performScrollTo().performClick()
+        assertEquals(0, chosenMeeting)
+        composeRule.onNodeWithContentDescription("Half an hour later").performScrollTo().performClick()
+        assertEquals(1, stepped)
+        composeRule.onNodeWithText("Until I move").performScrollTo().performClick()
+        assertEquals(1, chosenMotion)
+        composeRule.onNodeWithText("Until I leave").assertDoesNotExist()
+    }
+
+    @Test
+    fun `the offer to start waits for a confident idle, like the button beside it`() {
+        // The record has not been read: arming over a snooze the screen has
+        // not seen is how a user loses the deadline they were promised, so
+        // the rows wait exactly as `Snooze` does — and the way out stands.
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = null,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                endChoice = idleOffer(),
+                offersMotionEnd = true,
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
@@ -388,16 +461,73 @@ class MainScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("Do Not Disturb access needed").assertDoesNotExist()
-        // The point of this test: idle is stated, not left to be inferred
-        // from which button happens to be enabled.
-        composeRule.onNodeWithText("Not snoozing").assertExists()
-        composeRule.onNodeWithText("Snooze").assertIsEnabled()
-        // The mirror of the running case (maintainer, 2026-08-22): confidently
-        // idle is the one state where the way out is hidden, because there is
-        // provably nothing to get out of.
-        composeRule.onNodeWithText("End now").assertDoesNotExist()
-        composeRule.onNodeWithContentDescription("Settings").assertExists()
+        composeRule.onNodeWithText("Until 1:00 PM").assertDoesNotExist()
+        composeRule.onNodeWithText("Until I move").assertDoesNotExist()
+        composeRule.onNodeWithText("Snooze").assertDoesNotExist()
+        composeRule.onNodeWithText("End now").assertIsDisplayed()
+    }
+
+    @Test
+    fun `the offer to start needs access, like the button beside it`() {
+        capture {
+            MainScreen(
+                access = PolicyAccess.DENIED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                endChoice = idleOffer(),
+                offersMotionEnd = true,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Until 1:00 PM").assertDoesNotExist()
+        composeRule.onNodeWithText("Snooze").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a refused start says nothing is running, not that the end was not set`() {
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                endChoice = idleOffer().copy(failed = true),
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Couldn't snooze").assertExists()
+        composeRule.onNodeWithText("Couldn't set the end time").assertDoesNotExist()
     }
 
     @Test
@@ -2066,6 +2196,22 @@ class MainScreenScreenshotTest {
          */
         val NOON: Instant = Instant.parse("2026-09-08T12:00:00Z")
     }
+
+    /**
+     * The idle screen's offer as the activity would build it: seeded from
+     * the clock, bounded by the default cap, one meeting inside the window.
+     */
+    private fun idleOffer() = EndChoiceUiState(
+        condition = EndCondition(
+            endsAt = NOON.plus(Duration.ofHours(1)),
+            floor = NOON.plus(Duration.ofMinutes(30)),
+            ceiling = NOON.plus(Duration.ofHours(8)),
+        ),
+        formattedTime = "1:00 PM",
+        meetings = listOf(MeetingChoice(NOON.plus(Duration.ofMinutes(90)), "1:30 PM")),
+        tracksDeparture = false,
+        startsASnooze = true,
+    )
 
     private fun capture(
         name: String? = null,
