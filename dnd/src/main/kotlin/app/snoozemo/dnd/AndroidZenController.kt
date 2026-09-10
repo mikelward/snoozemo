@@ -271,7 +271,10 @@ class AndroidZenController(
         val disowned = !snoozed && giveBackTheRinger() is RingerOutcome.Disowned
         val outcome = setRuleState(snoozed, trigger, placeName)
         when (ringerFollowUp(snoozed, outcome, ringerDisowned = disowned)) {
-            RingerFollowUp.QUIET -> quietTheRinger(snooze)
+            // The rule this arm actually wrote, not whatever the store holds
+            // by the time each probe runs (Codex, PR #251).
+            RingerFollowUp.QUIET ->
+                quietTheRingerWatchingTheRule(snooze, (outcome as? ZenOutcome.Applied)?.ruleId)
             RingerFollowUp.HAND_BACK_AND_FORGET -> {
                 // Already done above on the release path; an **arm** that ended
                 // the snooze has not done it at all (Codex, PR #176).
@@ -294,17 +297,284 @@ class AndroidZenController(
     }
 
     /**
+     * Lowers the ringer, reading the rule's state either side of the write.
+     *
+     * **A measurement, not a change**: the ringer is taken exactly as before,
+     * whatever either read says. This exists to settle one question with
+     * evidence instead of argument.
+     *
+     * The control comes free, because `quietTheRinger` does not always write: a
+     * phone already at or below its ceiling is left alone. Those arms bracket
+     * an interval with no mode change in it, which is what makes the pair
+     * attributable rather than merely suggestive.
+     *
+     * **The two arms are not the same length, so the length is recorded rather
+     * than assumed** (Codex, PR #251). A write also persists the loan, checks
+     * the fixed-volume policy and reads the mode back, so its interval is the
+     * longer one — and a longer interval is likelier to contain a transition
+     * that was coming anyway. Measuring it makes that confounder something a
+     * capture can rule out instead of something the design has to promise: if
+     * the deactivations sit with `outcome=<mode>` while `took=` is comparable
+     * across both arms, duration is not the explanation.
+     *
+     * **`took=` spans both reads, not the write between them** (Codex, PR
+     * #251). It is only worth anything as a bound on where an unseen transition
+     * could have landed, and that window closes when the second read returns,
+     * not when the write does — a slow second binder query lengthens it exactly
+     * as a slow write would. Timed around the write alone it under-reported
+     * precisely the samples that then read as short intervals, which is the cue
+     * to rule timing out and convict the write. Bracketing the mode setter
+     * alone would be tighter still and wrong for the same reason, quite apart
+     * from the probe reading a zen rule `:dnd`'s ringer has no business knowing
+     * about.
+     *
+     * A device capture on 2026-09-10 has an arm whose rule write was accepted,
+     * whose ringer moved to the ceiling, and whose `ACTIVATED` broadcast then
+     * arrived about twenty milliseconds later with the rule reading back as
+     * `INACTIVE` — followed at once by a `DEACTIVATED` that ended the snooze as
+     * `DND_TURNED_OFF`, seconds after a tap the user was still watching. Across
+     * two builds, four of the five arms that wrote the ringer died that way,
+     * and all six that found nothing to take survived. So the ringer write is
+     * the suspect, and the pair of reads is what convicts or clears it
+     * (`TODO.md`):
+     *
+     * `setterCalls` is the arm, and it is **counted, not inferred**: one call
+     * into the ringer can hand an earlier loan back — setter and all — and then
+     * report `Untouched` because the new ceiling had nothing to take, so the
+     * outcome would have cleared a write that happened (Codex, PR #251). The
+     * outcome is kept beside it as context, never as the discriminator.
+     *
+     * **These are observations, not verdicts** (Codex, PR #251). Every one of
+     * them is a single arm, and a transition that arrives asynchronously can
+     * land inside any window by coincidence — which is what `took=` is for.
+     * The repair is chosen from the two-run comparison below and nowhere else.
+     *
+     * - `before=ACTIVE after=INACTIVE setterCalls=1` — the strongest single
+     *   arm there is: the rule went down across a window that contained our
+     *   write. Suggestive, and worth more the shorter `took=` is, but one arm
+     *   cannot separate it from an unrelated transition landing there.
+     * - `before=ACTIVE after=INACTIVE setterCalls=0` — the rule moved across a
+     *   window with no mode change of any kind in it, so the platform does do
+     *   this unprompted. That weakens the suspicion; it does not clear the
+     *   write, which could still contribute on the arms that have one.
+     * - `setterCalls=…+inflight` — a setter was running through the window from
+     *   another thread, so it is neither arm and the sample is dropped. Exactly
+     *   `0` with no marker is what the control requires.
+     * - `outcome=refused…` — context for why a write did not take. It no longer
+     *   decides the arm, because `setterCalls` already does.
+     * - `before=INACTIVE after=INACTIVE` — the rule was never in effect and the
+     *   write changed nothing. The cause is elsewhere, and waiting would buy
+     *   nothing.
+     * - `before=ACTIVE after=ACTIVE` — **not a healthy arm, and not a clear**
+     *   (Codex, PR #251). The pair can only catch a knock-down that is
+     *   *synchronous*, and the failure under investigation is not: in the
+     *   capture the deactivation arrived about twenty milliseconds after the
+     *   write, as a broadcast. So a dying arm reads `after=ACTIVE` too, and
+     *   reading that as healthy would clear the write on almost every arm —
+     *   the false clear this whole line exists to prevent. What it says is
+     *   only "the rule had not moved yet".
+     *
+     * **Which is why the per-arm `setterCalls` is the load-bearing half.** An
+     * `after=ACTIVE` arm is judged by the lines that follow it in the same
+     * capture — the rule-status broadcast, and the `DND_TURNED_OFF` ending if
+     * it comes. That table was built by hand from the first capture and its
+     * write column was inferred; this line makes the column authoritative, per
+     * arm. The immediate pair is a bonus that settles it outright in the
+     * synchronous case.
+     *
+     * **But the write/no-write split inside one capture is not a control**
+     * (Codex, PR #251). Whether an arm writes is decided by `currentMode()`,
+     * and a rule that is working has already lowered the ringer — so the rival
+     * explanation, a fresh rule slow to take effect, *causes both* the death
+     * and the write, and every dying arm carries a setter call with the setter
+     * innocent. Making that column accurate does not make it independent, and
+     * a tally over a single capture cannot convict.
+     *
+     * **The assignment has to come from the protocol, and it does**
+     * (`TODO.md` 6a). The tester fixes the ringer's starting mode before
+     * arming: audible and every arm writes, already on vibrate and no arm
+     * does — a split chosen by hand, so it is independent of what the rule is
+     * doing. The two hypotheses part there. If our write knocks the rule down,
+     * the deaths sit in the audible group and the vibrate group is clean; if a
+     * fresh rule is simply slow, its slowness does not care what the ringer
+     * started at and both groups die alike. Comparing *those two runs* is the
+     * experiment; the arms within one run only ever supply the readings above.
+     *
+     * **Only while the debug log is recording.** With it off the line goes
+     * nowhere, so the reads would be pure cost — and the first of them delays
+     * the ringer, which is a change in behavior charged to a user who cannot
+     * capture anything in return.
+     *
+     * **Two costs, stated rather than hidden.** The first read sits between the
+     * rule write and the ringer write, so it delays the ringer by a binder
+     * round-trip — about a millisecond, and in the direction that makes the
+     * failure *less* likely, which is the one bias worth knowing when reading
+     * the results. The second read is after the write and carries no such
+     * effect. Neither is between the tap and `STATE_TRUE` (`AGENTS.md`, the arm
+     * path): both are on the far side of a rule write already confirmed.
+     *
+     * Contained end to end, so a measurement can never cost an arm.
+     */
+    private fun quietTheRingerWatchingTheRule(snooze: SnoozeIdentity?, armedRuleId: String?) {
+        // Nobody is collecting, so nobody pays. With the log off the line is
+        // discarded, and what is left is two policy IPCs on the arm path and a
+        // ringer delayed by the first of them — an observer effect charged to a
+        // user who cannot produce the observation (Codex, PR #251).
+        if (!SnoozeDebugLog.isRecording) {
+            quietTheRinger(snooze)
+            return
+        }
+        // **Two windows, and the count is the pair rather than either one.**
+        // The outer samples bracket the rule reads and the inner ones sit
+        // against the write, so a setter that ran somewhere in between is
+        // counted by the outer pair and may or may not be counted by the inner
+        // one. Where they agree the number is exact; where they differ, a write
+        // landed in a gap at an edge and the sample says so instead of picking
+        // a side (Codex, PR #251).
+        //
+        // Sampling once was wrong in both directions and the earlier reasoning
+        // here only saw one of them. Inside the reads, a concurrent setter in a
+        // gap went uncounted and a guilty write read as a control. Outside
+        // them, it was counted and an innocent one read as a conviction — which
+        // the comment this replaces waved through as "the right direction",
+        // on the belief that over-counting merely made a sample unusable. It
+        // does not: `TODO.md` reads a moved rule with a write in the window as
+        // the shape that points at us, so an over-count is not a dropped
+        // control but a false conviction, and both errors choose the wrong
+        // repair.
+        val writesOuterBefore = runCatching { ringer.modeWrites }.getOrNull()
+        // The clock brackets **both probes**, not the write between them. What
+        // `took` has to bound is the span in which a transition could have
+        // landed without being seen, and that runs from before the first read
+        // to after the second — a slow second binder query lengthens it just as
+        // surely as a slow write does. Timing only the write let two samples
+        // report the same `took` over materially different observation windows,
+        // so a transition that arrived during a delayed second probe read as a
+        // short interval — which is `TODO.md`'s cue to rule timing out and
+        // convict the write (Codex, PR #251). It starts before the first read
+        // rather than after it for the same reason: a transition landing during
+        // that read is not reliably in either value, so the uncertainty starts
+        // there.
+        val startedAt = System.nanoTime()
+        // **One rule, named once, for both reads** (Codex, PR #251). Resolving
+        // the id separately at each probe reads a *mutable* store, so a rule
+        // replaced in between — `ensureRule` after a deletion — would leave
+        // `before` describing the old rule and `after` the new one, and the
+        // line would report a transition that is really two different rules.
+        // `ZenOutcome.Applied` carries the id this arm actually wrote, which
+        // exists to close exactly that race.
+        val before = runCatching { ruleActivation(armedRuleId) }.getOrNull()
+        val writesInnerBefore = runCatching { ringer.modeWrites }.getOrNull()
+        val outcome = quietTheRinger(snooze)
+        val writesInnerAfter = runCatching { ringer.modeWrites }.getOrNull()
+        val after = runCatching { ruleActivation(armedRuleId) }.getOrNull()
+        val tookMicros = (System.nanoTime() - startedAt) / 1_000
+        val writesOuterAfter = runCatching { ringer.modeWrites }.getOrNull()
+        val wrote = setterCalls(
+            outerBefore = writesOuterBefore,
+            innerBefore = writesInnerBefore,
+            innerAfter = writesInnerAfter,
+            outerAfter = writesOuterAfter,
+        )
+        SnoozeDebugLog.event(
+            "ringer: rule around the ceiling write — " +
+                "before=${before?.name ?: "unreadable"} after=${after?.name ?: "unreadable"} " +
+                "setterCalls=$wrote outcome=${outcome.wroteWhat} took=${tookMicros}us",
+        )
+    }
+
+    /**
+     * How many times the platform's ringer setter ran across the observed
+     * window — as a **bound**, because four samples on an unsynchronized
+     * timeline cannot give a point (Codex, PR #251).
+     *
+     * The inner pair brackets the write and the outer pair brackets the rule
+     * reads, so a setter from another thread is counted by the outer pair if it
+     * landed anywhere across the reads and by the inner pair only if it landed
+     * against the write. Agreement means every write in the observed window is
+     * accounted for at both edges and the number is exact. Disagreement means
+     * one ran in a gap at an edge, where it is neither reliably inside the
+     * window nor reliably outside it, and the honest report is the range.
+     *
+     * This is where the counter stops growing, and the reason is that the
+     * property is now structural rather than another interleaving closed. The
+     * four earlier findings were each a different route to a wrong count — a
+     * hand-back's setter the outcome could not see, a per-instance counter, the
+     * samples nested inside the reads, a write already in flight — and each was
+     * answered by moving a sample. A sample has two neighbouring gaps by
+     * construction, so moving it only ever trades one gap for another. Reporting
+     * the pair does not close a gap; it makes every gap visible as uncertainty,
+     * which no ordering of a single pair can do.
+     *
+     * **Only a bare number is a usable sample.** `+inflight` and a range are
+     * both "this window cannot be called", and `TODO.md` says to drop them
+     * rather than read them as either arm.
+     */
+    private fun setterCalls(
+        outerBefore: RingerWriteCounts?,
+        innerBefore: RingerWriteCounts?,
+        innerAfter: RingerWriteCounts?,
+        outerAfter: RingerWriteCounts?,
+    ): String {
+        if (outerBefore == null || innerBefore == null || innerAfter == null || outerAfter == null) {
+            return "unreadable"
+        }
+        val inner = innerAfter.finished - innerBefore.finished
+        // A setter in flight at any edge could have landed anywhere in between,
+        // so the window cannot be called clean whatever the deltas say. Named
+        // rather than folded into the count, because the two are different
+        // facts and only one of them is an arm.
+        val edges = listOf(outerBefore, innerBefore, innerAfter, outerAfter)
+        if (edges.any { !it.isSettled }) return "$inner+inflight"
+        val outer = outerAfter.finished - outerBefore.finished
+        return if (inner == outer) "$inner" else "$inner..$outer"
+    }
+
+    /**
+     * Whether a mode change actually happened, in a word — the control.
+     *
+     * The two reads bracket a call that does **not** always write: a phone
+     * already at or below its ceiling is left alone, and a fixed-volume policy
+     * refuses. Those arms span the same interval, take the same reads, and touch
+     * nothing — so `before=ACTIVE after=INACTIVE wrote=nothing` is the platform
+     * moving the rule on its own, and the same pair with a real write is the
+     * only shape that points at us (Codex, PR #251).
+     *
+     * Without it the pair is ambiguous in exactly the way the whole question
+     * turns on, because the failure being investigated already involves
+     * activations and deactivations arriving asynchronously — an interval that
+     * contains a write also contains time, and time alone is a rival
+     * explanation.
+     */
+    private val RingerOutcome?.wroteWhat: String
+        get() = when (this) {
+            is RingerOutcome.Set -> mode.name
+            RingerOutcome.Untouched -> "nothing"
+            RingerOutcome.Disowned -> "nothing, disowned"
+            // Named, and **excluded from the comparison**: a refusal cannot say
+            // whether the setter ran. `AudioRingerController` refuses before it
+            // — a fixed-volume policy, a loan that would not persist, no ceiling
+            // to set — and equally after it, when the read-back still reports
+            // the old mode (Codex, PR #251). So this is neither arm of the
+            // experiment; the reason is recorded so a reader can see which
+            // sample was dropped and why, rather than counting it as either.
+            is RingerOutcome.Refused -> "refused, ${reason.name} — not a usable sample"
+            null -> "threw — not a usable sample"
+        }
+
+    /**
      * Contained, because this is not the snooze. An exception escaping the
      * ringer would unwind `end()` and then `onStartCommand` — the same failure
      * the diagnosis branch below is contained against — and cost the release
      * that the wake-up existed to perform, over a phone that is merely a little
      * louder than asked.
      */
-    private fun quietTheRinger(snooze: SnoozeIdentity?) {
-        runCatching { ringer.quiet(snooze) }.onFailure {
-            SnoozeDebugLog.failure(it, "ringer: applying the chosen ceiling threw; the snooze stands")
-        }
-    }
+    private fun quietTheRinger(snooze: SnoozeIdentity?): RingerOutcome? =
+        runCatching { ringer.quiet(snooze) }
+            .onFailure {
+                SnoozeDebugLog.failure(it, "ringer: applying the chosen ceiling threw; the snooze stands")
+            }
+            .getOrNull()
 
     /**
      * Contained for the same reason, and the stakes here are the release's.

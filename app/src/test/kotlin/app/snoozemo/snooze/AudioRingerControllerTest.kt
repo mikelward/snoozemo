@@ -82,6 +82,23 @@ class AudioRingerControllerTest {
     }
 
     @Test
+    fun `the setter count spans every controller in the process`() {
+        choose(SnoozeRinger.VIBRATE)
+        val before = newController().modeWrites.finished
+
+        // A *different* instance does the writing — which is what the startup
+        // reconciler is, since it builds its own through `default`. An instance
+        // counter would report nothing here, and a window that contained that
+        // write would be read as a no-write control (Codex, PR #251).
+        newController().quiet(SnoozeIdentity(1_000L))
+
+        assertEquals(before + 1, newController().modeWrites.finished)
+        // And nothing is left in flight, so a window that ends here reads as a
+        // clean sample rather than an uncertain one.
+        assertEquals(true, newController().modeWrites.isSettled)
+    }
+
+    @Test
     fun `the default ceiling brings an audible phone down to vibrate`() {
         // No stored choice at all, which is what a fresh install has.
         val outcome = newController().quiet()
