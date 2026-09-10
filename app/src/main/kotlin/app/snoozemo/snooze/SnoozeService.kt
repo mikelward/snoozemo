@@ -45,6 +45,7 @@ import app.snoozemo.core.ZenRuleStatusChange
 import app.snoozemo.core.ZenTrigger
 import app.snoozemo.core.endReason
 import app.snoozemo.core.endingFor
+import app.snoozemo.core.identity
 import app.snoozemo.core.logSummary
 import app.snoozemo.core.ruleSubject
 import app.snoozemo.dnd.AndroidZenController
@@ -446,6 +447,43 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         controller.active?.let { notifications.showOngoing(it) }
     }
 
+    /**
+     * Applies a ceiling the arm deferred and no activation broadcast has since
+     * landed (SPEC.md §5.9).
+     *
+     * The arm leaves the ringer alone until the rule reads back as in effect,
+     * and the activation broadcast is normally what supplies that. It is not
+     * guaranteed to: the rule fires its `ACTIVATED` once, and the read-back can
+     * still disagree when that arrives — the same race, seen from the other
+     * side — so the one notification is spent and the rule then becomes active
+     * with nothing left to notice (Codex, PR #250). Without this the phone
+     * would stay above its ceiling for the whole snooze.
+     *
+     * On the wake the snooze already pays for, exactly as [restateOngoingCard]
+     * is, and for a related reason: both are state that is read once at a
+     * moment and never listened to afterwards. It is bounded by that wake's own
+     * cadence — half an hour at worst, and only on the residual race — which
+     * is the accepted cost of adding no wake-up: a phone louder than asked is
+     * the cheaper failure (principle 1), and the card says so throughout, since
+     * the ceiling was recorded at the arm even though the mode change was not.
+     *
+     * Idempotent and cheap on every wake that does not need it: a re-assertion
+     * never overwrites an outstanding loan, and a phone already at or below the
+     * ceiling is left alone. Two binder reads on the branch that is already
+     * making several.
+     */
+    private fun catchUpRingerCeiling() {
+        val snooze = controller.active ?: return
+        val activation = runCatching { zen.ruleActivation(snooze.ruleId) }.getOrElse {
+            Log.w(TAG, "Re-reading the rule state for the ringer ceiling failed; leaving it.", it)
+            return
+        }
+        if (activation != ZenRuleActivation.ACTIVE) return
+        runCatching { zen.applyRingerCeiling(snooze.identity) }.onFailure {
+            SnoozeDebugLog.failure(it, "ringer: catching the deferred ceiling up threw; the snooze stands")
+        }
+    }
+
     /** The flavor seam's repair poke, overridable for the JVM harness. */
     protected open fun pokeWatchRepair() = app.snoozemo.presence.pokePresenceRepair()
 
@@ -708,6 +746,37 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                     "armedFor=$armedFor " +
                     "→ $action",
             )
+        }
+        // The moment the arm deferred its ringer ceiling to: the rule is now
+        // observed in effect, so lowering the ringer can no longer land in the
+        // window that was knocking the rule back down (`AndroidZenController
+        // .quietTheRingerOnceInEffect`). Usually a no-op, because zen has
+        // lowered the ringer itself by now and the ceiling finds nothing to
+        // take — which is exactly the shape every surviving arm in the
+        // 2026-09-10 capture had.
+        //
+        // Ahead of `action`, and not gated on it: this is `None` in the
+        // resolver's terms, which is precisely the case that used to do
+        // nothing at all.
+        if (snooze != null && ours && stillActive == true && resolved == ZenRuleStatus.ACTIVATED) {
+            runCatching { zen.applyRingerCeiling(snooze.identity) }.onFailure {
+                SnoozeDebugLog.failure(it, "ringer: applying the deferred ceiling threw; the snooze stands")
+            }
+            // The card was posted at the arm, when the ceiling had not been
+            // applied yet, and this attempt is the moment it either lands or is
+            // refused — neither of which is a state transition, so nothing else
+            // reposts before the half-hourly backstop (Codex, PR #250). The
+            // shortfall clause is read once at the post, so a refused write
+            // would leave a phone ringing under a card that does not say so for
+            // up to half an hour, which is principle 2's failure.
+            restateOngoingCard()
+        } else if (snooze != null && ours && resolved == ZenRuleStatus.ACTIVATED) {
+            // The broadcast said the rule went on and the read-back does not
+            // agree yet — the very race this change exists for, seen from the
+            // other side. Applying the ceiling here is what must not happen;
+            // losing it is what [catchUpRingerCeiling] is for, and this line is
+            // how a reader tells that case from a ceiling that simply landed.
+            SnoozeDebugLog.event("ringer: the activation raced the read-back; the ceiling waits for a later wake")
         }
         when (action) {
             is ZenRuleStatusAction.EndSnooze -> {
@@ -1227,6 +1296,9 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 // needs a new one or it will never be revisited.
                 rescheduleIfUnfinished()
                 repairDegradedWatch()
+                // Before the card, so a ceiling that lands here is reflected by
+                // the restate rather than a half-hour after it.
+                catchUpRingerCeiling()
                 restateOngoingCard()
             }
             ACTION_EXTEND -> extend()

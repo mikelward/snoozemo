@@ -482,6 +482,197 @@ class AudioRingerControllerTest {
     }
 
     @Test
+    fun `capturing a ceiling records the whole borrow without moving the ringer`() {
+        choose(SnoozeRinger.VIBRATE)
+        val snooze = SnoozeIdentity(1_000L)
+
+        val outcome = newController().captureCeiling(snooze)
+
+        // The mode change is what waits for the rule to be observed in effect;
+        // neither the choice nor the way back can wait with it.
+        assertEquals(RingerOutcome.Untouched, outcome)
+        assertEquals(AudioManager.RINGER_MODE_NORMAL, audio.ringerMode)
+        assertEquals(SnoozeRinger.VIBRATE, PrefsRingerLoanStore(context).activeChoice())
+        assertEquals(snooze, PrefsRingerLoanStore(context).choiceOwner())
+        // An **unfinished** borrow, which is the state a process death between
+        // the record and the mode change has always produced — so the deferral
+        // is finished by machinery that already exists rather than new state.
+        assertEquals(
+            BorrowedRinger(
+                restoreTo = RingerMode.NORMAL,
+                setTo = RingerMode.VIBRATE,
+                applied = false,
+                // And never *attempted*, which is what the release reads: with
+                // the window held open by the deferral, a user who picks the
+                // ceiling's own mode would otherwise be read as our own write.
+                attempted = false,
+            ),
+            PrefsRingerLoanStore(context).borrowed(),
+        )
+    }
+
+    @Test
+    fun `finishing a captured ceiling takes the ringer`() {
+        choose(SnoozeRinger.VIBRATE)
+        val snooze = SnoozeIdentity(1_000L)
+        newController().captureCeiling(snooze)
+
+        val outcome = newController().finishCeiling(snooze)
+
+        assertEquals(RingerOutcome.Set(RingerMode.VIBRATE), outcome)
+        assertEquals(AudioManager.RINGER_MODE_VIBRATE, audio.ringerMode)
+    }
+
+    @Test
+    fun `finishing takes nothing when the arm had nothing to take`() {
+        // The arm found the phone already at the ceiling, so it recorded no
+        // borrow. The user turns the ringer back up mid-snooze.
+        choose(SnoozeRinger.VIBRATE)
+        audio.ringerMode = AudioManager.RINGER_MODE_VIBRATE
+        val snooze = SnoozeIdentity(1_000L)
+        newController().captureCeiling(snooze)
+        audio.ringerMode = AudioManager.RINGER_MODE_NORMAL
+
+        val outcome = newController().finishCeiling(snooze)
+
+        // Theirs to keep (SPEC.md §5.9 rule 4). A catch-up that quieted here
+        // would be a second arm on a periodic wake, overruling a deliberate
+        // change every half hour for the length of the snooze (Codex, PR #250).
+        assertEquals(RingerOutcome.Untouched, outcome)
+        assertEquals(AudioManager.RINGER_MODE_NORMAL, audio.ringerMode)
+    }
+
+    @Test
+    fun `finishing takes nothing back after the user moves the ringer mid-deferral`() {
+        choose(SnoozeRinger.VIBRATE)
+        val snooze = SnoozeIdentity(1_000L)
+        newController().captureCeiling(snooze)
+        // Recorded against `NORMAL`; the user has since chosen silent.
+        audio.ringerMode = AudioManager.RINGER_MODE_SILENT
+
+        val outcome = newController().finishCeiling(snooze)
+
+        // The unfinished-borrow rule already declines where the live mode has
+        // moved off the one the record was written against, so a deferral
+        // inherits that without a new decision.
+        assertEquals(RingerOutcome.Untouched, outcome)
+        assertEquals(AudioManager.RINGER_MODE_SILENT, audio.ringerMode)
+    }
+
+    @Test
+    fun `finishing leaves an attempted but unconfirmed loan to a re-assertion`() {
+        choose(SnoozeRinger.VIBRATE)
+        val snooze = SnoozeIdentity(1_000L)
+        // What a write whose read-back threw, or whose marker was not stored,
+        // leaves behind: attempted, not confirmed. It is meant to be finished
+        // by a re-assertion — but the user has since turned the phone back up
+        // to what the loan recorded, and this runs on every periodic wake.
+        PrefsRingerLoanStore(context).record(
+            BorrowedRinger(restoreTo = RingerMode.NORMAL, setTo = RingerMode.VIBRATE, applied = false),
+        )
+
+        val outcome = newController().finishCeiling(snooze)
+
+        // Quieting here would re-lower it every half hour for the length of the
+        // snooze, which is the same overreach the guard exists to stop under a
+        // different flag (Codex, PR #250).
+        assertEquals(RingerOutcome.Untouched, outcome)
+        assertEquals(AudioManager.RINGER_MODE_NORMAL, audio.ringerMode)
+    }
+
+    @Test
+    fun `re-deferring does not downgrade a loan whose write was attempted`() {
+        choose(SnoozeRinger.VIBRATE)
+        val snooze = SnoozeIdentity(1_000L)
+        // A write that was attempted and never confirmed — the read-back threw,
+        // or the marker was not stored — with the user having since put the
+        // ringer back to what the loan recorded.
+        PrefsRingerLoanStore(context).record(
+            BorrowedRinger(restoreTo = RingerMode.NORMAL, setTo = RingerMode.VIBRATE, applied = false),
+        )
+
+        // A re-assertion that has to defer again: the rule is not observed in
+        // effect, so this records rather than writes.
+        newController().captureCeiling(snooze)
+
+        // Still attempted. Written as false, the periodic catch-up would read
+        // this as a deferred borrow and lower the ringer on every wake, past
+        // the guard meant to exclude exactly this loan (Codex, PR #250).
+        assertEquals(true, PrefsRingerLoanStore(context).borrowed()?.attempted)
+        assertEquals(RingerOutcome.Untouched, newController().finishCeiling(snooze))
+        assertEquals(AudioManager.RINGER_MODE_NORMAL, audio.ringerMode)
+    }
+
+    @Test
+    fun `a snooze that ends mid-deferral leaves the user's own choice alone`() {
+        choose(SnoozeRinger.VIBRATE)
+        val snooze = SnoozeIdentity(1_000L)
+        newController().captureCeiling(snooze)
+        // The user reaches for the same mode the ceiling would have set, before
+        // the rule was ever observed in effect. To `setTo` alone this is
+        // indistinguishable from Snoozemo's own write.
+        audio.ringerMode = AudioManager.RINGER_MODE_VIBRATE
+
+        val outcome = newController().giveBack()
+
+        // Nothing was taken, so nothing is owed: putting the phone back to
+        // `NORMAL` here would undo a deliberate mid-snooze change (SPEC.md
+        // §5.9 rule 4, Codex PR #250).
+        assertEquals(RingerOutcome.Disowned, outcome)
+        assertEquals(AudioManager.RINGER_MODE_VIBRATE, audio.ringerMode)
+        assertNull(PrefsRingerLoanStore(context).borrowed())
+    }
+
+    @Test
+    fun `a finished ceiling is still handed back at the end`() {
+        choose(SnoozeRinger.VIBRATE)
+        val snooze = SnoozeIdentity(1_000L)
+        newController().captureCeiling(snooze)
+        newController().finishCeiling(snooze)
+
+        val outcome = newController().giveBack()
+
+        // The narrowness matters in both directions: a deferral that actually
+        // completed owes the ringer back exactly as an undeferred one does.
+        assertEquals(RingerOutcome.Set(RingerMode.NORMAL), outcome)
+        assertEquals(AudioManager.RINGER_MODE_NORMAL, audio.ringerMode)
+    }
+
+    @Test
+    fun `finishing takes nothing when the ceiling already landed`() {
+        choose(SnoozeRinger.VIBRATE)
+        val snooze = SnoozeIdentity(1_000L)
+        newController().quiet(snooze)
+        // The applied ceiling holds, and the user turns the phone back up.
+        audio.ringerMode = AudioManager.RINGER_MODE_NORMAL
+
+        val outcome = newController().finishCeiling(snooze)
+
+        assertEquals(RingerOutcome.Untouched, outcome)
+        assertEquals(AudioManager.RINGER_MODE_NORMAL, audio.ringerMode)
+    }
+
+    @Test
+    fun `a captured ceiling survives the setting changing under the snooze`() {
+        choose(SnoozeRinger.VIBRATE)
+        val snooze = SnoozeIdentity(1_000L)
+        newController().captureCeiling(snooze)
+
+        // The deferred arm's own broadcast never came, and the user chose
+        // `Silent` for the *next* snooze meanwhile. A re-assertion — a restore,
+        // the cap alarm's re-arm — must still run at the ceiling this snooze
+        // armed with (SPEC.md §5.9 rule 2). Without the capture above there is
+        // no record, and this reads the new setting instead.
+        choose(SnoozeRinger.SILENT)
+
+        val outcome = newController().quiet(snooze)
+
+        assertEquals(RingerOutcome.Set(RingerMode.VIBRATE), outcome)
+        assertEquals(AudioManager.RINGER_MODE_VIBRATE, audio.ringerMode)
+        assertEquals(SnoozeRinger.VIBRATE, PrefsRingerLoanStore(context).activeChoice())
+    }
+
+    @Test
     fun `an owner-less record does not lower a running snooze to a later choice`() {
         // The other thing that record can be: a snooze running at `Vibrate`,
         // restored across the upgrade that added owners, after the user chose

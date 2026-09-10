@@ -2353,6 +2353,49 @@ releasing hands the ringer back *before* the rule goes off, so a failed release 
 and every retry path intact. A failed ringer change never fails the snooze; it is reported and the
 snooze stands.
 
+**"Confirmed on" means observed in effect, not merely accepted** (device capture, 2026-09-10). The
+platform accepting `STATE_TRUE`, and the rule reading back as present and enabled, say nothing about
+whether Do Not Disturb is on yet — a capture caught the activation broadcast arriving while the
+rule's own state still read as inactive, followed a moment later by a deactivation that ended the
+snooze. Every arm in that capture that lowered the ringer lost its rule that way; every arm that
+found the phone already quiet and wrote nothing survived. So the ringer write appears to be what
+knocks the rule back down inside that window, and the ceiling waits for the rule's state to read as
+active. **Only the mode change waits**: the arm records the whole borrow — the choice, its owner,
+and the way back — and takes none of it. That is not a new state but the *unfinished* borrow the
+ordering above already produces for the moment between the record landing and the mode moving, so a
+deferred ceiling is finished by the rule everything else is: only while the live mode is still the
+one the record was written against.
+
+What the deferral does add is a record that says outright it took **nothing**, and the release reads
+that rather than inferring it. The existing check compares the live mode against what the loan
+records itself as having set, which cannot tell a user who chose that very mode from Snoozemo having
+set it — a distinction that never mattered while the gap between recording and writing was
+microseconds wide, and does once a deferral holds it open until the rule appears. A loan that was
+never attempted therefore owes nothing back at all: whatever the phone is in is the user's (rule 4). Deferring the record instead would let a setting changed during
+the deferral govern a snooze already running (rule 2), leave the card unable to say the phone is
+still louder than asked, and make a later catch-up indistinguishable from a fresh arm. Where the
+rule is not yet active, the arm records the ceiling, leaves the ringer alone, and finishes it on the
+activation broadcast instead — usually finding nothing left to take, because a rule that is really
+in effect has already quieted the phone itself — or on the next re-assertion if that broadcast never
+comes. The card is rebuilt after that attempt, since it was posted before the ceiling landed and
+neither landing nor being refused is a state transition anything else would repost on.
+
+The broadcast is not relied on to arrive usefully, because it can carry the same race: a rule fires
+its activation once, and the read-back can still disagree when that one arrives, spending the
+notification with the rule then becoming active and nothing left to notice. So a deferred ceiling is
+also caught up on the periodic wake the snooze already pays for, which finishes it once the rule
+reads as in effect and does nothing otherwise. **A catch-up is never a second arm**: it acts only on
+a borrow that was recorded and **never attempted**, which is what a deferred arm records and nothing
+else does. An arm that found the phone already quiet enough leaves nothing for it to act on, and a
+write that was attempted but never confirmed stays a re-assertion's to finish; in both, a phone that
+is loud by then is one the user turned up, theirs to keep under rule 4 rather than something to
+quiet again on every wake for the length of the snooze. That bounds the residual case at the wake's own
+cadence rather than at the length of the snooze; a phone louder than asked for that long is the
+cheaper failure (principle 1), and the card reports the shortfall throughout, since the ceiling was
+recorded at the arm even though the mode change was not. The cost is a
+ceiling that lands milliseconds late on the devices that need it at all; the alternative was an arm
+that silently ended its own snooze.
+
 **One thing about `Silent` is unresolved and flagged rather than guessed at** (`TODO.md`).
 A `Silent` ceiling is the only one whose hand-back leaves `RINGER_MODE_SILENT`, and
 `setRingerMode`'s reference says an adjustment that *would toggle* Do Not Disturb is permitted

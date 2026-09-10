@@ -39,6 +39,39 @@ interface RingerController {
     fun quiet(snooze: SnoozeIdentity? = null): RingerOutcome
 
     /**
+     * Records the ceiling [snooze] runs under **without moving the ringer**.
+     *
+     * What an arm does when the zen rule is not yet observed in effect and the
+     * mode change has to wait (`AndroidZenController.quietTheRingerOnceInEffect`).
+     * The record cannot wait with it: it is the snooze's own captured choice,
+     * and every later re-assertion — a restore, the cap alarm's re-arm — reuses
+     * it rather than reading the setting afresh (SPEC.md §5.9 rule 2). Deferring
+     * the record too would leave a snooze whose ceiling is decided by whatever
+     * the setting says at the next re-assertion, which is the setting governing
+     * a snooze already running (Codex, PR #250).
+     *
+     * It is also what the ongoing card reads to say whether the ceiling is
+     * holding, so a deferred arm reports honestly that the phone is still
+     * louder than asked rather than claiming no ceiling at all.
+     */
+    fun captureCeiling(snooze: SnoozeIdentity? = null): RingerOutcome
+
+    /**
+     * Finishes a ceiling [captureCeiling] recorded and left un-taken, and does
+     * nothing where there is no such record.
+     *
+     * The pair is deliberate: this is a **catch-up, not a second arm**. It runs
+     * on a periodic wake, so it acts only on a borrow that was never attempted
+     * — what a deferred arm records and nothing else does. An arm that found
+     * the phone already at or below its ceiling recorded nothing to finish, and
+     * a write that was attempted but never confirmed is a re-assertion's to
+     * finish, not this: in both, a phone that is loud by now is one the user
+     * turned up, theirs to keep (SPEC.md §5.9 rule 4) rather than something to
+     * quiet again every wake for the length of the snooze.
+     */
+    fun finishCeiling(snooze: SnoozeIdentity? = null): RingerOutcome
+
+    /**
      * Hands the ringer back, if Snoozemo took it and the user has not moved it
      * since. Safe to call with nothing outstanding, which is what makes it
      * usable both on the release path and as a start-up reconcile.

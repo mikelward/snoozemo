@@ -5,7 +5,10 @@ import android.content.Intent
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.SnoozeLifecycle
 import app.snoozemo.core.SnoozeRecordState
+import app.snoozemo.core.ZenRuleActivation
+import app.snoozemo.core.identity
 import java.time.Instant
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -57,6 +60,20 @@ class RuleStatusReceiverTest {
         org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
     }
 
+    /**
+     * The ongoing card as currently posted, by identity.
+     *
+     * Robolectric's shadow keeps the notifications that are *up*, not a log of
+     * posts, so a repost replaces rather than appends — and every post builds a
+     * fresh `Notification`, which is what makes the object the observation.
+     */
+    private fun ongoingCard(): android.app.Notification? {
+        val manager = appContext.getSystemService(NotificationManager::class.java)
+        val title = appContext.getString(app.snoozemo.R.string.ongoing_title)
+        return org.robolectric.Shadows.shadowOf(manager).allNotifications
+            .lastOrNull { org.robolectric.Shadows.shadowOf(it).contentTitle?.toString() == title }
+    }
+
     private fun ruleStatusLine(): String =
         SnoozeDebugLog.snapshot().last { it.contains("rule status:") }
 
@@ -82,6 +99,116 @@ class RuleStatusReceiverTest {
 
         // Both directions, so a receiver that hard-coded "ours" would fail too.
         assertTrue(ruleStatusLine(), ruleStatusLine().contains("rule=another"))
+    }
+
+    @Test
+    fun `an activation of our own rule applies the ceiling the arm deferred`() {
+        runningSnooze()
+        startService(SnoozeService.ACTION_RESTORE)
+        TestSnoozeService.zen.activation = ZenRuleActivation.ACTIVE
+        TestSnoozeService.zen.ceilingsApplied.clear()
+
+        sendStatus(OWN_RULE_ID, NotificationManager.AUTOMATIC_RULE_STATUS_ACTIVATED)
+
+        // The moment the arm waits for. `ZenRuleStatusChange.resolve` answers
+        // `None` here — an activation is never an ending — so this is the one
+        // branch of the whole §5.8 path that used to do nothing at all, and it
+        // is now where the ringer ceiling actually lands.
+        //
+        // Under the running snooze's own identity, so the ceiling record is
+        // this snooze's rather than a previous one's (SPEC.md §5.9 rule 2).
+        assertEquals(
+            listOf(snoozeFixture(now).identity),
+            TestSnoozeService.zen.ceilingsApplied,
+        )
+    }
+
+    @Test
+    fun `applying the deferred ceiling reposts the ongoing card`() {
+        runningSnooze()
+        startService(SnoozeService.ACTION_RESTORE)
+        TestSnoozeService.zen.activation = ZenRuleActivation.ACTIVE
+        val before = ongoingCard()
+        assertTrue("the arm posts a card to repost", before != null)
+
+        sendStatus(OWN_RULE_ID, NotificationManager.AUTOMATIC_RULE_STATUS_ACTIVATED)
+
+        // The card was posted at the arm, before the ceiling had been applied,
+        // and applying it here is not a state transition — so without this
+        // repost a refused ringer write would leave a phone ringing under a
+        // card that does not say so until the half-hourly backstop (Codex,
+        // PR #250).
+        assertTrue("the card was not reposted", ongoingCard() !== before)
+    }
+
+    @Test
+    fun `an activation whose read-back is not active applies nothing`() {
+        runningSnooze()
+        startService(SnoozeService.ACTION_RESTORE)
+        // Exactly the shape a device capture caught on 2026-09-10: the
+        // `ACTIVATED` broadcast arrives while the rule reads back `INACTIVE`,
+        // milliseconds before a `DEACTIVATED` that ended the snooze. Writing
+        // the ringer here is the very thing that appears to knock the rule
+        // down, so the broadcast alone must not be enough.
+        TestSnoozeService.zen.activation = ZenRuleActivation.INACTIVE
+        TestSnoozeService.zen.ceilingsApplied.clear()
+
+        sendStatus(OWN_RULE_ID, NotificationManager.AUTOMATIC_RULE_STATUS_ACTIVATED)
+
+        assertEquals(emptyList<Any?>(), TestSnoozeService.zen.ceilingsApplied)
+    }
+
+    @Test
+    fun `a later wake catches up a ceiling the activation raced`() {
+        runningSnooze()
+        startService(SnoozeService.ACTION_RESTORE)
+        // The residual race: the rule's one `ACTIVATED` arrives while the
+        // read-back still disagrees, so the broadcast cannot be the moment the
+        // ceiling lands and there is no second one coming.
+        TestSnoozeService.zen.activation = ZenRuleActivation.INACTIVE
+        sendStatus(OWN_RULE_ID, NotificationManager.AUTOMATIC_RULE_STATUS_ACTIVATED)
+        assertEquals(emptyList<Any?>(), TestSnoozeService.zen.ceilingsApplied)
+
+        // The rule really is in effect by the next wake the snooze already pays
+        // for, and that is where the ceiling catches up — without it the phone
+        // stays above its ceiling for the whole snooze (Codex, PR #250).
+        TestSnoozeService.zen.activation = ZenRuleActivation.ACTIVE
+        startService(SnoozeService.ACTION_CHECK_CAP)
+
+        assertEquals(
+            listOf(snoozeFixture(now).identity),
+            TestSnoozeService.zen.ceilingsApplied,
+        )
+    }
+
+    @Test
+    fun `a wake with the rule still not in effect catches nothing up`() {
+        runningSnooze()
+        startService(SnoozeService.ACTION_RESTORE)
+        TestSnoozeService.zen.activation = ZenRuleActivation.INACTIVE
+        TestSnoozeService.zen.ceilingsApplied.clear()
+
+        startService(SnoozeService.ACTION_CHECK_CAP)
+
+        // The catch-up is not a way around the gate: it applies the ceiling
+        // only where the read-back agrees, same as the broadcast does.
+        assertEquals(emptyList<Any?>(), TestSnoozeService.zen.ceilingsApplied)
+    }
+
+    @Test
+    fun `an activation of somebody else's rule applies nothing`() {
+        runningSnooze()
+        startService(SnoozeService.ACTION_RESTORE)
+        TestSnoozeService.zen.activation = ZenRuleActivation.ACTIVE
+        TestSnoozeService.zen.ceilingsApplied.clear()
+
+        sendStatus("some-other-app's-rule", NotificationManager.AUTOMATIC_RULE_STATUS_ACTIVATED)
+
+        // Another app's rule going on says nothing about ours being in effect,
+        // and the read-back above is about *our* rule — so without the
+        // ownership gate a foreign activation would be enough to lower the
+        // ringer for our snooze.
+        assertEquals(emptyList<Any?>(), TestSnoozeService.zen.ceilingsApplied)
     }
 
     @Test

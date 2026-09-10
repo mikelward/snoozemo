@@ -81,6 +81,19 @@ internal class RefusingZen : ZenController {
         return ruleId?.let(activationById::get) ?: activation
     }
 
+    /**
+     * Every deferred ringer ceiling this was asked to apply, in order.
+     *
+     * The arm no longer lowers the ringer itself unless the rule is already
+     * observed in effect, so this is where the ceiling actually lands on the
+     * common path (`AndroidZenController.quietTheRingerOnceInEffect`).
+     */
+    val ceilingsApplied = mutableListOf<SnoozeIdentity?>()
+
+    override fun applyRingerCeiling(snooze: SnoozeIdentity?) {
+        ceilingsApplied += snooze
+    }
+
     /** The rule id this fake believes it currently holds. */
     var ownRuleId: String? = OWN_RULE_ID
 

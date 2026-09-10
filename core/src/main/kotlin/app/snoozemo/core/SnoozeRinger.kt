@@ -143,6 +143,30 @@ data class BorrowedRinger(
      * today's behavior rather than being re-applied on sight.
      */
     val applied: Boolean = true,
+
+    /**
+     * Whether a mode change was ever *attempted* for this record.
+     *
+     * [applied] answers "did the change land"; this answers the prior question,
+     * and they are not the same. The window between the record and the write is
+     * normally microseconds wide, so "maybe it landed" was the only uncertainty
+     * worth modeling — but a ceiling the arm **defers** until the zen rule is
+     * observed in effect (SPEC.md §5.9) holds that record open for as long as
+     * it takes the rule to show up, which can be the next periodic wake.
+     *
+     * The difference decides the release. A loan that was attempted owes the
+     * ringer back, verified against [setTo]. One that was never attempted owes
+     * nothing at all — Snoozemo did not move the ringer, so whatever it is now
+     * is the user's, and restoring [restoreTo] over it would undo a deliberate
+     * mid-snooze change (§5.9 rule 4). That case is reachable only because the
+     * deferral made the window long: a user who chooses the very mode the
+     * ceiling would have set looks, to [setTo] alone, exactly like Snoozemo's
+     * own write (Codex, PR #250).
+     *
+     * Defaults to true, so a record written by a build without this field
+     * behaves exactly as it did.
+     */
+    val attempted: Boolean = true,
 )
 
 /** What to do about the ringer, and what the borrow record becomes. */
@@ -298,7 +322,13 @@ object RingerHandover {
         // The ceiling is not a target (`SnoozeRinger`) — a silent phone under a
         // `VIBRATE` snooze stays silent.
         if (!current.isLouderThan(ceiling)) return RingerStep.Nothing
-        return RingerStep.Borrow(BorrowedRinger(restoreTo = current, setTo = ceiling))
+        // Neither applied nor attempted: a step is an instruction, and nothing
+        // has been tried at the moment one is produced. The recorder decides
+        // both, which is what lets it tell a fresh borrow it is about to defer
+        // from a stored one whose write was already attempted (Codex, PR #250).
+        return RingerStep.Borrow(
+            BorrowedRinger(restoreTo = current, setTo = ceiling, applied = false, attempted = false),
+        )
     }
 
     /**
@@ -314,6 +344,12 @@ object RingerHandover {
      */
     fun giveBack(borrowed: BorrowedRinger?, current: RingerMode?): RingerStep {
         if (borrowed == null) return RingerStep.Nothing
+        // Nothing was ever taken, so nothing is owed — whatever the phone is in
+        // now is the user's own (`BorrowedRinger.attempted`). Ahead of the
+        // [setTo] comparison below, which cannot tell a user who chose the
+        // ceiling's own mode from Snoozemo having set it, and would put the
+        // ringer back over a deliberate change.
+        if (!borrowed.attempted) return RingerStep.Disown
         if (current == null) return RingerStep.GiveBack(borrowed.restoreTo)
         // Unverifiable for a different reason — the record cannot say what was
         // set — and answered the same way, per `BorrowedRinger.setTo`.

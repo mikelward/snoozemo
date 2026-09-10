@@ -58,7 +58,46 @@ class AudioRingerController(
      * it runs between the tap and the rule going on. Everything here happens
      * *after* the rule is confirmed on.
      */
-    override fun quiet(snooze: SnoozeIdentity?): RingerOutcome = synchronized(RINGER) { quietLocked(snooze) }
+    override fun quiet(snooze: SnoozeIdentity?): RingerOutcome =
+        synchronized(RINGER) { quietLocked(snooze, moveTheMode = true) }
+
+    override fun captureCeiling(snooze: SnoozeIdentity?): RingerOutcome =
+        synchronized(RINGER) { quietLocked(snooze, moveTheMode = false) }
+
+    /**
+     * Finishes a ceiling [captureCeiling] recorded and did not take — and does
+     * nothing at all otherwise.
+     *
+     * The guard is the whole point, and it is what keeps a catch-up from
+     * becoming a second arm (Codex, PR #250). This runs on a periodic wake, so
+     * anything it is willing to act on it acts on again and again for the
+     * length of the snooze — and every case where the live mode is the user's
+     * own doing is one it must leave alone (SPEC.md §5.9 rule 4).
+     *
+     * So it takes the **narrowest** answer available: a borrow that was never
+     * attempted, which is exactly what a deferred arm records and nothing else
+     * does. Two nearby states are deliberately outside it:
+     *
+     * - **No loan at all** — an arm that found the phone already at or below
+     *   its ceiling. A phone that is loud by now is one the user turned up.
+     * - **Attempted but unconfirmed** (`applied = false`, `attempted = true`) —
+     *   a write whose read-back threw, or whose marker was not stored. That
+     *   loan *is* meant to be finished by a re-assertion, which is what
+     *   [quiet] does and where it has always happened; taking it here would
+     *   re-lower the ringer on every periodic wake for a user who has since
+     *   turned it back to what the loan recorded, which is the same overreach
+     *   under a different flag.
+     *
+     * What is left is the deferred borrow, which [RingerHandover.quiet]'s
+     * unfinished branch already knows how to finish — including declining where
+     * the live mode has moved off the one the record was written against.
+     */
+    override fun finishCeiling(snooze: SnoozeIdentity?): RingerOutcome = synchronized(RINGER) {
+        val borrowed = (readLoan() ?: return@synchronized RingerOutcome.Refused(RingerFailure.PLATFORM_REFUSED))
+            .borrowed
+        if (borrowed == null || borrowed.attempted) return@synchronized RingerOutcome.Untouched
+        quietLocked(snooze, moveTheMode = true)
+    }
 
     override fun giveBack(): RingerOutcome = synchronized(RINGER) { giveBackLocked() }
 
@@ -157,7 +196,7 @@ class AudioRingerController(
         return RingerShortfall.Louder(current).takeIf { current.isLouderThan(ceiling) }
     }
 
-    private fun quietLocked(snooze: SnoozeIdentity?): RingerOutcome {
+    private fun quietLocked(snooze: SnoozeIdentity?, moveTheMode: Boolean): RingerOutcome {
         val loanBefore = readLoan() ?: return RingerOutcome.Refused(RingerFailure.PLATFORM_REFUSED)
         val ceiling = inForce(snooze) ?: return RingerOutcome.Refused(RingerFailure.PLATFORM_REFUSED)
         val chosen = ceiling.chosen
@@ -201,8 +240,9 @@ class AudioRingerController(
             return RingerOutcome.Untouched
         }
 
+
         return when (val step = RingerHandover.quiet(chosen, currentMode(), loan.borrowed)) {
-            is RingerStep.Borrow -> borrow(step.borrowed, chosen)
+            is RingerStep.Borrow -> borrow(step.borrowed, chosen, moveTheMode)
             // The three "correct, and say which" cases: a loan already
             // outstanding (a re-asserted arm), a phone already at or below the
             // ceiling, or a mode that could not be read so there was no way
@@ -269,7 +309,11 @@ class AudioRingerController(
      * Record first, then set, then verify — the order [RingerStep.Borrow]
      * documents, with each failure undoing exactly what it has to.
      */
-    private fun borrow(borrowed: BorrowedRinger, chosen: SnoozeRinger): RingerOutcome {
+    private fun borrow(
+        borrowed: BorrowedRinger,
+        chosen: SnoozeRinger,
+        moveTheMode: Boolean = true,
+    ): RingerOutcome {
         val manager = audioManager ?: return refuse(RingerFailure.PLATFORM_REFUSED, "no AudioManager")
         // Asked only here, on the one branch that is about to write. A device
         // with a fixed volume policy refuses ringer changes outright, so
@@ -281,7 +325,14 @@ class AudioRingerController(
         // Recorded as **not yet applied**, so a process death in the window
         // between this write and the mode change leaves something that can be
         // finished rather than a loan a restore would skip (Codex, PR #176).
-        if (!loans.record(borrowed.copy(applied = false))) {
+        // `attempted` only ever moves one way. A deferral records that nothing
+        // was written *for a new borrow*, but this path is also reached by a
+        // re-assertion finishing a loan whose write was already attempted and
+        // merely unconfirmed — and writing `false` over that would hand the
+        // periodic catch-up a loan it reads as deferred, which is the one thing
+        // its guard exists to exclude (Codex, PR #250).
+        val attempted = moveTheMode || borrowed.attempted
+        if (!loans.record(borrowed.copy(applied = false, attempted = attempted))) {
             // `commit` returning false still updated the in-memory map, so this
             // process now holds a loan the disk does not (Codex, PR #176). Left
             // there, a service recreated without the process dying would find an
@@ -295,6 +346,26 @@ class AudioRingerController(
         }
         val target = borrowed.setTo
             ?: return refuse(RingerFailure.PLATFORM_REFUSED, "no ceiling to set").also { loans.clearContained() }
+
+        // The whole borrow is recorded and none of it taken: the mode change is
+        // what waits for the zen rule to be observed in effect, because moving
+        // the ringer inside that window is what appears to knock the fresh rule
+        // back down (`AndroidZenController.quietTheRingerOnceInEffect`).
+        //
+        // Left as an unfinished borrow that was never *attempted*
+        // (`BorrowedRinger.attempted`), which is the part that had to be new.
+        // Finishing it reuses the existing rule — only while the live mode is
+        // still the one the record was written against, so a user who moves the
+        // ringer during the deferral keeps it — but the release could not:
+        // `setTo` alone cannot tell a user who chose the ceiling's own mode
+        // from Snoozemo having set it, and over a window microseconds wide that
+        // never mattered. A deferral holds it open until the rule shows up
+        // (Codex, PR #250), so the record says outright that nothing was taken
+        // and the release owes nothing back (SPEC.md §5.9 rule 4).
+        if (!moveTheMode) {
+            SnoozeDebugLog.event("ringer: a ${chosen.name} ceiling is recorded but not taken; the mode change waits")
+            return RingerOutcome.Untouched
+        }
 
         // `REFUSED` only, never `UNVERIFIED`: an unconfirmed borrow keeps its
         // loan, because if the write did land, clearing it would leave the phone

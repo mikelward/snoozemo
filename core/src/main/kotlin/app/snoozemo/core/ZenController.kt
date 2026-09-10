@@ -49,6 +49,28 @@ interface ZenController {
     ): ZenOutcome
 
     /**
+     * Finishes a ceiling the arm recorded and did not take, now that the rule
+     * is observed to be **in effect** (SPEC.md §5.9).
+     *
+     * Split out of [setSnoozed] because the arm cannot know that yet. The
+     * platform accepting `STATE_TRUE` is not the rule silencing anything: a
+     * device capture on 2026-09-10 caught the `ACTIVATED` broadcast arriving
+     * with a read-back of `INACTIVE`, milliseconds before a `DEACTIVATED` that
+     * ended the snooze (`TODO.md`). Writing the ringer in that window is what
+     * appears to knock the rule back down, so the write waits for the rule to
+     * be seen active — which is also what [setSnoozed]'s own documentation
+     * has always claimed the arm does.
+     *
+     * A **catch-up, not a second arm**: it acts only on a borrow the arm
+     * recorded and never attempted, so a phone that is loud by now for any
+     * other reason is one the user turned up and keeps (§5.9 rule 4).
+     *
+     * A no-op by default: only the platform controller owns a ringer, and a
+     * caller without one has nothing to apply.
+     */
+    fun applyRingerCeiling(snooze: SnoozeIdentity?) = Unit
+
+    /**
      * The id of the rule [ensureRule] has already prepared, if it has.
      *
      * A memory read, not a binder call, so it is safe to call from the main

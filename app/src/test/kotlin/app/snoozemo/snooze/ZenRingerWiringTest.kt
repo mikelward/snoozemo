@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.SnoozeIdentity
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
@@ -16,6 +17,7 @@ import app.snoozemo.dnd.ZenRuleIdStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -59,6 +61,18 @@ class ZenRingerWiringTest {
         ringer = ringer,
     )
 
+    private fun controller(ringer: RingerController, store: ZenRuleIdStore) = AndroidZenController(
+        context = context,
+        store = store,
+        configurationActivity = ComponentName(context.packageName, "app.snoozemo.ui.MainActivity"),
+        ringer = ringer,
+    )
+
+    @Before
+    fun clearTheLog() {
+        SnoozeDebugLog.resetForTest()
+    }
+
     @Test
     fun `a refused arm takes the ringer from nobody`() {
         val ringer = RecordingRinger()
@@ -77,6 +91,54 @@ class ZenRingerWiringTest {
         // so nothing else would ever reach the release branch (Codex, PR #176).
         assertTrue(ringer.handedBack)
         assertTrue(ringer.forgotten)
+    }
+
+    @Test
+    fun `an arm whose rule is not yet in effect leaves the ringer alone`() {
+        val ringer = RecordingRinger()
+        shadowOf(context.getSystemService(NotificationManager::class.java))
+            .setNotificationPolicyAccessGranted(true)
+
+        val outcome = controller(ringer, RememberingStore()).setSnoozed(
+            true,
+            ZenTrigger.USER_ACTION,
+            "Home",
+            SnoozeIdentity(1_000L),
+        )
+
+        // The platform accepted the rule write — and still reports the rule as
+        // not in effect, which is the state a device capture on 2026-09-10
+        // caught the `ACTIVATED` broadcast arriving in. Every arm in that
+        // capture that lowered the ringer here lost its rule milliseconds
+        // later; every arm that wrote nothing survived. So an accepted write is
+        // not the signal, and the ceiling waits for the read-back.
+        assertTrue(outcome.toString(), outcome is ZenOutcome.Applied)
+        assertFalse(ringer.quieted)
+        // Said rather than silent: a ceiling that has not been applied is the
+        // state a later reader has to be able to tell from one that has
+        // (AGENTS.md, principle 2).
+        val deferral = SnoozeDebugLog.snapshot().first { it.contains("ceiling deferred") }
+        assertTrue(deferral, deferral.contains("ceiling deferred until the rule is in effect"))
+        assertTrue(deferral, deferral.contains("rule=INACTIVE"))
+        // Only the *mode change* waits. The choice is captured now, under this
+        // snooze's own identity, or a re-assertion after a setting change would
+        // run the snooze at a ceiling chosen for the next one (Codex, PR #250).
+        assertEquals(listOf<SnoozeIdentity?>(SnoozeIdentity(1_000L)), ringer.capturedFor)
+    }
+
+    @Test
+    fun `the deferred ceiling lands when the rule is observed in effect`() {
+        val ringer = RecordingRinger()
+        val snooze = SnoozeIdentity(1_000L)
+
+        controller(ringer).applyRingerCeiling(snooze)
+
+        // What the `ACTIVATED` broadcast calls once the read-back agrees the
+        // rule really is on. Under the snooze's own identity, so it reuses that
+        // snooze's ceiling record rather than reading the setting afresh
+        // (SPEC.md §5.9 rule 2).
+        assertTrue(ringer.quieted)
+        assertEquals(listOf<SnoozeIdentity?>(snooze), ringer.quietedFor)
     }
 
     @Test
@@ -142,6 +204,20 @@ class ZenRingerWiringTest {
             private set
         val quietedFor = mutableListOf<SnoozeIdentity?>()
 
+        /** Every ceiling captured without a mode change, in order. */
+        val capturedFor = mutableListOf<SnoozeIdentity?>()
+
+        override fun captureCeiling(snooze: SnoozeIdentity?): RingerOutcome {
+            capturedFor += snooze
+            return RingerOutcome.Untouched
+        }
+
+        override fun finishCeiling(snooze: SnoozeIdentity?): RingerOutcome {
+            quieted = true
+            quietedFor += snooze
+            return RingerOutcome.Untouched
+        }
+
         override fun forgetCeiling() {
             forgotten = true
         }
@@ -160,8 +236,24 @@ class ZenRingerWiringTest {
 
     private object ThrowingRinger : RingerController {
         override fun quiet(snooze: SnoozeIdentity?): RingerOutcome = error("the ringer is unreachable")
+        override fun captureCeiling(snooze: SnoozeIdentity?): RingerOutcome = error("the ringer is unreachable")
+        override fun finishCeiling(snooze: SnoozeIdentity?): RingerOutcome = error("the ringer is unreachable")
         override fun giveBack(): RingerOutcome = error("the ringer is unreachable")
         override fun forgetCeiling(): Unit = error("the ringer is unreachable")
+    }
+
+    /** A store that keeps what it is given, so an arm can actually succeed. */
+    private class RememberingStore : ZenRuleIdStore {
+        private var id: String? = null
+        override fun ruleId(): String? = id
+        override fun setRuleId(id: String): Boolean {
+            this.id = id
+            return true
+        }
+        override fun clear(): Boolean {
+            id = null
+            return true
+        }
     }
 
     /** A store with no rule, so the rule write fails for a stated reason. */

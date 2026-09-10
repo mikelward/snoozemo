@@ -271,7 +271,7 @@ class AndroidZenController(
         val disowned = !snoozed && giveBackTheRinger() is RingerOutcome.Disowned
         val outcome = setRuleState(snoozed, trigger, placeName)
         when (ringerFollowUp(snoozed, outcome, ringerDisowned = disowned)) {
-            RingerFollowUp.QUIET -> quietTheRinger(snooze)
+            RingerFollowUp.QUIET -> quietTheRingerOnceInEffect(snooze)
             RingerFollowUp.HAND_BACK_AND_FORGET -> {
                 // Already done above on the release path; an **arm** that ended
                 // the snooze has not done it at all (Codex, PR #176).
@@ -291,6 +291,58 @@ class AndroidZenController(
             RingerFollowUp.NOTHING -> Unit
         }
         return outcome
+    }
+
+    override fun applyRingerCeiling(snooze: SnoozeIdentity?) {
+        runCatching { ringer.finishCeiling(snooze) }.onFailure {
+            SnoozeDebugLog.failure(it, "ringer: finishing the deferred ceiling threw; the snooze stands")
+        }
+    }
+
+    /**
+     * The ceiling waits for the rule to be **in effect**, not merely accepted.
+     *
+     * `setAutomaticZenRuleState(STATE_TRUE)` returning, and [confirmSilenced]
+     * agreeing the rule exists and is enabled, say nothing about whether zen is
+     * actually on yet — a device capture on 2026-09-10 caught the `ACTIVATED`
+     * broadcast arriving with a read-back of `INACTIVE`, and a `DEACTIVATED`
+     * one millisecond later that ended the snooze. Every arm in that capture
+     * that wrote the ringer died that way; every arm that found the ringer
+     * already low and wrote nothing survived. So the write is what appears to
+     * knock the rule back down, and it waits.
+     *
+     * Deferring costs nothing where it matters: once the rule really is on, zen
+     * has usually lowered the ringer itself, so [applyRingerCeiling] finds
+     * nothing to take. Where it has not — a device whose filter leaves the
+     * ringer alone — the ceiling lands on the `ACTIVATED` broadcast instead,
+     * milliseconds later, or on the next re-assertion if that broadcast never
+     * comes.
+     *
+     * The read is one binder call, and it is on the far side of
+     * [confirmSilenced]'s own — so nothing here is added between the tap and
+     * `STATE_TRUE` (`AGENTS.md`, the arm path).
+     */
+    private fun quietTheRingerOnceInEffect(snooze: SnoozeIdentity?) {
+        val activation = runCatching { ruleActivation() }.getOrNull()
+        if (activation == ZenRuleActivation.ACTIVE) {
+            quietTheRinger(snooze)
+            return
+        }
+        // Said, never silent: a ceiling that has not been applied is the state
+        // a later reader has to be able to tell from one that has.
+        SnoozeDebugLog.event(
+            "ringer: ceiling deferred until the rule is in effect; rule=${activation?.name ?: "unreadable"}",
+        )
+        // Only the *mode change* waits. The choice this snooze runs under is
+        // captured now, because a re-assertion reuses the record and reads the
+        // live setting only in its absence: deferring the record too would let
+        // a setting changed during the deferral govern a snooze already running,
+        // which SPEC.md §5.9 rule 2 exists to prevent (Codex, PR #250). It is
+        // also what the ongoing card reads, so a deferred arm reports the phone
+        // as still louder than asked rather than claiming no ceiling at all.
+        runCatching { ringer.captureCeiling(snooze) }.onFailure {
+            SnoozeDebugLog.failure(it, "ringer: recording the deferred ceiling threw; the snooze stands")
+        }
     }
 
     /**

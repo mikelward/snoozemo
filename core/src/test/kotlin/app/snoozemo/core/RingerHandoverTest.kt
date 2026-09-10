@@ -25,8 +25,19 @@ class RingerHandoverTest {
             borrowed = null,
         )
 
+        // Neither flag set: a step is an instruction, and at the moment one is
+        // produced nothing has been written. The recorder sets both, which is
+        // what lets it tell this from a stored loan whose write was already
+        // attempted (Codex, PR #250).
         assertEquals(
-            RingerStep.Borrow(BorrowedRinger(restoreTo = RingerMode.NORMAL, setTo = RingerMode.VIBRATE)),
+            RingerStep.Borrow(
+                BorrowedRinger(
+                    restoreTo = RingerMode.NORMAL,
+                    setTo = RingerMode.VIBRATE,
+                    applied = false,
+                    attempted = false,
+                ),
+            ),
             step,
         )
     }
@@ -36,7 +47,14 @@ class RingerHandoverTest {
         val step = RingerHandover.quiet(SnoozeRinger.SILENT, RingerMode.VIBRATE, borrowed = null)
 
         assertEquals(
-            RingerStep.Borrow(BorrowedRinger(restoreTo = RingerMode.VIBRATE, setTo = RingerMode.SILENT)),
+            RingerStep.Borrow(
+                BorrowedRinger(
+                    restoreTo = RingerMode.VIBRATE,
+                    setTo = RingerMode.SILENT,
+                    applied = false,
+                    attempted = false,
+                ),
+            ),
             step,
         )
     }
@@ -118,6 +136,62 @@ class RingerHandoverTest {
         assertEquals(
             RingerStep.Disown,
             RingerHandover.giveBack(outstanding, current = RingerMode.SILENT),
+        )
+    }
+
+    @Test
+    fun `a ceiling that was never taken owes nothing back`() {
+        // The arm deferred the mode change until the zen rule was observed in
+        // effect (SPEC.md §5.9) and the snooze ended first, so nothing was ever
+        // taken. The phone is at the ceiling's own mode because the *user* put
+        // it there — indistinguishable from Snoozemo's own write by `setTo`
+        // alone, which is why the record says outright that it never wrote
+        // (Codex, PR #250).
+        val neverTaken = BorrowedRinger(
+            restoreTo = RingerMode.NORMAL,
+            setTo = RingerMode.VIBRATE,
+            applied = false,
+            attempted = false,
+        )
+
+        assertEquals(
+            RingerStep.Disown,
+            RingerHandover.giveBack(neverTaken, current = RingerMode.VIBRATE),
+        )
+    }
+
+    @Test
+    fun `a ceiling that was never taken owes nothing back at the mode it was found in`() {
+        val neverTaken = BorrowedRinger(
+            restoreTo = RingerMode.NORMAL,
+            setTo = RingerMode.VIBRATE,
+            applied = false,
+            attempted = false,
+        )
+
+        // Still at what the arm found, so restoring it would be a no-op — but
+        // the record is dropped rather than acted on, which is what keeps the
+        // *next* give-back from finding a loan against a ringer nobody took.
+        assertEquals(
+            RingerStep.Disown,
+            RingerHandover.giveBack(neverTaken, current = RingerMode.NORMAL),
+        )
+    }
+
+    @Test
+    fun `an attempted loan is still verified against what it set`() {
+        // The distinction has to stay narrow: a loan whose write was attempted
+        // but never confirmed keeps the old reading, because there the phone
+        // really may be where Snoozemo put it.
+        val unconfirmed = BorrowedRinger(
+            restoreTo = RingerMode.NORMAL,
+            setTo = RingerMode.VIBRATE,
+            applied = false,
+        )
+
+        assertEquals(
+            RingerStep.GiveBack(RingerMode.NORMAL),
+            RingerHandover.giveBack(unconfirmed, current = RingerMode.VIBRATE),
         )
     }
 

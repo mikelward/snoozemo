@@ -3711,6 +3711,17 @@ that can only be settled on a real device, ordered by risk.
        something else? The answer decides whether there is a bug to fix or only a comment to
        write. Repeat on One UI at Phase 8 — this is the sort of thing Samsung changes.
 
+6a. [ ] **Every arm holds, on a phone whose ringer is audible** (PR #249, vC 502+). The
+        fix defers the ringer ceiling until the rule's state reads back as active, on the
+        evidence that our own ringer write was knocking the freshly-armed rule down. Arm ten
+        times with the ringer on normal and confirm each snooze survives, then read the debug
+        log: `ringer: ceiling deferred until the rule is in effect` on the arm, and the
+        ceiling landing on the activation broadcast a moment later. **A deactivation on an
+        arm seconds old, with no ringer write near it, kills the diagnosis** — the cause would
+        be somewhere else, and the log now says which of the two happened. Repeat with the
+        ringer already on vibrate, where the ceiling has nothing to take and nothing should
+        change.
+
 ### Tuning — these change details, not direction
 
 7. [ ] Real battery draw over a 4-hour stationary snooze versus the `SPEC.md` §9 estimates,
@@ -4838,6 +4849,29 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   more, not less.
 
 ## Decisions needing review
+
+- [ ] **Should the ringer ceiling be deferred at all?** Autopilot deferred it (PR #250) on the
+      evidence of one device capture: every arm that wrote the ringer lost its rule, every arm that
+      wrote nothing survived. The deferral works, but it turned a window microseconds wide into a
+      state that can live until the next periodic wake, and **four rounds of review were spent
+      making that state safe** — the choice record had to stop waiting with the mode, the one
+      activation broadcast turned out to be spendable, the catch-up turned out to be a second arm,
+      and the release turned out unable to tell a user's own choice from ours. Each fix was right
+      and each was found by review rather than by a test, which is the shape that says the design
+      is doing the work, not the bugs.
+
+      **The alternative** is not to defer: keep writing the ringer at the arm and accept the
+      failure, or find another signal that the rule is in effect that does not need a long-lived
+      intermediate state. Both are cheaper in machinery and one of them is wrong — which is
+      undecidable from here, because the whole premise rests on a capture nobody has reproduced
+      under the fix yet.
+
+      **So the order matters**: *Hardware verification* 6a is what says whether the deferral even
+      fixes the bug. If it does, the state is earning its keep. If a capture still shows a
+      deactivation on an arm seconds old with no ringer write near it, the deferral bought nothing
+      and every one of those four states can come back out. **Reversible either way** — nothing
+      persisted by it outlives a snooze, and `BorrowedRinger.attempted` defaults to the value that
+      makes an older record behave exactly as it did.
 
 - [ ] **Where should the preference-write lock live?** Autopilot put
       `PreferenceWriteLock` in `:core` (PR #246) after Codex found a fifth exposed store,
@@ -7179,6 +7213,78 @@ what sets it off.
   until 10:30 … but it ended the snooze now") is still unexplained *by evidence* — a capture on
   versionCode 493 or higher, where both this and #242's logging ship, is what settles it.
   Tracked under *Hardware verification*.
+
+## Arming quietly ended its own snooze — the ringer write (device capture, 2026-09-10)
+
+- [x] **The ringer ceiling was lowered as soon as the platform accepted `STATE_TRUE`, and on
+  this device that write is what knocked the rule back down.** Reported as "tapping snooze did
+  nothing" about two attempts in ten. Fixed in PR #249.
+
+  What the capture showed, in a single arm: the rule write is accepted, the ringer moves to the
+  chosen ceiling, and roughly twenty milliseconds later the activation broadcast arrives with the
+  rule's own state reading back as **inactive**, followed immediately by a deactivation. The app
+  reads that exactly as designed — the user turned Do Not Disturb off — and ends the snooze as
+  `DND_TURNED_OFF`, seconds after a tap the user is still watching.
+
+  The discriminator is in the log and is not subtle. Eleven arms: the six that recorded nothing
+  to take for the ceiling all survived; five wrote the ceiling and four of those died this way,
+  across two builds. The surviving six differ for a reason that fits the mechanism rather than
+  contradicting it — when the rule really is in effect, the platform has already lowered the
+  ringer, so the ceiling finds nothing to take and writes nothing. It is a race between our rule
+  write taking effect and our own ringer write, and the arms that lost it are the ones that wrote.
+
+  So the arm no longer writes the ringer on the strength of an accepted rule write. It reads the
+  rule's state; where that is not yet active it records `ringer: ceiling deferred until the rule
+  is in effect` and leaves the phone alone, and the ceiling lands instead on the activation
+  broadcast, once the read-back agrees. That broadcast branch resolved to "do nothing" before, so
+  this costs no new wake-up and no new IPC on the arm path — the read is on the far side of the
+  confirmation the arm already made. `SPEC.md` §5.9 carries the decision.
+
+  **The activation broadcast is not relied on to arrive usefully** (Codex, PR #250). It fires once,
+  and the read-back can still disagree when it arrives — the same race from the other side — which
+  spends the one notification and leaves the rule to become active with nothing watching. A deferred
+  ceiling is therefore also caught up on the periodic wake the snooze already pays for, bounding the
+  residual case at that cadence rather than at the length of the snooze. **That catch-up is not a
+  second arm** (Codex, PR #250, second round): a deferred arm records the whole borrow and takes
+  none of it — the *unfinished* borrow the ordering already produced for the moment between the
+  record and the mode change — and the catch-up finishes only such a record. An arm that found the
+  phone already quiet enough leaves nothing to finish, so a phone that is loud later is one the user
+  turned up, and rule 4 keeps it theirs instead of quieting it again every half hour.
+
+  **And a deferral records that it took nothing** (Codex, PR #250, third round). The release
+  compares the live mode against what the loan says it set, which cannot tell a user who chose that
+  very mode from Snoozemo having set it — harmless while the gap between recording and writing was
+  microseconds wide, reachable once a deferral holds it open until the rule appears. The record now
+  carries whether a write was ever *attempted*, and one that was not owes nothing back. **And the
+  catch-up acts only on such a record** (Codex, fourth round): a write that was attempted but never
+  confirmed is a re-assertion's to finish, as it always was, because taking it on a periodic wake
+  would re-lower the ringer every wake for a user who had turned it back to what the loan recorded.
+
+  Four rounds on one mechanism is itself evidence, and it is recorded under *Decisions needing
+  review*: whether to defer at all is the maintainer's call, and 6a is what informs it.
+
+  **Recorded, not fixed — a sixth finding, and the point at which patching stopped** (Codex, PR
+  #250). A never-attempted loan is finished only while the live mode is still what the record was
+  written against, and it is left in place otherwise. So a user who moves the ringer away during
+  the deferral and later happens to move it back finds the next periodic catch-up finishing a
+  ceiling they have twice chosen against. The narrow fix is to retire the loan the first time a
+  finishing attempt sees the mode has moved, rather than letting later wakes reconsider it.
+
+  It is not being made here, deliberately. Six findings in one mechanism, every one a consequence
+  of the same thing — a window microseconds wide turned into a state that can live until the next
+  periodic wake — is evidence about the design and not about the bugs, and the maintainer has said
+  they would rather not carry a deferral at all if the arm path can stay as it is. The
+  instrumentation PR decides whether any of this is needed; patching a seventh round into a
+  mechanism that may be deleted spends review on the wrong question. If the capture keeps the
+  deferral, this fix lands with it.
+
+  **The deferral line is also the experiment.** If the next capture still shows a deactivation on
+  an arm seconds old with no ringer write anywhere near it, the mechanism above is wrong and the
+  cause is elsewhere — the log now distinguishes the two outcomes rather than leaving them to be
+  inferred from a ceiling line that may or may not appear.
+
+  **Still owed: a handset check**, on vC 502 or higher. Arm ten times on a phone whose ringer is
+  audible and confirm every arm holds. Tracked under *Hardware verification*.
 
 ## Coverage gap: the trampoline's refused-start recovery (PR #238)
 

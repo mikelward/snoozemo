@@ -128,6 +128,10 @@ class PrefsRingerLoanStore(context: Context) : RingerLoanStore {
             // True for a record written before the marker existed, so an older
             // loan behaves exactly as it did rather than being re-applied.
             applied = prefs.getBoolean(KEY_APPLIED, true),
+            // True for the same reason, and for an older record it is the
+            // honest answer as well: every loan a build without deferral wrote
+            // had its mode change attempted a moment later.
+            attempted = prefs.getBoolean(KEY_ATTEMPTED, true),
         )
     }
 
@@ -146,6 +150,7 @@ class PrefsRingerLoanStore(context: Context) : RingerLoanStore {
         .putString(KEY_RESTORE_TO, borrowed.restoreTo.name)
         .putString(KEY_SET_TO, borrowed.setTo?.name)
         .putBoolean(KEY_APPLIED, borrowed.applied)
+        .putBoolean(KEY_ATTEMPTED, borrowed.attempted)
         // A new loan starts its retry sequence over. Left behind, a spent tally
         // from an earlier snooze would deny this one its retries entirely.
         .remove(KEY_FAILURES)
@@ -160,6 +165,7 @@ class PrefsRingerLoanStore(context: Context) : RingerLoanStore {
         .remove(KEY_RESTORE_TO)
         .remove(KEY_SET_TO)
         .remove(KEY_APPLIED)
+        .remove(KEY_ATTEMPTED)
         .remove(KEY_FAILURES)
         .commit()
 
@@ -216,6 +222,7 @@ class PrefsRingerLoanStore(context: Context) : RingerLoanStore {
         const val KEY_CHOICE = "active_choice"
         const val KEY_CHOICE_OWNER = "active_choice_owner"
         const val KEY_APPLIED = "applied"
+        const val KEY_ATTEMPTED = "attempted"
         const val KEY_FAILURES = "hand_back_failures"
         const val TAG = "RingerLoan"
     }
