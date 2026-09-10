@@ -4721,6 +4721,25 @@ Nothing here is scheduled; each is a sequel that follows from something already 
       either way. Off by default, chosen per snooze, additive to the cap.
       **The trial is below and the decision is not made.** `until Wi-Fi goes` is
       untouched by this and stays deferred on the original terms.
+- [ ] **Move `Snooze now` to the footer, and offer the `Until …` rows when idle**
+      (maintainer, 2026-09-10). Two halves of one restructure, both the maintainer's
+      call:
+      - **`Snooze now` pinned beside `End now`**, only one of the two showing at a
+        time. That reverses the recorded reasoning in `MainScreen` — ending is urgent
+        and arming is not, and a pinned `Snooze` sat at the foot of an otherwise empty
+        idle screen — so record the reversal and its reason in `SPEC.md` rather than
+        swapping the conclusion silently. The second half is what makes it hold: the
+        idle screen is no longer empty. **Keep the asymmetry**: `End now` shows on
+        `snoozing != false`, so an unread record can never be what hides the way back
+        to a ringing phone (`SPEC.md` §7).
+      - **The `Until …` rows on the idle screen, as a way to start.** Tapping one
+        **arms immediately** with that end condition, rather than selecting it for a
+        later `Snooze` tap; `+` / `−` arm immediately too (maintainer, 2026-09-10).
+        That collapses "arm, then refine" into one tap — the refine step exists only
+        because arming had to come first. The offers have no record to compute from
+        when nothing is running, so they come from the clock, the settings' default
+        cap and the calendar; and the arm path's guarantee still governs (`SPEC.md`
+        §4.1, §6.9): a row that arms must not wait on anything.
 - [ ] **Does `When I move` fire usefully, or too eagerly?** The on-device question this
       shipped to answer (`SPEC.md` §4.4), and the one that decides whether it stays.
       Arm a snooze with the row on, sit through a real meeting, and record what happens:
