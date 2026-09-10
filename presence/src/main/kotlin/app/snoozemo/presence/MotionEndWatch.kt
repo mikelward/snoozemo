@@ -1,6 +1,8 @@
 package app.snoozemo.presence
 
 import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorManager
 import app.snoozemo.core.SnoozeDebugLog
 
 /**
@@ -123,5 +125,72 @@ fun motionEndWatch(context: Context, onMoved: () -> Unit): MotionEndWatch =
  * whether a default sensor of that type exists and nothing more.
  */
 fun deviceHasMotionSensor(context: Context): Boolean =
-    context.applicationContext.getSystemService(android.hardware.SensorManager::class.java)
-        ?.getDefaultSensor(android.hardware.Sensor.TYPE_SIGNIFICANT_MOTION) != null
+    context.applicationContext.getSystemService(SensorManager::class.java)
+        ?.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION) != null
+
+/**
+ * One sensor the platform reports, reduced to the two facts a fallback choice
+ * turns on: what kind it is, and whether it can wake the device.
+ *
+ * No name, no vendor, no reading — [describeMotionSensors] renders the kind
+ * from a fixed table, so nothing a manufacturer wrote reaches the log.
+ */
+data class MotionSensorPresence(val type: Int, val wakeUp: Boolean)
+
+/**
+ * Every sensor this device reports, for [describeMotionSensors] to reduce.
+ *
+ * Read only after [deviceHasMotionSensor] has answered no (maintainer,
+ * 2026-09-10): a Pixel 11a on Android 17 reported no significant-motion sensor
+ * at all, and "unavailable" alone left the next question — what *is* there
+ * to fall back to — as a guess. Asking the platform for the list costs one
+ * IPC, off the main thread, once per run.
+ */
+fun motionSensorInventory(context: Context): List<MotionSensorPresence> =
+    context.applicationContext.getSystemService(SensorManager::class.java)
+        ?.getSensorList(Sensor.TYPE_ALL)
+        .orEmpty()
+        .map { MotionSensorPresence(type = it.type, wakeUp = it.isWakeUpSensor) }
+
+/**
+ * The kinds of sensor a motion wake-up could be built on, by platform type,
+ * with the fixed label the log uses for each.
+ *
+ * A closed table, not `Sensor.stringType`: a vendor-defined type carries a
+ * vendor-defined string, and a report the user shares must not pick up
+ * whatever a manufacturer chose to put there. Anything outside the table is
+ * dropped before rendering.
+ */
+private val MOTION_SENSOR_KINDS: Map<Int, String> = linkedMapOf(
+    Sensor.TYPE_SIGNIFICANT_MOTION to "significant-motion",
+    Sensor.TYPE_MOTION_DETECT to "motion-detect",
+    Sensor.TYPE_STATIONARY_DETECT to "stationary-detect",
+    Sensor.TYPE_STEP_DETECTOR to "step-detector",
+    Sensor.TYPE_STEP_COUNTER to "step-counter",
+    Sensor.TYPE_ACCELEROMETER to "accelerometer",
+    Sensor.TYPE_LINEAR_ACCELERATION to "linear-acceleration",
+    Sensor.TYPE_GYROSCOPE to "gyroscope",
+)
+
+/**
+ * One log line naming which motion-class sensors are present, in the table's
+ * order, each marked `(wake-up)` where the platform says it can wake the
+ * device — the property that decides whether a kind is usable as an exit at
+ * all. Kinds outside [MOTION_SENSOR_KINDS] are ignored, and a kind present
+ * twice is named once.
+ *
+ * Pure, so the rendering is testable without a platform behind it; the
+ * platform read is [motionSensorInventory].
+ */
+fun describeMotionSensors(present: List<MotionSensorPresence>): String {
+    val byKind = present.groupBy { it.type }
+    val named = MOTION_SENSOR_KINDS.mapNotNull { (type, label) ->
+        val sensors = byKind[type] ?: return@mapNotNull null
+        if (sensors.any { it.wakeUp }) "$label (wake-up)" else label
+    }
+    return if (named.isEmpty()) {
+        "motion sensors present: none of the kinds a wake-up could use"
+    } else {
+        "motion sensors present: " + named.joinToString(", ")
+    }
+}

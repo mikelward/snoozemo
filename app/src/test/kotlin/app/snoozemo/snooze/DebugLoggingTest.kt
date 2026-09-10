@@ -2,9 +2,12 @@ package app.snoozemo.snooze
 
 import android.content.Context
 import android.app.Application
+import android.hardware.Sensor
+import android.hardware.SensorManager
 import androidx.test.core.app.ApplicationProvider
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.presence.deviceHasMotionSensor
+import app.snoozemo.ui.buildHoldsForegroundService
 import app.snoozemo.ui.motionEndUnavailability
 import java.io.File
 import org.junit.After
@@ -15,6 +18,8 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.ShadowSensor
 
 /**
  * The settings switch's plumbing, deferred from Codex's PR #62 review: the
@@ -125,12 +130,40 @@ class DebugLoggingTest {
         // unexplained. `motionEndUnavailability` is the same function the
         // screen acts on, so the reason and the behavior cannot drift.
         val expected = motionEndUnavailability { deviceHasMotionSensor(context) }
-            ?.let { "when I move is unavailable: $it" }
+            ?.let { "when I move is unavailable: ${it.reason}" }
             ?: "when I move is available"
         assertTrue(
             "the log settles which it is; said: " + SnoozeDebugLog.snapshot(),
             SnoozeDebugLog.snapshot().any { it.contains(expected) },
         )
+    }
+
+    @Test
+    fun `a phone with no significant-motion sensor says which motion sensors it has`() {
+        // The Pixel 11a case (maintainer, 2026-09-10): "no significant-motion
+        // sensor" alone left the fallback a guess. Robolectric's sensor
+        // manager starts empty, so this plants one accelerometer and no
+        // significant-motion sensor, which is the shape that has to be
+        // explained. `direct` never asks the sensor at all, so the line must
+        // not appear there — a build with no foreground service has no
+        // fallback to choose.
+        val sensors = context.getSystemService(SensorManager::class.java)
+        shadowOf(sensors).addSensor(ShadowSensor.newInstance(Sensor.TYPE_ACCELEROMETER))
+        assertFalse("precondition: the planted sensor is not the one the row needs", deviceHasMotionSensor(context))
+
+        DebugLogging.install(context)
+        DebugLogging.setEnabled(context, false) {}
+        DebugLogging.setEnabled(context, true) {}
+        DebugLogging.awaitIdleForTest()
+
+        val inventory = SnoozeDebugLog.snapshot().filter { it.contains("motion sensors present:") }
+        if (buildHoldsForegroundService) {
+            assertTrue("said: " + SnoozeDebugLog.snapshot(), inventory.isNotEmpty())
+            assertTrue("names the accelerometer: $inventory", inventory.all { it.contains("accelerometer") })
+            assertFalse("and not the sensor that is absent: $inventory", inventory.any { it.contains("significant-motion") })
+        } else {
+            assertTrue("no inventory on a build that cannot use one: $inventory", inventory.isEmpty())
+        }
     }
 
     @Test

@@ -1548,6 +1548,16 @@ a log that still cannot say. It is a property of this build and this phone, like
 and the device the run context already carries, and it is restated on a re-enable for the same
 reason that line is (§4.6).
 
+**A phone with no significant-motion sensor also says which motion sensors it has** (maintainer,
+2026-09-10). The first phone to report none was a Pixel 11a on Android 17, and "unavailable" alone
+left the next question — which kind of sensor a fallback wake-up could be built on — as a guess to
+be made a second time. So that one reason, and only that one, is followed by a line naming the
+motion-class kinds present (significant motion, motion detect, stationary detect, step detector,
+step counter, accelerometer, linear acceleration, gyroscope), each marked when it can wake the
+device; kinds only, from a fixed table, never a vendor's name for one. A build with no foreground
+service has no fallback to choose, and a phone with the sensor needs no inventory, so neither gets
+the line.
+
 **The switch outlives the time choices.** The other rows are withheld once the cap comes inside
 `MIN_CAP` (§7), because there is no time left to choose. This one is not: it carries a state the
 user has to be able to revoke for as long as the sensor is armed, and bundling it with the time

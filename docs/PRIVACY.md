@@ -298,7 +298,11 @@ recorded alongside the run details above — once per run, and again if you turn
 back on — and only as which of the two reasons it is: that this build of
 Snoozemo carries no foreground service, or that this phone has no significant-motion
 sensor. It names no device and reads nothing from the sensor; it is there so a missing
-row can be told apart from a version of Snoozemo that predates it,
+row can be told apart from a version of Snoozemo that predates it. When the reason is the
+missing sensor, one more line names which kinds of motion sensor the phone does have — motion
+detect, step detector, accelerometer and the like, from a fixed list, with whether each can
+wake the phone — so a replacement can be chosen for it. Kinds only: never a manufacturer's
+name for a part, and never a reading from any of them,
 **which control you tapped** — the Quick Settings tile, a button on the ongoing
 notification, a button in the app, or an end time you chose — what Snoozemo found when it
 checked whether its rule was still holding the phone quiet, and what it concluded from that;

@@ -246,7 +246,7 @@ class EndChoiceUiStateTest {
             assertNull("nothing is wrong when both hold", motionEndUnavailability { true })
             assertEquals(
                 "this device has no significant-motion sensor",
-                motionEndUnavailability { false },
+                motionEndUnavailability { false }?.reason,
             )
         } else {
             assertEquals(
@@ -254,7 +254,7 @@ class EndChoiceUiStateTest {
                 "this build holds no foreground service",
                 // `throw`, not `Assert.fail`: a Java `void` method is `Unit`
                 // to Kotlin, so `fail` does not satisfy a `() -> Boolean`.
-                motionEndUnavailability { throw AssertionError("the sensor must not be asked") },
+                motionEndUnavailability { throw AssertionError("the sensor must not be asked") }?.reason,
             )
         }
     }

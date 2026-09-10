@@ -478,13 +478,21 @@ internal fun motionEndUiState(
  * is excluded on purpose now. The sensor question is asked second and through
  * a lambda, so the flavor that can never offer the row never asks it.
  *
- * The strings are fixed and name no device, so they are safe for a log the
- * user shares (AGENTS.md, *Privacy*).
+ * An enum rather than the reason string, so the log can act on *which* one it
+ * is — a missing sensor gets the inventory line, a missing service does not —
+ * without comparing prose. The strings are fixed and name no device, so they
+ * are safe for a log the user shares (AGENTS.md, *Privacy*).
  */
-internal fun motionEndUnavailability(deviceHasMotionSensor: () -> Boolean): String? = when {
-    !buildHoldsForegroundService -> "this build holds no foreground service"
-    !deviceHasMotionSensor() -> "this device has no significant-motion sensor"
+internal fun motionEndUnavailability(deviceHasMotionSensor: () -> Boolean): MotionEndUnavailability? = when {
+    !buildHoldsForegroundService -> MotionEndUnavailability.NO_FOREGROUND_SERVICE
+    !deviceHasMotionSensor() -> MotionEndUnavailability.NO_MOTION_SENSOR
     else -> null
+}
+
+/** Why `When I move` cannot be offered here, with the words the log uses. */
+internal enum class MotionEndUnavailability(val reason: String) {
+    NO_FOREGROUND_SERVICE("this build holds no foreground service"),
+    NO_MOTION_SENSOR("this device has no significant-motion sensor"),
 }
 
 /** Everything [MotionEndRow] draws, as one value. */

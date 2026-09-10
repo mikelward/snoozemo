@@ -4,8 +4,11 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import app.snoozemo.core.SnoozeDebugLog
+import app.snoozemo.presence.describeMotionSensors
 import app.snoozemo.presence.deviceHasMotionSensor
+import app.snoozemo.presence.motionSensorInventory
 import app.snoozemo.storage.SerializedPreferences
+import app.snoozemo.ui.MotionEndUnavailability
 import app.snoozemo.ui.motionEndUnavailability
 import com.mikelward.androidlog.android.DebugFileSink
 import com.mikelward.androidlog.android.PreviousRun
@@ -676,19 +679,35 @@ internal object DebugLogging {
      * re-enable site it would skip the switch's own outcome and leave Settings
      * looking stuck. A refusal says so in the log rather than going quiet.
      *
-     * The strings are fixed and name no device; nothing is read from the
-     * sensor, only whether one exists (`docs/PRIVACY.md`).
+     * **A missing sensor is followed by what the phone has instead**
+     * (maintainer, 2026-09-10). The first device to report no
+     * significant-motion sensor was a Pixel 11a, and "unavailable" alone left
+     * the next question — which kind of sensor a fallback wake-up could use —
+     * as a guess. So that one reason, and only that one, is followed by the
+     * kinds present, from a closed table of labels; a build with no foreground
+     * service has no fallback to choose, and a phone with the sensor needs no
+     * inventory.
+     *
+     * The strings are fixed and name no device; nothing is read from any
+     * sensor, only whether it exists and whether it can wake the device
+     * (`docs/PRIVACY.md`).
      */
     private fun logMotionEndCapability(app: Context) {
-        val line = runCatching {
-            motionEndUnavailability { deviceHasMotionSensor(app) }
-                ?.let { "when I move is unavailable: $it" }
-                ?: "when I move is available"
+        val lines = runCatching {
+            val reason = motionEndUnavailability { deviceHasMotionSensor(app) }
+            listOfNotNull(
+                reason?.let { "when I move is unavailable: ${it.reason}" } ?: "when I move is available",
+                if (reason == MotionEndUnavailability.NO_MOTION_SENSOR) {
+                    describeMotionSensors(motionSensorInventory(app))
+                } else {
+                    null
+                },
+            )
         }.getOrElse { thrown ->
-            runCatching { Log.w(TAG, "Reading the significant-motion sensor threw.", thrown) }
-            "whether when I move can work here could not be determined"
+            runCatching { Log.w(TAG, "Reading the motion sensors threw.", thrown) }
+            listOf("whether when I move can work here could not be determined")
         }
-        SnoozeDebugLog.event(line)
+        lines.forEach { SnoozeDebugLog.event(it) }
     }
 
     private fun appVersion(context: Context): String = runCatching {
