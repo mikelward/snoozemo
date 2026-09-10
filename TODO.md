@@ -4712,13 +4712,52 @@ Nothing here is scheduled; each is a sequel that follows from something already 
       plus background location, so `play`-flavor only.
 - [ ] **`ZenDeviceEffects`** — grayscale, dim wallpaper, night mode while snoozed
       (`SPEC.md` §5.5).
-- [ ] **Explicit fallback end conditions** (`until Wi-Fi goes`, `until I move`) — only if
+- [x] **`until I move` — built as `When I move`, and on trial** (maintainer, 2026-09-10;
+      `SPEC.md` §4.4). Taken ahead of hardware item 2 rather than after it, and
+      deliberately: the item above reads it as a *fallback* for the three-source
+      layering, and this is not that. The case it answers is the meeting room, which no
+      amount of geofence accuracy reaches — the office SSID covers the floor and §6.6's
+      radius is 100 m — so the measurement that would have gated it cannot answer it
+      either way. Off by default, chosen per snooze, additive to the cap.
+      **The trial is below and the decision is not made.** `until Wi-Fi goes` is
+      untouched by this and stays deferred on the original terms.
+- [ ] **Does `When I move` fire usefully, or too eagerly?** The on-device question this
+      shipped to answer (`SPEC.md` §4.4), and the one that decides whether it stays.
+      Arm a snooze with the row on, sit through a real meeting, and record what happens:
+      does shifting in a seat end it, does walking to a whiteboard end it, does walking
+      out of the room end it, and how long after. `TYPE_SIGNIFICANT_MOTION` is
+      vendor-tuned, so this is a Pixel measurement and a Samsung one, not one number.
+      The debug log names the ending (`significant motion: ending the snooze`) and the
+      ended-notification says `you moved` rather than `you left`, so an over-eager
+      firing is legible as one after the fact.
+      - **A second question rides along, and it is the one that fails silently**: does
+        the sensor fire *at all* while only the foreground service holds the process?
+        Hardware item 2a says to plan as though it does not — that item predates the
+        foreground service landing and is stale on that half, but a service is the
+        platform's named remedy rather than a guarantee, so a snooze that simply never
+        ends on movement is the outcome to check for first. Nothing is lost if it never
+        fires: the cap and the departure test both still bound the snooze.
+      - **If it fires but discriminates badly**, the next thing to weigh is Play
+        Services' activity-recognition transitions — `WALKING` with a dwell, delivered
+        by `PendingIntent` so it survives a dead process, and already inside the
+        `play-services-location` artifact `play` carries. It needs the
+        `ACTIVITY_RECOGNITION` runtime grant and a Data Safety answer, so it is a
+        distribution decision and **not authorized** (maintainer, 2026-09-10: "doesn't
+        mean I decided it's ever worth requesting yet another permission"). Recorded as
+        the known alternative, not as a plan. `MotionEndWatch` takes a
+        `TriggerRegistrar`, so swapping the source is an implementation of that seam.
+- [ ] **Explicit fallback end conditions** (`until Wi-Fi goes`) — only if
       hardware item 2 shows the three-source layering isn't enough. Preference order is:
       fix it invisibly, then have the app pick the fallback itself and say so, and only
       then expose them as standing user choices (`SPEC.md` §6.10).
 - [ ] **Chaining back-to-back meetings**, if using the app shows people actually want it.
 - [ ] **"Until I leave this room"** (maintainer, 2026-08-13) — the use that justifies keeping
-      `Anchor.bssid`. A room is smaller than an SSID: in an office the whole floor is one
+      `Anchor.bssid`. **`When I move` above is a cheaper answer to the same use, shipped
+      first and on trial**; if it turns out to discriminate well enough, this item may
+      not be worth its BSSID machinery at all, and the trial's result is what decides
+      that. Kept open until then, because the two fail differently — this one errs
+      toward ending early on a roam, that one errs toward ending early on a fidget.
+      A room is smaller than an SSID: in an office the whole floor is one
       network, so SSID loss cannot notice you leaving the meeting room you are sitting in,
       which is exactly the case a "quiet until I leave here" snooze is for. Design
       constraints in `SPEC.md` §6.2 — the short version:

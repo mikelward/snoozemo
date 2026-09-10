@@ -40,6 +40,22 @@ enum class EndReason {
     /** The departure test confirmed the user left the anchor. The intended path. */
     DEPARTURE,
 
+    /**
+     * The phone moved, on a snooze the user asked to end that way (SPEC.md
+     * §4.4) — `TYPE_SIGNIFICANT_MOTION` fired and the snooze was carrying
+     * [ActiveSnooze.endsOnMotion].
+     *
+     * **Not a departure, and deliberately its own reason.** The departure test
+     * is evidence that the user left somewhere; this is evidence only that the
+     * phone moved, which the engine elsewhere treats as a reason to *look*
+     * rather than a verdict (see `MotionTrigger`). Recording it as
+     * [DEPARTURE] would put an unconfirmed ending into the same bucket as a
+     * confirmed one, and this ending is the one whose false-positive rate is
+     * being measured — so the log has to be able to tell them apart
+     * (`TODO.md`, the on-device trial).
+     */
+    MOVED,
+
     /** The duration cap fired — the backstop that holds when every sensor has failed. */
     DURATION_CAP,
 
@@ -82,6 +98,7 @@ fun EndReason.zenTrigger(): ZenTrigger = when (this) {
     // our tile or notification, or the platform's own Do Not Disturb toggle.
     EndReason.MANUAL, EndReason.DND_TURNED_OFF -> ZenTrigger.USER_ACTION
     EndReason.DEPARTURE,
+    EndReason.MOVED,
     EndReason.DURATION_CAP,
     EndReason.LOST_CAPABILITY,
     -> ZenTrigger.CONTEXT
@@ -182,6 +199,36 @@ enum class TrackingMode {
      */
     val tracksDeparture: Boolean
         get() = this != DURATION_ONLY && !isSettling
+
+    /**
+     * Whether a snooze in this mode keeps the process resident — the
+     * foreground service of SPEC.md §6.10.
+     *
+     * **One predicate, asked on both sides of the same question**, the way
+     * [tracksDeparture] is. The service holds a foreground service exactly for
+     * these modes, and `When I move` (§4.4) can only be offered where one is
+     * held: `TYPE_SIGNIFICANT_MOTION` is a one-shot sensor, and Android
+     * delivers no one-shot sensor events to a background app — the remedy the
+     * platform names is a foreground service. Offered anywhere else the row
+     * would arm a watch that never fires, which is a snooze running silently
+     * to its cap behind a promise the app cannot keep (principle 1).
+     *
+     * Broader than [tracksDeparture] by exactly [SETTLING]: an arm still
+     * looking for its anchor already holds the service, because it is about to
+     * need one. That is the difference between "is anything watching yet" and
+     * "is this process protected", and the two rows want different answers —
+     * `Until I leave` lengthens a cap on a promise that may not materialize,
+     * while the motion watch works the instant it is armed and does not care
+     * whether an anchor ever lands.
+     *
+     * False for [DURATION_ONLY], where the service is deliberately an ordinary
+     * started one. That is also what keeps the row off `direct`, which runs
+     * nothing but duration-only snoozes and declares no foreground-service
+     * permission at all — a flavor gate that falls out of the mode rather than
+     * needing one of its own.
+     */
+    val keepsProcessResident: Boolean
+        get() = this != DURATION_ONLY
 
     companion object {
         /**

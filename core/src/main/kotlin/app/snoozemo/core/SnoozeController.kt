@@ -513,6 +513,48 @@ class SnoozeController(
     }
 
     /**
+     * Turns `When I move` on or off for the running snooze (SPEC.md §4.4).
+     * Returns the updated snooze, or null when there is nothing running or the
+     * flag already reads [value].
+     *
+     * **Unlike [lowerCapTo], this really is another exit**, and that is the
+     * whole difference between the two. Lowering the cap moves the one deadline
+     * an alarm already watches; this arms a sensor that nothing else is
+     * listening to, so the caller has a watch to start and stop either side of
+     * it — which is why the null return matters here rather than being a
+     * courtesy. A no-op reported as a change would have the service tear down a
+     * live watch and build an identical one on every recomposition that
+     * restated the same value.
+     *
+     * **Every mode may take it**, including [TrackingMode.DURATION_ONLY]
+     * (maintainer, 2026-09-10). A background app receives no one-shot sensor
+     * events, but the service now holds a foreground service for an armed
+     * motion exit whatever the tracking mode says — so the capability follows
+     * the choice rather than the choice being gated on the capability. That is
+     * the opposite of the pairing `Until I leave` keeps with
+     * [TrackingMode.tracksDeparture], and deliberately: a duration-only snooze
+     * in a meeting room is exactly where location can see nothing and this row
+     * is the only answer left.
+     *
+     * What can still refuse it is the hardware. The caller validates that the
+     * platform actually registered the sensor and clears the flag when it did
+     * not, so a device without one never keeps a promise it cannot honor —
+     * that check belongs beside the registration, not here.
+     *
+     * Emits a transition, because the ongoing notification has to stop or start
+     * saying what ends this snooze — a second exit the user cannot see is
+     * principle 2's failure.
+     */
+    fun setEndsOnMotion(value: Boolean): ActiveSnooze? {
+        val snooze = active ?: return null
+        if (snooze.endsOnMotion == value) return null
+        val updated = snooze.copy(endsOnMotion = value)
+        active = updated
+        listener.onStateChanged(state, updated, null)
+        return updated
+    }
+
+    /**
      * Takes [restated] as the running snooze — the same snooze with its clock
      * frames rewritten onto the clock the user has just set (SPEC.md §7).
      * Returns it, or null when there is nothing running or it describes a

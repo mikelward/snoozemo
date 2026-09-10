@@ -404,6 +404,15 @@
     <!-- The reason behind a degraded mode, joined to it. Approved 2026-08-30. -->
     <!-- TODO: translate -->
     <string name="ongoing_degraded_reason" tools:ignore="MissingTranslation">%1$s — %2$s</string>
+    <!--
+      `When I move` on the ongoing card (SPEC.md §4.4). Joined with "or"
+      rather than the em dash above, because this is a second *exit*, not a
+      qualification on the first: "Ends when you leave — when you move" reads
+      as an explanation of leaving, which is exactly the conflation the
+      feature is not.
+    -->
+    <!-- TODO: translate -->
+    <string name="ongoing_or_when_you_move" tools:ignore="MissingTranslation">%1$s, or when you move</string>
     <!-- TODO: translate -->
     <string name="ongoing_watch_unprotected" tools:ignore="MissingTranslation">tracking may pause</string>
     <!-- TODO: translate -->
@@ -430,6 +439,8 @@
     <!-- TODO: translate -->
     <string name="action_end_at" tools:ignore="MissingTranslation">Until %1$s</string>
     <string name="ended_departure">Snooze ended — you left</string>
+    <!-- TODO: translate -->
+    <string name="ended_moved" tools:ignore="MissingTranslation">Snooze ended — you moved</string>
     <string name="ended_cap">Snooze ended — time limit reached</string>
     <!-- Deliberately not "lost access": this covers every capability loss, and
          the specific reason is carried by its own one-shot alongside it. -->
@@ -448,6 +459,15 @@
     <string name="extend_at_max">Already at the time limit</string>
     <!-- TODO: translate -->
     <string name="failure_could_not_set_end" tools:ignore="MissingTranslation">Couldn\'t set the end time</string>
+    <!--
+      Both end conditions need the location grant: `Until I leave` to measure a
+      departure, `When I move` because the foreground service that keeps the
+      sensor alive is typed `location` and the platform refuses it without one
+      (SPEC.md §4.4). Says what is needed rather than what failed — the tap did
+      nothing, and the reason is the actionable half.
+    -->
+    <!-- TODO: translate -->
+    <string name="failure_needs_location" tools:ignore="MissingTranslation">Needs location access</string>
 
     <!--
       The end-condition sheet (SPEC.md §4.4), shown by the tile's trampoline once
@@ -469,6 +489,10 @@
          describing them (maintainer, 2026-09-08). -->
     <!-- TODO: translate -->
     <string name="main_until_i_leave" tools:ignore="MissingTranslation">Until I leave</string>
+    <!-- TODO: translate -->
+    <string name="main_when_i_move" tools:ignore="MissingTranslation">When I move</string>
+    <!-- TODO: translate -->
+    <string name="main_when_i_move_on" tools:ignore="MissingTranslation">Also ending when you move</string>
     <!-- Names the calendar mark on a row whose time came from a meeting, for a
          screen reader: the label alone reads the same as the adjustable time,
          so the mark is the only thing saying where that time came from. Not

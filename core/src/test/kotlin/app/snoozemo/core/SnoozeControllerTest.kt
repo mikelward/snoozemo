@@ -599,11 +599,95 @@ class SnoozeControllerTest {
             fresh.end(reason)
             val expected = when (reason) {
                 EndReason.MANUAL, EndReason.DND_TURNED_OFF -> ZenTrigger.USER_ACTION
-                EndReason.DEPARTURE, EndReason.DURATION_CAP, EndReason.LOST_CAPABILITY ->
-                    ZenTrigger.CONTEXT
+                EndReason.DEPARTURE, EndReason.MOVED, EndReason.DURATION_CAP,
+                EndReason.LOST_CAPABILITY,
+                -> ZenTrigger.CONTEXT
             }
             assertEquals("$reason", false to expected, pending.calls.last())
         }
+    }
+
+    @Test
+    fun `when I move arms only once and reports the change`() {
+        armFully()
+
+        val armed = controller.setEndsOnMotion(true)
+
+        assertNotNull(armed)
+        assertTrue(controller.active!!.endsOnMotion)
+        // Restating the same value is not a change: the service tears its
+        // watch down and rebuilds it on every reported transition, so a no-op
+        // reported as one would churn a live sensor registration.
+        assertNull(controller.setEndsOnMotion(true))
+    }
+
+    @Test
+    fun `when I move can be turned back off`() {
+        armFully()
+        controller.setEndsOnMotion(true)
+
+        assertNotNull(controller.setEndsOnMotion(false))
+        assertFalse(controller.active!!.endsOnMotion)
+    }
+
+    @Test
+    fun `a duration-only snooze may take when I move`() {
+        // The case the row exists for: a meeting room where location can see
+        // nothing. The service keeps the process resident for an armed motion
+        // exit whatever the mode says, so the choice is not gated on tracking
+        // (maintainer, 2026-09-10) — the earlier version refused exactly here,
+        // which withheld the exit from the snooze that needed it most.
+        controller.beginArming(
+            ActiveSnooze.capExpiryFor(now),
+            readClock(),
+            canTrackDeparture = false,
+        )
+        controller.onAnchorCaptured(Anchor(capturedAt = now))
+        assertEquals(TrackingMode.DURATION_ONLY, controller.active!!.mode)
+
+        assertNotNull(controller.setEndsOnMotion(true))
+        assertTrue(controller.active!!.endsOnMotion)
+    }
+
+
+    @Test
+    fun `degrading past departure tracking keeps when I move`() {
+        // Losing location does not take the motion exit with it: the service
+        // holds the process for the exit itself, so the choice outlives the
+        // tracking it never depended on. An earlier version cleared the flag
+        // here, which took an exit away mid-snooze for a reason the user never
+        // asked about (maintainer, 2026-09-10).
+        val fixOnly = anchor.copy(ssid = null, bssid = null)
+        armFully(fixOnly)
+        controller.setEndsOnMotion(true)
+
+        controller.onPresenceUpdate(
+            PresenceUpdate(event = null, degradation = DegradationCause.NO_LOCATION_FIX),
+        )
+
+        assertEquals(TrackingMode.DURATION_ONLY, controller.active!!.mode)
+        assertTrue("the exit survives the tracking", controller.active!!.endsOnMotion)
+    }
+
+    @Test
+    fun `degrading to a mode that still holds the process keeps when I move`() {
+        // The other direction, so the rule above cannot be satisfied by
+        // clearing the flag on any degradation at all: Wi-Fi-only still holds
+        // a foreground service, so the exit is still deliverable.
+        armFully()
+        controller.setEndsOnMotion(true)
+
+        controller.onPresenceUpdate(
+            PresenceUpdate(event = null, degradation = DegradationCause.NO_LOCATION_FIX),
+        )
+
+        assertEquals(TrackingMode.WIFI_ONLY, controller.active!!.mode)
+        assertTrue(controller.active!!.endsOnMotion)
+    }
+
+    @Test
+    fun `when I move does nothing with no snooze running`() {
+        assertNull(controller.setEndsOnMotion(true))
     }
 
     @Test

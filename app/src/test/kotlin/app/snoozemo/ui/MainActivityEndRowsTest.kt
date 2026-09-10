@@ -13,6 +13,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -215,5 +216,356 @@ class MainActivityEndRowsTest {
         settle()
 
         assertEquals(emptyList<Instant>(), activity.meetingOffers)
+    }
+
+    private fun shadowApp() =
+        shadowOf(ApplicationProvider.getApplicationContext<android.app.Application>())
+
+    /**
+     * Forgets every service start so far, so what follows measures the tap
+     * rather than the activity's own startup.
+     *
+     * **`nextStartedService` is a queue, and it pops the oldest.** Read
+     * straight after a tap it returns whatever the screen had already sent
+     * while opening — an `ACTION_END` here — so the assertion was about a
+     * different call entirely. Drained with the same loop the sibling tests
+     * use rather than a `clear` helper, so there is one idiom in the file.
+     */
+    private fun forgetServiceStarts() {
+        while (shadowApp().nextStartedService != null) Unit
+    }
+
+    /** Every action sent since [forgetServiceStarts], oldest first. */
+    private fun serviceActions(): List<String?> {
+        val actions = mutableListOf<String?>()
+        while (true) {
+            val next = shadowApp().nextStartedService ?: return actions
+            actions.add(next.action)
+        }
+    }
+
+    /**
+     * Whether the motion tap reached the service since [forgetServiceStarts].
+     *
+     * Asked as *did it happen* rather than *was it the last thing to happen*,
+     * because this activity sends the service more than the tap does: under
+     * Robolectric there is no Do Not Disturb access, so a startup or resume
+     * refresh decides the snooze should end and sends `ACTION_END` on its own
+     * schedule. Which of the two lands last is the harness's business; whether
+     * the tap was delivered is the test's.
+     */
+    /**
+     * Whether a departure commit reached the service since the last drain.
+     *
+     * `Until I leave` goes out as `ACTION_SET_CAP` carrying
+     * [SnoozeService.EXTRA_RESTORE_END], so the extra is what tells it from a
+     * chosen time.
+     */
+    private fun sentDeparture(): Boolean {
+        var found = false
+        while (true) {
+            val next = shadowApp().nextStartedService ?: return found
+            if (
+                next.action == app.snoozemo.snooze.SnoozeService.ACTION_SET_CAP &&
+                next.getBooleanExtra(app.snoozemo.snooze.SnoozeService.EXTRA_RESTORE_END, false)
+            ) {
+                found = true
+            }
+        }
+    }
+
+    private fun sentMotionEnd(): Boolean =
+        serviceActions().contains(app.snoozemo.snooze.SnoozeService.ACTION_SET_MOTION_END)
+
+    @Test
+    fun `when I move asks for location rather than arming without it`() {
+        // The foreground service that keeps the sensor alive is typed
+        // `location`, and the platform refuses to start one without the grant
+        // — so arming here would record a promise it will not let us keep
+        // (SPEC.md §4.4).
+        ActiveSnoozeStore(context).arm(snooze())
+        val activity = screen()
+        settle()
+        forgetServiceStarts()
+
+        activity.toggleMotionEndFromScreen(true)
+        settle()
+
+        assertFalse("the tap armed nothing", sentMotionEnd())
+    }
+
+    @Test
+    fun `when I move arms once location is granted`() {
+        // The other direction, so the gate above cannot pass by refusing
+        // everything.
+        // All three, not just fine. `LocationPermission.GRANTED` means both
+        // halves are held, and the background half is required on `play` —
+        // granting fine alone would read as `ASKABLE` there and pass only on
+        // `direct`, which is a test that agrees with itself on one flavor.
+        shadowApp().grantPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+        )
+        ActiveSnoozeStore(context).arm(snooze())
+        val activity = screen()
+        settle()
+        forgetServiceStarts()
+
+        activity.toggleMotionEndFromScreen(true)
+        settle()
+
+        assertTrue("the tap reached the service", sentMotionEnd())
+    }
+
+    @Test
+    fun `approximate location is enough for when I move`() {
+        // The platform's prerequisite for a `location`-typed foreground
+        // service is "at least one of ACCESS_COARSE_LOCATION,
+        // ACCESS_FINE_LOCATION" — background is not among them, and the sensor
+        // needs no location at all. Holding this row to the departure
+        // aggregate refused it to everyone who picked Android's approximate
+        // option (Codex, PR #252).
+        shadowApp().grantPermissions(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+        ActiveSnoozeStore(context).arm(snooze())
+        val activity = screen()
+        settle()
+        forgetServiceStarts()
+
+        activity.toggleMotionEndFromScreen(true)
+        settle()
+
+        assertTrue("the tap reached the service", sentMotionEnd())
+    }
+
+    @Test
+    fun `a when I move grant does not go on to ask for background location`() {
+        // The background rationale belongs to departure tracking. Following a
+        // motion tap with it would be a detour for a permission that exit will
+        // never use — and leaving the switch waiting on the answer would be
+        // worse still (Codex, PR #252).
+        ActiveSnoozeStore(context).arm(snooze())
+        val activity = screen()
+        settle()
+        activity.toggleMotionEndFromScreen(true)
+        settle()
+        shadowApp().grantPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+        )
+
+        activity.onForegroundLocationResult(fineGranted = true)
+        settle()
+
+        assertFalse(
+            "no background rationale behind a motion tap",
+            activity.showBackgroundLocationRationale,
+        )
+    }
+
+    @Test
+    fun `a grant that lands after a rotation still runs the tap that asked`() {
+        // The permission dialog is a window over this activity, so a rotation
+        // behind it recreates the activity while the request is still out. The
+        // result is delivered to the *new* instance, which without the saved
+        // pending action finds nothing to resume — the user grants location
+        // and the row they touched silently does nothing (Codex, PR #252).
+        ActiveSnoozeStore(context).arm(snooze())
+        val controller = controller()
+        settle()
+        controller.get().toggleMotionEndFromScreen(true)
+        settle()
+
+        controller.recreate()
+        settle()
+        // The recreation's own startup calls are not what this measures.
+        forgetServiceStarts()
+        shadowApp().grantPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+        )
+        controller.get().onForegroundLocationResult(fineGranted = true)
+        settle()
+
+        assertTrue("the tap the user made before the rotation was replayed", sentMotionEnd())
+    }
+
+    @Test
+    fun `a grant for a snooze that has ended is not applied to the next one`() {
+        // The wait is unbounded — the user can sit on the permission dialog —
+        // and a snooze can end and another be armed from the shade underneath
+        // it. Without the tap's own snooze riding along, the grant would give
+        // the new one a movement exit nobody asked for (Codex, PR #252).
+        ActiveSnoozeStore(context).arm(snooze())
+        val activity = screen()
+        settle()
+        activity.toggleMotionEndFromScreen(true)
+        settle()
+
+        // The one it was tapped on ends; a different one is armed.
+        ActiveSnoozeStore(context).arm(snooze(startedAt = at(offsetSeconds = 60)))
+        settle()
+        forgetServiceStarts()
+        shadowApp().grantPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+        )
+        activity.onForegroundLocationResult(fineGranted = true)
+        settle()
+
+        assertFalse("the new snooze keeps its own end conditions", sentMotionEnd())
+    }
+
+    @Test
+    fun `dismissing the rationale after the snooze changed reports nothing`() {
+        // Both endings of a pending tap need the same identity check: the
+        // grant that resumes it, and this dismissal that abandons it.
+        // Reporting here would tell the user the *running* snooze's row failed
+        // when it never tried (Codex, PR #252).
+        shadowApp().grantPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+        )
+        ActiveSnoozeStore(context).arm(snooze())
+        val activity = screen()
+        settle()
+        activity.chooseDepartureFromScreen()
+        settle()
+        activity.onForegroundLocationResult(fineGranted = true)
+        settle()
+
+        // The one it was tapped on ends; a different one is armed.
+        ActiveSnoozeStore(context).arm(snooze(startedAt = at(offsetSeconds = 60)))
+        settle()
+        activity.dismissBackgroundLocationRationale()
+        settle()
+
+        assertNull("the new snooze is told nothing about the old one's tap", activity.lastOutcome)
+    }
+
+    @Test
+    fun `a grant that lands before the record has loaded still runs the tap`() {
+        // The recreated activity restores the pending tap immediately but
+        // reads the record asynchronously, so `activeSnooze` is null for a
+        // moment — which must read as "not known yet", not as "the snooze
+        // ended". Reading it as the latter dropped a valid tap and granting
+        // permission then applied nothing (Codex, PR #252).
+        ActiveSnoozeStore(context).arm(snooze())
+        val controller = controller()
+        settle()
+        controller.get().toggleMotionEndFromScreen(true)
+        settle()
+
+        controller.recreate()
+        // Deliberately no `settle()` here: the recreated activity's record
+        // read has been posted and not yet delivered, which is the race.
+        forgetServiceStarts()
+        shadowApp().grantPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+        )
+        controller.get().onForegroundLocationResult(fineGranted = true)
+
+        assertTrue("the tap survives the record read it raced", sentMotionEnd())
+    }
+
+    @Test
+    fun `a grant with no tap behind it replays nothing`() {
+        // The other direction: a grant arriving from the Permissions screen,
+        // or from a trip to Settings, must not replay a tap the user made
+        // minutes ago and has forgotten about.
+        ActiveSnoozeStore(context).arm(snooze())
+        val activity = screen()
+        settle()
+        forgetServiceStarts()
+
+        activity.onForegroundLocationResult(fineGranted = true)
+        settle()
+
+        assertFalse("nothing was replayed", sentMotionEnd())
+    }
+
+    @Test
+    fun `a departure tap waits for the background half rather than failing`() {
+        // On `play` the whole grant is two prompts, and the second one used to
+        // land nowhere: the foreground result found the aggregate still
+        // `ASKABLE`, reported the tap failed, and the background callback only
+        // refreshed state — so granting it applied nothing (Codex, PR #252).
+        shadowApp().grantPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+        )
+        ActiveSnoozeStore(context).arm(snooze())
+        val activity = screen()
+        settle()
+        forgetServiceStarts()
+
+        activity.chooseDepartureFromScreen()
+        settle()
+        activity.onForegroundLocationResult(fineGranted = true)
+        settle()
+
+        // Flavor-aware rather than hard-coded: `direct` needs no background
+        // half, so there the tap is already done by here, and pinning either
+        // answer would be a test that agrees with itself on one flavor.
+        if (locationTrackingNeedsBackgroundPermission) {
+            assertTrue("the rationale is up", activity.showBackgroundLocationRationale)
+            assertFalse("and the tap is waiting, not failed", sentDeparture())
+            shadowApp().grantPermissions(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            activity.onBackgroundLocationResult()
+            settle()
+        }
+        assertTrue("the grant applies the tap the user made", sentDeparture())
+    }
+
+    @Test
+    fun `the background rationale survives a rotation`() {
+        // The rotation happens *after* the foreground result is consumed, so
+        // nothing would put the dialog back — and the pending departure would
+        // sit there with no callback left to resume or reject it, silently
+        // unapplied (Codex, PR #252).
+        shadowApp().grantPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+        )
+        ActiveSnoozeStore(context).arm(snooze())
+        val controller = controller()
+        settle()
+        controller.get().chooseDepartureFromScreen()
+        settle()
+        controller.get().onForegroundLocationResult(fineGranted = true)
+        settle()
+        assertEquals(
+            "the rationale is up exactly where the flavor needs the background half",
+            locationTrackingNeedsBackgroundPermission,
+            controller.get().showBackgroundLocationRationale,
+        )
+
+        controller.recreate()
+        settle()
+
+        assertEquals(
+            "and still up afterwards, so the tap can still be resumed",
+            locationTrackingNeedsBackgroundPermission,
+            controller.get().showBackgroundLocationRationale,
+        )
+    }
+
+    @Test
+    fun `turning when I move off never asks for a permission`() {
+        // Withdrawing a choice must not be met with a prompt, and there is no
+        // service to keep for an exit being given up.
+        ActiveSnoozeStore(context).arm(snooze())
+        val activity = screen()
+        settle()
+        forgetServiceStarts()
+
+        activity.toggleMotionEndFromScreen(false)
+        settle()
+
+        assertTrue("the tap reached the service", sentMotionEnd())
     }
 }

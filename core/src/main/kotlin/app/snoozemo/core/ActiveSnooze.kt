@@ -217,6 +217,28 @@ data class ActiveSnooze(
      * improves on rather than replaces.
      */
     val ruleId: String? = null,
+    /**
+     * Whether this snooze also ends the moment the phone moves — the user's
+     * `When I move` choice (SPEC.md §4.4), off unless they asked for it.
+     *
+     * **A second way to end, not a replacement for the cap.** Nothing here
+     * touches [capExpiresAt]: the backstop of §7 still bounds the snooze, the
+     * departure test still runs where there is one, and this adds
+     * `TYPE_SIGNIFICANT_MOTION` firing as a third exit. So the failure
+     * direction of an over-eager sensor is a snooze that ends early — the
+     * annoying direction — rather than one that never ends.
+     *
+     * On the record rather than beside it, for the reason [lifecycle] is: the
+     * watch is re-armed from a restored record after every process death, and
+     * a flag held only in memory would come back false, leaving a snooze the
+     * user asked to end on movement running silently to its cap instead. It is
+     * part of what the snooze *is*, so it is part of what gets written.
+     *
+     * Defaults to false, which is also what a record written before this field
+     * existed reads as — and false is the honest answer there, since nothing
+     * armed a watch for it.
+     */
+    val endsOnMotion: Boolean = false,
 ) {
     /**
      * How long is left before the cap fires, floored at zero. Never negative: an

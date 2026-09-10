@@ -28,11 +28,13 @@ class EndChoiceUiStateTest {
         startedAt: Instant = now,
         capIn: Duration = ActiveSnooze.DEFAULT_CAP,
         mode: TrackingMode = TrackingMode.FULL,
+        endsOnMotion: Boolean = false,
     ) = ActiveSnooze(
         anchor = Anchor(capturedAt = startedAt, ssid = "ExampleWifi"),
         startedAt = startedAt,
         capExpiresAt = startedAt.plus(capIn),
         mode = mode,
+        endsOnMotion = endsOnMotion,
     )
 
     private val condition = EndCondition(
@@ -189,5 +191,97 @@ class EndChoiceUiStateTest {
             state(snooze(), meetingEnds = ends, at = now.plus(Duration.ofMinutes(20)))!!
                 .meetings.map { it.at },
         )
+    }
+
+    /**
+     * The `When I move` row is a `play`-only capability, because only that
+     * flavor declares a foreground service — and this file runs on both, so
+     * every assertion here is against the flavor's own answer rather than a
+     * hard-coded one. On `direct` the row is correctly offered nowhere, and
+     * these read as "still nowhere".
+     */
+    private fun offered(
+        record: ActiveSnooze? = snooze(),
+        hasSensor: Boolean = true,
+    ): MotionEndUiState? = motionEndUiState(record, deviceHasMotionSensor = { hasSensor })
+
+    @Test
+    fun `the motion switch reads the running snooze`() {
+        assertEquals(buildHoldsForegroundService, offered() != null)
+        if (!buildHoldsForegroundService) return
+
+        assertFalse("off until the user asks", offered()!!.enabled)
+        assertTrue(offered(snooze(endsOnMotion = true))!!.enabled)
+    }
+
+    @Test
+    fun `the motion switch is offered whatever the tracking mode`() {
+        // Where location can see nothing is where this row is the only answer
+        // left, so gating it on tracking withheld it from the snooze that
+        // needed it most (maintainer, 2026-09-10).
+        for (mode in TrackingMode.entries) {
+            assertEquals("$mode", buildHoldsForegroundService, offered(snooze(mode = mode)) != null)
+        }
+    }
+
+    @Test
+    fun `the motion switch is withheld on a phone with no such sensor`() {
+        // Offering it would produce a switch the service rolls straight back
+        // — a control that undoes itself is worse than one that was never
+        // there (Codex, PR #252).
+        assertNull(offered(hasSensor = false))
+    }
+
+    @Test
+    fun `the motion switch needs a running snooze, and asks the platform nothing`() {
+        // The sensor lookup is a `SensorManager` call made from composition,
+        // so an idle screen must not reach it — the common first frame has no
+        // snooze at all (Codex, PR #252).
+        var asked = 0
+
+        assertNull(motionEndUiState(null, deviceHasMotionSensor = { asked++; true }))
+
+        assertEquals("the platform was not asked", 0, asked)
+    }
+
+    @Test
+    fun `a build with no foreground service asks the platform nothing either`() {
+        // `direct` cannot hold one, so the answer could not change the outcome.
+        var asked = 0
+
+        val state = motionEndUiState(snooze(), deviceHasMotionSensor = { asked++; true })
+
+        assertEquals(buildHoldsForegroundService, state != null)
+        assertEquals(if (buildHoldsForegroundService) 1 else 0, asked)
+    }
+
+    @Test
+    fun `the motion switch outlives the time choices`() {
+        // Once the cap comes inside `MIN_CAP` there is no time left to choose
+        // and `endChoiceUiState` withholds the whole offer — but a switch the
+        // user turned on has to stay revocable for as long as the sensor is
+        // armed (Codex, PR #252). The two answers are deliberately
+        // independent, and this is the case that proves it.
+        val nearlyOver = snooze(capIn = Duration.ofMinutes(5), endsOnMotion = true)
+
+        assertNull("no time left to choose", state(nearlyOver))
+        assertEquals(
+            "but the switch is unaffected by that gate",
+            buildHoldsForegroundService,
+            offered(nearlyOver) != null,
+        )
+    }
+
+    @Test
+    fun `neither question is answered from another snooze's record`() {
+        // Fails closed the way every other field here does: an offer this
+        // cannot confirm belongs to the running snooze must not draw a switch
+        // claiming that snooze's state.
+        val state = state(
+            record = snooze(startedAt = now, endsOnMotion = true),
+            offerFor = now.minus(Duration.ofMinutes(5)),
+        )
+
+        assertNull(state)
     }
 }
