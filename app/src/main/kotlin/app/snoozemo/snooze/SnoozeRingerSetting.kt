@@ -61,6 +61,23 @@ internal object SnoozeRingerSetting {
     }
 
     /**
+     * Test seam: waits for everything already queued on the worker to finish.
+     *
+     * The worker is process-wide and outlives a Robolectric test method, so a
+     * test that leaves a write on it hands the next test a store that changes
+     * underneath its own setup — order- and load-dependent, and exactly the
+     * shape that made an earlier draft of `MainActivityStoreReadGateTest` fail
+     * only under full-suite load (Codex, PR #247). A task queued behind the
+     * rest of a FIFO worker's is done only once they are.
+     */
+    @VisibleForTesting
+    internal fun awaitIdleForTest(timeoutSeconds: Long = 5): Boolean {
+        val done = java.util.concurrent.CountDownLatch(1)
+        runCatching { worker.execute { done.countDown() } }.onFailure { done.countDown() }
+        return done.await(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS)
+    }
+
+    /**
      * Persists [ceiling], calling [onDone] on the worker with whether it stuck.
      *
      * Nothing here reaches for the ringer. The choice governs the **next**
