@@ -73,6 +73,50 @@ class RingerReconcileTest {
         assertNull(PrefsRingerLoanStore(appContext).borrowed())
     }
 
+    /**
+     * That startup reconciliation cannot take the ringer in front of an arm
+     * (Codex, PR #259, third round).
+     *
+     * Standing down when the lock is already held covers only the order where
+     * the arm got there first — and on a cold start the other order is the
+     * likely one, since the tap is what started the process and `onCreate` runs
+     * before the service can arm. Letting the arm window pass is what covers
+     * that half, so what is asserted here is the *negative*: with a loan on
+     * disk and no snooze, this check would certainly hand the ringer back, and
+     * it has not while the window is still open.
+     *
+     * Deterministic rather than timed: the wait is a seam, so the test holds it
+     * open and the thread is provably parked inside it when the assertion runs.
+     * No sleeps, and nothing that could pass because a race happened to go one
+     * way.
+     */
+    @Test
+    fun `startup reconciliation does not touch the ringer before the arm window passes`() {
+        borrowThenLoseTheSnooze()
+        val waiting = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+
+        val worker = reconcileRingerInBackground(appContext) {
+            waiting.countDown()
+            release.await()
+        }
+        check(waiting.await(10, java.util.concurrent.TimeUnit.SECONDS)) { "reconciliation never reached the wait" }
+
+        // Parked in the window, so this is the state at a moment the thread
+        // cannot have acted in — not merely a moment it had not acted in yet.
+        assertEquals(AudioManager.RINGER_MODE_VIBRATE, audio.ringerMode)
+        assertNotNull(PrefsRingerLoanStore(appContext).borrowed())
+
+        // Released *and joined*, because past the wait this worker does a real
+        // hand-back: it moves the process-wide ringer mode and clears the shared
+        // preferences, so a test that returned while it ran would overwrite the
+        // next test's freshly prepared fixture (Codex, PR #259). That is the
+        // once-in-ten flakiness this class's own comment describes.
+        release.countDown()
+        worker.join(10_000)
+        check(!worker.isAlive) { "reconciliation did not finish" }
+    }
+
     @Test
     fun `nothing borrowed is a no-op rather than a change`() {
         handBackRingerNow(appContext)

@@ -311,10 +311,38 @@ class RingerHandoverTest {
     @Test
     fun `a refused arm keeps the loan for the snooze that is still running`() {
         // `SnoozeController` stays armed on this and lets the cap retry, so the
-        // ringer is still owed to a live snooze.
+        // ringer is still owed to a live snooze — and this arm took nothing of
+        // its own, which is the re-assertion case: a cap re-arm or a restore
+        // runs over a loan the running snooze already owns.
         assertEquals(
             RingerFollowUp.NOTHING,
             ringerFollowUp(snoozed = true, ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED)),
+        )
+    }
+
+    @Test
+    fun `a refused arm gives back the ringer it took a moment earlier`() {
+        // The other half, and the one the ceiling-first order created: a fresh
+        // arm has already taken the ringer on the strength of a rule write that
+        // did not land, so it leaves the phone where the user had it.
+        assertEquals(
+            RingerFollowUp.HAND_BACK,
+            ringerFollowUp(
+                snoozed = true,
+                ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED),
+                freshlyBorrowed = true,
+            ),
+        )
+        // And it is *not* the ending's hand-back: the snooze runs on, and a
+        // live snooze with its ceiling forgotten could not report the shortfall
+        // it is now certainly having.
+        assertEquals(
+            RingerFollowUp.HAND_BACK_AND_FORGET,
+            ringerFollowUp(
+                snoozed = true,
+                ZenOutcome.NotApplied(ZenFailure.NO_RULE),
+                freshlyBorrowed = true,
+            ),
         )
     }
 

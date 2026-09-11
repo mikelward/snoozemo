@@ -58,46 +58,27 @@ interface RingerController {
      * a restore would adopt the setting meant for the *next* snooze.
      */
     fun forgetCeiling()
-
-    /**
-     * How many times the platform's ringer-mode setter has been **attempted**
-     * since this process started — a monotonic count, for the diagnostic that
-     * asks whether a mode write happened inside a given window (SPEC.md §4.6).
-     *
-     * Counted rather than inferred from an outcome, because the outcome cannot
-     * answer it (Codex, PR #251). A single call can hand an earlier loan back —
-     * setter and all — and then report `Untouched` because the new ceiling had
-     * nothing to take, so reading the outcome would record "no write" across an
-     * interval that contained one, and clear a suspect that was guilty.
-     *
-     * Zero for a controller that owns no ringer.
-     */
-    val modeWrites: RingerWriteCounts
-        get() = RingerWriteCounts(started = 0, finished = 0)
-}
-
-/**
- * How many times the platform's ringer setter has been **started** and
- * **finished** in this process — monotonic, so a window's worth is a
- * subtraction (SPEC.md §4.6).
- *
- * Two numbers rather than one, because an observer bracketing a window has to
- * answer "did a write happen in here" and a single count cannot: a counter
- * bumped before the assignment can be read, descheduled, and only then reach
- * the setter, landing the write inside the window with both samples already
- * carrying it. [isSettled] is the question that catches that.
- */
-data class RingerWriteCounts(val started: Int, val finished: Int) {
-
-    /** No setter call is in flight: every one that started has finished. */
-    val isSettled: Boolean get() = started == finished
 }
 
 /** What a ringer call actually did. Never silently discarded. */
 sealed interface RingerOutcome {
 
-    /** The phone is now in [mode]. */
-    data class Set(val mode: RingerMode) : RingerOutcome
+    /**
+     * The phone is now in [mode].
+     *
+     * [finishedAnEarlierLoan] says the write **completed a loan an earlier arm
+     * had already recorded** rather than taking a fresh one — the `unfinished`
+     * case in `RingerHandover.quiet`, where a process died between the record
+     * and the mode write. It matters to exactly one caller and for one reason
+     * (Codex, PR #259): that only ever happens on a re-assertion, where our own
+     * zen rule is already active, so the write has just tripped the platform's
+     * ringer/Do-Not-Disturb coupling and deactivated it. A fresh arm has no
+     * active rule to lose, which is why the two cannot share an answer.
+     */
+    data class Set(
+        val mode: RingerMode,
+        val finishedAnEarlierLoan: Boolean = false,
+    ) : RingerOutcome
 
     /**
      * The ringer was deliberately left where it is: no ceiling chosen, already

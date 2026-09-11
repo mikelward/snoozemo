@@ -205,12 +205,29 @@ enum class RingerFollowUp {
     RE_QUIET,
 
     /**
-     * Leave the ringer alone. Either an arm the platform refused, which stays
-     * armed for the cap to retry — so the loan is still owed to a snooze that is
-     * still running — or a refused release whose hand-back found the ringer had
+     * Leave the ringer alone. Either an arm the platform refused over a loan it
+     * did not take — so the loan is still owed to a snooze that is still
+     * running — or a refused release whose hand-back found the ringer had
      * become the user's own.
      */
     NOTHING,
+
+    /**
+     * Hand back **this arm's own borrow**, and keep the ceiling.
+     *
+     * A refused arm stays armed for the cap to retry, but under the ceiling-
+     * first order (SPEC.md §5.9) it has already taken the ringer on the
+     * strength of a rule write that did not land — which the old order could
+     * not do, because it never got that far. Giving it back keeps what the user
+     * observes unchanged: a snooze that is not being enforced leaves the ringer
+     * where they had it, and a retry that succeeds borrows afresh.
+     *
+     * Distinct from [HAND_BACK_AND_FORGET], which is an *ending* and drops the
+     * ceiling with the loan. Here the snooze is still running, and a live
+     * snooze with its ceiling forgotten could not report the shortfall it is
+     * now certainly having.
+     */
+    HAND_BACK,
 }
 
 /**
@@ -223,17 +240,28 @@ enum class RingerFollowUp {
  * it is testable: a release the platform *refuses* cannot be produced through
  * the adapter under Robolectric, which is how this whole family of cases keeps
  * arriving as review findings rather than test failures.
+ *
+ * [freshlyBorrowed] is whether *this* arm took the ringer, as opposed to
+ * finding a loan the running snooze already owned — and it is the difference
+ * between [RingerFollowUp.HAND_BACK] and [RingerFollowUp.NOTHING] on a refused
+ * arm (Codex, PR #259). A re-assertion writes nothing for an outstanding loan
+ * and *finishes* rather than takes one whose write never landed, so handing
+ * back on either would undo a live snooze's ceiling on the strength of a
+ * refusal that keeps that very snooze armed. An input for the same reason as
+ * the one above: `PLATFORM_REFUSED` is the one refusal the adapter cannot be
+ * made to produce under Robolectric.
  */
 fun ringerFollowUp(
     snoozed: Boolean,
     outcome: ZenOutcome,
     ringerDisowned: Boolean = false,
+    freshlyBorrowed: Boolean = false,
 ): RingerFollowUp = when {
     snoozed && outcome is ZenOutcome.Applied -> RingerFollowUp.QUIET
     // Both directions of "nothing of ours is silencing the phone" agree: no
     // policy access, no rule, or the rule already switched off.
     outcome.confirmsNothingSilencing -> RingerFollowUp.HAND_BACK_AND_FORGET
-    snoozed -> RingerFollowUp.NOTHING
+    snoozed -> if (freshlyBorrowed) RingerFollowUp.HAND_BACK else RingerFollowUp.NOTHING
     // The snooze runs on, so the ceiling would go back down — but re-applying
     // it here would find no loan, borrow again, and lower the very ringer the
     // hand-back had just left as theirs (Codex, PR #176).

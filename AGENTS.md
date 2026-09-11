@@ -97,8 +97,16 @@ UI**:
   and before any UI; `ARMING` never blocks on a location fix (10 s ceiling, then degrade to
   Wi-Fi-only or duration-only and say so); no synchronous disk, `PackageManager`,
   telephony, or `NotificationManager` policy IPC between the tap and the zen rule going
-  `STATE_TRUE`. Any change touching the tile, trampoline, or `SnoozeController` arm path
-  must state in the PR what that path now reads and what it waits for.
+  `STATE_TRUE`. **The one permitted predecessor is the ringer ceiling**, because the
+  platform turns Do Not Disturb off in response to our own `setRingerMode`, so a ceiling
+  applied after `STATE_TRUE` deactivates the rule it just set (`SPEC.md` §5.9, which
+  counts what it costs). It is warmed, bounded and yielded to by background recovery —
+  and it is the exception, not a precedent: anything added inside
+  `RingerController.quiet` lands on this path by default, so check it against this rule
+  rather than against the ringer's own, and count what it really costs rather than
+  assuming it is a platform call or two. Any change touching the tile, trampoline, or
+  `SnoozeController` arm path must state in the PR what that path now reads and what it
+  waits for.
 - **Jank-free UI**: the end-condition sheet appears over whatever the user was doing, right
   after a tap they expect to be instant, so the first frame must be the real content — no
   flash of a blank window from the transparent trampoline (`SPEC.md` §6.9), no spinner

@@ -1514,12 +1514,27 @@ the point is that every other line of the app is worthless if it isn't true.
       live on API 35+, the hand-back could turn off a manual Do Not Disturb or another
       app's rule — breaking `SPEC.md` §5.6, one of the three hard invariants.
 
-      **What could not be established here**: whether the coupling still applies on
-      API 35+. The docs describe it only in that one sentence;
-      `android.googlesource.com` is blocked in the sandbox; and Android 15's own
-      global-DND restriction names `setInterruptionFilter` and `setNotificationPolicy`
-      and *not* `setRingerMode`, which argues both ways — either the ringer no longer
-      toggles zen for a targeting-35 app, or it is an unclosed hole.
+      **Established on a device, 2026-09-11 — it is an unclosed hole.** This used to
+      read "what could not be established here", the coupling's survival on API 35+
+      being unreadable from the docs with `android.googlesource.com` blocked. A
+      maintainer capture on a Pixel 10 Pro (API 37) settled it: writing the ceiling
+      while Snoozemo's own rule was active turned Do Not Disturb off and deactivated
+      the rule within milliseconds (item 6a). So the coupling is live, and **broader
+      than this item assumed** — it fires on a plain `VIBRATE` ceiling, not only on
+      the silent-to-audible transition, and in both directions.
+
+      **What that changes here**: the exposure is no longer hypothetical, and it is no
+      longer `Silent`-only. Any ringer write this app makes while *any* Do Not Disturb
+      source is active can turn that source off, so the §5.6 breach reaches the arm
+      path too (arming on a phone that already has a bedtime schedule running) and
+      `RE_QUIET` (a refused release that re-applies the ceiling under our own active
+      rule). The arm's *own* rule is no longer at risk — `SPEC.md` §5.9 now applies the
+      ceiling before the rule goes on — but that ordering cannot help the two cases
+      above, where zen is already on for someone else's reason.
+
+      **What is still open** is the same decision, now with a wider blast radius and
+      one fewer unknown: the device check below is what says whether another source
+      actually survives our write.
 
       **Why no mitigation was shipped.** The obvious one — release our rule first, then
       hand the ringer back only if `getCurrentInterruptionFilter()` reads
@@ -1542,7 +1557,9 @@ the point is that every other line of the app is worthless if it isn't true.
       **The device check that would settle it**: with a manual Do Not Disturb (or a
       bedtime schedule) active, arm a `Silent`-ceiling snooze and end it — then look at
       whether the other source is still on. Worth doing on both a Pixel and a One UI
-      device, since this is exactly the kind of behavior an OEM fork diverges on.
+      device, since this is exactly the kind of behavior an OEM fork diverges on. Now
+      worth running on the **arm** as well as the release, and with a `Vibrate` ceiling
+      as well as `Silent`, since 6a showed the coupling is not particular about either.
 
 - [ ] **Apply a changed ceiling to a snooze already running.** Today the choice governs
       the next snooze; changing it mid-snooze does nothing until then, which is the one
@@ -1841,6 +1858,26 @@ the point is that every other line of the app is worthless if it isn't true.
       `navigationBarsPadding`.
 
 ## Phase 5 (M5) — Edge cases and degraded modes
+
+- [ ] **Un-stick the rule on a re-assertion that finishes an earlier loan** (`SPEC.md` §5.9).
+      Split out of PR #259 so the ordering fix could land (maintainer, 2026-09-11); the work is
+      written and reviewed, on `claude/rule-unstick`.
+      The ceiling-before-rule order solves a *fresh* arm, which has no rule of ours to lose. It
+      cannot solve a re-assertion — a cap re-arm or a restore after process death — because the
+      rule is already active there, and `RingerHandover.quiet` still writes on one of those: the
+      `unfinished` branch, finishing a loan whose own write never landed. That write trips the
+      coupling, and `STATE_TRUE` cannot undo it, so the re-assertion reports itself applied over a
+      rule the platform is ignoring and the `DEACTIVATED` broadcast ends the snooze.
+      The fix is to turn the rule off and on again on that one path, which costs a real window
+      where Do Not Disturb is genuinely off, and a `ZenFailure.RULE_TURNED_OFF` for the case where
+      it will not go back on. Getting the second part right took six review rounds, because
+      `PLATFORM_REFUSED` names two opposite states of the world — nothing enforcing, and a
+      condition left set on a rule the user disabled — and what parts them is whether the platform
+      *accepted* the write. The last open question is what to report when the reset was refused,
+      the re-arm was accepted, and the platform will not say whether the rule is on: `Applied`
+      claims a snooze that may not exist, and an ending would erase the record of one that may.
+      Narrower than it was either way: before that order, every arm wrote the ringer under its own
+      rule.
 
 - [x] **Make the refused-release escalation one pure decision in `:core`** (`SPEC.md` §7.1).
       **Landed** as `ReleaseEscalation` + `ReleaseProgress` + `ReleaseStep`, with the service and
@@ -3711,32 +3748,31 @@ that can only be settled on a real device, ordered by risk.
        something else? The answer decides whether there is a bug to fix or only a comment to
        write. Repeat on One UI at Phase 8 — this is the sort of thing Samsung changes.
 
-6a. [ ] **What the rule is doing either side of the ringer write** (the instrumentation PR).
-        Arm ten times with the ringer on normal and read
-        `ringer: rule around the ceiling write — before=… after=… setterCalls=… outcome=… took=…`
-        on every arm, the ones that hold included. **Read `setterCalls` before reading the pair**:
-        only a bare number is a usable sample, so an arm reporting a range (`0..1`) or `+inflight`
-        is dropped rather than counted as either result, and so is one whose `outcome` says *not a
-        usable sample*. Then, on a dying arm, **record these rather than
-        conclude from them**: `before=ACTIVE after=INACTIVE` with `setterCalls` at one or more is
-        the strongest single arm there is and still only suggestive, since an asynchronous
-        transition can land in any window; the same pair with `setterCalls=0` shows the platform
-        moving the rule unprompted, which weakens the suspicion without clearing the write. **`after=ACTIVE` on a dying arm clears nothing** — the
-        capture's deactivation arrived about twenty milliseconds after the write, so the pair
-        catches only a synchronous knock-down; note that arm's `setterCalls` and read on to the
-        broadcast and ending that follow it. Reading the pair without the count is how this
-        checklist would pick the opposite repair. Note the observer effect before calling a clean
-        run a fix: the first read delays the ringer slightly, which makes the failure less likely
-        to reproduce.
+6a. [x] **What the rule is doing either side of the ringer write** — **answered, 2026-09-11**,
+        and the ten-arm protocol below was not needed: a maintainer capture on a Pixel 10 Pro
+        (API 37) carried two arms, both reading `before=ACTIVE after=INACTIVE setterCalls=1
+        outcome=VIBRATE` — a clean sample, the shape this checklist called the strongest single
+        arm — each followed by `DEACTIVATED → EndSnooze(DND_TURNED_OFF)` about 180 ms after the
+        tap. The control that settled it was cheaper than the vibrate run and assigned by hand
+        the same way: with the ceiling set to `Ring`, which imposes nothing and never writes the
+        ringer, the snooze held. So the write is the cause and a slow rule is cleared.
 
-        **Then run the same ten arms again with the ringer already on vibrate, and compare the two
-        runs — that comparison is the experiment.** With nothing to take, no arm writes, so the
-        split is assigned by you rather than by the rule. Do not tally write against no-write
-        *within* a run: whether an arm writes depends on the ringer's mode at the time, and a rule
-        that is working has already lowered it, so a slow rule causes both the death and the
-        write and every dying arm carries a setter call whether or not the setter did anything.
-        Deaths in the audible run and a clean vibrate run point at our write; both runs dying
-        alike says a fresh rule is simply slow, and the write is a bystander.
+        **The mechanism is the documented one**, and the maintainer's second observation named
+        it: `AudioManager.setRingerMode` is the *external* ringer path, and Notification Policy
+        Access does not exempt this app from the DND coupling — it permits it. The volume panel's
+        own bell / vibrate control, which is the system's internal path, leaves an active Do Not
+        Disturb alone (checked on the same device: DND on, panel → `Vibrate`, DND still on).
+        No app can reach that path, so ordering is the fix and it shipped: the ceiling is now
+        applied before the rule goes on (`SPEC.md` §5.9). The instrumentation was retired with
+        it — `modeWrites`, the four-sample `setterCalls` bound and the `rule around the ceiling
+        write` line — since after the reorder its `before` read is always `INACTIVE` and the line
+        would report a window that no longer means anything.
+
+        **Left open by the fix, and both are §5.6 rather than this bug**: arming while another
+        Do Not Disturb source is already running still turns *theirs* off, and `RE_QUIET` — a
+        release the platform refuses, where the snooze runs on and the ceiling goes back down
+        with our rule necessarily active — writes the ringer under zen with no order to reverse.
+        The `Silent`-ceiling item above is the device check that covers both.
 
 ### Tuning — these change details, not direction
 
@@ -7304,7 +7340,22 @@ what sets it off.
 
 ## Arming can end its own snooze — measuring the ringer write (device capture, 2026-09-10)
 
-- [ ] **A snooze reported as "tapping snooze did nothing", about two attempts in ten.** The tile
+> **Settled 2026-09-11, and the write was the cause.** A second capture (Pixel 10 Pro, API 37)
+> carried two arms, both `before=ACTIVE after=INACTIVE setterCalls=1 outcome=VIBRATE` — the
+> "strongest single arm" shape below, twice, cleanly — and the control that assigns the split by
+> hand turned out to be cheaper than the vibrate run this entry planned: with the ceiling set to
+> `Ring`, which imposes nothing and never writes the ringer, the snooze held. A slow rule is
+> cleared, since its slowness would not care what the ceiling was set to.
+>
+> The mechanism is documented rather than inferred: `AudioManager.setRingerMode` is the external
+> ringer path, and Notification Policy Access *permits* rather than exempts an adjustment that
+> toggles Do Not Disturb. The volume panel's bell / vibrate control leaves an active Do Not
+> Disturb alone because it is the system's internal path, which no app can reach. The fix is the
+> order — ceiling first, rule second (`SPEC.md` §5.9) — and the instrumentation described below
+> was retired with it. Everything under this heading is kept as the reasoning that got there,
+> not as live work; items 6a and the `Silent`-ceiling P1 carry what is still open.
+
+- [x] **A snooze reported as "tapping snooze did nothing", about two attempts in ten.** The tile
   goes back to `Snooze here` a second or two after the tap, with the phone never quieted. The
   capture says what happens; what it does not settle is *why*, and this entry is the experiment
   that will.
