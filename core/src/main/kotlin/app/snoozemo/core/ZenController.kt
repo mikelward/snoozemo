@@ -179,6 +179,21 @@ enum class ZenFailure {
 
     /** The platform rejected the change. */
     PLATFORM_REFUSED,
+
+    /**
+     * We turned the rule **off** on purpose and could not turn it back on.
+     *
+     * Only the re-assertion un-stick reaches this (SPEC.md §5.9): finishing an
+     * earlier loan writes the ringer, the platform's coupling deactivates our
+     * rule, and a deactivated rule has to be set `STATE_FALSE` before it will
+     * go on again. When that `STATE_FALSE` lands and the `STATE_TRUE` after it
+     * does not, the phone is **definitely** audible — which `PLATFORM_REFUSED`
+     * would deny, since it means "a rule that still exists refused a change,
+     * and may well work next time" and keeps the snooze armed on that promise
+     * (Codex, PR #259). Claiming a snooze over a ringing phone is principle 2's
+     * failure, so this says what is actually true and lets the snooze end.
+     */
+    RULE_TURNED_OFF,
     ;
 
     /**
@@ -200,7 +215,7 @@ enum class ZenFailure {
      */
     val nothingLeftToRelease: Boolean
         get() = when (this) {
-            NO_POLICY_ACCESS, NO_RULE, RULE_DISABLED -> true
+            NO_POLICY_ACCESS, NO_RULE, RULE_DISABLED, RULE_TURNED_OFF -> true
             PLATFORM_REFUSED -> false
         }
 }

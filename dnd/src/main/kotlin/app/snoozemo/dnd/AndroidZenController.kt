@@ -18,6 +18,7 @@ import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.RingerFollowUp
 import app.snoozemo.core.ZenOutcome
 import app.snoozemo.core.ringerFollowUp
+import app.snoozemo.core.unstuckArmOutcome
 import app.snoozemo.core.confirmsNothingSilencing
 import app.snoozemo.core.ZenRuleState
 import app.snoozemo.core.SnoozeIdentity
@@ -38,12 +39,16 @@ import app.snoozemo.core.ZenTrigger
  *   the service, the cap alarm, the backstop, the restore path — so a ceiling
  *   applied here cannot be forgotten by one of them. Wired into the six
  *   existing call sites separately, it would have been six chances to miss.
+ * @param stuckRule whether the rule still needs turning off before it will go
+ *   back on (SPEC.md §5.9). Durable, because the arm that cannot confirm the
+ *   revival hands its snooze to a later process to retry — see [StuckRuleStore].
  */
 class AndroidZenController(
     private val context: Context,
     private val store: ZenRuleIdStore,
     private val configurationActivity: ComponentName,
     private val ringer: RingerController,
+    private val stuckRule: StuckRuleStore,
 ) : ZenController {
 
     private val notificationManager: NotificationManager
@@ -305,16 +310,120 @@ class AndroidZenController(
      */
     private fun arm(trigger: ZenTrigger, placeName: String, snooze: SnoozeIdentity?): ZenOutcome {
         val quieted = quietTheRinger(snooze)
-        // **What this order does *not* solve is a re-assertion** — a cap re-arm
-        // or a restore after process death — where the rule is already active
-        // and `RingerHandover.quiet` can still write: the `unfinished` branch,
-        // finishing a loan whose own write never landed. That write trips the
-        // coupling like any other, and `STATE_TRUE` cannot undo it. Tracked as
-        // its own change (`TODO.md`), because it needs the rule turned off and
-        // on again — a real cost on a rare path, and a decision of its own.
-        // Strictly narrower than before this reorder, which wrote under the
-        // rule on *every* arm.
-        val outcome = setRuleState(snoozed = true, trigger = trigger, placeName = placeName)
+        // **The one case where the ceiling write hits a rule that is already
+        // on** (Codex, PR #259). Ordering solves a *fresh* arm, which has no
+        // rule of ours to lose. It cannot solve a re-assertion — a cap re-arm
+        // or a restore after process death — because the rule is already active
+        // there by definition, and `RingerHandover.quiet` writes on one of
+        // those: the `unfinished` branch, finishing a loan whose own write never
+        // landed (the process-death window PR #176 added it for).
+        //
+        // That write trips the coupling and deactivates our rule, and
+        // `STATE_TRUE` below cannot undo it: a deactivated rule stays
+        // deactivated until its owner sets `STATE_FALSE` first (`ZenRuleStatus`,
+        // the `DEACTIVATED` case). Left alone, the re-assertion reports itself
+        // applied over a rule the platform is ignoring, and the `DEACTIVATED`
+        // broadcast then ends the snooze as `DND_TURNED_OFF` — this PR's own
+        // bug, reached by the one path its reordering cannot reach.
+        //
+        // So the rule is un-stuck rather than re-set. The cost is real and
+        // bounded: Do Not Disturb is genuinely off between these two calls, so a
+        // call arriving in that window rings. It is the maintainer's call
+        // (2026-09-11) and it is *not* the design they declined — that was this
+        // same off-and-on cycle **on every arm**. Here it is one rare recovery
+        // path, mid-snooze, against the alternative of a snooze that silently
+        // stops being one.
+        //
+        // Skipping the finish instead was the other candidate and is worse: it
+        // restores PR #176's failure, where a process death in that window left
+        // the phone above its ceiling for the snooze's whole length with rule 2
+        // politely declining to touch it.
+        //
+        // **And the requirement outlives this arm**, which is why it is read
+        // from disk as well as from the write (Codex, PR #260). The signal above
+        // is one-shot: the finishing write marks the loan applied, so the next
+        // arm's `RingerHandover.quiet` returns `Nothing` and sees an ordinary
+        // re-assertion. That matters because this path can end *unconfirmed* —
+        // always, below API 35 — keeping the snooze for the cap to retry, and
+        // the retry would then report `Applied` over a rule still deactivated.
+        val ringerUnstuck = quieted is RingerOutcome.Set && quieted.finishedAnEarlierLoan
+        // Null is an unreadable record, which counts as stuck but is *not* a
+        // durable `true` — the write below turns on that difference.
+        val recordedStuck = ruleRecordedStuck()
+        val unstuck = ringerUnstuck || recordedStuck != false
+        var resetLanded = false
+        if (unstuck) {
+            // Written **before** the cycle, not after it, for the reason rule 1
+            // writes the way back before the ringer mode (`SPEC.md` §5.9): a
+            // process that dies between the two calls leaves a rule the platform
+            // is ignoring, and the record is the only thing that would know. The
+            // residual is narrower and stated in §5.9 — a death between the
+            // ringer write itself and this commit.
+            //
+            // Only where the signal is *new* (Codex, PR #260). An arm reaching
+            // here off the stored flag already has it on disk, and writing it
+            // again is a synchronous preference `commit` between the tap and
+            // `STATE_TRUE` for a value that has not changed — which is exactly
+            // what the arm path forbids (`AGENTS.md`). A write that does not
+            // land is reported and leaves the residual `TODO.md` records.
+            if (ringerUnstuck && recordedStuck != true) recordRuleStuck(true)
+            SnoozeDebugLog.event("rule: the ceiling write hit an active rule; turning it off so it can go on again")
+            // Its result is deliberately **not** what the rewrite below turns
+            // on (Codex, PR #259, twice). The deactivation is knowledge from the
+            // *ringer write*, not from this call: reaching here means a real
+            // `setRingerMode` landed, and the coupling this whole order exists
+            // for is what turned Do Not Disturb off. Gating on this call
+            // succeeding left the worse case uncovered — the write deactivates
+            // the rule, this `STATE_FALSE` is refused as well, and the arm then
+            // reported a refusal that keeps the snooze armed over a phone it had
+            // itself made audible.
+            //
+            // Kept for the *accepted* re-arm below, though, and only for that:
+            // the off half is what makes the on half mean anything, so a
+            // `STATE_TRUE` accepted after a refused reset has landed on a rule
+            // the platform goes on ignoring (Codex, PR #259).
+            resetLanded = setRuleState(
+                snoozed = false,
+                trigger = trigger,
+                placeName = placeName,
+            ) is ZenOutcome.Applied
+        }
+        // Decided in `:core` over the platform's own answer rather than
+        // inferred from the refusal code, which cannot tell a rule this path
+        // just deactivated from one the user disabled (Codex, PR #259, the
+        // second finding on this handling). The read runs only here, after a
+        // refused re-assertion on the rare branch that finished a loan — off
+        // the arm path in every sense.
+        val reArm = writeRuleState(snoozed = true, trigger = trigger, placeName = placeName)
+        val outcome = unstuckArmOutcome(
+            reArmed = reArm.outcome,
+            unstuck = unstuck,
+            resetLanded = resetLanded,
+            reArmAccepted = reArm.accepted,
+        ) {
+            runCatching { ruleActivation(null) }.getOrElse {
+                Log.w(TAG, "Reading the rule's activation after a refused re-arm failed.", it)
+                ZenRuleActivation.UNKNOWN
+            }
+        }
+        // **Cleared only by a rule confirmed on, which is what `Applied` means
+        // here** — after the checks above it is the one answer that has either
+        // seen the platform say `ACTIVE` or landed both halves of the cycle.
+        //
+        // Every other answer leaves the record for the *release* to clear, and
+        // that is deliberate (Codex, PR #260, twice). Clearing on an ending
+        // looks right — the reset landed, so the rule is not stuck — and it
+        // takes away the one thing that tells a *refused* release nothing is
+        // enforcing, which is how a redundant `STATE_FALSE` ended up
+        // re-borrowing the ringer under a rule already confirmed off. The
+        // release clears it the moment its own write lands, so the only case
+        // that keeps it is the case that wants it.
+        if (unstuck && outcome is ZenOutcome.Applied) recordRuleStuck(false)
+        if (unstuck && outcome is ZenOutcome.NotApplied && outcome.reason == ZenFailure.RULE_TURNED_OFF) {
+            SnoozeDebugLog.warning(
+                "rule: it was turned off to be re-armed and would not go back on; nothing is silencing the phone",
+            )
+        }
         val followUp = ringerFollowUp(
             snoozed = true,
             outcome = outcome,
@@ -368,8 +477,26 @@ class AndroidZenController(
         // (Codex, PR #176): that path would find no loan, borrow again, and
         // lower the very ringer rule 4 had just left as theirs.
         val disowned = giveBackTheRinger() is RingerOutcome.Disowned
+        // Read *before* the write, because it is what the write's own refusal
+        // cannot tell us (Codex, PR #260): a rule recorded stuck is a rule the
+        // platform is ignoring, so a refused `STATE_FALSE` here is not the
+        // "still enforced, try again" case the re-quiet below assumes.
+        val stuck = ruleRecordedStuck() != false
         val outcome = setRuleState(snoozed = false, trigger = trigger, placeName = placeName)
-        when (ringerFollowUp(snoozed = false, outcome = outcome, ringerDisowned = disowned)) {
+        // A rule the platform has accepted `STATE_FALSE` for is not stuck: the
+        // next `STATE_TRUE` is a fresh activation, which is the very thing the
+        // cycle was manufacturing. Only on success, and only where something was
+        // recorded — a refused release may leave the rule on and still
+        // deactivated, and that is knowledge the next arm wants.
+        if (outcome is ZenOutcome.Applied && stuck) recordRuleStuck(false)
+        when (
+            ringerFollowUp(
+                snoozed = false,
+                outcome = outcome,
+                ringerDisowned = disowned,
+                nothingEnforcing = stuck,
+            )
+        ) {
             // Already handed back above; this only clears the record.
             RingerFollowUp.HAND_BACK_AND_FORGET -> forgetTheCeiling()
             // The hand-back above ran unconditionally, and the window that
@@ -422,6 +549,58 @@ class AndroidZenController(
         }
         .getOrNull()
 
+    /**
+     * Whether a previous arm left the rule needing an off-and-on cycle
+     * (SPEC.md §5.9), contained like the ringer calls above.
+     *
+     * **Null where the read threw**, which callers treat as "stuck" — the same
+     * direction the decision itself takes: the requirement is kept unless
+     * something says the rule is live, and an unreadable record says nothing.
+     * Answering "not stuck" skips the cycle on exactly the retry the record
+     * exists for, and the `STATE_TRUE` that follows can be accepted over a rule
+     * the platform is still ignoring — `Snoozing` on the card, an audible phone
+     * in the pocket, to the cap. The other way costs an off-and-on cycle on
+     * each arm while the read keeps failing, which on a fresh arm is not even
+     * visible (Do Not Disturb is off before it) and on a re-assertion is the
+     * cost already accepted for this path.
+     *
+     * Null rather than `true` because the *write* side needs the difference
+     * (Codex, PR #260): a guess is not a durable record, so an arm whose signal
+     * is new must still write it, and only a `true` actually read off disk
+     * allows the write to be skipped. A read can fail transiently where the
+     * commit after it would have landed.
+     *
+     * On the fast path in every arm, and a memory hit because the file is
+     * warmed at startup for the rule id.
+     */
+    private fun ruleRecordedStuck(): Boolean? = runCatching { stuckRule.stuck() }
+        .onFailure {
+            SnoozeDebugLog.failure(it, "rule: reading whether it needs un-sticking threw; assuming it does")
+        }
+        .getOrNull()
+
+    /**
+     * Records it, saying so when it did not land.
+     *
+     * Never refuses the arm over it: the cycle still runs in this process, and
+     * what a lost write costs is a *later* process's knowledge. Returned so the
+     * caller can see it; what to do about an unbacked retry is the open
+     * question in `TODO.md` rather than something decided here.
+     */
+    private fun recordRuleStuck(stuck: Boolean): Boolean {
+        val landed = runCatching { stuckRule.setStuck(stuck) }
+            .onFailure {
+                SnoozeDebugLog.failure(it, "rule: recording whether it needs un-sticking threw")
+            }
+            .getOrDefault(false)
+        if (!landed) {
+            SnoozeDebugLog.warning(
+                "rule: whether it needs un-sticking did not reach disk; only this process knows",
+            )
+        }
+        return landed
+    }
+
     /** Contained like the two above; losing this record costs a line of honesty. */
     private fun forgetTheCeiling() {
         runCatching { ringer.forgetCeiling() }.onFailure {
@@ -429,11 +608,33 @@ class AndroidZenController(
         }
     }
 
+    /**
+     * A rule write, and whether the platform **accepted the state change** —
+     * which is not the same as the write succeeding.
+     *
+     * The two come apart in exactly one place, and it is the place five review
+     * rounds kept landing on (Codex, PR #259): [confirmSilenced] runs *after* an
+     * accepted `STATE_TRUE`, and can refuse the arm anyway when the rule turns
+     * out to be switched off. Its refusal is `PLATFORM_REFUSED` — the same code
+     * a write the platform simply rejected produces — but the state of the world
+     * behind the two is opposite. One left a condition set on a rule that could
+     * silence the phone the day the user re-enables it; the other wrote nothing
+     * at all. Nothing downstream could tell them apart from the code, so this
+     * carries the fact rather than having callers guess at it.
+     */
+    private data class RuleWrite(val outcome: ZenOutcome, val accepted: Boolean)
+
     private fun setRuleState(
         snoozed: Boolean,
         trigger: ZenTrigger,
         placeName: String,
-    ): ZenOutcome {
+    ): ZenOutcome = writeRuleState(snoozed, trigger, placeName).outcome
+
+    private fun writeRuleState(
+        snoozed: Boolean,
+        trigger: ZenTrigger,
+        placeName: String,
+    ): RuleWrite {
         // Straight to the warmed id, with no checks in front of it. AGENTS.md's
         // arm-path rule is explicit that no NotificationManager policy IPC may
         // sit between the tap and the rule going STATE_TRUE, and a "is access
@@ -445,7 +646,7 @@ class AndroidZenController(
         if (warmId != null) {
             val applied = trySetState(warmId, snoozed, trigger, placeName)
             if (applied is ZenOutcome.Applied) {
-                return confirmSilenced(warmId, snoozed, placeName)
+                return RuleWrite(confirmSilenced(warmId, snoozed, placeName), accepted = true)
             }
         }
 
@@ -465,16 +666,17 @@ class AndroidZenController(
         // threw tells us nothing of the sort. Unknown has to stay retryable.
         val access = runCatching { policyAccess() }.getOrElse {
             Log.e(TAG, "Reading policy access failed while diagnosing a refused write.", it)
-            return ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED)
+            return RuleWrite(ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED), accepted = false)
         }
         if (access == PolicyAccess.DENIED) {
-            return ZenOutcome.NotApplied(ZenFailure.NO_POLICY_ACCESS)
+            return RuleWrite(ZenOutcome.NotApplied(ZenFailure.NO_POLICY_ACCESS), accepted = false)
         }
         when (ensureRule()) {
             ZenRuleState.READY -> Unit
-            ZenRuleState.DISABLED -> return ZenOutcome.NotApplied(ZenFailure.RULE_DISABLED)
+            ZenRuleState.DISABLED ->
+                return RuleWrite(ZenOutcome.NotApplied(ZenFailure.RULE_DISABLED), accepted = false)
             ZenRuleState.MISSING_ACCESS ->
-                return ZenOutcome.NotApplied(ZenFailure.NO_POLICY_ACCESS)
+                return RuleWrite(ZenOutcome.NotApplied(ZenFailure.NO_POLICY_ACCESS), accepted = false)
             // PLATFORM_REFUSED, not NO_RULE, and the distinction has teeth:
             // FAILED means the *lookup* threw, which is exactly why ensureRule
             // keeps the existing id rather than creating a second rule. So we
@@ -483,9 +685,10 @@ class AndroidZenController(
             // while that rule may still be silencing the phone. Unknown is
             // retryable; only a rule we know is absent is an ending.
             ZenRuleState.FAILED ->
-                return ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED)
+                return RuleWrite(ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED), accepted = false)
         }
-        val ruleId = store.ruleId() ?: return ZenOutcome.NotApplied(ZenFailure.NO_RULE)
+        val ruleId = store.ruleId()
+            ?: return RuleWrite(ZenOutcome.NotApplied(ZenFailure.NO_RULE), accepted = false)
         // Retried rather than abandoned, because this runs on the *release* path
         // too, where giving up means leaving the phone silent.
         //
@@ -496,9 +699,9 @@ class AndroidZenController(
         // here and reported as a successful snooze over an audible phone.
         val applied = trySetState(ruleId, snoozed, trigger, placeName)
         return if (applied is ZenOutcome.Applied) {
-            confirmSilenced(ruleId, snoozed, placeName)
+            RuleWrite(confirmSilenced(ruleId, snoozed, placeName), accepted = true)
         } else {
-            applied
+            RuleWrite(applied, accepted = false)
         }
     }
 
@@ -693,6 +896,7 @@ class AndroidZenController(
                 store = PrefsZenRuleIdStore(app),
                 configurationActivity = ComponentName(app.packageName, CONFIGURATION_ACTIVITY_CLASS),
                 ringer = AudioRingerController.default(app),
+                stuckRule = PrefsStuckRuleStore(app),
             )
         }
     }

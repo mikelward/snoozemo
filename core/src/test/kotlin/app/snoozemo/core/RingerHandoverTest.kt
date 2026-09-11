@@ -360,6 +360,210 @@ class RingerHandoverTest {
     }
 
     @Test
+    fun `an arm that un-stuck its rule and could not re-arm it reports an ending`() {
+        // The phone is audible by our own hand here — the ceiling write turned
+        // Do Not Disturb off — so `PLATFORM_REFUSED`'s promise that the rule
+        // may still be enforcing is false, and keeping the snooze armed on it
+        // would report `Snoozing` over a ringing phone until the duration cap.
+        for (activation in listOf(ZenRuleActivation.INACTIVE, ZenRuleActivation.MISSING)) {
+            assertEquals(
+                ZenOutcome.NotApplied(ZenFailure.RULE_TURNED_OFF),
+                unstuckArmOutcome(
+                    ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED),
+                    unstuck = true,
+                    resetLanded = true,
+                    reArmAccepted = false,
+                ) { activation },
+            )
+        }
+        // And it is a code every release path treats as already over, which is
+        // the whole point of saying it.
+        assertEquals(true, ZenFailure.RULE_TURNED_OFF.nothingLeftToRelease)
+    }
+
+    @Test
+    fun `a refusal after an accepted write always keeps its retry`() {
+        // The trap needs a `STATE_TRUE` the platform *accepted* — that is what
+        // sets the condition, and the refusal comes afterwards, from the arm's
+        // own confirmation noticing the rule is switched off. Ending there
+        // would erase the record that will eventually drive that condition back
+        // off, and the day the user re-enables the rule it silences the phone
+        // with nothing left that knows to stop it.
+        //
+        // So it holds whatever the platform says about activation, including
+        // saying nothing — which is API 34, always.
+        val activations = listOf(
+            ZenRuleActivation.INACTIVE,
+            ZenRuleActivation.MISSING,
+            ZenRuleActivation.UNKNOWN,
+        )
+        for (activation in activations) {
+            assertEquals(
+                ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED),
+                unstuckArmOutcome(
+                    ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED),
+                    unstuck = true,
+                    resetLanded = true,
+                    reArmAccepted = true,
+                ) { activation },
+            )
+        }
+    }
+
+    @Test
+    fun `a disabled rule keeps its retry only while a condition is left set`() {
+        // The same refusal from the other place it comes from: a rule the user
+        // switched off whose condition could not be reset. Ending here would
+        // leave that trap armed — the day they re-enable it, it silences the
+        // phone with nothing left in the app that knows to end it. The old
+        // version of this test said that and then passed `resetLanded = true`,
+        // which is the opposite fixture (Codex, PR #260).
+        assertEquals(
+            ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED),
+            unstuckArmOutcome(
+                ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED),
+                unstuck = true,
+                resetLanded = false,
+                reArmAccepted = false,
+            ) { ZenRuleActivation.DISABLED },
+        )
+        // And where our own reset landed, the condition is already clear, so
+        // there is no trap to keep the record for — and a disabled rule
+        // enforces nothing, so keeping the snooze would read `Snoozing` over a
+        // phone that is not quiet. The ending says which rule it was.
+        assertEquals(
+            ZenOutcome.NotApplied(ZenFailure.RULE_DISABLED),
+            unstuckArmOutcome(
+                ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED),
+                unstuck = true,
+                resetLanded = true,
+                reArmAccepted = false,
+            ) { ZenRuleActivation.DISABLED },
+        )
+        assertEquals(true, ZenFailure.RULE_DISABLED.nothingLeftToRelease)
+    }
+
+    @Test
+    fun `an unreadable activation falls back to whether the reset landed`() {
+        // What API 34 always answers, where neither this read nor the
+        // `DEACTIVATED` broadcast exists. A reset that landed is evidence of
+        // its own — we turned the rule off and the platform accepted — so
+        // nothing is enforcing and the snooze ends.
+        assertEquals(
+            ZenOutcome.NotApplied(ZenFailure.RULE_TURNED_OFF),
+            unstuckArmOutcome(
+                ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED),
+                unstuck = true,
+                resetLanded = true,
+                reArmAccepted = false,
+            ) { ZenRuleActivation.UNKNOWN },
+        )
+        // And where the reset did not land either, there is no evidence at all,
+        // so the retryable refusal stands rather than being guessed into an
+        // ending.
+        assertEquals(
+            ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED),
+            unstuckArmOutcome(
+                ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED),
+                unstuck = true,
+                resetLanded = false,
+                reArmAccepted = false,
+            ) { ZenRuleActivation.UNKNOWN },
+        )
+    }
+
+    @Test
+    fun `an ordinary arm is passed through untouched, whatever it says`() {
+        // The negative that keeps this off the common path: an arm that
+        // finished no loan never wrote the ringer under an active rule, so
+        // nothing here applies — and the platform is not asked either.
+        val outcomes = listOf(
+            ZenOutcome.Applied("rule"),
+            ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED),
+            ZenOutcome.NotApplied(ZenFailure.NO_RULE),
+        )
+        for (outcome in outcomes) {
+            assertEquals(
+                outcome,
+                unstuckArmOutcome(
+                    outcome,
+                    unstuck = false,
+                    resetLanded = false,
+                    reArmAccepted = false,
+                ) { error("the platform must not be asked") },
+            )
+        }
+        // And an un-stick that worked says so, without asking either.
+        assertEquals(
+            ZenOutcome.Applied("rule"),
+            unstuckArmOutcome(
+                ZenOutcome.Applied("rule"),
+                unstuck = true,
+                resetLanded = true,
+                reArmAccepted = true,
+            ) { error("the platform must not be asked") },
+        )
+        // A refusal that already means "nothing is silencing the phone" keeps
+        // its own, more specific reason: rewriting it would report a rule we
+        // turned off where the rule is in fact gone.
+        assertEquals(
+            ZenOutcome.NotApplied(ZenFailure.NO_RULE),
+            unstuckArmOutcome(
+                ZenOutcome.NotApplied(ZenFailure.NO_RULE),
+                unstuck = true,
+                resetLanded = true,
+                reArmAccepted = false,
+            ) { error("the platform must not be asked") },
+        )
+    }
+
+    @Test
+    fun `an accepted re-arm after a refused reset is checked, not believed`() {
+        // The off half is what makes the on half mean anything: a deactivated
+        // rule stays deactivated until its owner sets `STATE_FALSE` first, so a
+        // `STATE_TRUE` accepted after a refused reset landed on a rule the
+        // platform goes on ignoring — and the arm's own confirmation only asks
+        // that the rule exists and is enabled, which a deactivated one is.
+        assertEquals(
+            ZenOutcome.NotApplied(ZenFailure.RULE_TURNED_OFF),
+            unstuckArmOutcome(
+                ZenOutcome.Applied("rule"),
+                unstuck = true,
+                resetLanded = false,
+                reArmAccepted = false,
+            ) { ZenRuleActivation.INACTIVE },
+        )
+        // And it stands when the platform says the rule really is on, which is
+        // the direction that must not be guessed: ending over a rule that is
+        // enforcing leaves Do Not Disturb on with nothing left to turn it off.
+        assertEquals(
+            ZenOutcome.Applied("rule"),
+            unstuckArmOutcome(
+                ZenOutcome.Applied("rule"),
+                unstuck = true,
+                resetLanded = false,
+                reArmAccepted = false,
+            ) { ZenRuleActivation.ACTIVE },
+        )
+        // Where it will not say — always, below API 35 — the arm is reported
+        // *unconfirmed* rather than either applied or ended. `Applied` would
+        // stop the retry over a snooze that may not exist; an ending would
+        // erase the record of one that may, leaving Do Not Disturb on with
+        // nothing that knows to turn it off. The retryable refusal keeps the
+        // snooze, the cap and the release, so a later re-assertion can un-stick
+        // the rule properly.
+        assertEquals(
+            ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED),
+            unstuckArmOutcome(
+                ZenOutcome.Applied("rule"),
+                unstuck = true,
+                resetLanded = false,
+                reArmAccepted = false,
+            ) { ZenRuleActivation.UNKNOWN },
+        )
+    }
+
+    @Test
     fun `a refused release puts the ceiling back rather than leaving it up`() {
         // The release handed the ringer back before the rule write, and this
         // refusal keeps the snooze running (Codex, PR #176) — so the phone
@@ -383,6 +587,31 @@ class RingerHandoverTest {
                 ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED),
                 ringerDisowned = true,
             ),
+        )
+    }
+
+    @Test
+    fun `a refused release over a rule known to be off leaves the phone audible`() {
+        // The re-quiet above rests on the snooze still being enforced: the rule
+        // exists, the platform may accept the change next time, and the phone is
+        // quiet meanwhile. A rule this app already recorded as stuck is one the
+        // platform is ignoring, so lowering the ringer again would put the phone
+        // under a ceiling with nothing silencing it, until a retry or the cap
+        // (Codex, PR #260 — reachable because `RULE_TURNED_OFF` sends the reboot
+        // fallback into a redundant release the platform can refuse).
+        assertEquals(
+            RingerFollowUp.NOTHING,
+            ringerFollowUp(
+                snoozed = false,
+                ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED),
+                nothingEnforcing = true,
+            ),
+        )
+        // And it changes nothing where the release landed: that is already the
+        // confirmed case, and the ceiling record is still Snoozemo's to clear.
+        assertEquals(
+            RingerFollowUp.HAND_BACK_AND_FORGET,
+            ringerFollowUp(snoozed = false, ZenOutcome.Applied("rule"), nothingEnforcing = true),
         )
     }
 
