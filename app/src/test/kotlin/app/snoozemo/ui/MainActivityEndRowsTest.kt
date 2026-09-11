@@ -996,6 +996,10 @@ class MainActivityEndRowsTest {
      * rather than having to be inferred.
      */
     private fun oneMeetingEnding(end: Instant): Instant {
+        // Cleared per fixture: the recorder below is a companion property, so
+        // without this a test that never asked the calendar could read the
+        // previous one's selection and pass on it.
+        OneMeetingProvider.lastSelection = null
         shadowApp().grantPermissions(android.Manifest.permission.READ_CALENDAR)
         ShadowContentResolver.registerProviderInternal(CalendarContract.AUTHORITY, OneMeetingProvider(end))
         return end
@@ -1010,14 +1014,63 @@ class MainActivityEndRowsTest {
             selection: String?,
             selectionArgs: Array<out String>?,
             sortOrder: String?,
-        ): Cursor = MatrixCursor(arrayOf(CalendarContract.Instances.END)).apply {
-            addRow(arrayOf<Any>(end.toEpochMilli()))
+        ): Cursor {
+            lastSelection = selection
+            return MatrixCursor(arrayOf(CalendarContract.Instances.END)).apply {
+                addRow(arrayOf<Any>(end.toEpochMilli()))
+            }
         }
 
         override fun getType(uri: Uri): String? = null
         override fun insert(uri: Uri, values: ContentValues?): Uri? = null
         override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?) = 0
         override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?) = 0
+
+        companion object {
+            /**
+             * The selection the last query carried, which is where the window
+             * lives — the provider answers with the same row whatever it is
+             * asked, so a test that only read the result could not tell a
+             * narrowed window from a wide one.
+             */
+            var lastSelection: String? = null
+        }
+    }
+
+    @Test
+    fun `a shortened cap does not narrow the screen's calendar window`() {
+        // The maintainer's report: "when I choose a fixed end time, the next
+        // meeting times should not disappear". A chosen time lowers the cap,
+        // and this read was bounded by the cap — so the window shrank with it
+        // and every meeting past the chosen time went off the screen for good,
+        // since nothing re-widens a window the query never asked for.
+        //
+        // The notification's read goes through `NextMeetings`' `snooze`
+        // overload and moved to the backstop with it; this one calls the `cap`
+        // overload directly and kept the old bound, which is how it survived.
+        val shortened = snooze(capIn = Duration.ofHours(2), ceilingIn = Duration.ofHours(7))
+        val end = oneMeetingEnding(at().plus(Duration.ofHours(6)))
+        ActiveSnoozeStore(context).arm(shortened)
+
+        val activity = screen()
+        settle()
+
+        val selection = requireNotNull(OneMeetingProvider.lastSelection) {
+            "the calendar was never asked"
+        }
+        assertTrue(
+            "the window is the backstop: $selection",
+            selection.contains(shortened.capCeilingAt.toEpochMilli().toString()),
+        )
+        assertFalse(
+            "and not the cap a chosen time left behind: $selection",
+            selection.contains(shortened.capExpiresAt.toEpochMilli().toString()),
+        )
+        assertEquals(
+            "so a meeting past the chosen time is still offered",
+            listOf(end),
+            activity.meetingOffers,
+        )
     }
 
     @Test
