@@ -1834,12 +1834,16 @@ the point is that every other line of the app is worthless if it isn't true.
       little as 45 minutes of headroom above the floor, and a step is 30 — so on a tap at
       13:12, whose seed is 14:00, `−` is legitimately dead, because the value below it is
       18 minutes out. It disables rather than clamping onto a ragged 13:42.
-- [x] Choosing a time **lowers the cap**; it does not disable departure tracking. Whichever
-      comes first wins (`SPEC.md` §7). **Landed** as `SnoozeController.lowerCapTo` — the
+- [x] Choosing a time **moves the cap**. **Landed** as `SnoozeController.lowerCapTo` — the
       mirror of `extendTo`, refusing the opposite direction — driven by
       `SnoozeService.ACTION_SET_CAP`, which re-arms the alarm, then writes the record, then
-      tells the controller, in that order and with `+30 min`'s own rollback. Nothing is said
-      to the presence engine, because nothing about tracking changed.
+      tells the controller, in that order and with `+30 min`'s own rollback.
+      **Superseded 2026-09-11 on the half about tracking**: this said a chosen time does not
+      disable departure tracking and that whichever exit comes first wins, which was true as
+      built and is not any more — a chosen time now replaces both event exits (`SPEC.md`
+      §4.4), so there *is* something said to the presence engine. Left in place rather than
+      rewritten, because what landed here is still what landed; the reversal is recorded
+      under *Decide what tapping an end condition means*.
 - [x] Dismissing the sheet, or never seeing it, leaves the user correctly snoozed. The scrim
       and the back gesture both just finish the activity; the snooze was armed before the
       sheet existed.
@@ -1870,10 +1874,12 @@ the point is that every other line of the app is worthless if it isn't true.
       blurbs both point away from prose beside a control. Copy needs approving before it is
       translated (*Translations*), and it wants deciding alongside the headline that follows
       the choice. Half of that is now done: a snooze that also ends on movement says so, on the
-      card and in the shade (PR #262). What is left is this copy, and the time rows, which still
-      leave the card reading `Snoozing until you leave` after the user picked a time — the same
-      confusion from the other end. Both wait on *Decide what tapping an end condition means*
-      below, since copy explaining a row cannot be written before what the row does is settled.
+      card and in the shade (PR #262). What is left is this copy. **The time rows are no longer
+      part of it** (2026-09-11): they used to leave the card reading `Snoozing until you leave`
+      after the user picked a time, and that is fixed at the source rather than in copy — a
+      chosen time now takes departure off, so the card names the timer because the timer is
+      what ends the snooze. What still waits on *Decide what tapping an end condition means*
+      below is the `Until I move` row, the one direction of the replacement model still open.
 
 ## Phase 5 (M5) — Edge cases and degraded modes
 
@@ -5194,6 +5200,94 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
   more, not less.
 
 ## Decisions needing review
+
+- [ ] **Is the exit-warning card worth what it is costing to get right?** Seven Codex
+      findings across PR #267's rounds 15-20 have been about this one card's lifetime —
+      where the clear belongs, the teardown, the no-service release, the restore, the
+      no-op restore — and several were consequences of the previous fix rather than of
+      the original change. Every one was real, and each is fixed and tested. But the rate
+      is the signal: a partial-success warning has to be posted by whichever operation
+      failed to remove an exit, and retired by every operation that removes one, ends a
+      snooze, or replaces it — which is a lot of sites for one line of text. **The
+      alternatives**, for whoever decides: (a) keep it as it is, now that the rule is
+      stated and the sites are enumerated; (b) drop the separate card and fold "an exit
+      stayed armed" into the ongoing notification, which is restated on every transition
+      and therefore cannot go stale — cheaper to keep correct, less visible; (c) drop the
+      warning entirely and let the sheet report the partial success inline, accepting that
+      a user who dismisses it is not told. Reversible: it is one notification id, one post
+      site and a handful of retires.
+      **An eighth finding arrived while this was pending and is deliberately unfixed**
+      (Codex, PR #267, round 23), so whoever decides is deciding with it in view: the
+      standalone `Until I move` row keys its retire to whether the *motion* flag changed,
+      which is wrong in both directions. A `Still ends if you move` survives a later tap on
+      that row — the flag is already true, so nothing retires, even though the user has now
+      chosen that exit deliberately; and a `Still ends when you leave` is deleted by a tap
+      that newly arms motion, though departure is still armed. The fix under option (a) is
+      the shape round 19 already settled — recompute from both flags after the whole
+      choice, rather than from the one that moved — and under (b) or (c) it disappears with
+      the card. Round 18's reasoning for the `changing` guard was the wrong half of this:
+      it treated a repeat tap as a no-op, when a repeat tap is the user affirming the exit.
+
+- [x] **The partial-success warnings have their own notification id** (`ID_EXITS`), taken
+      under autopilot on PR #267 after a **fourth** finding on the same card's lifetime. The
+      first three were the clear misplaced (`cancelFailure` keyed off `APPLIED`, at the top
+      of `setCap`, past the identity check); the fourth was a warning left standing after the
+      snooze it described ended. That last one is the one the shared id made unfixable: the
+      teardown that would clear it also posts `Couldn't forget this snooze`, so on one id the
+      clear deletes the wrong card. **The round before this, the split was recorded here as
+      the maintainer's call and not taken** — the fourth finding is what changed that, since
+      the alternative was a fifth ordering hazard rather than a fix. **What the maintainer is
+      being asked to review**: the shade can now carry two cards at once — an attempt's
+      failure and a still-armed exit — where before it carried whichever posted last.
+      Reverting is one id and one cancel site.
+
+- [ ] **What keeps tracking capability current while a timer-only snooze's watch is
+      stopped?** Raised by Codex as a P1 on PR #267 and left for the maintainer, because the
+      fix it needs is an interface change rather than a patch. **The hazard is real and this
+      PR introduced it**: a snooze narrowed to its timer stops its presence watch, and
+      `ActiveSnooze.mode` is only ever recomputed from a presence *update*, so with the watch
+      stopped the recorded capability freezes. Revoke location permission (or turn location
+      services off) during that window and nothing corrects it — the comment on
+      `ACTION_LOCATION_GRANTED` says why: **Android broadcasts no permission change**, so the
+      app only learns of a revocation when the monitor next tries something, and a stopped
+      monitor never tries. `Until I leave` is then still offered, still passes the
+      `!running.mode.tracksDeparture` guard PR #234 added, enables the exit **and lengthens
+      the cap back to `capCeilingAt`** — and when the restarted watch discovers the
+      capability is gone the snooze degrades to duration-only holding that longer cap with
+      nothing watching. Bounded by the backstop the snooze armed with (§7 still fires), but
+      it is quiet longer than the user had, granted on a premise that was stale.
+      **Why there is no cheap fix:** `PresenceMonitor.supportedModes(anchor)` is computed
+      from the anchor's own fields (`hasUsableFix`, `ssid`) and consults no permission, so
+      re-asking it at restore time returns the same stale answer. A live check needs either a
+      new capability question on `PresenceMonitor` — implemented in the geofence monitor,
+      the duration-only monitor and the test fake — or permission logic duplicated into
+      `SnoozeService`, which is policy that lives in the presence module and would drift.
+      **The alternatives**, for whoever decides: (a) add `canTrackDepartureNow(anchor)` to
+      `PresenceMonitor` and gate the restore on it — most correct, widest blast radius;
+      (b) keep the record's mode current while the watch is stopped, e.g. have the §6.10
+      backstop wake re-derive it — no interface change, but it makes the backstop responsible
+      for capability, which it is not today; (c) have the restore not lengthen the cap until
+      the restarted watch reports healthy, leaving the shortened cap in place meanwhile —
+      safest for principle 1 and the most behavior it changes, since the restore's whole
+      point is putting the cap back. Not guessed on autopilot: each one moves a boundary
+      somebody chose deliberately.
+
+- [ ] **Should `effectiveMode` exist, or should render sites take `(mode, endsOnDeparture)`
+      explicitly?** Raised by the three findings on PR #267 and left for the maintainer rather
+      than settled under autopilot. `effectiveMode` was added so no render site could remember
+      only half of "the mode *and* the flag" — and then three separate readers got it wrong in
+      three different ways: the ongoing card and the screen paired a narrowed mode with a
+      degradation cause that outlived it, and the tile, which keeps its own copy of the
+      derivation because it reads the record off disk rather than binding a service (§6.9),
+      never learned the new input at all. **What I did** is complete the existing design:
+      `effectiveDegradation` beside `effectiveMode`, so the pair travels together, plus the flag
+      threaded into the tile's `claimsTimerOnly`. Additive and cheap to undo, which is why
+      autopilot took it. **The alternative** is that a derived property which silently answers
+      for two questions is the wrong shape, and every reader should be made to name both inputs
+      — the compiler then finds the readers instead of review doing it. The tile is the argument
+      against `effectiveMode` being sufficient in any case: a second module reading a
+      preferences file cannot inherit a Kotlin property, so that copy has to be kept in step by
+      hand however this is answered.
 
 - [ ] **Can the ringer-write experiment assign its arms independently, and is it worth a
       behavior change to do so?** Open question from PR #251, raised by Codex across four
