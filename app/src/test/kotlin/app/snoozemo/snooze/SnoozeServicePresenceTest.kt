@@ -241,6 +241,78 @@ class SnoozeServicePresenceTest {
         assertNull(ActiveSnoozeStore(appContext).load())
     }
 
+    /**
+     * The other half of leaving a pending anchor capture running when a time
+     * is chosen (SPEC.md §4.4): it has to be able to finish.
+     *
+     * `effectiveMode` goes duration-only the moment the time is chosen, and the
+     * repost announcing it runs `promote`, which demotes the service on the
+     * spot. With the capture still in flight that is the worst of both — the
+     * capture kept for the sake of the `Until I leave` route, and the process
+     * it needs in order to land given away, so a kill leaves a record still
+     * `SETTLING` with an empty anchor and the route gone for the life of that
+     * snooze (Codex, PR #267).
+     */
+    @Test
+    fun `a time chosen mid-capture keeps the process until the anchor lands`() {
+        val controller = startService(SnoozeService.ACTION_ARM)
+
+        controller.get().onStartCommand(
+            Intent(appContext, TestSnoozeService::class.java)
+                .setAction(SnoozeService.ACTION_SET_CAP)
+                .putExtra(
+                    SnoozeService.EXTRA_CAP_EXPIRES_AT,
+                    now.plusSeconds(3600).toEpochMilli(),
+                ),
+            0,
+            2,
+        )
+        shadowOf(getMainLooper()).idle()
+
+        assertEquals(
+            "the capture still has to land, so the process stays",
+            0,
+            TestSnoozeService.foregroundExits,
+        )
+
+        // And once it has, there is nothing left to stay resident for.
+        TestSnoozeService.captureRequests.single().invoke(captured)
+        shadowOf(getMainLooper()).idle()
+
+        assertTrue(
+            "with the anchor in hand the timer-only snooze gives the process back",
+            TestSnoozeService.foregroundExits >= 1,
+        )
+    }
+
+    /**
+     * The sibling of the test above, and the same durable-fence fact seen from
+     * the other side: an end removes it, but a snooze the user narrowed to its
+     * timer keeps *running*, so nothing else will.
+     *
+     * A geofence outlives the process that registered it, so a death between
+     * the record write and the teardown leaves one out there for a snooze that
+     * is now timer-only. Declining to *start* a watch does nothing about a
+     * watch that is already registered — the guard has to reconcile, not just
+     * return (Codex, PR #267).
+     */
+    @Test
+    fun `a cold restore of a timer-only snooze takes a surviving fence down`() {
+        startService(
+            SnoozeService.ACTION_RESTORE,
+            record = snoozeFixture(now).copy(endsOnDeparture = false),
+        )
+
+        assertTrue(
+            "the fence that survived the process has to come off",
+            TestSnoozeService.presence.stops >= 1,
+        )
+        assertTrue(
+            "and nothing may start watching again",
+            TestSnoozeService.presence.startedWith.isEmpty(),
+        )
+    }
+
     @Test
     fun `a warm wake repairs a degraded watch without replacing it`() {
         // A cold wake re-registers through the restore; a warm service skips

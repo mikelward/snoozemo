@@ -498,7 +498,11 @@ class SnoozeNotifications(private val context: Context) {
         departure: DepartureObservation?,
         atAnchorWifi: Boolean,
     ): String? {
-        if (snooze.mode != TrackingMode.FULL) return null
+        // `effectiveMode` like the lines above: nothing is measuring a distance
+        // for a snooze the user narrowed to its timer. `stopDepartureWatch`
+        // clears the last reading too, so this is the second of two — the
+        // reading cannot be stale here, and the line cannot appear at all.
+        if (snooze.effectiveMode != TrackingMode.FULL) return null
         val reading = departure?.takeIf { it.isFresh(SnoozeClock.read().uptimeMillis) }
         // Ahead of the network, and only this case is (Codex, PR #229). A
         // geofence exit escalates to `CHECKING` *without* clearing the
@@ -553,7 +557,29 @@ class SnoozeNotifications(private val context: Context) {
         unprotected: Boolean,
         atAnchorWifi: Boolean,
     ): android.app.Notification {
-        val body = when (snooze.mode) {
+        // **`Timer only` says nothing true while the movement exit is armed.**
+        // The clause further down appends `, or when you move`, so the two
+        // composed read `Timer only, or when you move` — a card contradicting
+        // itself in six words (Codex, PR #267). Reachable from a chosen time
+        // followed by `Until I move`, and from a snooze that degraded past
+        // departure tracking with the movement exit already on. The movement
+        // exit is then the only end condition worth naming: the timer is the
+        // countdown this card already carries.
+        //
+        // Narrower than the screen's rule, deliberately. `MainScreen` drops
+        // the mode *and its cause* for any motion snooze (maintainer,
+        // 2026-09-11); this drops only a mode that claims to be alone, so a
+        // snooze still watching for a departure goes on naming both exits —
+        // which is what the clause below exists for.
+        val motionIsTheOnlyNamedExit =
+            snooze.endsOnMotion && snooze.effectiveMode == TrackingMode.DURATION_ONLY
+        // `effectiveMode`, not `mode`: a snooze whose user chose a time ends
+        // on its timer whatever the machinery could still watch for, and a card
+        // promising `Ends when you leave` over one is an exit the user cannot
+        // predict (principle 2).
+        val body = if (motionIsTheOnlyNamedExit) {
+            context.getString(R.string.ongoing_ends_when_you_move)
+        } else when (snooze.effectiveMode) {
             TrackingMode.FULL -> context.getString(R.string.ongoing_ends_when_you_leave)
             // Says what it can actually do, not what it wishes it could.
             TrackingMode.WIFI_ONLY -> context.getString(R.string.ongoing_wifi_only)
@@ -575,9 +601,14 @@ class SnoozeNotifications(private val context: Context) {
         // that matters, and stacking a second em-dashed clause onto a state
         // that resolves in minutes buys nothing for the length it costs
         // (AGENTS.md, *Concise copy*).
-        val withReason = when (snooze.mode) {
+        val withReason = when (snooze.effectiveMode) {
             TrackingMode.WIFI_ONLY, TrackingMode.DURATION_ONLY ->
-                reasonFor(snooze.degradation)?.let {
+                // `effectiveDegradation`, matching the `effectiveMode` this
+                // very `when` is over: a snooze the user narrowed to its timer
+                // reads `DURATION_ONLY` here, and pairing that with a cause the
+                // record still carries said `Timer only — weak signal` over a
+                // choice the user made deliberately (Codex, PR #267).
+                reasonFor(snooze.effectiveDegradation)?.let {
                     context.getString(R.string.ongoing_degraded_reason, body, it)
                 } ?: body
             // SETTLING carries no cause for the same reason FULL doesn't:
@@ -617,7 +648,19 @@ class SnoozeNotifications(private val context: Context) {
         // `SnoozeService.foregroundHost`). That is exactly the snooze where
         // this row is the only answer, so it is exactly the one that must say
         // the watch is unprotected rather than promise an exit twice over.
-        val protectionMatters = snooze.mode != TrackingMode.DURATION_ONLY || snooze.endsOnMotion
+        // **Or a capture still out**, which the *raw* mode is what reports:
+        // a snooze given a time during the arm's anchor capture reads
+        // `DURATION_ONLY` through `effectiveMode` while `mode` is still
+        // `SETTLING`, and the capture is deliberately left running because its
+        // anchor is what `Until I leave` goes back to (SPEC.md §4.4). The
+        // service holds the process for exactly that window, so this predicate
+        // has to agree with it — suppressing the warning there meant a refused
+        // promotion went unsaid on the one snooze whose route home depends on
+        // surviving long enough to capture (Codex, PR #267).
+        val protectionMatters =
+            snooze.effectiveMode != TrackingMode.DURATION_ONLY ||
+                snooze.endsOnMotion ||
+                snooze.mode.isSettling
         val withProtection = if (unprotected && protectionMatters) {
             context.getString(
                 R.string.ongoing_degraded_reason,
@@ -635,9 +678,11 @@ class SnoozeNotifications(private val context: Context) {
         // Last, after the degradations. Those explain how well the promise
         // above is being kept; this adds a promise of its own, so it reads
         // wrong wedged between a claim and its caveat.
-        val withMotion = if (snooze.endsOnMotion) {
+        val withMotion = if (snooze.endsOnMotion && !motionIsTheOnlyNamedExit) {
             context.getString(R.string.ongoing_or_when_you_move, withProtection)
         } else {
+            // Already named above, where it replaced a mode that would have
+            // claimed to be the only one.
             withProtection
         }
         val notification = android.app.Notification.Builder(context, CHANNEL_ACTIVE)
@@ -1286,6 +1331,62 @@ class SnoozeNotifications(private val context: Context) {
      */
     fun showCouldNotSetEnd() = showOneShot(R.string.failure_could_not_set_end)
 
+    /**
+     * A chosen time that *applied*, over an exit that would not come off
+     * (SPEC.md §4.4).
+     *
+     * Not [showCouldNotSetEnd], which says the end time could not be set —
+     * here it was, and saying otherwise describes the opposite failure. What
+     * the user needs is what the snooze will still do, because a surviving
+     * exit ends it *earlier* than the time they just picked and they would
+     * otherwise have no way to know why (principle 2).
+     *
+     * One per exit rather than a shared line: the two leave the user watching
+     * for different things.
+     */
+    fun showMovementExitStayedOn() = showExitWarning(R.string.failure_movement_exit_stayed_on)
+
+    /** [showMovementExitStayedOn]'s sibling, for the departure exit. */
+    fun showDepartureExitStayedOn() = showExitWarning(R.string.failure_departure_exit_stayed_on)
+
+    /**
+     * Both exits, on the one card they would otherwise fight over.
+     *
+     * The three share an id, so posting per failure would leave the second
+     * replacing the first and the user told about one exit while two were
+     * armed.
+     */
+    fun showBothExitsStayedOn() = showExitWarning(R.string.failure_both_exits_stayed_on)
+
+    /**
+     * **Its own id, not the one-shots' shared one** (Codex, PR #267, four
+     * findings on this card's lifetime). The three above describe the *snooze*
+     * — an exit still armed that will end it earlier than the time just
+     * chosen — while every other one-shot describes an *attempt* that failed.
+     * On one id those two kinds kept overwriting and deleting each other: a
+     * refused choice took down a warning that was still true, a genuine
+     * "couldn't set the end time" replaced one, and a snooze ending left one
+     * standing because the teardown that would clear it must not clear
+     * `Couldn't forget this snooze` — which the same teardown posts.
+     *
+     * Split, each card's lifetime belongs to the thing it describes: this one
+     * comes down when no exit is left armed ([cancelExitWarning]) or when the
+     * snooze it is about ends.
+     */
+    private fun showExitWarning(text: Int): Boolean = post(
+        ID_EXITS,
+        android.app.Notification.Builder(context, CHANNEL_ENDED)
+            .setSmallIcon(TileR.drawable.ic_tile_snooze)
+            .setContentTitle(context.getString(text))
+            .setAutoCancel(true)
+            .build(),
+    )
+
+    /** Takes down an exit warning that no longer describes anything. */
+    fun cancelExitWarning() {
+        drop(ID_EXITS)
+    }
+
     /** `+30 min` with nowhere left to go: the 24 h backstop is absolute (§7). */
     fun showAtMaxDuration() = showOneShot(R.string.extend_at_max)
 
@@ -1688,6 +1789,7 @@ class SnoozeNotifications(private val context: Context) {
         const val ID_STUCK = 4
         const val ID_END_FAILURE = 5
         const val ID_RINGER = 6
+        const val ID_EXITS = 7
         const val REQUEST_END = 10
         const val REQUEST_EXTEND = 11
         const val REQUEST_RELEASE_STUCK = 12

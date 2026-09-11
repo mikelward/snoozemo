@@ -1222,15 +1222,113 @@ nothing (§7's `MIN_CAP`), on either path.
   that a card is tappable. It is on every build, including the duration-only one, since it
   is the sheet's confirm rather than anything the departure row was carrying.
   A user who meant `until I leave` and pressed `OK` out of habit gets whatever time the row
-  is showing, which is at most the backstop the snooze armed with and never beyond it, and
-  departure tracking stays armed either way — so the worst the ambiguity costs is a snooze
-  that ends no later than it was always going to. The alternative considered was making the
-  rows a selection that only `OK` commits; rejected because it charges every user a second
-  tap on the app's one-tap path.
-- **The helper line is not decoration.** Choosing a time *moves the cap*; it does not disable
-  departure tracking (§7). Walking out at 13:40 still ends the snooze at 13:40. The rows differ only
-  in whether there is a time bound below the backstop, and the sheet should say so plainly rather
-  than implying they are exclusive modes.
+  is showing, which is at most the backstop the snooze armed with and never beyond it — and,
+  since a chosen time now replaces the other end conditions (below), that snooze runs to the
+  time rather than ending when they walk out. **That is a real cost of the ambiguity, and it
+  is what the bullet below traded for**: the earlier reading kept departure armed either way,
+  so the worst case was a snooze ending no later than it was always going to. The floor that
+  survives is the backstop: whatever `OK` commits, the snooze cannot outlast the cap it armed
+  with, and `Until I leave` is one tap away on the same sheet. The alternative considered was
+  making the rows a selection that only `OK` commits; rejected because it charges every user a
+  second tap on the app's one-tap path.
+- **Choosing a time makes the timer the only exit** (maintainer, 2026-09-11: "The Until (time)
+  button should start/switch to a timer only snooze"). It *moves the cap* and it also takes the
+  other end conditions off — the movement exit and departure tracking both — so a snooze told to
+  end at 14:00 ends at 14:00 and not when the user walks out at 13:40. This reverses the earlier
+  reading, where a chosen time added a deadline beside whatever was already armed and the rows
+  "differed only in whether there is a time bound below the backstop": that made a row name one
+  thing while the snooze did another, which is the confusion the rows exist to remove.
+
+  **This settles the time row, not the whole replacement model.** `Until I move` still *adds* an
+  exit rather than replacing one (§4.4's movement section), and whether it should clear departure
+  the way a chosen time does is a product question that stays open — nothing here answers it. What
+  this removes is the obstacle that made it hard to ask: departure used to be the tracking *mode*
+  rather than a flag, so there was nothing to turn off.
+  `ActiveSnooze.endsOnDeparture` is that flag: user intent, kept apart from
+  `mode`, which stays the machinery's capability and is recomputed from the anchor on every
+  presence update. `effectiveMode` is where the two meet for anything that renders.
+
+  **Keeping them apart is what lets the card stay honest.** A snooze reading `Timer only` because
+  the user chose it and one reading `Timer only` because location died are different situations,
+  and principle 2 is that the user can tell — so the choice never overwrites the mode, and the
+  debug log records both.
+
+  **The cause is narrowed with the mode, not beside it.** A degradation explains tracking that is
+  still *trying*, so it survives exactly as long as something is watching: `effectiveDegradation`
+  is null once the user has chosen a timer, and the card reads a plain `Timer only`. Narrowing
+  only the mode broke the distinction the paragraph above exists for — a snooze that had been
+  `Wi-Fi only` for a weak signal and was then given a time rendered `Timer only — weak signal`,
+  reporting the user's own choice as a failure of the machinery. The pair travels together for
+  the reason `effectiveMode` exists at all: two halves at a call site is a pair somebody
+  eventually takes one of.
+
+  **Every surface reads the choice, the shade included.** The Quick Settings tile derives its own
+  `Timer only` qualifier by reading the record off disk rather than binding a service (§6.9), so
+  it has to narrow the mode by the choice for itself. Reading the mode alone left the tile showing
+  an unqualified countdown, as though a departure were still watched, while the screen and the
+  notification said `Timer only`: one record, two answers.
+
+  **`Until I leave` is the way back**, and it is offered from the *capability* rather than from the
+  current choice: a snooze narrowed to its timer is exactly the one whose row has something to do.
+
+  **Which half moves first is decided by which failure ends the snooze earlier.** A chosen time
+  *removes* exits, and removing one can only ever make a snooze outlast something — so the
+  narrowing runs **after** the cap is actually in place. Done first, a refused cap alarm left an
+  eight-hour snooze with its eight hours and nothing watching for a departure, which is a phone
+  quiet all afternoon after the user walked out. `Until I leave` is the mirror: it *adds* an exit
+  and lengthens the cap, so its exits go first. Neither ordering is the general rule; the rule is
+  that the dangerous half goes last.
+
+  **It holds within the exits too, not only between the exits and the cap.** `Until I leave` over a
+  snooze that has taken a movement exit has two writes to make — departure on, movement off — and
+  the removal is again the one whose failure can leave a snooze outlasting something. Done the
+  other way round, a movement clear that landed over a departure write that did not left *both*
+  exits off under a still-shortened cap: nothing watching at all, produced by the control the user
+  reached for to put an exit back.
+
+  **An exit that will not come off is said, not swallowed.** The time the user picked is already
+  in place and a surviving exit only ends the snooze *sooner*, so the choice counts as applied —
+  and the user is told, in the shade, which exits stayed armed. Partial success is reported as
+  success plus a warning rather than as a refusal, because refusing would misdescribe a deadline
+  that is genuinely set. **Both removals are attempted whatever either does**: they are
+  independent, and abandoning the second because the first failed left a snooze ending on an exit
+  the warning had not mentioned. **And a warning belongs to the snooze it is about**, and outlives
+  every attempt that does not answer it: a choice for a snooze that has already ended, or one
+  refused before it changes anything, leaves the shade alone. An exit that is still armed is
+  still worth warning about, so what takes that card down is the exit coming off, the snooze
+  it describes ending, or a later warning replacing it. It is its own card for that reason:
+  a warning about the *snooze* and a report of a failed *attempt* have different lifetimes,
+  and sharing one meant each kept deleting the other.
+
+  **Nothing may still be watching, and that is a stronger claim than "nothing was started".** A
+  geofence outlives the process that registered it, so a snooze narrowed to its timer has to have
+  any existing watch *taken down* — including on a cold restore, where the record says timer-only
+  and a fence registered before the last process died may still be running.
+
+  **And no presence evidence ends it — a confirmed departure and a loss of tracking capability
+  alike.** Fail open (D7) answers "is it safe to stay armed on state nothing can verify", and a
+  snooze narrowed to its timer is verifying nothing: its cap is armed and is what guarantees it
+  ends, so ignoring a late report costs nothing the cap does not already cover. Ending on one
+  would end the phone's silence early on a condition the user had just replaced. **One place
+  decides whether an event ends a given snooze**, because two sites act on these reports — the
+  controller, which ends, and the service, which escalates an end the platform refused — and a
+  gate taught to only one of them was worse than no gate: the controller ignored the departure
+  and the service escalated it a moment later, since a snooze that is still running is the same
+  shape as a refused release.
+
+  **The choice takes effect on every surface at once**, including during the arm's anchor-capture
+  window, which is where a choice made from the tile sheet ordinarily lands. The card and the
+  tile both say what the snooze now ends on rather than what it was armed for.
+
+  **A pending anchor capture is allowed to finish**, and the process is kept alive until it does.
+  Its anchor is what `Until I leave` goes back to, so cancelling it — or losing it to a kill —
+  would make the choice a one-way door, which §4.4's replacement model exists to avoid.
+
+  **What stops running.** The geofence comes off and the location requests end, so an eight-hour
+  timer-only snooze costs about what a duration-only one costs (§9). The §6.10 backstop stays —
+  it re-arms the cap, re-asserts the zen rule and reconciles policy access, none of which a
+  timer-only snooze needs less than any other, and all of which matter more when the timer is the
+  only thing left ending it.
 - **The sheet does its own arithmetic; the service has the final word.** §6.9 forbids the
   trampoline *waiting* on the service it has just started, not reading what that service has
   already written: the sheet is decided after the start is away, so it reads the record to learn
@@ -1243,10 +1341,12 @@ nothing (§7's `MIN_CAP`), on either path.
   offering eight hours over a snooze with one left would promise time the service would clamp
   away. It is the backstop rather than the current cap because a chosen time moves the cap either
   way, so the cap is no longer the edge of what can be chosen.
-- **`until I leave` commits by changing nothing.** Departure tracking is already armed and the
-  backstop is already the cap, so that row is the snooze exactly as the tile left it — which is
-  also why dismissing the sheet and choosing that row are the same outcome, as the rule above
-  requires. It is offered on the strength of what the *build* tracks, which is not the same
+- **`until I leave` commits by changing nothing — on a snooze the tile just armed.** Departure
+  tracking is already armed and the backstop is already the cap, so on that snooze the row is
+  exactly what the tile left, which is why dismissing the sheet and choosing it are the same
+  outcome, as the rule above requires. **It stopped being a no-op in general on 2026-09-11**: a
+  chosen time now replaces the other exits, so over a snooze narrowed to its timer this row is
+  the way back — it puts departure on and restores the cap to the backstop. It is offered on the strength of what the *build* tracks, which is not the same
   question as what this snooze ended up tracking: a `play` anchor that degrades to duration-only
   (§6.5) still gets the row. The degradation says so where the user is looking, but the row is a
   promise made before the answer is known — see `TODO.md`.
@@ -1461,7 +1561,7 @@ the tile-first user who never opens the app is exactly who D9 was written for.
 |---|---|---|
 | **I leave here** | §6 presence engine | **v1** on `play`, offered whenever the build tracks departure. `direct` is duration-only until Phase 7 (§3), and drops the row rather than promising it |
 | **A time, adjustable** | none | **v1.** Seeded at now + 1 h; also the §7 cap |
-| **Whichever comes first** | both | **v1.** Not a third row — implied. Setting a time leaves departure tracking armed |
+| **Whichever comes first** | both | **v1 as designed, reversed 2026-09-11.** Setting a time used to leave departure armed so whichever came first won; a chosen time now *replaces* the other exits (§4.4), so the timer is the only one. `Until I leave` is the way back |
 | **This meeting ends** | `READ_CALENDAR` | **Landed 2026-08-31**, as a notification action rather than a sheet row — see below |
 | **My next alarm** | `AlarmManager.getNextAlarmClock()` | **Explore.** No permission at all, and a natural fit for a bedtime snooze. Offer only when the next alarm is 3–12 h out, so it doesn't propose a 4-minute snooze |
 | **Wi-Fi goes** | `NetworkCallback.onLost` | **Fallback only, if §6.10 measurement forces it.** Instant and free, but it inverts D4 — it *is* the failure mode we designed around |
@@ -1625,6 +1725,9 @@ product exists to stop them guessing.
 that snooze.** Off unless chosen, chosen per snooze rather than as a setting, and it *adds* an exit
 rather than replacing one — the cap still bounds the snooze (§7) and the departure test still runs
 where there is one, so whichever comes first wins, exactly as the three existing exits already do.
+Unchanged by the time row becoming a replacement (§4.4): a chosen time takes this exit *off*, but
+choosing this one takes nothing off, and whether it should is still open. "Where there is one" now
+covers the case of a snooze narrowed to its timer, which has no departure test to run.
 
 **The signal is `TYPE_SIGNIFICANT_MOTION`, and the honest description of it is "coarse".** The same
 sensor already feeds §6.7's duty cycle, and there it is deliberately *not* a verdict: motion is a
@@ -1714,13 +1817,20 @@ what makes "you choose a different row" true rather than merely said. Until this
 had no way back: a tap on `Until I move` was permanent for the life of the snooze, and the status
 went on naming it. So the departure row now takes the movement exit off as well as putting the cap
 back — one tap, one answer — and the card reads `Snoozing until you leave`.
-**Half of it landing alone is a D7 question, and it is answered the D7 way**: the exit comes off
-first, so the case that can be left behind is a snooze that ends *earlier* than the user asked
-rather than later.
+**Half of it landing alone is a D7 question, and it is answered the D7 way**: the departure exit
+goes back on *first* and the movement exit comes off after, so a half that lands alone leaves the
+snooze with an exit rather than none. Written the other way round — the removal first — a movement
+clear that landed over a departure write that did not left both exits off under the still-shortened
+cap, which is nothing watching at all, from the one control the user reached for to put an exit
+back. The rule is the one §4.4 states for the chosen time in mirror image: whichever half is done
+first has to be the one whose failure leaves the snooze ending *earlier*, so the addition leads and
+the removal goes last.
 **This is one direction of the replacement model, not the whole of it.** The reverse — `Until I
-move` over a departure snooze — is the harder half, since departure is the tracking mode rather
-than a flag, and stays open (`TODO.md`, *Decide what tapping an end condition means*). A chosen
-time still replaces neither: it moves the cap and says nothing about which exits are armed.
+move` over a departure snooze — stays open (`TODO.md`, *Decide what tapping an end condition
+means*). It used to be the harder half because departure was the tracking mode rather than a flag;
+`ActiveSnooze.endsOnDeparture` removed that obstacle, so what remains is the product question
+alone. A **chosen time** does now replace both exits (§4.4) — it is the one row that has been
+settled.
 
 **A refused choice says so where the tap happened, like a declined time** (Codex, PR #255). The
 switch answered only through the record the screen observed, which was enough while a refused tap
@@ -3738,13 +3848,19 @@ rather than replacing any of them — the cap still bounds the snooze and depart
 untouched — so a snooze that has it on has four ways to end and whichever comes first wins. A
 snooze that has not asked for it behaves exactly as this table read before.
 
-A time chosen in the §4.4 sheet does not add a fourth exit — it *moves the cap*. Picking 14:00 sets
-`capExpiresAt` to 14:00 while departure tracking stays fully armed, so whichever comes first wins and
-leaving early still ends the snooze early. The move is in whichever direction the chosen time lies:
-a time later than the current cap pushes it out, which is what makes `+` a stepper rather than a
-one-way door (maintainer, 2026-09-11). The 8-hour default remains an absolute backstop above any
-chosen value, and neither a chosen time nor `+30 min` may push past it — so the longest a snooze can
-run is still the one it armed with, whatever the sheet is used to do in between.
+A time chosen in the §4.4 sheet adds no exit — it *moves the cap* and **takes the others away**.
+Picking 14:00 sets `capExpiresAt` to 14:00, clears the movement exit, and takes departure tracking
+off, so 14:00 is when the snooze ends and leaving at 13:40 does not (maintainer, 2026-09-11). There
+is then one exit rather than four, which is what "timer only" means. `Until I leave` puts departure
+back; `Until I move` re-arms movement.
+
+The move is in whichever direction the chosen time lies: a time later than the current cap pushes it
+out, which is what makes `+` a stepper rather than a one-way door. The 8-hour default remains an
+absolute backstop above any chosen value, and neither a chosen time nor `+30 min` may push past it —
+so the longest a snooze can run is still the one it armed with, whatever the sheet is used to do in
+between. **That is what keeps the narrowing safe**: taking exits away can only ever make a snooze
+outlast a departure it would have ended on, never outlast its cap, and the cap is the layer §7
+exists to guarantee.
 
 The cap uses `AlarmManager.setAndAllowWhileIdle` — **inexact on purpose**. Exact alarms need
 `SCHEDULE_EXACT_ALARM`, which is no longer auto-granted on Android 14+ and carries its own Play
@@ -4756,7 +4872,8 @@ merge result.
 | Arm on Samsung with Sleeping Apps on, wait 4 h | Still tracking |
 | Arm while DND already on from a bedtime schedule, then leave | Snoozemo's rule off, bedtime rule untouched |
 | Arm with no meeting in progress | No sheet, armed in one tap |
-| Arm during a meeting, tap `Until <time>`, then leave early | Ends on departure, not at the meeting end |
+| Arm during a meeting, tap `Until <time>`, then leave early | **Stays snoozed until that time** — a chosen time replaces the other exits (§4.4). Reversed 2026-09-11; this row used to expect a departure |
+| Arm during a meeting, tap `Until <time>`, then tap `Until I leave` | Ends on departure again — the way back is one tap |
 | Arm during a meeting, tap `Until <time>`, stay put | Ends at the meeting end |
 | Arm during an all-day event or a "free" calendar block | Not offered as a meeting |
 | Arm minutes before a meeting starts | Its end is offered, since the offer is not gated on overlapping now |

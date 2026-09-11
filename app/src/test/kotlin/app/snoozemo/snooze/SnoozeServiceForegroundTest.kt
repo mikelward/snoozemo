@@ -136,6 +136,74 @@ class SnoozeServiceForegroundTest {
         )
     }
 
+    /**
+     * The warning has to survive a time chosen *during* the anchor capture,
+     * which is the ordinary tile-sheet flow.
+     *
+     * Two predicates answer "does this snooze need the process?" and only one
+     * of them had learned about a pending capture: `wantsForeground` holds the
+     * process while the capture is out, because its anchor is what
+     * `Until I leave` goes back to — while this card's gate read
+     * `effectiveMode`, saw the timer, and suppressed the warning. So a refused
+     * promotion went unsaid on exactly the snooze whose route home depends on
+     * surviving long enough to capture (Codex, PR #267). The raw `mode` is
+     * what reports it: still `SETTLING` while `effectiveMode` reads
+     * `DURATION_ONLY`.
+     */
+    @Test
+    fun `a time chosen mid-capture still says the watch is unprotected`() {
+        TestSnoozeService.refuseForeground = true
+
+        // Armed, capture deliberately undelivered, so the mode is `SETTLING`.
+        val controller = startService(SnoozeService.ACTION_ARM)
+        controller.get().onStartCommand(
+            Intent(appContext, TestSnoozeService::class.java)
+                .setAction(SnoozeService.ACTION_SET_CAP)
+                .putExtra(
+                    SnoozeService.EXTRA_CAP_EXPIRES_AT,
+                    now.plusSeconds(3600).toEpochMilli(),
+                ),
+            0,
+            2,
+        )
+        shadowOf(getMainLooper()).idle()
+
+        assertTrue(
+            "the capture still has to land, so a refused promotion matters",
+            shadeText().contains(stringOf(app.snoozemo.R.string.ongoing_watch_unprotected)),
+        )
+    }
+
+    @Test
+    fun `a capture that finished inside begin holds no foreground service`() {
+        // The real runner starts inside `begin`, and both halves can settle
+        // there — no location permission plus a refused Wi-Fi callback. The
+        // callback then clears the handle field *before* the assignment that
+        // would set it, so the finished handle is what lands and a predicate
+        // reading the field never goes false again: a timer-only snooze kept
+        // the location foreground service to its cap (Codex, PR #267).
+        TestSnoozeService.captureSettlesInBegin = unwatchable
+
+        val controller = startService(SnoozeService.ACTION_ARM)
+        shadowOf(getMainLooper()).idle()
+        controller.get().onStartCommand(
+            Intent(appContext, TestSnoozeService::class.java)
+                .setAction(SnoozeService.ACTION_SET_CAP)
+                .putExtra(
+                    SnoozeService.EXTRA_CAP_EXPIRES_AT,
+                    now.plusSeconds(3600).toEpochMilli(),
+                ),
+            0,
+            2,
+        )
+        shadowOf(getMainLooper()).idle()
+
+        assertNull(
+            "nothing is being watched for, so nothing holds the process",
+            shadowOf(controller.get()).lastForegroundNotification,
+        )
+    }
+
     @Test
     fun `the first card of a watched snooze does not cry refusal`() {
         // The card is built before it is posted and promotion happens on the

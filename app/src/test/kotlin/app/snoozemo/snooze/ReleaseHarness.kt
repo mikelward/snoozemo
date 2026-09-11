@@ -184,6 +184,11 @@ internal class TestSnoozeService : SnoozeService() {
         onCaptured: (Anchor) -> Unit,
     ): AutoCloseable {
         captureRequests += onCaptured
+        // The real runner starts inside `begin`, and both halves can settle
+        // there — no location permission plus a refused Wi-Fi callback, or no
+        // `ConnectivityManager` at all. [captureSettlesInBegin] is how a test
+        // reaches that ordering, which is the one the service has to survive.
+        captureSettlesInBegin?.let(onCaptured)
         return AutoCloseable { captureClosed++ }
     }
 
@@ -203,7 +208,8 @@ internal class TestSnoozeService : SnoozeService() {
             // anything back (Codex, PR #252).
             override fun update(snooze: ActiveSnooze): Boolean {
                 val wrote = super.update(snooze)
-                return if (refuseRecordUpdates) false else wrote
+                val refused = refuseRecordUpdates || refuseRecordUpdateWhen?.invoke(snooze) == true
+                return if (refused) false else wrote
             }
         }
 
@@ -326,6 +332,17 @@ internal class TestSnoozeService : SnoozeService() {
          */
         var refuseRecordUpdates: Boolean = false
 
+        /**
+         * Refuses only the writes this matches, which [refuseRecordUpdates]
+         * cannot express: an ordering defect shows up when one write of a pair
+         * lands and the other does not, and a switch that fails *every* write
+         * never reaches the second one. Matched on the record being written, so
+         * a test names the write it means ("the one turning departure on")
+         * rather than counting — the transitions commit records of their own,
+         * so a positional count is not stable.
+         */
+        var refuseRecordUpdateWhen: ((ActiveSnooze) -> Boolean)? = null
+
         /** Fence-repair pokes the service sent through the flavor seam. */
         var repairPokes: Int = 0
 
@@ -357,6 +374,12 @@ internal class TestSnoozeService : SnoozeService() {
 
         /** How many captures were closed — by an exit, or by a replacement. */
         var captureClosed: Int = 0
+
+        /**
+         * An anchor the capture delivers **before `begin` returns**, or null
+         * for the ordinary asynchronous delivery through [captureRequests].
+         */
+        var captureSettlesInBegin: Anchor? = null
 
         /**
          * Both clocks, frozen. The uptime is arbitrary but plausible and moves
@@ -393,12 +416,14 @@ internal class TestSnoozeService : SnoozeService() {
             zen = RefusingZen()
             captureRequests = mutableListOf()
             captureClosed = 0
+            captureSettlesInBegin = null
             repairPokes = 0
             grantPokes = 0
             presence = FakePresenceMonitor()
             motionRegistrar = FakeMotionRegistrar()
             motionWatchesBuilt = 0
             refuseRecordUpdates = false
+            refuseRecordUpdateWhen = null
             testReading = ClockReading(
                 wallMillis = now.toEpochMilli(),
                 uptimeMillis = FIXTURE_UPTIME_MILLIS,

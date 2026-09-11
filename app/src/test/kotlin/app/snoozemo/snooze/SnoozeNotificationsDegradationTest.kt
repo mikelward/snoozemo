@@ -120,9 +120,19 @@ class SnoozeNotificationsDegradationTest {
     }
 
     /** What the ongoing card most recently said. */
-    private fun postedOngoing(mode: TrackingMode, cause: DegradationCause?): String {
+    private fun postedOngoing(
+        mode: TrackingMode,
+        cause: DegradationCause?,
+        endsOnDeparture: Boolean = true,
+        endsOnMotion: Boolean = false,
+    ): String {
         SnoozeNotifications(appContext).showOngoing(
-            snoozeFixture(now).copy(mode = mode, degradation = cause),
+            snoozeFixture(now).copy(
+                mode = mode,
+                degradation = cause,
+                endsOnDeparture = endsOnDeparture,
+                endsOnMotion = endsOnMotion,
+            ),
         )
         val manager = appContext.getSystemService(android.app.NotificationManager::class.java)
         val posted = shadowOf(manager).allNotifications
@@ -136,6 +146,80 @@ class SnoozeNotificationsDegradationTest {
             stringOf(modeString),
             stringOf(causeString),
         )
+
+    /**
+     * Principle 2's distinction, at the surface that has to carry it: a card
+     * reading `Timer only` because the user chose a time is a different thing
+     * from one reading it because location died, and the second half of the
+     * card is the only place that difference can show.
+     *
+     * Both directions, because the failure this guards is one-sided. Narrowing
+     * the mode without narrowing the cause rendered the user's own choice as
+     * `Timer only — weak signal`, blaming the machinery for it; narrowing too
+     * far would drop a real cause from a snooze that is still trying to track
+     * and is exactly what the cause exists to explain. So the same record is
+     * asserted with the exit on and off (Codex, PR #267).
+     */
+    @Test
+    fun `a chosen timer is not reported as a tracking failure`() {
+        assertEquals(
+            stringOf(R.string.ongoing_timer_only),
+            postedOngoing(
+                TrackingMode.WIFI_ONLY,
+                DegradationCause.FIXES_TOO_VAGUE,
+                endsOnDeparture = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `a timer-only snooze that ends on movement names the movement, not the timer`() {
+        // Composed, the two read `Timer only, or when you move` — a card
+        // contradicting itself (Codex, PR #267). Reachable from a chosen time
+        // followed by `Until I move`. The movement exit is the only end
+        // condition worth naming; the timer is the countdown already on the
+        // card.
+        assertEquals(
+            stringOf(R.string.ongoing_ends_when_you_move),
+            postedOngoing(
+                TrackingMode.WIFI_ONLY,
+                cause = null,
+                endsOnDeparture = false,
+                endsOnMotion = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `a snooze still watching for a departure names both exits`() {
+        // The other direction, and why this is narrower than the screen's
+        // rule: departure is still armed, so the card names it *and* the
+        // movement exit rather than dropping one.
+        assertEquals(
+            appContext.getString(
+                R.string.ongoing_or_when_you_move,
+                stringOf(R.string.ongoing_ends_when_you_leave),
+            ),
+            postedOngoing(
+                TrackingMode.FULL,
+                cause = null,
+                endsOnDeparture = true,
+                endsOnMotion = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `a snooze still watching for a departure keeps naming its cause`() {
+        assertEquals(
+            expected(R.string.ongoing_wifi_only, R.string.ongoing_cause_weak_signal),
+            postedOngoing(
+                TrackingMode.WIFI_ONLY,
+                DegradationCause.FIXES_TOO_VAGUE,
+                endsOnDeparture = true,
+            ),
+        )
+    }
 
     @Test
     fun `location switched off says so`() {

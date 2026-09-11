@@ -169,6 +169,14 @@ open class ActiveSnoozeStore(
             // otherwise come back from a process death running silently to its
             // cap instead.
             endsOnMotion = prefs.getBoolean(KEY_ENDS_ON_MOTION, false),
+            // Defaults to *true*, unlike its sibling above, and the asymmetry
+            // is the point: a record written before this key existed comes from
+            // a build where leaving always ended a snooze, so `true` is what it
+            // meant. Reading it as false would take the exit off every snooze
+            // that survived the upgrade, silently — a phone left quiet past a
+            // departure the user was relying on, which is principle 1's
+            // failure rather than a missing field.
+            endsOnDeparture = prefs.getBoolean(KEY_ENDS_ON_DEPARTURE, true),
         )
     }
 
@@ -491,6 +499,7 @@ open class ActiveSnoozeStore(
         // been confirmed on a rule must not keep naming the previous one's.
         .putString(KEY_RULE_ID, snooze.ruleId)
         .putBoolean(KEY_ENDS_ON_MOTION, snooze.endsOnMotion)
+        .putBoolean(KEY_ENDS_ON_DEPARTURE, snooze.endsOnDeparture)
         .putString(KEY_PLACE, snooze.placeName)
         .putString(KEY_SSID, snooze.anchor.ssid)
         // Recorded alongside the SSID and acted on by nothing (SPEC.md §6.2);
@@ -705,6 +714,7 @@ open class ActiveSnoozeStore(
          * nothing armed a watch for it.
          */
         const val KEY_ENDS_ON_MOTION = "ends_on_motion"
+        const val KEY_ENDS_ON_DEPARTURE = "ends_on_departure"
         const val KEY_CAP_EXPIRES_AT = "cap_expires_at"
         const val KEY_BOOT_REFERENCE = "boot_reference"
         const val KEY_CAP_CEILING_AT = "cap_ceiling_at"

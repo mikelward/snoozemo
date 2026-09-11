@@ -228,6 +228,41 @@ sealed interface PresenceEvent {
 }
 
 /**
+ * What ending [snooze] on this event would be recorded as, or null if this
+ * event must not end it.
+ *
+ * **One place answers this, for every site that acts on a presence event.**
+ * The controller ends the snooze and the service escalates a *refused* end,
+ * and both used to decide for themselves which events were endings — so the
+ * intent gate below reached one of them and not the other, and a late
+ * departure the controller had correctly ignored came back as the service
+ * escalating it a moment later. A predicate that has to be remembered twice
+ * is one that will be taught once.
+ *
+ * The gate itself: a snooze the user has narrowed to its timer ends on that
+ * timer and nothing else (SPEC.md §4.4). The watch is down by then, so
+ * ordinarily no event arrives at all — but a geofence already in flight, or
+ * an exit held across a restore, can still land after the choice. Acting on
+ * one would end the phone's silence early on a condition the user had just
+ * replaced, and D7's fail-open direction does not license that: the duration
+ * cap is still armed and is still what guarantees the snooze ends, so
+ * ignoring these costs nothing the cap does not cover.
+ *
+ * Capability loss is included for the same reason a departure is. Once
+ * nothing ends this snooze but its timer, whether departure tracking *could*
+ * have worked is no longer a question about it.
+ *
+ * Exhaustive over the sealed hierarchy on purpose — a fifth event has to
+ * answer this before it compiles, rather than defaulting into whichever
+ * branch a caller's `else` happened to have.
+ */
+fun PresenceEvent.endReasonFor(snooze: ActiveSnooze): EndReason? = when (this) {
+    PresenceEvent.StillHere, PresenceEvent.ProbablyLeft -> null
+    PresenceEvent.Departed -> EndReason.DEPARTURE.takeIf { snooze.endsOnDeparture }
+    is PresenceEvent.CapabilityLost -> EndReason.LOST_CAPABILITY.takeIf { snooze.endsOnDeparture }
+}
+
+/**
  * Why tracking degraded. An enum rather than a message so the controller
  * branches on a value and the user-facing wording stays in the UI layer, where
  * it can be translated — and so no sanitizing is needed at the boundary, since

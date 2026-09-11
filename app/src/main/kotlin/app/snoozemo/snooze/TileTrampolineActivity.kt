@@ -700,10 +700,12 @@ class TileTrampolineActivity : ComponentActivity() {
                             condition = condition,
                             formattedTime = formatSheetTime(this@TileTrampolineActivity, condition.endsAt),
                             onChooseTime = { sheet.commit(condition.endsAt) },
-                            // The departure row commits by changing nothing:
+                            // The departure row commits by changing nothing
+                            // **on this sheet**: it is the arm-time one, so
                             // tracking is already armed and the default cap is
-                            // already the backstop, so "until I leave" is the
-                            // snooze exactly as it stands (§4.4).
+                            // already the backstop (§4.4). Over a *running*
+                            // snooze the row of the same name is the way back
+                            // from a chosen time and does real work.
                             onChooseDeparture = ::finish,
                             onStepDown = sheet::stepDown,
                             onStepUp = sheet::stepUp,
