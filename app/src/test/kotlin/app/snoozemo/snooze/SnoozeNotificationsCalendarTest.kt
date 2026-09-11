@@ -10,6 +10,7 @@ import android.content.Intent
 import android.database.MatrixCursor
 import android.net.Uri
 import android.provider.CalendarContract
+import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.R
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.EndReason
@@ -655,9 +656,12 @@ class SnoozeNotificationsCalendarTest {
      * Each row is otherwise an ordinary meeting — visible, timed, accepted,
      * busy — so the only thing under test is the column the case varies.
      */
-    private fun rowsKeptBySelection(rows: List<Triple<String, Int?, Instant>>): List<String> {
-        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
-        SnoozeNotifications(appContext).showOngoing(snoozeFixture(now))
+    private fun rowsKeptBySelection(
+        rows: List<Triple<String, Int?, Instant>>,
+        record: ActiveSnooze = snoozeFixture(now),
+    ): List<String> {
+        ActiveSnoozeStore(appContext).arm(record)
+        SnoozeNotifications(appContext).showOngoing(record)
         held.single().run()
         val selection = requireNotNull(provider.lastSelection) { "the query carried no selection" }
 
@@ -713,27 +717,56 @@ class SnoozeNotificationsCalendarTest {
     }
 
     @Test
-    fun `a meeting ending after the cap is never read`() {
+    fun `a meeting ending after the backstop is never read`() {
         // The range in the URI selects instances that *overlap* it, so a
-        // meeting straddling the cap comes back and its end — a time the
+        // meeting straddling the bound comes back and its end — a time the
         // snooze could never reach — would be read before `MeetingEnd`
         // discarded it. `docs/PRIVACY.md` promises Snoozemo never reads
         // further into the calendar than the running snooze could reach, so
         // the bound belongs in the query, not only in the filter afterwards
         // (Codex, PR #156).
         //
-        // The fixture's cap is `now + 7h`; the straddling row starts inside
-        // the window like any real one and simply runs past it.
+        // The fixture's cap and backstop are both `now + 7h`; the straddling
+        // row starts inside the window like any real one and simply runs past
+        // it.
         val kept = rowsKeptBySelection(
             listOf(
-                Triple("inside the cap", null, now.plus(Duration.ofHours(6))),
-                Triple("straddles the cap", null, now.plus(Duration.ofHours(9))),
+                Triple("inside the backstop", null, now.plus(Duration.ofHours(6))),
+                Triple("straddles the backstop", null, now.plus(Duration.ofHours(9))),
             ),
         )
 
         assertEquals(
-            "an end past the cap must not come back from the provider at all",
-            listOf("inside the cap"),
+            "an end past the backstop must not come back from the provider at all",
+            listOf("inside the backstop"),
+            kept,
+        )
+    }
+
+    @Test
+    fun `a meeting past a shortened cap is still read`() {
+        // The other side of the bound, and the one a pure `MeetingEnd` test
+        // cannot see: it is handed its candidates, while the app gets only
+        // what this query returned. Bounded at `capExpiresAt`, a snooze the
+        // user had stepped down to two hours never saw the four-o'clock
+        // meeting again — so `MeetingEnd.offersFor` widening to the backstop
+        // changed nothing that reaches a screen (Codex, PR #266).
+        //
+        // A chosen time moves the cap either way now, so this end really is
+        // reachable and really is a row worth drawing.
+        val shortened = snoozeFixture(now, capIn = Duration.ofHours(2))
+
+        val kept = rowsKeptBySelection(
+            listOf(
+                Triple("before the shortened cap", null, now.plus(Duration.ofHours(1))),
+                Triple("past the cap, inside the backstop", null, now.plus(Duration.ofHours(6))),
+            ),
+            record = shortened,
+        )
+
+        assertEquals(
+            "the window is the backstop, so both come back",
+            listOf("before the shortened cap", "past the cap, inside the backstop"),
             kept,
         )
     }

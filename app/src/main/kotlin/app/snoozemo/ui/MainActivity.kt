@@ -2038,16 +2038,25 @@ class MainActivity : ComponentActivity() {
      * - **Nothing to refine** — no snooze, or a cap already inside the floor
      *   (`EndCondition.offersAChoice`). The rows go; there is no time the
      *   service would accept.
-     * - **A different snooze, or a cap that has moved.** Re-seeded, discarding
-     *   whatever the user had stepped to, because the bounds the stepping
-     *   happened inside are no longer the snooze's. The cap check is what
-     *   catches a settled commit: the offer's ceiling *is* `capExpiresAt`
-     *   (`EndCondition.ceilingFor`), so a shortened cap leaves the two
-     *   unequal, and re-seeding is what stops the next offer being one the
-     *   service would honor by doing nothing while reporting it applied.
-     * - **The same snooze on the same cap.** Reconciled only, so a time the
-     *   user stepped to survives every record read that did not change what
-     *   it is bounded by.
+     * - **A different snooze, or a ceiling that has moved.** Re-seeded,
+     *   discarding whatever the user had stepped to, because the bounds the
+     *   stepping happened inside are no longer the snooze's. The ceiling is
+     *   `capCeilingAt` (`EndCondition.ceilingFor`), which is fixed for a
+     *   snooze's life apart from a wall-clock change
+     *   (`ActiveSnooze.reconciledOnto`) — so this catches the one thing that
+     *   really does move the bounds, and nothing else.
+     *
+     *   It deliberately no longer fires on a settled commit. It used to,
+     *   because the ceiling used to be `capExpiresAt` and a chosen time
+     *   lowered it; re-seeding was then needed to stop the next offer being
+     *   one the service would honor by doing nothing while reporting it
+     *   applied. A chosen time now moves the cap either way and only an exact
+     *   match is a no-op, so there is nothing left to protect against — and
+     *   keeping the time the user just chose on screen is the better answer
+     *   anyway.
+     * - **The same snooze under the same ceiling.** Reconciled only, so a time
+     *   the user stepped to survives every record read that did not change
+     *   what it is bounded by.
      *
      * Never touches a commit in flight, for [EndChoiceController.reconcile]'s
      * reason: its answer is coming and settles the rows itself, and rebuilding

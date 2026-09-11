@@ -65,9 +65,10 @@ import java.time.Instant
  * - **`Until I leave` commits.** On the sheet it dismisses, because a snooze
  *   that has just been armed is already running to its ceiling and "until I
  *   leave" is what it is already doing. Here the snooze may have been
- *   shortened minutes ago, so choosing it has to put the cap back — the one
- *   choice in the app that lengthens one, bounded by the same ceiling `+30
- *   min` is (§4.3).
+ *   shortened minutes ago, so choosing it has to put the cap back — all the
+ *   way to the ceiling, and bounded by the same one `+30 min` is (§4.3).
+ *   Not the only choice that lengthens a cap any more: a chosen time moves it
+ *   either way now, so `−` has a way back that is not this row.
  *
  * Deliberately stateless, like the sheet's own content: it is handed what to
  * draw and reports taps. Every label arrives already formatted, so this stays

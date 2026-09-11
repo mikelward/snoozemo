@@ -298,11 +298,11 @@ class SnoozeServiceSetCapTest {
         // happens when that belief is wrong. A stale reading must never buy
         // silence past the eight hours the whole design leans on.
         //
-        // What declines it today is the "not sooner than the cap" guard rather
-        // than the backstop clamp beside it: no record can carry a cap later
-        // than its own ceiling yet, so anything above the ceiling is above the
-        // cap too. This pins the guarantee, which holds either way, rather than
-        // whichever line currently delivers it.
+        // The fixture already runs to its backstop, so the clamp lands the
+        // request exactly on the cap and there is nothing to write. `a
+        // lengthening chosen time stops at the backstop` covers the case where
+        // the clamp has somewhere to move to. This pins the guarantee, which
+        // holds either way, rather than whichever line delivers it.
         val record = snoozeFixture(now, startedAgo = Duration.ofHours(1))
         val beyond = now.plus(Duration.ofHours(20))
 
@@ -340,23 +340,63 @@ class SnoozeServiceSetCapTest {
     }
 
     @Test
-    fun `a time later than the cap already set leaves it alone`() {
-        // Not a failure and not a lengthening: the snooze already ends no later
-        // than the moment chosen, so the choice is honored by doing nothing.
-        // `+30 min` is the only thing that moves a cap outward (SPEC.md §4.3).
+    fun `a time later than the cap already set moves the cap out to it`() {
+        // The half that makes `+` a stepper rather than a one-way door
+        // (maintainer, 2026-09-11: "the plus button should always be available
+        // to increase that time"). This used to be honored by doing nothing —
+        // a chosen time could only shorten — so a snooze stepped down to two
+        // hours could never be stepped back up, whatever the sheet offered.
+        //
+        // Still bounded: the fixture's backstop is seven hours out, and five is
+        // inside it.
         val record = snoozeFixture(now, capIn = Duration.ofHours(2))
+        val chosen = now.plus(Duration.ofHours(5))
 
-        chooseEnd(now.plus(Duration.ofHours(5)), record)
+        chooseEnd(chosen, record)
 
-        assertEquals(record.capExpiresAt, ActiveSnoozeStore(appContext).load()?.capExpiresAt)
+        assertEquals(
+            "the cap moves out to the time the user chose",
+            chosen,
+            ActiveSnoozeStore(appContext).load()?.capExpiresAt,
+        )
         // `postedOneShot` would see the ongoing notification too, so this asks
         // the narrower question: nothing failed, so no failure was reported.
         assertFalse(
             "nothing failed, so nothing is reported",
             shadeShows(stringOf(R.string.failure_could_not_set_end)),
         )
-        // Applied, not failed: the snooze already ends no later than the moment
-        // chosen, so the sheet dismisses rather than claiming a problem.
+        assertEquals(EndChoiceResult.APPLIED, reported)
+    }
+
+    @Test
+    fun `a time exactly on the cap already set changes nothing`() {
+        // The one real no-op left: the snooze already ends at the moment the
+        // user picked, so their choice is honored by doing nothing. Narrower
+        // than it was — anything not *equal* is now a move, in one direction or
+        // the other — and that narrowing is what the test above needed.
+        val record = snoozeFixture(now, capIn = Duration.ofHours(2))
+
+        chooseEnd(record.capExpiresAt, record)
+
+        assertEquals(record.capExpiresAt, ActiveSnoozeStore(appContext).load()?.capExpiresAt)
+        assertEquals(EndChoiceResult.APPLIED, reported)
+    }
+
+    @Test
+    fun `a lengthening chosen time stops at the backstop`() {
+        // `+` reaches further than it did, and §7 is what it reaches *to*. The
+        // clamp used to be unreachable — a request above the ceiling was above
+        // the cap too, and the direction test declined it first — so this is
+        // the case that turned it from defensive into load-bearing.
+        val record = snoozeFixture(now, startedAgo = Duration.ofHours(3), capIn = Duration.ofHours(1))
+
+        chooseEnd(now.plus(Duration.ofHours(20)), record)
+
+        assertEquals(
+            "the backstop the snooze armed with, not the time asked for",
+            record.capCeilingAt,
+            ActiveSnoozeStore(appContext).load()?.capExpiresAt,
+        )
         assertEquals(EndChoiceResult.APPLIED, reported)
     }
 

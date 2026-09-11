@@ -59,13 +59,21 @@ object MeetingEnd {
      * Still no event identity, for the reason [offerFor] gives: what comes back
      * is times, and a caller that wanted to say *which* meeting would have to
      * read something this deliberately never asks the provider for.
+     *
+     * **Bounded by [ActiveSnooze.capCeilingAt], not the cap the snooze
+     * currently carries** (maintainer, 2026-09-11). A chosen time moves the cap
+     * either way now, so the backstop is the edge of what the service would
+     * accept — and read from the cap, shortening to an hour took every meeting
+     * beyond it off the screen permanently, which is the same one-way door
+     * `EndCondition.ceilingFor` was fixed for. A meeting inside the backstop is
+     * a time the service will take, so it is a row worth drawing.
      */
     fun offersFor(
         snooze: ActiveSnooze?,
         candidateEnds: List<Instant>,
         now: Instant,
         limit: Int,
-    ): List<Instant> = offersBefore(snooze?.capExpiresAt ?: return emptyList(), candidateEnds, now, limit)
+    ): List<Instant> = offersBefore(snooze?.capCeilingAt ?: return emptyList(), candidateEnds, now, limit)
 
     /**
      * [offersFor] against a cap named directly rather than read off a record.

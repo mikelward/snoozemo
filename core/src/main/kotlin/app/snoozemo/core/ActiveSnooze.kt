@@ -433,9 +433,10 @@ data class ActiveSnooze(
      * past the backstop.
      *
      * The ceiling is the **8-hour default**, not [MAX_CAP]. SPEC.md §7 is
-     * explicit: a time chosen in the end-condition sheet only ever *lowers* the
-     * cap, "the 8-hour default remains an absolute backstop above any chosen
-     * value, and `+30 min` may not push past it." Clamping to [MAX_CAP] instead
+     * explicit: "the 8-hour default remains an absolute backstop above any
+     * chosen value, and `+30 min` may not push past it" — which is the half
+     * that still holds now that a chosen time may move the cap either way, and
+     * the reason both controls clamp to the same place. Clamping to [MAX_CAP] instead
      * let sixteen taps walk a default snooze from 8 hours to 24 — sixteen hours
      * of silence past the backstop the whole design leans on, reached by a
      * button whose only job is to add half an hour.

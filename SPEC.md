@@ -1180,8 +1180,8 @@ rather than read by it: neither surface may put a disk wait in front of the shee
 The app screen also cannot decide at the moment of the tap, because the service has only just been
 asked to arm and the record that says what cap to offer against does not exist yet. It waits for the
 next record it reads — which it reads off the main thread anyway — and opens the sheet on the first
-frame it can be honest on. A cap already inside the floor still offers nothing (§7's `MIN_CAP`), on
-either path.
+frame it can be honest on. A snooze whose whole backstop is already inside the floor still offers
+nothing (§7's `MIN_CAP`), on either path.
 
 #### v1
 
@@ -1221,25 +1221,28 @@ either path.
   shaped like one, so the sheet has a terminal action a user can find without having to know
   that a card is tappable. It is on every build, including the duration-only one, since it
   is the sheet's confirm rather than anything the departure row was carrying.
-  A user who meant `until I leave` and pressed `OK` out of habit gets a *shorter* snooze,
-  not a longer one — choosing a time only lowers the cap and leaves departure tracking armed
-  — which is the fail-open direction D7 asks for, so the ambiguity costs nothing that
-  matters. The alternative considered was making the rows a selection that only `OK`
-  commits; rejected because it charges every user a second tap on the app's one-tap path.
-- **The helper line is not decoration.** Choosing a time *lowers the cap*; it does not disable
+  A user who meant `until I leave` and pressed `OK` out of habit gets whatever time the row
+  is showing, which is at most the backstop the snooze armed with and never beyond it, and
+  departure tracking stays armed either way — so the worst the ambiguity costs is a snooze
+  that ends no later than it was always going to. The alternative considered was making the
+  rows a selection that only `OK` commits; rejected because it charges every user a second
+  tap on the app's one-tap path.
+- **The helper line is not decoration.** Choosing a time *moves the cap*; it does not disable
   departure tracking (§7). Walking out at 13:40 still ends the snooze at 13:40. The rows differ only
   in whether there is a time bound below the backstop, and the sheet should say so plainly rather
   than implying they are exclusive modes.
 - **The sheet does its own arithmetic; the service has the final word.** §6.9 forbids the
   trampoline *waiting* on the service it has just started, not reading what that service has
   already written: the sheet is decided after the start is away, so it reads the record to learn
-  the cap the running snooze actually carries and offers nothing later. It seeds and steps against
-  the clock from there, and the service re-clamps whatever is committed. Two clamps rather than
-  one, on purpose: the sheet's keeps `−` from offering times the service would refuse, and the
-  service's keeps a value chosen against a stale reading from outliving it. The ceiling has to be
-  the record's own cap and not a fresh backstop, because a duplicate arm from a stale tile snapshot
-  keeps the snooze already running (§4.2) — offering an hour over a snooze with ten minutes left
-  would be honored by doing nothing and reported as applied.
+  the backstop the running snooze actually carries and offers nothing later. It seeds and steps
+  against the clock from there, and the service re-clamps whatever is committed. Two clamps rather
+  than one, on purpose: the sheet's keeps the steppers from offering times the service would
+  refuse, and the service's keeps a value chosen against a stale reading from outliving it. The
+  ceiling has to be **that record's own `capCeilingAt`** and not a fresh eight hours from now,
+  because a duplicate arm from a stale tile snapshot keeps the snooze already running (§4.2) —
+  offering eight hours over a snooze with one left would promise time the service would clamp
+  away. It is the backstop rather than the current cap because a chosen time moves the cap either
+  way, so the cap is no longer the edge of what can be chosen.
 - **`until I leave` commits by changing nothing.** Departure tracking is already armed and the
   backstop is already the cap, so that row is the snooze exactly as the tile left it — which is
   also why dismissing the sheet and choosing that row are the same outcome, as the rule above
@@ -1266,7 +1269,9 @@ Three differences from the sheet, and all three are behavior rather than layout:
 - **`Until I leave` commits, where the sheet's dismisses.** On the sheet that row changes nothing,
   because the snooze it is offered over was armed seconds ago and is already running to its
   ceiling. Here the snooze may have been shortened half an hour ago, so choosing it has to put the
-  cap **back** — the one choice in the app that lengthens one. It is bounded by the same ceiling
+  cap **back** — no longer the *only* choice that lengthens one, since a chosen time moves the cap
+  in whichever direction it lies, but still the only one that names no time. It is bounded by the
+  same ceiling
   `+30 min` is (§4.3), the snooze's own `capCeilingAt`, so it can never run past the backstop the
   snooze started with. The service is what names that instant, not the screen: a clock change moves
   the ceiling under a fixed `startedAt`, so a time computed on this side would be a guess about a
@@ -1277,7 +1282,11 @@ Three differences from the sheet, and all three are behavior rather than layout:
   departure the row named.
 - **Meeting ends are rows here, not just a notification action.** §4.3's card offers the next
   meeting end; the screen offers the next two, on the same rules — later than the floor, earlier
-  than the cap, times only and never a title. Two rather than one because a screen has room for the
+  than the **backstop**, times only and never a title. The backstop rather than the cap for the
+  reason the stepper's ceiling is: a meeting between a shortened cap and the backstop is a time
+  the service will take. That bound is part of the calendar *query* and not a filter over its
+  answer, so the window `docs/PRIVACY.md` promises moves with it — never further than the snooze
+  could reach, which is now as far as the stepper can push it. Two rather than one because a screen has room for the
   choice a card has to pick between, and because "the meeting after this one" is the common answer
   when the current one is nearly over.
 - **The rows are dropped, not disabled, where they cannot be honored.** A duration-only snooze
@@ -1288,7 +1297,7 @@ Three differences from the sheet, and all three are behavior rather than layout:
 **The offer is decided against the clock, not against the moment the record was
 read.** The rows sit there for as long as the snooze does, so the snapshot they
 were built from goes stale under them — a meeting end slides inside the floor, or
-the cap itself crosses inside it — and the service declines a time inside the
+the backstop itself crosses inside it — and the service declines a time inside the
 floor. A row left standing over one of those fails on every tap, and the refusal
 cannot recover it: the offer the controller would rebuild from no longer offers a
 choice. So the whole offer is withheld the moment the running record stops being
@@ -1430,10 +1439,17 @@ the height belongs to the exit, and this is that height being spent on it. The r
 asked to try; a device pass is what confirms the gap reads as deliberate rather than as an unfinished
 screen.
 
-**The stepper still only shortens.** Its ceiling is the cap the snooze currently carries, so a user
-who has shortened to an hour cannot step back to two — they choose `Until I leave` and step down
-again. `+30 min` (§4.3) is the control that lengthens, and giving the stepper the same reach is
-tracked in `TODO.md` rather than guessed at here.
+**The stepper reaches both ways** (maintainer, 2026-09-11: "the plus button should always be
+available to increase that time"). Its ceiling is `capCeilingAt` — the §7 backstop the snooze armed
+with — rather than the cap it currently carries, and a chosen time moves the cap in whichever
+direction it lies. Read from the cap, the ceiling came down with every `−`, so one tap down was
+permanent and the only way back was `Until I leave` followed by stepping down again: a stepper with
+a one-way half is not a stepper. Nothing new becomes reachable, because the backstop is where the
+snooze was always going to end, and it is the same ceiling `+30 min` (§4.3) clamps to.
+
+For the same reason the rows are offered while the *backstop* is still more than `MIN_CAP` away
+rather than while the cap is: asked of the cap, a snooze stepped down to half an hour lost its rows
+exactly where the way back out is the thing the user wants.
 
 **Whether the sheet survives this is an open question**, recorded in `TODO.md`: the screen now does
 everything the sheet does and more, but the sheet is the only refinement a *tile* user ever sees, and
@@ -1688,8 +1704,8 @@ user had to be able to revoke for as long as the sensor was armed. That argument
 question the user had not asked. `Until I leave` is not revocable either — you choose a different
 row — and this is the same kind of answer: an end condition, chosen by tapping, adding an exit the
 cap still bounds. So the row reads `Until I move`, matching its sibling, is drawn as the same card,
-and sits in the same group, which it leaves with the others once the cap comes inside `MIN_CAP`
-(§7). Tapping it on a snooze that already ends on motion changes nothing. Where it sits in the
+and sits in the same group, which it leaves with the others once the backstop comes inside
+`MIN_CAP` (§7). Tapping it on a snooze that already ends on motion changes nothing. Where it sits in the
 group is §4.2's order.
 
 **`Until I leave` takes the movement exit off** (maintainer, 2026-09-11: "if I tap until I move
@@ -1704,7 +1720,7 @@ rather than later.
 **This is one direction of the replacement model, not the whole of it.** The reverse — `Until I
 move` over a departure snooze — is the harder half, since departure is the tracking mode rather
 than a flag, and stays open (`TODO.md`, *Decide what tapping an end condition means*). A chosen
-time still replaces neither: it lowers the cap and says nothing about which exits are armed.
+time still replaces neither: it moves the cap and says nothing about which exits are armed.
 
 **A refused choice says so where the tap happened, like a declined time** (Codex, PR #255). The
 switch answered only through the record the screen observed, which was enough while a refused tap
@@ -3722,10 +3738,13 @@ rather than replacing any of them — the cap still bounds the snooze and depart
 untouched — so a snooze that has it on has four ways to end and whichever comes first wins. A
 snooze that has not asked for it behaves exactly as this table read before.
 
-A time chosen in the §4.4 sheet does not add a fourth exit — it *lowers the cap*. Picking 14:00 sets
+A time chosen in the §4.4 sheet does not add a fourth exit — it *moves the cap*. Picking 14:00 sets
 `capExpiresAt` to 14:00 while departure tracking stays fully armed, so whichever comes first wins and
-leaving early still ends the snooze early. The 8-hour default remains an absolute backstop above any
-chosen value, and `+30 min` may not push past it.
+leaving early still ends the snooze early. The move is in whichever direction the chosen time lies:
+a time later than the current cap pushes it out, which is what makes `+` a stepper rather than a
+one-way door (maintainer, 2026-09-11). The 8-hour default remains an absolute backstop above any
+chosen value, and neither a chosen time nor `+30 min` may push past it — so the longest a snooze can
+run is still the one it armed with, whatever the sheet is used to do in between.
 
 The cap uses `AlarmManager.setAndAllowWhileIdle` — **inexact on purpose**. Exact alarms need
 `SCHEDULE_EXACT_ALARM`, which is no longer auto-granted on Android 14+ and carries its own Play
