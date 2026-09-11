@@ -1859,7 +1859,7 @@ the point is that every other line of the app is worthless if it isn't true.
 
 ## Phase 5 (M5) — Edge cases and degraded modes
 
-- [ ] **Bound the stale-loan hand-back that an arm can run before `STATE_TRUE`** (`SPEC.md`
+- [ ] **Bound the recovery work that can sit in front of `STATE_TRUE`** (`SPEC.md`
       §5.9). Deferred from PR #259 (Codex): the ceiling-before-rule order put
       `quietLocked`'s `handBackFirst` branch in front of the zen write, so an arm that
       *replaces* a ceiling record still carrying an earlier snooze's loan hands that loan
@@ -1874,9 +1874,16 @@ the point is that every other line of the app is worthless if it isn't true.
       to the release, the retry alarm and startup reconciliation, all of which already come
       back for the loan — at the cost of a slower recovery in exactly the case where the
       ringer is misbehaving.
-      Worth measuring before building: the device check PR #259 already owes — whether the
-      tap still feels instant with the persistence ahead of the rule — is what would say
-      whether this is perceptible at all.
+      **The retry alarm's own hand-back is the same question** (Codex, PR #259). It keeps the
+      blocking `giveBackIfIdle` deliberately — its one-shot alarm is spent by the time the
+      receiver runs, so standing down there would leave a stranded loan with nothing
+      scheduled — so an `ACTION_RINGER_RETRY` or boot broadcast that wins the lock a moment
+      before a tap runs its ladder while the arm waits. The fix has a second half the
+      others do not: yield *and* re-arm the spent one-shot, or the stand-down is the
+      stranding it was avoiding.
+      Worth measuring before building, for both: the device check PR #259 already owes —
+      whether the tap still feels instant with the persistence ahead of the rule — is what
+      would say whether any of it is perceptible.
 
 - [ ] **Un-stick the rule on a re-assertion that finishes an earlier loan** (`SPEC.md` §5.9).
       Split out of PR #259 so the ordering fix could land (maintainer, 2026-09-11); the work is
