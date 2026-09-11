@@ -4,13 +4,17 @@ import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
@@ -32,6 +36,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import app.snoozemo.R
@@ -230,26 +235,10 @@ internal fun EndConditionRows(
         }
 
         help?.let { open ->
-            // Each slot is wrapped, and the dialog hosts its own pinch: a
-            // dialog is its own window, so the theme's scaled density does not
-            // reach it and the text would come out at the system size whatever
-            // the user chose (Codex, PR #217, on the rationale dialog).
-            AlertDialog(
-                modifier = Modifier.pinchFontSizeHost(),
-                onDismissRequest = { openHelp = null },
-                title = { FontSizeWindow { Text(stringResource(open.title)) } },
-                text = {
-                    FontSizeWindow {
-                        Text(stringResource(open.body(departureUsesWifi, departureUsesArea)))
-                    }
-                },
-                confirmButton = {
-                    FontSizeWindow {
-                        TextButton(onClick = { openHelp = null }) {
-                            Text(stringResource(R.string.action_close))
-                        }
-                    }
-                },
+            EndHelpCard(
+                title = stringResource(open.title),
+                body = stringResource(open.body(departureUsesWifi, departureUsesArea)),
+                onClose = { openHelp = null },
             )
         }
     }
@@ -286,6 +275,114 @@ private fun EndHelp.body(usesWifi: Boolean, usesArea: Boolean): Int = when (this
         else -> R.string.end_help_leave_body
     }
 }
+
+/**
+ * One help card, as its own window.
+ *
+ * A thin wrapper over [EndHelpCardContent], which is the whole of what the
+ * card draws. The split is so a screenshot test can record the wording: a
+ * dialog is its own window and this suite's capture draws the activity's
+ * `decorView`, so a snapshot taken with an `AlertDialog` open records the
+ * screen behind it — a picture that looks fine and shows none of the copy it
+ * exists to show, which is this suite's own false-pass failure mode.
+ *
+ * **[BasicAlertDialog], not `AlertDialog` and not a bare `Dialog`.**
+ * `AlertDialog` takes its title, text and button as separate slots, so there is
+ * no single composable to hand a test — which is the whole reason this split
+ * exists. A bare `Dialog` gives that, and silently drops three things
+ * `AlertDialog` was doing: the 280–560dp width range, the dialog pane
+ * semantics TalkBack announces the modal with, and a text slot measured after
+ * the buttons so a long body cannot push the action off a short screen. Codex
+ * found all three on PR #265, one per round, which is what a mechanism rather
+ * than three bugs looks like. [BasicAlertDialog] is the component for exactly
+ * this case: arbitrary content, with the width range and the pane semantics
+ * kept. The third is layout of this card's own making and is handled below.
+ *
+ * **It narrows the class rather than deleting it.** A fourth round asked for
+ * heading semantics on the title, which no wrapper can supply: what
+ * [BasicAlertDialog] restores is the *container* — the window's width and the
+ * pane it announces — while everything a slot used to carry is now this card's
+ * to state. The title below does; anything added beside it has to as well.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun EndHelpCard(title: String, body: String, onClose: () -> Unit) {
+    // The card hosts its own pinch, and its content is wrapped: a dialog is
+    // its own window, so the theme's scaled density does not reach it and the
+    // text would come out at the system size whatever the user chose (Codex,
+    // PR #217, on the rationale dialog).
+    BasicAlertDialog(onDismissRequest = onClose) {
+        Box(modifier = Modifier.pinchFontSizeHost()) {
+            FontSizeWindow { EndHelpCardContent(title = title, body = body, onClose = onClose) }
+        }
+    }
+}
+
+/**
+ * What a help card says, drawn in whatever window the caller gives it.
+ *
+ * `internal` so a screenshot test can record it directly; [EndHelpCard] is
+ * the only production caller and puts it in a dialog window.
+ *
+ * **Carries the width range itself rather than leaning on the window's.**
+ * [BasicAlertDialog] applies the same one, so in production this is redundant
+ * — but the recorded image is taken without that wrapper, and a constraint
+ * only the wrapper held would leave the snapshot showing a width the product
+ * never draws. (At the recorded screen width the cap does not bind either way;
+ * what this buys is that it cannot silently stop being there.)
+ */
+@Composable
+internal fun EndHelpCardContent(title: String, body: String, onClose: () -> Unit) {
+    Surface(
+        shape = MaterialTheme.shapes.extraLarge,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.sizeIn(minWidth = DIALOG_MIN_WIDTH, maxWidth = DIALOG_MAX_WIDTH),
+    ) {
+        Column(
+            modifier = Modifier.padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            // **Weighted and scrolling, so the way out is measured first.**
+            // An unweighted body is measured before the row below it and can
+            // take the whole window: at a large system font compounded with
+            // the app's own 160% setting, or in short landscape, `Close` was
+            // left clipped or measured to zero — a modal with no visible way
+            // out (Codex, PR #265). `fill = false` keeps a short card short;
+            // the scroll is what a long one does with the space it is given.
+            Column(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                // **A heading, so TalkBack's heading navigation finds it.**
+                // Not restoring something `AlertDialog` was doing — Material's
+                // title slot styles and pads, it does not mark a heading — so
+                // this is a small improvement on what the card had before,
+                // taken because a modal's one title is exactly what heading
+                // navigation is for (Codex, PR #265).
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.semantics { heading() },
+                )
+                Text(text = body, style = MaterialTheme.typography.bodyMedium)
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onClose) { Text(stringResource(R.string.action_close)) }
+            }
+        }
+    }
+}
+
+/**
+ * Material's own dialog width range, which [BasicAlertDialog] applies and
+ * [EndHelpCardContent] repeats so the recorded image carries it too.
+ *
+ * Named here because Material does not export them.
+ */
+private val DIALOG_MIN_WIDTH = 280.dp
+private val DIALOG_MAX_WIDTH = 560.dp
 
 /**
  * A committing row with a `?` beside it.
