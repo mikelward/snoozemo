@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.crash.CrashReporting
+import app.snoozemo.dnd.PrefsRingerLoanStore
 import app.snoozemo.dnd.PrefsZenRuleIdStore
 import app.snoozemo.dnd.RingerOutcome
 import app.snoozemo.dnd.SnoozeRingerStore
@@ -62,10 +63,15 @@ class SnoozemoApplication : Application(), androidx.work.Configuration.Provider 
         EndSheetStore(this).warm()
         WelcomeStore(this).warm()
         // How loud a snooze may be (SPEC.md §5.9). Warmed for the same reason
-        // as the rule id: the arm path reads it — after the rule is on, never
-        // before it — so a cold tap should find it in memory rather than
-        // waiting on the file.
+        // as the rule id: the arm path reads it, so a cold tap should find it
+        // in memory rather than waiting on the file.
         SnoozeRingerStore(this).warm()
+        // The way back from that ceiling, and the more urgent of the two now
+        // (Codex, PR #259). Since §5.9 moved the ceiling ahead of `STATE_TRUE`,
+        // this store is read *and written* before the rule goes on rather than
+        // after it — so a cold tap that overtakes this warming pays for a
+        // preference load on the one path that has to feel instant.
+        PrefsRingerLoanStore(this).warm()
         // How big the app's own text is (SPEC.md §4.8). Not on the arm path —
         // nothing between a tile tap and the zen rule reads it — but every
         // screen's first frame is sized from it, and a screen that rendered at

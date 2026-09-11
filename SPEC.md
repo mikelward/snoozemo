@@ -1732,44 +1732,20 @@ happened:
   decisions that change nothing are kept because a snooze surviving a broadcast is as informative
   as one that does not. Never the rule's identifier: whether it was ours is the diagnostic, which
   one it was is not.
-- **The rule's state either side of the ringer write**, on an arm that takes the ringer, and only
-  while the log is recording. A field with an expiry: it exists to settle one question, and comes
-  out once that question is settled. A device capture (2026-09-10) has an arm whose rule write was
-  accepted, whose ringer moved to the ceiling, and whose activation broadcast then arrived twenty
-  milliseconds later with the rule reading back as inactive — followed at once by a deactivation
-  that ended the snooze as `DND_TURNED_OFF`, seconds after the tap. Across that capture every arm
-  that wrote the ringer was at risk and most died; every arm that found nothing to take survived.
-  That is consistent with our own write knocking the rule down, and equally consistent with
-  something else making a fresh rule slow to take effect while leaving the ringer high — and the
-  two want opposite fixes. Reading the rule immediately before and immediately after the write
-  separates them where the rule moves at once — active-then-inactive points at the write, and the
-  same answer twice rules out a *synchronous* knock-down without clearing anything, since the
-  failure arrives asynchronously. What decides it either way is a comparison the *capture protocol*
-  makes possible rather than the log alone: whether an arm writes is decided by the ringer's
-  current mode, and a rule that is working has already lowered it — so within one run a slow rule
-  produces both the deaths and the writes, and the correlation proves nothing however accurately
-  it is recorded. Two runs with the ringer's starting mode fixed by hand, audible and already
-  quiet, assign that split independently and part the two explanations.
-  The line also records **how many times the platform's ringer setter was actually called** across
-  that window, which is the control that makes the pair attributable rather than merely
-  suggestive: the ceiling does not always write, so the arms that call it zero times bracket the
-  same two reads with no mode change between them, and a rule that moves across one of those moved
-  on its own. Counted rather than inferred from the call's result, because a result cannot answer
-  it — one call can hand an earlier loan back, setter included, and still report that it took
-  nothing. A window the count cannot settle — the arm shares the setter with the startup
-  reconciler, so one can be running at an edge or land where the count cannot place it — says so
-  and is dropped rather than assigned to an arm. That direction matters both ways: an over-count
-  convicts an innocent write exactly as an under-count clears a guilty one, and the two choose
-  opposite repairs. How the count is taken is implementation, and lives with the code. Rule state
-  and nothing else — never the rule's identifier, for
-  the reason above.
-
-  It is gated on the log actually recording, which is not an optimization but the same principle
-  applied to the measurement itself: the first read sits between the rule write and the ringer
-  write and delays the latter by a binder round-trip, so a user with the log off would pay a change
-  in behavior for evidence nobody collects. That delay is also the one bias to hold in mind when
-  reading a capture — it makes the failure *less* likely to reproduce, so a clean run is weaker
-  evidence than a failing one.
+- **The rule's state either side of the ringer write** was a field with a stated expiry — "it
+  exists to settle one question, and comes out once that question is settled" — and the question
+  is settled, so it is out (2026-09-11). It read the rule immediately before and immediately
+  after an arm's ringer write, with a count of how many times the platform's ringer setter was
+  actually called across that window, to part two explanations of a snooze that died seconds
+  after the tap: our own write knocking the rule down, against something making a fresh rule slow
+  to take effect. A device capture on API 37 read `ACTIVE` then `INACTIVE` across a single setter
+  call on both arms, and the control that assigns the split by hand — setting the ceiling to
+  `Ring`, which imposes nothing and never writes the ringer, and watching the snooze hold —
+  answered it: the write is the cause (§5.9). Retired with the fix, because after it the first
+  read is always `INACTIVE` and the line would report a window that no longer means anything. It
+  also cost what it measured: the first read sat between the rule write and the ringer write and
+  delayed the latter by a binder round-trip, which is exactly the kind of thing the arm path does
+  not carry for free.
 - Permission and capability state at each decision — notification-policy access, location permission
   and its precision, whether location services are on system-wide, battery-saver state. A denied
   permission is often the whole answer to "why didn't it end".
@@ -2408,6 +2384,75 @@ onward, for adjustments that would toggle Do Not Disturb unless the app holds No
 Access — which is §5.2's `ACCESS_NOTIFICATION_POLICY`, the grant without which there is no snooze to
 be quiet for. Android 15's restriction on changing global Do Not Disturb names `setInterruptionFilter`
 and `setNotificationPolicy` only; the ringer is untouched by it.
+
+**The ceiling is applied before the rule goes on, because that same sentence cuts the other way**
+(device capture, API 37, 2026-09-11). Holding Notification Policy Access does not exempt Snoozemo
+from the coupling — it is what *permits* it. A ceiling written while our own rule was active turned
+Do Not Disturb off, the platform deactivated the rule within milliseconds, and §5.8 read that
+deactivation as the user reaching the shade: the snooze ended about 180 ms after it started, with no
+notification, because §5.7 deliberately says nothing for a user-initiated ending. Tapping the tile
+appeared to do nothing at all. The volume panel's own bell / vibrate control does **not** do this —
+it is the system's internal ringer path — but no app can reach that path, so the order is the fix.
+Written first, there is no zen of ours for the coupling to turn off.
+
+**What the ceiling costs the arm, counted rather than assumed.** On a fresh arm it is a loan
+read, **two synchronous preference commits before the mode write** — rule 1 requires the way
+back on disk before the ringer moves, and declines the borrow outright if it cannot be written
+— and one after, plus a fixed-volume check and a mode read. Both stores are warmed at startup,
+so none of it pays for a cold file load. A re-assertion normally writes nothing, since an
+outstanding loan is never overwritten; the one exception is a loan whose own write never landed,
+which it finishes. A `Ring` ceiling imposes nothing and returns before any platform call at all.
+
+**An arm always has priority over startup reconciliation.** The ringer's lock is
+process-wide, and the recovery check that hands back a loan a dead process left behind wants
+it too — so on a cold tap the arm could queue behind a hand-back ladder, which under this
+order means queuing in front of Do Not Disturb. **Every arm is counted from before it asks
+for the lock**, and reconciliation yields to that count at every point it can: before asking
+for the lock, again the moment it holds it and before any recovery work, and between writes
+when an arm turns up mid-hand-back. Standing down leaves the record exactly as it found it —
+the loan and the ceiling it was taken for both stay, since dropping one without the other
+carries a stale borrow into the next snooze with nothing recording what the phone is owed. Timing is not what the
+guarantee rests on — a fixed wait only moves the race, since whoever starts the recovery
+thread, a tap can land just as the wait expires. A short wait before it runs at all is kept
+anyway, because it removes even the one-write pause in the ordering that is most common: a
+cold start, where the tap is what started the process. Yielding costs nothing that matters —
+it decides whether the phone is audible again now or shortly after, in a rare recovery case,
+and the loan stays on disk throughout for the next start, the next release or the next time
+the app is opened. The retry alarm's own path still waits on the lock, because its one-shot
+alarm is already spent and a stand-down there would leave a stranded loan with nothing
+scheduled.
+
+**A re-assertion is the one arm this order cannot help**, and it is deliberately left for its
+own change (`TODO.md`). A cap re-arm or a restore after process death runs with the rule
+already active, and rule 1's own recovery writes the ringer on one of those: the case where a
+loan was recorded but its write never landed, which the next arm *finishes*. That write trips
+the coupling, and `STATE_TRUE` cannot undo it — a deactivated rule stays deactivated until its
+owner sets `STATE_FALSE` first (§5.8). Fixing it means turning Do Not Disturb off and on again
+on that path, which is a real cost on a rare path and a decision of its own. Until then the
+exposure is strictly narrower than it was: before this order, every arm wrote the ringer under
+its own rule.
+
+**A refused arm gives back only what it took itself.** Under this order a *fresh* arm has already
+taken the ringer by the time the rule write is refused, so it hands it back and leaves the phone
+where the user had it. A re-assertion has not: an outstanding loan is never overwritten, and one
+whose write never landed is *finished* rather than taken, so both belong to the snooze that is
+still running — and that refusal is the retryable one, which keeps that snooze armed. Handing back
+there would drop a live snooze's ceiling for the rest of it. The ceiling record stays either way,
+since a live snooze that has forgotten it could not report the shortfall it is now having.
+
+Two things that order does not fix, both recorded rather than assumed away:
+
+- **Arming on a phone that already has another Do Not Disturb source running** — a bedtime
+  schedule, another app's rule — still writes the ringer with zen on, and turns *theirs* off. That
+  breaches §5.6, and it is the same exposure the `Silent`-ceiling hand-back has always carried.
+- **The release path keeps the opposite order** (ringer back, then rule off) for the reason rule 1
+  gives: the loan record is what a retry reads, and undoing the quiet after a release that cleared
+  the record would leave a phone on vibrate with nothing left that knows better. The hand-back is
+  an audible-direction write, so it trips the coupling too — harmless for our own rule, which is on
+  its way off regardless, and the same §5.6 exposure for anyone else's.
+
+Both wait on the device check `TODO.md` already specifies rather than a guess about how manual Do
+Not Disturb and other apps' rules are represented on current API levels.
 
 **The ringer is borrowed, and the loan is what gives it back.** Ringer mode is global device state
 that outlives the process and the reboot, so a snooze that quiets the phone and then loses the way

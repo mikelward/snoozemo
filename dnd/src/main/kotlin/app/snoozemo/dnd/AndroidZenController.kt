@@ -232,16 +232,17 @@ class AndroidZenController(
     /**
      * The rule, and the ringer with it (SPEC.md §5.9).
      *
-     * The ringer is nested *inside* the rule, in both directions, and the
-     * asymmetry is deliberate:
+     * The ringer moves **outside** the rule in both directions — down before it
+     * goes on, back up before it goes off — and each end has its own reason:
      *
-     * - **Arming** sets the rule first and lowers the ringer only once the rule
-     *   is confirmed on. Nothing may come between the tap and `STATE_TRUE`
-     *   (`AGENTS.md`, the arm path), and a *fresh* arm that is then refused has
-     *   taken nothing to give back. A **re-assertion** is the exception, and
-     *   `RingerFollowUp` is where it is decided: one that establishes nothing
-     *   was silencing the phone ends the snooze without a second zen call
-     *   anywhere in the app, so it owes back whatever an earlier arm took.
+     * - **Arming** lowers the ringer first and sets the rule once it is down,
+     *   because the platform turns Do Not Disturb off in response to our own
+     *   ringer write — see [arm], which is where that is established and what it
+     *   costs. An arm that is then refused hands back what it took, and a
+     *   re-assertion takes nothing to begin with. `RingerFollowUp` decides the
+     *   rest: one that establishes nothing was silencing the phone ends the
+     *   snooze without a second zen call anywhere in the app, so it owes back
+     *   whatever an earlier arm took.
      * - **Releasing** hands the ringer back *before* the rule goes off, because
      *   the loan record is what a retry reads and a release can fail: undoing
      *   the quiet while the record still exists leaves every retry path intact,
@@ -263,24 +264,114 @@ class AndroidZenController(
         trigger: ZenTrigger,
         placeName: String,
         snooze: SnoozeIdentity?,
-    ): ZenOutcome {
+    ): ZenOutcome =
+        if (snoozed) arm(trigger, placeName, snooze) else release(trigger, placeName, snooze)
+
+    /**
+     * Lowers the ringer, then turns the rule on — **in that order, because the
+     * platform couples them** (device capture, API 37).
+     *
+     * `AudioManager.setRingerMode` is the *external* ringer path, and its own
+     * reference says that from API 24 on, "ringer mode adjustments that would
+     * toggle Do Not Disturb are not allowed unless the app has been granted
+     * Notification Policy Access". Snoozemo holds that grant, so for this app
+     * the adjustment is **permitted rather than blocked** — and permitted means
+     * it goes through and turns Do Not Disturb *off*. Writing the ceiling while
+     * our own rule was active therefore deactivated it within milliseconds, the
+     * platform reported `DEACTIVATED`, and §5.8 read that as the user reaching
+     * the shade — ending the snooze it had just started, silently, because
+     * `DND_TURNED_OFF` is the ending that posts no notification. The tap looked
+     * like it did nothing at all.
+     *
+     * The volume panel's own ringer button does *not* do this: it is the
+     * system's internal path, which has no such coupling. There is no
+     * app-facing equivalent, so the order is the fix rather than the API.
+     *
+     * Written first, there is no zen of ours for the coupling to turn off. What
+     * it does **not** fix is arming on a phone that already has another source
+     * active — a bedtime schedule, another app's rule — where the same write
+     * turns *theirs* off and breaches §5.6. That is not a regression (the old
+     * order wrote the ringer under zen too, and lost our own rule as well), and
+     * it is the same exposure `TODO.md`'s `Silent`-ceiling item is waiting on a
+     * device check for.
+     *
+     * **This is the one thing permitted between the tap and `STATE_TRUE`**
+     * (`AGENTS.md`, the arm path). It is a `getRingerMode` and at most one
+     * `setRingerMode` — no disk, no `PackageManager`, no policy IPC — and a
+     * re-assertion does not even write, since an outstanding loan is never
+     * overwritten (`RingerHandover.quiet`). The alternative was re-asserting the
+     * rule after the write, which keeps the invariant literally intact and then
+     * argues with a documented platform behavior on every single arm.
+     */
+    private fun arm(trigger: ZenTrigger, placeName: String, snooze: SnoozeIdentity?): ZenOutcome {
+        val quieted = quietTheRinger(snooze)
+        // **What this order does *not* solve is a re-assertion** — a cap re-arm
+        // or a restore after process death — where the rule is already active
+        // and `RingerHandover.quiet` can still write: the `unfinished` branch,
+        // finishing a loan whose own write never landed. That write trips the
+        // coupling like any other, and `STATE_TRUE` cannot undo it. Tracked as
+        // its own change (`TODO.md`), because it needs the rule turned off and
+        // on again — a real cost on a rare path, and a decision of its own.
+        // Strictly narrower than before this reorder, which wrote under the
+        // rule on *every* arm.
+        val outcome = setRuleState(snoozed = true, trigger = trigger, placeName = placeName)
+        val followUp = ringerFollowUp(
+            snoozed = true,
+            outcome = outcome,
+            // Only a borrow this arm actually took. A re-assertion writes
+            // nothing for a loan the running snooze already owns, and
+            // *finishes* rather than takes one whose write never landed.
+            freshlyBorrowed = quieted is RingerOutcome.Set && !quieted.finishedAnEarlierLoan,
+        )
+        when (followUp) {
+            // Taken above, before the rule. Nothing further is owed.
+            RingerFollowUp.QUIET -> Unit
+            // Nothing of ours is silencing the phone, so the snooze is over and
+            // whatever this arm — or an earlier one — took is owed back
+            // (Codex, PR #176).
+            RingerFollowUp.HAND_BACK_AND_FORGET -> {
+                giveBackTheRinger()
+                forgetTheCeiling()
+            }
+            // A refused arm stays armed for the cap to retry — but it has now
+            // taken the ringer on the strength of a rule write that did not
+            // land, which the old order could not do because it never got that
+            // far. Handing it back keeps what the user observes unchanged: a
+            // snooze that is not being enforced leaves the ringer where they
+            // had it. The loan goes back with it, so a retry that succeeds
+            // borrows afresh against the mode it finds then.
+            RingerFollowUp.HAND_BACK -> giveBackTheRinger()
+            // A refusal over a loan this arm did not take — a re-assertion's,
+            // and still owed to the snooze that is still running (Codex,
+            // PR #259).
+            RingerFollowUp.NOTHING -> Unit
+            // A refused *release*, so unreachable from here.
+            RingerFollowUp.RE_QUIET -> Unit
+        }
+        return outcome
+    }
+
+    /**
+     * Hands the ringer back, then turns the rule off — unchanged, and still the
+     * opposite order to [arm] for the reason the class comment gives: the loan
+     * record is what a retry reads, and a release can fail.
+     *
+     * The coupling above applies here too and is harmless for our own rule,
+     * which is on its way off regardless. Reversing this to avoid it would race
+     * the platform's recomputation and risk leaving the phone silent after a
+     * snooze the user was told had ended, which is principle 1's failure and
+     * the worse of the two (`TODO.md`).
+     */
+    private fun release(trigger: ZenTrigger, placeName: String, snooze: SnoozeIdentity?): ZenOutcome {
         // Carried across the rule write, because a hand-back that recognized the
         // user's own mid-snooze change must not be undone by the re-quiet below
         // (Codex, PR #176): that path would find no loan, borrow again, and
         // lower the very ringer rule 4 had just left as theirs.
-        val disowned = !snoozed && giveBackTheRinger() is RingerOutcome.Disowned
-        val outcome = setRuleState(snoozed, trigger, placeName)
-        when (ringerFollowUp(snoozed, outcome, ringerDisowned = disowned)) {
-            // The rule this arm actually wrote, not whatever the store holds
-            // by the time each probe runs (Codex, PR #251).
-            RingerFollowUp.QUIET ->
-                quietTheRingerWatchingTheRule(snooze, (outcome as? ZenOutcome.Applied)?.ruleId)
-            RingerFollowUp.HAND_BACK_AND_FORGET -> {
-                // Already done above on the release path; an **arm** that ended
-                // the snooze has not done it at all (Codex, PR #176).
-                if (snoozed) giveBackTheRinger()
-                forgetTheCeiling()
-            }
+        val disowned = giveBackTheRinger() is RingerOutcome.Disowned
+        val outcome = setRuleState(snoozed = false, trigger = trigger, placeName = placeName)
+        when (ringerFollowUp(snoozed = false, outcome = outcome, ringerDisowned = disowned)) {
+            // Already handed back above; this only clears the record.
+            RingerFollowUp.HAND_BACK_AND_FORGET -> forgetTheCeiling()
             // The hand-back above ran unconditionally, and the window that
             // buys is microseconds wide only when the release succeeds. On a
             // refusal the snooze runs on, so it would last until some later
@@ -290,277 +381,18 @@ class AndroidZenController(
             // unchanged. A ringer the hand-back disowned never reaches here —
             // `ringerDisowned` sends it to `NOTHING`, since it is theirs for
             // the rest of the snooze.
+            //
+            // **This one still writes the ringer with our rule active**, since
+            // the release was refused and there is no order to reverse. It is
+            // the same coupling, so it can end the snooze it is trying to keep
+            // quiet; recorded in `TODO.md` rather than fixed blind.
             RingerFollowUp.RE_QUIET -> quietTheRinger(snooze)
             RingerFollowUp.NOTHING -> Unit
+            // Both an arm's, so unreachable from here.
+            RingerFollowUp.QUIET, RingerFollowUp.HAND_BACK -> Unit
         }
         return outcome
     }
-
-    /**
-     * Lowers the ringer, reading the rule's state either side of the write.
-     *
-     * **A measurement, not a change**: the ringer is taken exactly as before,
-     * whatever either read says. This exists to settle one question with
-     * evidence instead of argument.
-     *
-     * The control comes free, because `quietTheRinger` does not always write: a
-     * phone already at or below its ceiling is left alone. Those arms bracket
-     * an interval with no mode change in it, which is what makes the pair
-     * attributable rather than merely suggestive.
-     *
-     * **The two arms are not the same length, so the length is recorded rather
-     * than assumed** (Codex, PR #251). A write also persists the loan, checks
-     * the fixed-volume policy and reads the mode back, so its interval is the
-     * longer one — and a longer interval is likelier to contain a transition
-     * that was coming anyway. Measuring it makes that confounder something a
-     * capture can rule out instead of something the design has to promise: if
-     * the deactivations sit with `outcome=<mode>` while `took=` is comparable
-     * across both arms, duration is not the explanation.
-     *
-     * **`took=` spans both reads, not the write between them** (Codex, PR
-     * #251). It is only worth anything as a bound on where an unseen transition
-     * could have landed, and that window closes when the second read returns,
-     * not when the write does — a slow second binder query lengthens it exactly
-     * as a slow write would. Timed around the write alone it under-reported
-     * precisely the samples that then read as short intervals, which is the cue
-     * to rule timing out and convict the write. Bracketing the mode setter
-     * alone would be tighter still and wrong for the same reason, quite apart
-     * from the probe reading a zen rule `:dnd`'s ringer has no business knowing
-     * about.
-     *
-     * A device capture on 2026-09-10 has an arm whose rule write was accepted,
-     * whose ringer moved to the ceiling, and whose `ACTIVATED` broadcast then
-     * arrived about twenty milliseconds later with the rule reading back as
-     * `INACTIVE` — followed at once by a `DEACTIVATED` that ended the snooze as
-     * `DND_TURNED_OFF`, seconds after a tap the user was still watching. Across
-     * two builds, four of the five arms that wrote the ringer died that way,
-     * and all six that found nothing to take survived. So the ringer write is
-     * the suspect, and the pair of reads is what convicts or clears it
-     * (`TODO.md`):
-     *
-     * `setterCalls` is the arm, and it is **counted, not inferred**: one call
-     * into the ringer can hand an earlier loan back — setter and all — and then
-     * report `Untouched` because the new ceiling had nothing to take, so the
-     * outcome would have cleared a write that happened (Codex, PR #251). The
-     * outcome is kept beside it as context, never as the discriminator.
-     *
-     * **These are observations, not verdicts** (Codex, PR #251). Every one of
-     * them is a single arm, and a transition that arrives asynchronously can
-     * land inside any window by coincidence — which is what `took=` is for.
-     * The repair is chosen from the two-run comparison below and nowhere else.
-     *
-     * - `before=ACTIVE after=INACTIVE setterCalls=1` — the strongest single
-     *   arm there is: the rule went down across a window that contained our
-     *   write. Suggestive, and worth more the shorter `took=` is, but one arm
-     *   cannot separate it from an unrelated transition landing there.
-     * - `before=ACTIVE after=INACTIVE setterCalls=0` — the rule moved across a
-     *   window with no mode change of any kind in it, so the platform does do
-     *   this unprompted. That weakens the suspicion; it does not clear the
-     *   write, which could still contribute on the arms that have one.
-     * - `setterCalls=…+inflight` — a setter was running through the window from
-     *   another thread, so it is neither arm and the sample is dropped. Exactly
-     *   `0` with no marker is what the control requires.
-     * - `outcome=refused…` — context for why a write did not take. It no longer
-     *   decides the arm, because `setterCalls` already does.
-     * - `before=INACTIVE after=INACTIVE` — the rule was never in effect and the
-     *   write changed nothing. The cause is elsewhere, and waiting would buy
-     *   nothing.
-     * - `before=ACTIVE after=ACTIVE` — **not a healthy arm, and not a clear**
-     *   (Codex, PR #251). The pair can only catch a knock-down that is
-     *   *synchronous*, and the failure under investigation is not: in the
-     *   capture the deactivation arrived about twenty milliseconds after the
-     *   write, as a broadcast. So a dying arm reads `after=ACTIVE` too, and
-     *   reading that as healthy would clear the write on almost every arm —
-     *   the false clear this whole line exists to prevent. What it says is
-     *   only "the rule had not moved yet".
-     *
-     * **Which is why the per-arm `setterCalls` is the load-bearing half.** An
-     * `after=ACTIVE` arm is judged by the lines that follow it in the same
-     * capture — the rule-status broadcast, and the `DND_TURNED_OFF` ending if
-     * it comes. That table was built by hand from the first capture and its
-     * write column was inferred; this line makes the column authoritative, per
-     * arm. The immediate pair is a bonus that settles it outright in the
-     * synchronous case.
-     *
-     * **But the write/no-write split inside one capture is not a control**
-     * (Codex, PR #251). Whether an arm writes is decided by `currentMode()`,
-     * and a rule that is working has already lowered the ringer — so the rival
-     * explanation, a fresh rule slow to take effect, *causes both* the death
-     * and the write, and every dying arm carries a setter call with the setter
-     * innocent. Making that column accurate does not make it independent, and
-     * a tally over a single capture cannot convict.
-     *
-     * **The assignment has to come from the protocol, and it does**
-     * (`TODO.md` 6a). The tester fixes the ringer's starting mode before
-     * arming: audible and every arm writes, already on vibrate and no arm
-     * does — a split chosen by hand, so it is independent of what the rule is
-     * doing. The two hypotheses part there. If our write knocks the rule down,
-     * the deaths sit in the audible group and the vibrate group is clean; if a
-     * fresh rule is simply slow, its slowness does not care what the ringer
-     * started at and both groups die alike. Comparing *those two runs* is the
-     * experiment; the arms within one run only ever supply the readings above.
-     *
-     * **Only while the debug log is recording.** With it off the line goes
-     * nowhere, so the reads would be pure cost — and the first of them delays
-     * the ringer, which is a change in behavior charged to a user who cannot
-     * capture anything in return.
-     *
-     * **Two costs, stated rather than hidden.** The first read sits between the
-     * rule write and the ringer write, so it delays the ringer by a binder
-     * round-trip — about a millisecond, and in the direction that makes the
-     * failure *less* likely, which is the one bias worth knowing when reading
-     * the results. The second read is after the write and carries no such
-     * effect. Neither is between the tap and `STATE_TRUE` (`AGENTS.md`, the arm
-     * path): both are on the far side of a rule write already confirmed.
-     *
-     * Contained end to end, so a measurement can never cost an arm.
-     */
-    private fun quietTheRingerWatchingTheRule(snooze: SnoozeIdentity?, armedRuleId: String?) {
-        // Nobody is collecting, so nobody pays. With the log off the line is
-        // discarded, and what is left is two policy IPCs on the arm path and a
-        // ringer delayed by the first of them — an observer effect charged to a
-        // user who cannot produce the observation (Codex, PR #251).
-        if (!SnoozeDebugLog.isRecording) {
-            quietTheRinger(snooze)
-            return
-        }
-        // **Two windows, and the count is the pair rather than either one.**
-        // The outer samples bracket the rule reads and the inner ones sit
-        // against the write, so a setter that ran somewhere in between is
-        // counted by the outer pair and may or may not be counted by the inner
-        // one. Where they agree the number is exact; where they differ, a write
-        // landed in a gap at an edge and the sample says so instead of picking
-        // a side (Codex, PR #251).
-        //
-        // Sampling once was wrong in both directions and the earlier reasoning
-        // here only saw one of them. Inside the reads, a concurrent setter in a
-        // gap went uncounted and a guilty write read as a control. Outside
-        // them, it was counted and an innocent one read as a conviction — which
-        // the comment this replaces waved through as "the right direction",
-        // on the belief that over-counting merely made a sample unusable. It
-        // does not: `TODO.md` reads a moved rule with a write in the window as
-        // the shape that points at us, so an over-count is not a dropped
-        // control but a false conviction, and both errors choose the wrong
-        // repair.
-        val writesOuterBefore = runCatching { ringer.modeWrites }.getOrNull()
-        // The clock brackets **both probes**, not the write between them. What
-        // `took` has to bound is the span in which a transition could have
-        // landed without being seen, and that runs from before the first read
-        // to after the second — a slow second binder query lengthens it just as
-        // surely as a slow write does. Timing only the write let two samples
-        // report the same `took` over materially different observation windows,
-        // so a transition that arrived during a delayed second probe read as a
-        // short interval — which is `TODO.md`'s cue to rule timing out and
-        // convict the write (Codex, PR #251). It starts before the first read
-        // rather than after it for the same reason: a transition landing during
-        // that read is not reliably in either value, so the uncertainty starts
-        // there.
-        val startedAt = System.nanoTime()
-        // **One rule, named once, for both reads** (Codex, PR #251). Resolving
-        // the id separately at each probe reads a *mutable* store, so a rule
-        // replaced in between — `ensureRule` after a deletion — would leave
-        // `before` describing the old rule and `after` the new one, and the
-        // line would report a transition that is really two different rules.
-        // `ZenOutcome.Applied` carries the id this arm actually wrote, which
-        // exists to close exactly that race.
-        val before = runCatching { ruleActivation(armedRuleId) }.getOrNull()
-        val writesInnerBefore = runCatching { ringer.modeWrites }.getOrNull()
-        val outcome = quietTheRinger(snooze)
-        val writesInnerAfter = runCatching { ringer.modeWrites }.getOrNull()
-        val after = runCatching { ruleActivation(armedRuleId) }.getOrNull()
-        val tookMicros = (System.nanoTime() - startedAt) / 1_000
-        val writesOuterAfter = runCatching { ringer.modeWrites }.getOrNull()
-        val wrote = setterCalls(
-            outerBefore = writesOuterBefore,
-            innerBefore = writesInnerBefore,
-            innerAfter = writesInnerAfter,
-            outerAfter = writesOuterAfter,
-        )
-        SnoozeDebugLog.event(
-            "ringer: rule around the ceiling write — " +
-                "before=${before?.name ?: "unreadable"} after=${after?.name ?: "unreadable"} " +
-                "setterCalls=$wrote outcome=${outcome.wroteWhat} took=${tookMicros}us",
-        )
-    }
-
-    /**
-     * How many times the platform's ringer setter ran across the observed
-     * window — as a **bound**, because four samples on an unsynchronized
-     * timeline cannot give a point (Codex, PR #251).
-     *
-     * The inner pair brackets the write and the outer pair brackets the rule
-     * reads, so a setter from another thread is counted by the outer pair if it
-     * landed anywhere across the reads and by the inner pair only if it landed
-     * against the write. Agreement means every write in the observed window is
-     * accounted for at both edges and the number is exact. Disagreement means
-     * one ran in a gap at an edge, where it is neither reliably inside the
-     * window nor reliably outside it, and the honest report is the range.
-     *
-     * This is where the counter stops growing, and the reason is that the
-     * property is now structural rather than another interleaving closed. The
-     * four earlier findings were each a different route to a wrong count — a
-     * hand-back's setter the outcome could not see, a per-instance counter, the
-     * samples nested inside the reads, a write already in flight — and each was
-     * answered by moving a sample. A sample has two neighbouring gaps by
-     * construction, so moving it only ever trades one gap for another. Reporting
-     * the pair does not close a gap; it makes every gap visible as uncertainty,
-     * which no ordering of a single pair can do.
-     *
-     * **Only a bare number is a usable sample.** `+inflight` and a range are
-     * both "this window cannot be called", and `TODO.md` says to drop them
-     * rather than read them as either arm.
-     */
-    private fun setterCalls(
-        outerBefore: RingerWriteCounts?,
-        innerBefore: RingerWriteCounts?,
-        innerAfter: RingerWriteCounts?,
-        outerAfter: RingerWriteCounts?,
-    ): String {
-        if (outerBefore == null || innerBefore == null || innerAfter == null || outerAfter == null) {
-            return "unreadable"
-        }
-        val inner = innerAfter.finished - innerBefore.finished
-        // A setter in flight at any edge could have landed anywhere in between,
-        // so the window cannot be called clean whatever the deltas say. Named
-        // rather than folded into the count, because the two are different
-        // facts and only one of them is an arm.
-        val edges = listOf(outerBefore, innerBefore, innerAfter, outerAfter)
-        if (edges.any { !it.isSettled }) return "$inner+inflight"
-        val outer = outerAfter.finished - outerBefore.finished
-        return if (inner == outer) "$inner" else "$inner..$outer"
-    }
-
-    /**
-     * Whether a mode change actually happened, in a word — the control.
-     *
-     * The two reads bracket a call that does **not** always write: a phone
-     * already at or below its ceiling is left alone, and a fixed-volume policy
-     * refuses. Those arms span the same interval, take the same reads, and touch
-     * nothing — so `before=ACTIVE after=INACTIVE wrote=nothing` is the platform
-     * moving the rule on its own, and the same pair with a real write is the
-     * only shape that points at us (Codex, PR #251).
-     *
-     * Without it the pair is ambiguous in exactly the way the whole question
-     * turns on, because the failure being investigated already involves
-     * activations and deactivations arriving asynchronously — an interval that
-     * contains a write also contains time, and time alone is a rival
-     * explanation.
-     */
-    private val RingerOutcome?.wroteWhat: String
-        get() = when (this) {
-            is RingerOutcome.Set -> mode.name
-            RingerOutcome.Untouched -> "nothing"
-            RingerOutcome.Disowned -> "nothing, disowned"
-            // Named, and **excluded from the comparison**: a refusal cannot say
-            // whether the setter ran. `AudioRingerController` refuses before it
-            // — a fixed-volume policy, a loan that would not persist, no ceiling
-            // to set — and equally after it, when the read-back still reports
-            // the old mode (Codex, PR #251). So this is neither arm of the
-            // experiment; the reason is recorded so a reader can see which
-            // sample was dropped and why, rather than counting it as either.
-            is RingerOutcome.Refused -> "refused, ${reason.name} — not a usable sample"
-            null -> "threw — not a usable sample"
-        }
 
     /**
      * Contained, because this is not the snooze. An exception escaping the
@@ -612,7 +444,9 @@ class AndroidZenController(
         val warmId = store.ruleId()
         if (warmId != null) {
             val applied = trySetState(warmId, snoozed, trigger, placeName)
-            if (applied is ZenOutcome.Applied) return confirmSilenced(warmId, snoozed, placeName)
+            if (applied is ZenOutcome.Applied) {
+                return confirmSilenced(warmId, snoozed, placeName)
+            }
         }
 
         // Only now — having already failed, or never having had an id — is it
@@ -639,7 +473,8 @@ class AndroidZenController(
         when (ensureRule()) {
             ZenRuleState.READY -> Unit
             ZenRuleState.DISABLED -> return ZenOutcome.NotApplied(ZenFailure.RULE_DISABLED)
-            ZenRuleState.MISSING_ACCESS -> return ZenOutcome.NotApplied(ZenFailure.NO_POLICY_ACCESS)
+            ZenRuleState.MISSING_ACCESS ->
+                return ZenOutcome.NotApplied(ZenFailure.NO_POLICY_ACCESS)
             // PLATFORM_REFUSED, not NO_RULE, and the distinction has teeth:
             // FAILED means the *lookup* threw, which is exactly why ensureRule
             // keeps the existing id rather than creating a second rule. So we
@@ -647,7 +482,8 @@ class AndroidZenController(
             // would tell a release to complete, erasing the record and the cap
             // while that rule may still be silencing the phone. Unknown is
             // retryable; only a rule we know is absent is an ending.
-            ZenRuleState.FAILED -> return ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED)
+            ZenRuleState.FAILED ->
+                return ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED)
         }
         val ruleId = store.ruleId() ?: return ZenOutcome.NotApplied(ZenFailure.NO_RULE)
         // Retried rather than abandoned, because this runs on the *release* path

@@ -11,6 +11,9 @@ import app.snoozemo.core.SnoozeIdentity
 import app.snoozemo.core.RingerStep
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.SnoozeRinger
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * The only place in the app that touches `AudioManager` (SPEC.md §11).
@@ -58,14 +61,21 @@ class AudioRingerController(
      * it runs between the tap and the rule going on. Everything here happens
      * *after* the rule is confirmed on.
      */
-    override fun quiet(snooze: SnoozeIdentity?): RingerOutcome = synchronized(RINGER) { quietLocked(snooze) }
+    override fun quiet(snooze: SnoozeIdentity?): RingerOutcome {
+        // Raised *before* asking for the lock, which is the whole point: an arm
+        // that is merely queued is still an arm in front of Do Not Disturb, and
+        // reconciliation has to be able to see it (see [ARMS_WAITING]).
+        ARMS_WAITING.incrementAndGet()
+        try {
+            return RINGER.withLock { quietLocked(snooze) }
+        } finally {
+            ARMS_WAITING.decrementAndGet()
+        }
+    }
 
-    override fun giveBack(): RingerOutcome = synchronized(RINGER) { giveBackLocked() }
+    override fun giveBack(): RingerOutcome = RINGER.withLock { giveBackLocked() }
 
-    override fun forgetCeiling() = synchronized(RINGER) { rememberChoice(null) }
-
-    override val modeWrites: RingerWriteCounts
-        get() = RingerWriteCounts(started = WRITES_STARTED.get(), finished = WRITES_FINISHED.get())
+    override fun forgetCeiling() = RINGER.withLock { rememberChoice(null) }
 
     /**
      * Hands the ringer back only if [snoozeRunning] says nothing is holding it.
@@ -77,13 +87,96 @@ class AudioRingerController(
      * than read here because the answer lives in `:app`'s record, which `:dnd`
      * cannot see.
      */
-    fun giveBackIfIdle(snoozeRunning: () -> Boolean): RingerOutcome = synchronized(RINGER) {
+    fun giveBackIfIdle(snoozeRunning: () -> Boolean): RingerOutcome =
+        RINGER.withLock { giveBackIfIdleLocked(snoozeRunning) }
+
+    /**
+     * The same check, but **declining to wait** for the ringer if something else
+     * holds it — for startup reconciliation, which must never sit in front of an
+     * arm (Codex, PR #259).
+     *
+     * Since the ceiling moved ahead of `STATE_TRUE` (`SPEC.md` §5.9), a cold
+     * tile tap's `quiet` wants this lock *before* Do Not Disturb goes on. This
+     * reconciliation runs from `Application.onCreate` on a daemon thread, so on
+     * a cold tap the two race — and on a stale loan the blocking form can hold
+     * the lock through a hand-back ladder of up to three writes with read-backs,
+     * preference commits and an alarm schedule. That is unbounded work in front
+     * of the one path that has to feel instant.
+     *
+     * **Standing down loses nothing**, which is what makes this safe rather than
+     * a trade: the lock being held means another caller is *actively using the
+     * ringer*, and every one of them either holds a live snooze's loan — whose
+     * own release hands it back — or is itself a hand-back. Either way this
+     * check's answer would have been "leave it alone". The loan stays on disk
+     * regardless, and the next process start, the next release and the next time
+     * the app is opened all retry from it.
+     *
+     * **[armWanted] is checked twice over, before the lock and again before each
+     * write**, because a fixed wait only moves the race (Codex, PR #259, the
+     * third finding on this contention): whoever starts this worker, a tap can
+     * land just as the wait expires, and then reconciliation holds the lock and
+     * the arm queues behind a hand-back in front of Do Not Disturb. A count
+     * raised before the arm blocks does not care about timing, and it is read
+     * again inside the hand-back so an arm that arrives *while* this is working
+     * is not stuck behind the rest of it. Never inside a write: one already
+     * issued has to be read back, and abandoning it half-done is how a loan
+     * stops matching the phone.
+     *
+     * Injected rather than read here for the reason [snoozeRunning] is — it is
+     * the only way the yield is testable without racing two threads onto one
+     * lock — and defaulted so production cannot forget to pass it.
+     *
+     * **Not for the retry alarm**, which keeps [giveBackIfIdle]: that receiver's
+     * one-shot alarm is already spent by the time it runs, so a stand-down there
+     * would leave a stranded loan with nothing scheduled at all. It is a
+     * background broadcast with no arm behind it, and waiting there costs
+     * nothing.
+     *
+     * @return null where the ringer was busy and nothing was attempted.
+     */
+    fun giveBackIfIdleUnlessBusy(
+        snoozeRunning: () -> Boolean,
+        armWanted: () -> Boolean = { ARMS_WAITING.get() > 0 },
+    ): RingerOutcome? {
+        if (armWanted() || !RINGER.tryLock()) {
+            SnoozeDebugLog.event("ringer: busy, so startup reconciliation stood down; the loan waits for the next start")
+            return null
+        }
+        return try {
+            giveBackIfIdleLocked(snoozeRunning, armWanted)
+        } finally {
+            RINGER.unlock()
+        }
+    }
+
+    private fun giveBackIfIdleLocked(
+        snoozeRunning: () -> Boolean,
+        armWanted: () -> Boolean = { false },
+    ): RingerOutcome {
+        // **Asked again the moment the lock is held, before any recovery work
+        // at all** (Codex, PR #259, the fourth finding on this contention).
+        // Checking before `tryLock` and then again only at the writes leaves a
+        // gap: an arm can raise the count in between and block, while this goes
+        // on to read the loan, ask whether a snooze is running, and — on an
+        // unreadable record — schedule an alarm, all in front of Do Not
+        // Disturb. Small work, but it is work the arm waits for, and the whole
+        // point of a count rather than a timer is that it does not have to.
+        //
+        // Tracked rather than called bare, because the answer decides what the
+        // exits below may touch: the one that stands down has to leave the
+        // record exactly as it found it.
+        var yielded = false
+        val yieldingToArm = { armWanted().also { wanted -> yielded = yielded || wanted } }
+        if (yieldingToArm()) {
+            SnoozeDebugLog.event("ringer: an arm wanted it, so startup reconciliation stood down; the loan waits")
+            return RingerOutcome.Untouched
+        }
         // The same ladder the release path takes, and for a sharper reason here
         // (Codex, PR #176): this is what the retry alarm's own receiver runs, so
         // a one-shot alarm that reaches an unreadable record is already spent —
         // returning without asking for a successor leaves nothing scheduled at
         // all.
-        val loan = readLoan() ?: return@synchronized escalateUnreadableState()
+        val loan = readLoan() ?: return escalateUnreadableState()
         val running = runCatching(snoozeRunning).getOrElse {
             SnoozeDebugLog.failure(it, "ringer: could not tell whether a snooze is running; leaving the loan alone")
             // Unknown is answered as "running", which keeps a phone that is
@@ -93,30 +186,46 @@ class AudioRingerController(
             // alarm spent that alarm and scheduled nothing, so a genuinely
             // stranded loan under it had nothing left coming.
             if (loan.borrowed != null) escalateUnreadableState("whether a snooze is running is unreadable")
-            return@synchronized RingerOutcome.Untouched
+            return RingerOutcome.Untouched
         }
         if (running) {
             // A snooze this process is about to restore, or one whose release
             // is still being retried. Its own release gives the ringer back;
             // stepping in here would un-quiet a phone still meant to be quiet.
             SnoozeDebugLog.event("ringer: a live snooze holds the ringer; left to its release")
-            return@synchronized RingerOutcome.Untouched
+            return RingerOutcome.Untouched
         }
-        // Dropped here, before the loan is even looked at, because the predicate
+        // Dropped on every path that resolves the loan, because the predicate
         // has just established that nothing is running: the choice record is
-        // then stale whatever the loan says, and every path out of this function
-        // has to drop it (Codex, PR #176, twice). [giveBackLocked] deliberately
+        // then stale whatever the loan says (Codex, PR #176, twice).
+        // [giveBackLocked] deliberately
         // leaves it — that runs on the release path, where a refused *rule*
         // write keeps the snooze alive — and nothing calls `forgetCeiling` for
         // this one, so a hand-back here used to resolve the loan and leave the
         // ceiling behind for the next arm to adopt as its own.
-        rememberChoice(null)
+        //
+        // **Not on the path that yields to an arm**, which is the one exit that
+        // leaves the loan outstanding on purpose (Codex, PR #259). Clearing
+        // there would drop the ceiling that loan was taken for while the loan
+        // itself lives on — so the stale borrow survives into the next snooze,
+        // which will not overwrite it (rule 2), with nothing left recording
+        // what the phone is owed. Standing down has to leave the record exactly
+        // as it found it, or it is not standing down.
+        if (yieldingToArm()) {
+            SnoozeDebugLog.event("ringer: an arm wanted it, so startup reconciliation stood down; the loan waits")
+            return RingerOutcome.Untouched
+        }
         // Asked *after* the predicate, unlike the loan-first shape this had at
         // first: a snooze that never borrowed still records a choice, so the
         // no-loan case had something to clear even before the line above moved.
-        if (loan.borrowed == null) return@synchronized RingerOutcome.Untouched
+        if (loan.borrowed == null) {
+            rememberChoice(null)
+            return RingerOutcome.Untouched
+        }
         SnoozeDebugLog.event("ringer: a snooze ended without handing it back; doing it now")
-        giveBackLocked()
+        val outcome = giveBackLocked(yieldingToArm)
+        if (!yielded) rememberChoice(null)
+        return outcome
     }
 
     /**
@@ -205,7 +314,12 @@ class AudioRingerController(
         }
 
         return when (val step = RingerHandover.quiet(chosen, currentMode(), loan.borrowed)) {
-            is RingerStep.Borrow -> borrow(step.borrowed, chosen)
+            // Whether this write **finishes** a loan already on disk rather than
+            // taking a fresh one. Known only here, where the loan read is still
+            // in hand: `RingerHandover.quiet` returns `Borrow` for both, and the
+            // record itself cannot say, since a fresh borrow is recorded
+            // unapplied too (Codex, PR #259).
+            is RingerStep.Borrow -> borrow(step.borrowed, chosen, finishing = loan.borrowed != null)
             // The three "correct, and say which" cases: a loan already
             // outstanding (a re-asserted arm), a phone already at or below the
             // ceiling, or a mode that could not be read so there was no way
@@ -224,7 +338,7 @@ class AudioRingerController(
         }
     }
 
-    private fun giveBackLocked(): RingerOutcome {
+    private fun giveBackLocked(armWanted: () -> Boolean = { false }): RingerOutcome {
         // An unreadable record is a **refused** hand-back, not a finished one:
         // there may well be a loan under it, and nothing else would ever come
         // back for it — the release that reaches this ignores the refusal, turns
@@ -244,7 +358,7 @@ class AudioRingerController(
         val borrowed = loan.borrowed ?: return RingerOutcome.Untouched
 
         return when (val step = RingerHandover.giveBack(borrowed, currentMode())) {
-            is RingerStep.GiveBack -> release(step.mode)
+            is RingerStep.GiveBack -> release(step.mode, armWanted)
             RingerStep.Disown -> {
                 // Their ringer now, so the record goes and the mode stays. A
                 // failed clear is retried rather than shrugged off (Codex,
@@ -272,7 +386,11 @@ class AudioRingerController(
      * Record first, then set, then verify — the order [RingerStep.Borrow]
      * documents, with each failure undoing exactly what it has to.
      */
-    private fun borrow(borrowed: BorrowedRinger, chosen: SnoozeRinger): RingerOutcome {
+    private fun borrow(
+        borrowed: BorrowedRinger,
+        chosen: SnoozeRinger,
+        finishing: Boolean = false,
+    ): RingerOutcome {
         val manager = audioManager ?: return refuse(RingerFailure.PLATFORM_REFUSED, "no AudioManager")
         // Asked only here, on the one branch that is about to write. A device
         // with a fixed volume policy refuses ringer changes outright, so
@@ -332,9 +450,10 @@ class AudioRingerController(
             SnoozeDebugLog.warning("ringer: the applied marker was not stored; a re-assertion re-sets the same mode")
         }
         SnoozeDebugLog.event(
-            "ringer: ${chosen.name} ceiling applied — ${target.name}, back to ${borrowed.restoreTo.name} at the end",
+            "ringer: ${chosen.name} ceiling applied — ${target.name}, back to ${borrowed.restoreTo.name} at the end" +
+                if (finishing) " (finishing an earlier arm's loan)" else "",
         )
-        return RingerOutcome.Set(target)
+        return RingerOutcome.Set(target, finishedAnEarlierLoan = finishing)
     }
 
     /**
@@ -351,7 +470,7 @@ class AudioRingerController(
      * that reached it. `resetCondition` is retried for the same reason and in
      * the same shape.
      */
-    private fun release(mode: RingerMode): RingerOutcome {
+    private fun release(mode: RingerMode, armWanted: () -> Boolean = { false }): RingerOutcome {
         // Through the same escalation as a refused write, not a plain refusal
         // (Codex, PR #176): the zen release goes ahead either way and takes the
         // record and every other alarm with it, so a give-back that returns
@@ -367,7 +486,21 @@ class AudioRingerController(
         // `any` rather than `repeat`, because it short-circuits: `return@repeat`
         // is a continue, so the loop would go on setting a ringer it had
         // already put back.
-        val handedBack = (1..HAND_BACK_ATTEMPTS).any { write(manager, mode) == Written.SET }
+        //
+        // The retries are where an arm can be left waiting, so reconciliation
+        // steps out of them (Codex, PR #259). Between attempts, never inside
+        // one: a write already issued has to be read back, and abandoning it
+        // half-done is how a loan stops matching the phone. Standing down here
+        // is the same answer [giveBackIfIdleUnlessBusy] gives when the lock is
+        // already held, with the same reasoning — the loan stays, and four
+        // other paths come back for it.
+        val handedBack = (1..HAND_BACK_ATTEMPTS).any {
+            if (armWanted()) {
+                SnoozeDebugLog.event("ringer: an arm wanted it, so startup reconciliation stood down; the loan waits")
+                return RingerOutcome.Untouched
+            }
+            write(manager, mode) == Written.SET
+        }
         if (!handedBack) {
             return escalate(mode, "$HAND_BACK_ATTEMPTS writes were refused")
         }
@@ -400,14 +533,7 @@ class AudioRingerController(
      * each caller prices it, and both of them keep the loan.
      */
     private fun write(manager: AudioManager, mode: RingerMode): Written {
-        // Before the call, not after: the question the count answers is whether
-        // the setter was *reached*, and a throw is still a write attempt.
-        WRITES_STARTED.incrementAndGet()
         val set = runCatching { manager.ringerMode = mode.toPlatform() }
-        // In a `finally`-shaped position rather than on the success path: a
-        // setter that threw still finished, and leaving it counted as started
-        // forever would mark every later window as having a write in flight.
-        WRITES_FINISHED.incrementAndGet()
         if (set.isFailure) {
             SnoozeDebugLog.failure(set.exceptionOrNull()!!, "ringer: setting ${mode.name} was refused")
             return Written.REFUSED
@@ -719,34 +845,35 @@ class AudioRingerController(
         /**
          * Process-wide, not per-instance, because the loan is: four places
          * build one of these against the same file in the same process.
+         *
+         * A [ReentrantLock] rather than a monitor so that one caller can decline
+         * to wait for it (Codex, PR #259). Startup reconciliation and a cold
+         * tile tap both want this lock, and since the ceiling moved ahead of
+         * `STATE_TRUE` the tap's wait would sit in front of Do Not Disturb
+         * rather than after it — see [giveBackIfIdleUnlessBusy].
          */
-        private val RINGER = Any()
+        private val RINGER = ReentrantLock()
 
         /**
-         * Every attempt on the platform's ringer setter, monotonic, so a
-         * window's worth is a subtraction — **started** and **finished**
-         * separately, because one count cannot tell an observer whether a
-         * setter is in flight right now (Codex, PR #251).
+         * Arms that want [RINGER], counted from before they ask for it.
          *
-         * A single counter incremented before the assignment can be read,
-         * descheduled, and only then reach the setter — so the write lands
-         * inside an observer's window while both of that observer's samples
-         * already include it. The pair makes that visible: a sample where
-         * started and finished disagree is a window with a write running
-         * through it, whatever the deltas say.
+         * The priority signal startup reconciliation yields to, replacing a
+         * timing one (Codex, PR #259, the third finding on this contention).
+         * A fixed wait only moves the race: whoever starts the worker —
+         * `Application.onCreate` or the app being opened — the tap can always
+         * land just as the wait expires, and then reconciliation takes the lock
+         * first and the arm queues behind a hand-back ladder in front of Do Not
+         * Disturb. A count does not care about timing: it is raised before the
+         * arm blocks, so reconciliation can see an arm it has not yet let
+         * through and step aside, from either order.
          *
-         * **Process-wide, like [RINGER], and for the same reason**: more than
-         * one controller exists. The startup reconciler builds its own through
-         * [default], and on a cold tile tap it can reach the setter between the
-         * diagnostic's two reads — an instance counter would report no write
-         * across a window that contained one, which is the false clear this
-         * counter exists to prevent (Codex, PR #251).
-         *
-         * Atomic rather than guarded by [RINGER], because the reader brackets a
-         * call that takes that lock and would deadlock on it.
+         * Yielding costs nothing, by [giveBackIfIdleUnlessBusy]'s own argument:
+         * the loan stays on disk, and the next process start, the next release,
+         * the retry alarm and the next time the app is opened all come back for
+         * it. It decides whether the phone is audible again now or shortly
+         * after, against an arm that has to feel instant.
          */
-        private val WRITES_STARTED = java.util.concurrent.atomic.AtomicInteger()
-        private val WRITES_FINISHED = java.util.concurrent.atomic.AtomicInteger()
+        private val ARMS_WAITING = AtomicInteger(0)
 
         /**
          * How many times a hand-back is retried before the loan is left for a

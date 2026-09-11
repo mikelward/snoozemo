@@ -35,11 +35,65 @@ import app.snoozemo.dnd.RingerOutcome
  * loan, and then this thread hands the ringer back — leaving the new snooze
  * running with no ceiling at all. Evaluating the record inside the controller's
  * own lock is what removes the window; ordering the two reads cannot.
+ *
+ * @return the worker, so a test can join it. Production ignores it: the thread
+ *   is a daemon precisely so nothing has to wait for it. Returned rather than
+ *   left unreachable because a test that releases the wait and then returns
+ *   leaves a real hand-back running into the next test's fixture — mutating the
+ *   process-wide ringer mode and the shared preferences it had just prepared
+ *   (Codex, PR #259). That is the flakiness the class comment on
+ *   `RingerReconcileTest` already describes, reached from the other direction.
  */
-internal fun reconcileRingerInBackground(context: Context) {
+internal fun reconcileRingerInBackground(
+    context: Context,
+    awaitArmWindow: () -> Unit = { Thread.sleep(ARM_WINDOW_MILLIS) },
+): Thread {
     val app = context.applicationContext
-    Thread { handBackRingerNow(app) }.apply { isDaemon = true }.start()
+    // **Stays out of the arm's way in both directions** (Codex, PR #259, three
+    // rounds). Since the ceiling moved ahead of `STATE_TRUE` (`SPEC.md` §5.9),
+    // an arm wants the ringer's lock *before* Do Not Disturb goes on — and a
+    // cold tile tap is exactly when this recovery thread is also starting, from
+    // `Application.onCreate`. On a stale loan this check can hold that lock
+    // through a hand-back ladder of up to three writes with read-backs,
+    // preference commits and an alarm schedule, so an arm queued behind it
+    // waits for unrelated recovery work in front of Do Not Disturb.
+    //
+    // Standing down when the lock is already held (`giveBackIfIdleUnlessBusy`)
+    // covers only *one* order — the arm got there first. It does nothing when
+    // this thread is scheduled first, which on a cold start is the likely half:
+    // the tap is what started the process, so `onCreate` runs before the
+    // service can arm. So the wait below is the other half, and the two are not
+    // redundant. Letting the arm window pass first means this can no longer
+    // acquire the lock in front of it; the stand-down then covers the leftovers
+    // — a warm process arming during the wait, or right as it ends.
+    //
+    // **Waiting costs nothing that matters.** This is the earlier of two
+    // backstops for a rare case (a crash or force-stop that skipped a
+    // hand-back), and as the comment above says, it only decides whether the
+    // phone is audible again now or after the next snooze. A few seconds more
+    // in that window is not a cost worth putting anything in front of a tile
+    // tap for.
+    return Thread {
+        runCatching {
+            awaitArmWindow()
+            AudioRingerController.default(app).giveBackIfIdleUnlessBusy(snoozeRunning(app))
+        }.onFailure { SnoozeDebugLog.failure(it, "ringer: the hand-back check failed") }
+    }.apply { isDaemon = true }.also { it.start() }
 }
+
+/**
+ * How long startup reconciliation lets the arm window pass before it reaches
+ * for the ringer.
+ *
+ * Long enough to be past a cold tile tap, which arms within about a second of
+ * the process starting — the trampoline starts the service in its `onCreate`
+ * and nothing on that path waits on anything (`SPEC.md` §4.1, §6.9). Short
+ * enough that a genuinely stranded ringer is still handed back promptly, and
+ * far short of the process outliving it: this is a daemon thread, so a process
+ * that dies inside the wait simply leaves the loan for the next start, the next
+ * release, the retry alarm, or the app being opened.
+ */
+private const val ARM_WINDOW_MILLIS = 5_000L
 
 /**
  * The same check, run on the caller's thread, returning what it managed — null
@@ -59,26 +113,33 @@ internal fun reconcileRingerInBackground(context: Context) {
 internal fun handBackRingerNow(context: Context): RingerOutcome? {
     val app = context.applicationContext
     return runCatching {
-        AudioRingerController.default(app).giveBackIfIdle {
-            // `readUnverified`, not `load` (Codex, PR #176). The question here
-            // is "is there a record at all", where `load`'s question is "is
-            // there a snooze this device may restore" — and the attribution
-            // filter between them is a real window on the arm path: the
-            // `ARMING` transition writes through `saveAsync`, which skips the
-            // device-stamp lookup on purpose, so for the moment before the
-            // post-arm blocking save stamps it, `load` rejects a live arming
-            // record as unattributed. This predicate would then read "nothing
-            // running" and hand a stale loan back over a snooze that had just
-            // armed and declined to borrow.
-            //
-            // The residual is the opposite case — a genuinely foreign record
-            // makes this read "running" and defers the hand-back — and it is
-            // the right way round to be wrong here only because it is
-            // temporary: the discard path clears such a record, and the next
-            // check then finds nothing and hands the ringer back.
-            ActiveSnoozeStore(app).readUnverified() != null
-        }
+        // **Waits for the ringer**, unlike the startup path above: this is the
+        // retry alarm's own receiver, whose one-shot alarm is already spent by
+        // the time it runs, so standing down would leave a stranded loan with
+        // nothing scheduled at all. There is no arm behind a background
+        // broadcast, so the wait costs nothing here.
+        AudioRingerController.default(app).giveBackIfIdle(snoozeRunning(app))
     }.onFailure {
         SnoozeDebugLog.failure(it, "ringer: the hand-back check failed")
     }.getOrNull()
 }
+
+/**
+ * Whether anything is holding the ringer, as both callers above ask it.
+ *
+ * `readUnverified`, not `load` (Codex, PR #176). The question here is "is there
+ * a record at all", where `load`'s question is "is there a snooze this device
+ * may restore" — and the attribution filter between them is a real window on
+ * the arm path: the `ARMING` transition writes through `saveAsync`, which skips
+ * the device-stamp lookup on purpose, so for the moment before the post-arm
+ * blocking save stamps it, `load` rejects a live arming record as unattributed.
+ * This predicate would then read "nothing running" and hand a stale loan back
+ * over a snooze that had just armed and declined to borrow.
+ *
+ * The residual is the opposite case — a genuinely foreign record makes this read
+ * "running" and defers the hand-back — and it is the right way round to be wrong
+ * here only because it is temporary: the discard path clears such a record, and
+ * the next check then finds nothing and hands the ringer back.
+ */
+private fun snoozeRunning(app: Context): () -> Boolean =
+    { ActiveSnoozeStore(app).readUnverified() != null }

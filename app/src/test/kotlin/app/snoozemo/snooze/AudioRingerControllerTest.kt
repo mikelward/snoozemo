@@ -19,6 +19,7 @@ import app.snoozemo.dnd.installRingerHandBackRetry
 import app.snoozemo.dnd.installRingerStuckNotice
 import app.snoozemo.dnd.SnoozeRingerStore
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
@@ -81,21 +82,137 @@ class AudioRingerControllerTest {
         SnoozeRingerStore(context).setChosen(SnoozeRinger.DEFAULT)
     }
 
+    /**
+     * The stand-down that keeps startup reconciliation off the arm path
+     * (Codex, PR #259). Since the ceiling moved ahead of `STATE_TRUE`, a cold
+     * tap's `quiet` wants this lock before Do Not Disturb goes on, so recovery
+     * work must never make it wait.
+     *
+     * The contention is produced through the real code path rather than by
+     * reaching for the lock: `giveBackIfIdle` evaluates its predicate *inside*
+     * the lock, which is the documented contract, so a predicate that parks
+     * there holds it exactly as a real hand-back would. Two latches rather than
+     * a sleep, so the ordering is explicit and the test cannot pass "most of the
+     * time".
+     */
     @Test
-    fun `the setter count spans every controller in the process`() {
+    fun `reconciliation stands down rather than making an arm wait for the ringer`() {
+        val holding = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val holder = Thread {
+            newController().giveBackIfIdle {
+                holding.countDown()
+                release.await()
+                true
+            }
+        }
+        holder.start()
+        check(holding.await(10, java.util.concurrent.TimeUnit.SECONDS)) { "the holder never took the ringer" }
+
+        // Never asked, because the stand-down happens before any of the work:
+        // a predicate that ran would mean the lock had been waited for.
+        val outcome = newController().giveBackIfIdleUnlessBusy(
+            snoozeRunning = { throw AssertionError("the busy check should not have reached the predicate") },
+        )
+
+        assertNull("expected a stand-down while the ringer was held", outcome)
+        release.countDown()
+        holder.join()
+    }
+
+    /**
+     * The other half of that stand-down, and the one a timing fix cannot give
+     * (Codex, PR #259, the third finding here): reconciliation that got the
+     * lock *first* must still get out of an arm's way rather than finish its
+     * work in front of Do Not Disturb.
+     *
+     * The arm is represented by its own predicate rather than a second thread,
+     * because two threads racing onto one lock is exactly the shape that passes
+     * "most of the time". In production that predicate reads a count every arm
+     * raises before it asks for the lock, so it is true for a queued arm as
+     * well as a running one.
+     */
+    @Test
+    fun `an arm that arrives mid-hand-back sends reconciliation away, loan intact`() {
         choose(SnoozeRinger.VIBRATE)
-        val before = newController().modeWrites.finished
+        audio.ringerMode = AudioManager.RINGER_MODE_NORMAL
+        newController().quiet()
+        assertEquals(AudioManager.RINGER_MODE_VIBRATE, audio.ringerMode)
 
-        // A *different* instance does the writing — which is what the startup
-        // reconciler is, since it builds its own through `default`. An instance
-        // counter would report nothing here, and a window that contained that
-        // write would be read as a no-write control (Codex, PR #251).
-        newController().quiet(SnoozeIdentity(1_000L))
+        // Past the lock and past the idle check — an arm that turns up only
+        // once the hand-back is under way.
+        var reached = false
+        val outcome = newController().giveBackIfIdleUnlessBusy(
+            snoozeRunning = { false },
+            armWanted = { reached.also { reached = true } },
+        )
 
-        assertEquals(before + 1, newController().modeWrites.finished)
-        // And nothing is left in flight, so a window that ends here reads as a
-        // clean sample rather than an uncertain one.
-        assertEquals(true, newController().modeWrites.isSettled)
+        assertEquals(RingerOutcome.Untouched, outcome)
+        // The phone is left where the snooze put it, and the way back is still
+        // on disk — which is the whole argument for standing down: four other
+        // paths come back for it.
+        assertEquals(AudioManager.RINGER_MODE_VIBRATE, audio.ringerMode)
+        assertNotNull(PrefsRingerLoanStore(context).borrowed())
+        // And the ceiling that loan was taken for survives with it (Codex,
+        // PR #259). Standing down leaves the record exactly as it found it:
+        // dropping the choice while the loan lives on would carry a stale
+        // borrow into the next snooze — which will not overwrite it — with
+        // nothing left recording what the phone is owed.
+        assertEquals(SnoozeRinger.VIBRATE, PrefsRingerLoanStore(context).activeChoice())
+    }
+
+    /**
+     * And an arm that turns up the instant the lock is taken, before any
+     * recovery work at all (Codex, PR #259). The check before `tryLock` cannot
+     * see that one, so it is asked again here — ahead of the loan read, the
+     * running predicate and the ceiling record, all of which the arm would
+     * otherwise wait for in front of Do Not Disturb.
+     */
+    @Test
+    fun `an arm that turns up as the lock is taken is not made to wait for the loan read`() {
+        choose(SnoozeRinger.VIBRATE)
+        audio.ringerMode = AudioManager.RINGER_MODE_NORMAL
+        newController().quiet()
+
+        // False for the check before the lock and true for every one after it,
+        // which is exactly the arm this finding is about: it raises the count
+        // in the gap between those two. A predicate that were simply `true`
+        // would be answered before the lock and prove nothing about the recheck.
+        var asked = 0
+        val outcome = newController().giveBackIfIdleUnlessBusy(
+            // Never reached: standing down happens before this is asked, which
+            // is what "before any recovery work" means.
+            snoozeRunning = { throw AssertionError("the loan was read before standing down") },
+            armWanted = { asked++ > 0 },
+        )
+
+        assertEquals("expected the lock to be taken before the arm turned up", 2, asked)
+        assertEquals(RingerOutcome.Untouched, outcome)
+        assertEquals(AudioManager.RINGER_MODE_VIBRATE, audio.ringerMode)
+        assertNotNull(PrefsRingerLoanStore(context).borrowed())
+        assertEquals(SnoozeRinger.VIBRATE, PrefsRingerLoanStore(context).activeChoice())
+    }
+
+    /**
+     * And the negative: with no arm anywhere near it, the same call does the
+     * hand-back it exists for. Without this, a predicate that had quietly
+     * widened to "always yield" would leave every phone on vibrate and still
+     * pass the test above.
+     */
+    @Test
+    fun `with no arm waiting, reconciliation hands the ringer back as before`() {
+        choose(SnoozeRinger.VIBRATE)
+        audio.ringerMode = AudioManager.RINGER_MODE_NORMAL
+        newController().quiet()
+
+        val outcome = newController().giveBackIfIdleUnlessBusy(
+            snoozeRunning = { false },
+            armWanted = { false },
+        )
+
+        assertEquals(RingerOutcome.Set(RingerMode.NORMAL), outcome)
+        assertEquals(AudioManager.RINGER_MODE_NORMAL, audio.ringerMode)
+        assertNull(PrefsRingerLoanStore(context).borrowed())
     }
 
     @Test
@@ -714,7 +831,14 @@ class AudioRingerControllerTest {
 
         val outcome = newController().quiet()
 
-        assertEquals(RingerOutcome.Set(RingerMode.VIBRATE), outcome)
+        // **Flagged as a finish**, which is the other half of a contract
+        // `ZenRingerWiringTest` asserts from the controller's side (Codex,
+        // PR #259): finishing only ever happens on a re-assertion, where our
+        // own zen rule is already active, so the caller has to know that this
+        // write just tripped the ringer/Do-Not-Disturb coupling and left the
+        // rule needing `STATE_FALSE` before it can go on again. A fresh borrow
+        // carries `false` and needs none of that.
+        assertEquals(RingerOutcome.Set(RingerMode.VIBRATE, finishedAnEarlierLoan = true), outcome)
         assertEquals(AudioManager.RINGER_MODE_VIBRATE, audio.ringerMode)
         // And the way back is still the original one, not the quiet mode.
         assertEquals(RingerMode.NORMAL, PrefsRingerLoanStore(context).borrowed()?.restoreTo)

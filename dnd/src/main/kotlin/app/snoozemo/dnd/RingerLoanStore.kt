@@ -132,12 +132,36 @@ class PrefsRingerLoanStore(context: Context) : RingerLoanStore {
     }
 
     /**
+     * Pulls the file into memory off the main thread, exactly as
+     * [app.snoozemo.dnd.SnoozeRingerStore.warm] does — but with **higher stakes
+     * than its sibling's**, which is why this was added late (Codex, PR #259).
+     *
+     * That one's caveat reads "what it costs when a tap overtakes it is a
+     * blocking read *after* the rule is already on rather than before it". Since
+     * the ceiling moved ahead of `STATE_TRUE` (`SPEC.md` §5.9), that is no
+     * longer true of *this* store: a tap that overtakes this warming blocks on a
+     * cold preference load **before** the rule goes on, which is exactly the
+     * stall `AGENTS.md`'s arm-path rule exists to prevent. Warming still narrows
+     * the window rather than closing it.
+     */
+    fun warm() {
+        Thread { borrowed() }.start()
+    }
+
+    /**
      * `commit`, not `apply`, and checked — the guarantee is the point.
      *
      * `apply` updates the in-memory map and hands the file write to a background
      * thread, so a process that died in that gap would leave the ringer quiet
-     * with no record of the mode to put back. One synchronous write, on the arm
-     * path but **after** the rule is already on, is what buys the way back.
+     * with no record of the mode to put back. One synchronous write is what buys
+     * the way back.
+     *
+     * **It now sits before the rule goes on**, not after: §5.9 rule 1 requires
+     * the way back on disk before the ringer moves, and the ringer has to move
+     * before `STATE_TRUE` or the platform turns Do Not Disturb off under us. So
+     * the two constraints put one synchronous write on the arm path ahead of the
+     * rule, and warming above is what keeps it from also paying for a cold file
+     * load.
      *
      * Both keys in one edit, so a reader can never see a way back without the
      * mode it pairs with.
