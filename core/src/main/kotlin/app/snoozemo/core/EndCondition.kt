@@ -14,8 +14,9 @@ import kotlin.math.abs
  * rendered by the trampoline *while the arm is still in flight* (§6.9: nothing
  * may wait on the record), so the one input it can count on is what time it is.
  * The service clamps the committed value against the record it actually has —
- * see [SnoozeController.lowerCapTo] — and this is what the user is shown and
- * steps through in the meantime.
+ * see [SnoozeController.lowerCapTo] and [SnoozeController.extendTo], since a
+ * chosen time may move the cap either way — and this is what the user is shown
+ * and steps through in the meantime.
  *
  * The two are not redundant. This one keeps the sheet's own floor and ceiling
  * honest so `−` stops offering times the service would refuse; the service's
@@ -57,6 +58,63 @@ data class EndCondition(
         val SEED_AHEAD: Duration = Duration.ofHours(1)
 
         /**
+         * The latest time the sheet may offer over [snooze]: the §7 backstop
+         * that snooze was always going to run to, not a fresh
+         * [ActiveSnooze.DEFAULT_CAP] from now.
+         *
+         * Takes the record rather than reading it, so each caller supplies it
+         * from wherever it already has one — a load on the tile path, the copy
+         * the app screen keeps warm — and neither puts a disk wait where this
+         * is decided (Codex, PR #150 discussion; principle 3). The record is
+         * also what keeps a duplicate arm honest: a second arm onto a running
+         * snooze is answered by *keeping* the one already running (SPEC.md
+         * §4.2), so the sheet's subject can have started long ago, and seeded
+         * against a constant it would offer eight hours over a snooze with ten
+         * minutes left.
+         *
+         * **[ActiveSnooze.capCeilingAt], not [ActiveSnooze.capExpiresAt]**
+         * (maintainer, 2026-09-11: "the plus button should always be available
+         * to increase that time"). The two coincide until a time is chosen, and
+         * a chosen time lowers the cap — so a ceiling read from the cap came
+         * down with it and `+` could never climb back. One tap of `−` was
+         * permanent, which is not a stepper.
+         *
+         * The backstop is the honest ceiling here because it is the one this
+         * snooze already had: `capCeilingAt` is where it was always going to
+         * end, it is what `+30 min` clamps to (SPEC.md §4.3), and it moves with
+         * the deadline across a wall-clock change ([ActiveSnooze.reconciledOnto])
+         * rather than drifting off it. Nothing becomes reachable that was not
+         * reachable at the arm.
+         */
+        fun ceilingFor(snooze: ActiveSnooze?, now: Instant): Instant =
+            snooze?.capCeilingAt ?: now.plus(ActiveSnooze.DEFAULT_CAP)
+
+        /**
+         * Whether there is a snooze **and** a time the sheet could set on it.
+         *
+         * The record alone is not enough. A snooze whose whole backstop is now
+         * closer than [ActiveSnooze.MIN_CAP] leaves nothing to choose: the
+         * service declines anything inside that floor and clamps anything above
+         * the ceiling, and with the two crossed there is no value left in
+         * between. The sheet would be a screen the user cannot answer.
+         *
+         * **Asked of the ceiling, not of the cap** (maintainer, 2026-09-11) —
+         * the same move [ceilingFor] makes and for the same reason. A chosen
+         * time lowers the cap, so a cap-based test dropped the rows off a
+         * snooze the user had stepped down to half an hour, and dropped them
+         * exactly where the way back out is the thing they would want. The cap
+         * is no longer the edge of what is choosable now that a chosen time may
+         * move it either way; the backstop is.
+         *
+         * Fails closed on a missing record: no sheet over a correctly armed
+         * snooze is exactly what the setting being off would have given.
+         */
+        fun offersAChoice(snooze: ActiveSnooze?, now: Instant): Boolean {
+            val ceiling = snooze?.capCeilingAt ?: return false
+            return ceiling.isAfter(now.plus(ActiveSnooze.MIN_CAP))
+        }
+
+        /**
          * The sheet as it first appears at [now], read in [zone].
          *
          * The time is seeded an hour out and **rounded to the nearest half
@@ -81,43 +139,6 @@ data class EndCondition(
          * the seed is clamped down to [ceiling] rather than opening on a time
          * the service would refuse.
          */
-        /**
-         * The latest time the sheet may offer over [snooze]: the cap that
-         * snooze actually carries, not a fresh [ActiveSnooze.DEFAULT_CAP] from
-         * now.
-         *
-         * They coincide on a fresh arm and part company on a duplicate one —
-         * a second arm onto a running snooze is answered by *keeping* the one
-         * already running (SPEC.md §4.2), so the record the sheet is about can
-         * have started long ago. Seeded against a constant, the sheet would
-         * offer an hour over a snooze with ten minutes left.
-         *
-         * Takes the record rather than reading it, so each caller supplies it
-         * from wherever it already has one — a load on the tile path, the copy
-         * the app screen keeps warm — and neither puts a disk wait where this
-         * is decided (Codex, PR #150 discussion; principle 3).
-         */
-        fun ceilingFor(snooze: ActiveSnooze?, now: Instant): Instant =
-            snooze?.capExpiresAt ?: now.plus(ActiveSnooze.DEFAULT_CAP)
-
-        /**
-         * Whether there is a snooze **and** a time the sheet could set on it.
-         *
-         * The record alone is not enough. A cap already closer than
-         * [ActiveSnooze.MIN_CAP] leaves nothing to choose — the service
-         * declines anything inside that floor, and the only value above it is
-         * later than the cap, which the service honors by doing nothing and
-         * reports as applied. Either way the sheet would be a screen the user
-         * cannot answer.
-         *
-         * Fails closed on a missing record: no sheet over a correctly armed
-         * snooze is exactly what the setting being off would have given.
-         */
-        fun offersAChoice(snooze: ActiveSnooze?, now: Instant): Boolean {
-            val cap = snooze?.capExpiresAt ?: return false
-            return cap.isAfter(now.plus(ActiveSnooze.MIN_CAP))
-        }
-
         fun seededAt(now: Instant, ceiling: Instant, zone: ZoneId): EndCondition {
             val floor = now.plus(ActiveSnooze.MIN_CAP)
             val seed = roundToHalfHour(now.plus(SEED_AHEAD), zone)

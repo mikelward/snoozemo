@@ -239,11 +239,15 @@ internal class EndChoiceController(
      * Chooses "until I leave" as a real end condition rather than as a
      * dismissal.
      *
-     * The one commit that *lengthens* a cap, which is what makes it a choice
-     * at all: a snooze shortened to an hour half an hour ago has no other way
-     * back to the departure it was armed on. Bounded by the same ceiling
-     * `+30 min` is (SPEC.md §4.3), so it can never run past the backstop the
-     * snooze started with.
+     * Lengthens the cap back to the snooze's own ceiling, which is what makes
+     * it a choice rather than a label: a snooze shortened to an hour half an
+     * hour ago has no other way back to the departure it was armed on in one
+     * tap. Bounded by the same ceiling `+30 min` is (SPEC.md §4.3), so it can
+     * never run past the backstop the snooze started with.
+     *
+     * No longer the only commit that lengthens — [commit] moves the cap in
+     * whichever direction the chosen time lies (maintainer, 2026-09-11) — but
+     * still the only one that names no time.
      *
      * Where a sheet appears at the arm, this has nothing to do — the snooze it
      * is offered over is already running to its ceiling — and that host wires

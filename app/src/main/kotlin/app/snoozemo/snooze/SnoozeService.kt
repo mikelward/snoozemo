@@ -2284,10 +2284,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     /**
      * A row committed in the end-condition sheet (SPEC.md §4.4).
      *
-     * Choosing a time **lowers the cap**; it does not add a fourth exit and it
-     * does not disable departure tracking. Walking out earlier still ends the
-     * snooze earlier — whichever comes first wins (§7) — so there is nothing
-     * here to tell the presence engine about.
+     * Choosing a time **moves the cap**, in whichever direction the chosen
+     * time lies (maintainer, 2026-09-11) and never past [ActiveSnooze.capCeilingAt];
+     * it does not add a fourth exit and it does not disable departure tracking.
+     * Walking out earlier still ends the snooze earlier — whichever comes first
+     * wins (§7) — so there is nothing here to tell the presence engine about.
      *
      * The sheet does its own arithmetic against the clock, because §6.9 forbids
      * it waiting on the record to exist. So the value arriving here was computed
@@ -2406,15 +2407,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             SnoozeDebugLog.event("end-condition: the chosen end is inside the floor now; declining it")
             return EndChoiceResult.REFUSED
         }
-        // The backstop clamp is currently unreachable, and stays anyway. Nothing
-        // can produce a cap later than its own ceiling yet, so a request above
-        // the ceiling is also above the cap and the refusal below already
-        // declines it — but `extendedCap`'s own doc names the case that would
-        // change that (a per-place cap above the default, which no setting
-        // offers yet), and the day one exists this is what keeps §7's backstop
-        // absolute above any chosen value. Cheap, and the alternative is
-        // remembering to add it back at exactly the moment it stops being
-        // obvious.
+        // The backstop clamp below is what holds §7 absolute above any chosen
+        // value, and it is load-bearing now rather than defensive: a chosen
+        // time may move the cap *out* as well as in (maintainer, 2026-09-11),
+        // so a request above the ceiling is no longer also refused by the
+        // direction test further down. The clamp is the only thing between
+        // `+` and a snooze running past the backstop it armed with.
         // **The mode is revalidated here, not on the screen**, and the screen's
         // check cannot stand in for it: a snooze that degrades to
         // duration-only mid-flight keeps its `startedAt`, so the identity
@@ -2476,10 +2474,23 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // instead of sixteen, and it exists because "until I leave" has to be
         // choosable *after* a time or the row is a label rather than a control
         // (maintainer, 2026-09-08).
+        // **A chosen time moves the cap either way** (maintainer, 2026-09-11:
+        // "the plus button should always be available to increase that time").
+        // This read `!target.isBefore(...)` — anything not earlier was "changes
+        // nothing" — which is what made `−` a one-way door: the sheet's ceiling
+        // came down with the cap and the service would have refused a later
+        // time even if the sheet had offered one. Both halves had to go for
+        // either to matter.
+        //
+        // Only an exact match is a no-op now, and it is a real one: the snooze
+        // already ends at the moment the user picked. Everything else is a move,
+        // bounded above by the clamp to `capCeilingAt` and below by the floor
+        // check, so nothing here can run a snooze past the backstop it armed
+        // with (SPEC.md §7).
         val alreadyThere = if (restoring) {
             !target.isAfter(snooze.capExpiresAt)
         } else {
-            !target.isBefore(snooze.capExpiresAt)
+            target == snooze.capExpiresAt
         }
         if (alreadyThere) {
             // Not a failure: the snooze already ends no later than the moment
@@ -2558,7 +2569,16 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 EndChoiceResult.REFUSED
             }
         }
-        if (restoring) controller.extendTo(target) else controller.lowerCapTo(target)
+        // By direction rather than by which row was tapped. `restoring` always
+        // lengthens, so it lands in the same branch it always did; a chosen
+        // time now picks its own. Each refuses the other direction, so asking
+        // the wrong one would be a silent no-op leaving `active` behind the
+        // record that was just written.
+        if (target.isAfter(snooze.capExpiresAt)) {
+            controller.extendTo(target)
+        } else {
+            controller.lowerCapTo(target)
+        }
         return EndChoiceResult.APPLIED
     }
 
@@ -3877,10 +3897,13 @@ open class SnoozeService : Service(), SnoozeController.Listener {
          * Put the running snooze's cap back to its own ceiling — the
          * `Until I leave` row chosen after a time was (SPEC.md §4.4).
          *
-         * The one control that lengthens a cap outside `+30 min`, and bounded
-         * by the same backstop: what it restores is where the snooze was
-         * already heading before the user shortened it. Reported like any other
-         * choice, so the screen behind it can say a refused tap did nothing.
+         * Bounded by the same backstop `+30 min` is: what it restores is
+         * where the snooze was already heading before the user shortened it.
+         * No longer the *only* control that lengthens a cap outside `+30 min`
+         * — a chosen time moves it either way now — but still the only one
+         * that names no time, which is what the `Until I leave` row is for.
+         * Reported like any other choice, so the screen behind it can say a
+         * refused tap did nothing.
          */
         fun restoreEnd(
             context: Context,

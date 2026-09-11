@@ -39,12 +39,18 @@ class EndChoiceUiStateTest {
         mode: TrackingMode = TrackingMode.FULL,
         endsOnMotion: Boolean = false,
         anchor: Anchor = Anchor(capturedAt = startedAt, ssid = "ExampleWifi"),
+        // What decides whether the rows are offered at all: a chosen time moves
+        // the cap either way, so the §7 backstop is the edge of what is
+        // choosable rather than the cap. Defaults to the cap, which is what an
+        // unshortened snooze carries.
+        ceilingIn: Duration = capIn,
     ) = ActiveSnooze(
         anchor = anchor,
         startedAt = startedAt,
         capExpiresAt = startedAt.plus(capIn),
         mode = mode,
         endsOnMotion = endsOnMotion,
+        capCeilingAt = startedAt.plus(ceilingIn),
     )
 
     private val condition = EndCondition(
@@ -351,12 +357,12 @@ class EndChoiceUiStateTest {
 
     @Test
     fun `until I move's availability is answered apart from the time offer`() {
-        // Once the cap comes inside `MIN_CAP` there is no time left to choose
-        // and `endChoiceUiState` withholds the whole offer. This answer is
-        // about the build and the phone, not the cap, so it does not move —
-        // it is the screen that withholds the row along with the group it now
-        // sits in (maintainer, 2026-09-10), and it does so from that gate, not
-        // from this one.
+        // Once the backstop comes inside `MIN_CAP` there is no time left to
+        // choose and `endChoiceUiState` withholds the whole offer. This answer
+        // is about the build and the phone, not the snooze, so it does not
+        // move — it is the screen that withholds the row along with the group
+        // it now sits in (maintainer, 2026-09-10), and it does so from that
+        // gate, not from this one.
         val nearlyOver = snooze(capIn = Duration.ofMinutes(5), endsOnMotion = true)
 
         assertNull("no time left to choose", state(nearlyOver))

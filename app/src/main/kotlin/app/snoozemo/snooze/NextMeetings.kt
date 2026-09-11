@@ -34,11 +34,21 @@ internal object NextMeetings {
             PackageManager.PERMISSION_GRANTED
 
     /**
-     * Every event end between [now] and [snooze]'s cap, or an empty list.
+     * Every event end between [now] and [snooze]'s §7 backstop, or an empty
+     * list.
      *
-     * Bounded by the cap because nothing past it can be offered — the service
-     * honors a time at or beyond the cap by doing nothing — so a wider window
-     * would read more of the user's calendar than the feature can ever use.
+     * **Bounded by [ActiveSnooze.capCeilingAt], not the cap the snooze
+     * currently carries** (maintainer, 2026-09-11). A chosen time moves the cap
+     * either way now, so a meeting between a shortened cap and the backstop is
+     * a time the service will take — and read at the cap, this window silently
+     * withheld exactly those candidates, leaving `MeetingEnd.offersFor`'s own
+     * widening unreachable through the app (Codex, PR #266). A pure test that
+     * hands `MeetingEnd` its candidates directly cannot see that; the bound
+     * lives here.
+     *
+     * Still the narrowest window the feature can use, which is the privacy
+     * promise `docs/PRIVACY.md` makes: never further into the calendar than the
+     * snooze could reach. What moved is how far it can reach, not the rule.
      *
      * `Instances` rather than `Events`: a repeating meeting is one row in
      * `Events` and the provider expands it, so querying the events table
@@ -61,7 +71,7 @@ internal object NextMeetings {
          * one sat blocked (Codex, PR #234).
          */
         cancellation: android.os.CancellationSignal? = null,
-    ): List<Instant> = endsBefore(context, snooze.capExpiresAt, now, cancellation)
+    ): List<Instant> = endsBefore(context, snooze.capCeilingAt, now, cancellation)
 
     /**
      * [endsBefore] against a cap named directly rather than read off a record.

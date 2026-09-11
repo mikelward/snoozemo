@@ -1478,12 +1478,16 @@ the point is that every other line of the app is worthless if it isn't true.
       screen instead, so there is one refinement surface reached two ways. That trades a
       transparent activity for a full one on the arm path, which §6.9 has opinions about.
 
-- [ ] **Should the stepper be able to lengthen a cap too?** Today its ceiling is the cap the
-      snooze currently carries, so a user who shortened to an hour cannot step back to two — they
-      tap `Until I leave` and step down again. `+30 min` (§4.3) is the control that lengthens, and
-      giving the stepper the same reach would make the two consistent. Not guessed at under
-      autopilot because it changes what a control offered at arm time can do, not just what the
-      main screen can.
+- [x] **Should the stepper be able to lengthen a cap too?** Yes (maintainer, 2026-09-11: "the
+      plus button should always be available to increase that time"). Its ceiling was the cap the
+      snooze currently carried, so a chosen time lowered the ceiling along with the cap and one
+      tap of `−` was permanent — the only way back was `Until I leave` followed by stepping down
+      again. The ceiling is now `capCeilingAt`, the §7 backstop the snooze armed with and the same
+      one `+30 min` clamps to, and the service moves the cap in whichever direction the chosen
+      time lies. `EndCondition.offersAChoice` moved to the ceiling for the same reason: asked of
+      the cap, a snooze stepped down to half an hour lost its rows exactly where the way back out
+      is what the user wants. Nothing new is reachable — the backstop is where the snooze was
+      always going to end. `SPEC.md` §4.4 and §7 record it.
 
 - [ ] **Should tapping the tile arm, or show the sheet first?** (maintainer, 2026-09-08:
       *"yes for now tapping the tile starts the snooze, that was what I had in mind, but I

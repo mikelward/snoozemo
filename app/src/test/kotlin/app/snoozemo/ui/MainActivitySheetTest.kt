@@ -46,13 +46,23 @@ class MainActivitySheetTest {
 
     private val context = ApplicationProvider.getApplicationContext<android.content.Context>()
 
-    private fun snoozeWithCapIn(gap: Duration): ActiveSnooze {
+    /**
+     * A running snooze whose cap is [gap] from now, and whose §7 backstop is
+     * [ceiling] from now.
+     *
+     * The backstop is what decides whether a sheet is offered at all
+     * (`EndCondition.offersAChoice`), because a chosen time moves the cap
+     * either way and so the cap is no longer the edge of what is choosable.
+     * It defaults to the cap, which is what an unshortened snooze carries.
+     */
+    private fun snoozeWithCapIn(gap: Duration, ceiling: Duration = gap): ActiveSnooze {
         val now = Instant.now()
         return ActiveSnooze(
             anchor = Anchor(capturedAt = now, ssid = "ExampleWifi"),
             startedAt = now,
             capExpiresAt = now.plus(gap),
             mode = TrackingMode.DURATION_ONLY,
+            capCeilingAt = now.plus(ceiling),
         )
     }
 
@@ -95,10 +105,10 @@ class MainActivitySheetTest {
     }
 
     @Test
-    fun `a cap already inside the floor offers nothing`() {
-        // The service declines anything inside `MIN_CAP` and honors anything
-        // past the cap by doing nothing, so the sheet would be a screen the
-        // user cannot answer.
+    fun `a backstop already inside the floor offers nothing`() {
+        // The service declines anything inside `MIN_CAP` and clamps anything
+        // above the backstop, so with the two crossed the sheet would be a
+        // screen the user cannot answer.
         EndSheetStore(context).setEnabled(true)
         ActiveSnoozeStore(context).arm(snoozeWithCapIn(ActiveSnooze.MIN_CAP.minusMinutes(5)))
         val activity = screen()
@@ -160,7 +170,7 @@ class MainActivitySheetTest {
         activity.offerSheetForThisArm()
         settle()
 
-        // A cap now inside the floor: there is no time left worth offering.
+        // A backstop now inside the floor: there is no time left worth offering.
         activity.reconcileSheet(
             record = snoozeWithCapIn(ActiveSnooze.MIN_CAP.minusMinutes(5)),
             seenAtGeneration = activity.sheetGenerationForTest,

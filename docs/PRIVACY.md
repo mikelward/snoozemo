@@ -250,7 +250,9 @@ event finishes, and that is all it ever sees. Calendars you have hidden, all-day
 invitations you have declined, canceled meetings, and blocks marked "free" are skipped.
 
 **Only as far ahead as the snooze can last.** The question is bounded by the snooze's own
-time limit, because an end time past it could not change anything anyway — so Snoozemo
+time limit — the longest it could run, which is the limit it started with and not whatever
+shorter end you have since picked, since you can pick a later one again — because an end
+time past that could not change anything anyway. So Snoozemo
 never reads further into your calendar than the snooze could reach: the running one, or,
 when nothing is snoozed yet, the one the screen is offering to start, whose limit is the
 same default a plain `Snooze` tap would set — and that offer is only made, and your calendar

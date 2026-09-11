@@ -57,12 +57,26 @@ class MainActivityEndRowsTest {
     private fun at(offsetSeconds: Long = 0L): Instant =
         Instant.ofEpochMilli(System.currentTimeMillis()).plusSeconds(offsetSeconds)
 
-    private fun snooze(startedAt: Instant = at(), capIn: Duration = ActiveSnooze.DEFAULT_CAP) =
+    /**
+     * A running snooze whose cap is [capIn] from [startedAt] and whose §7
+     * backstop is [ceilingIn] from it.
+     *
+     * The backstop is what decides whether rows are offered at all
+     * (`EndCondition.offersAChoice`), because a chosen time moves the cap
+     * either way and so the cap is no longer the edge of what is choosable.
+     * It defaults to the cap, which is what an unshortened snooze carries.
+     */
+    private fun snooze(
+        startedAt: Instant = at(),
+        capIn: Duration = ActiveSnooze.DEFAULT_CAP,
+        ceilingIn: Duration = capIn,
+    ) =
         ActiveSnooze(
             anchor = Anchor(capturedAt = startedAt, ssid = "ExampleWifi"),
             startedAt = startedAt,
             capExpiresAt = startedAt.plus(capIn),
             mode = TrackingMode.DURATION_ONLY,
+            capCeilingAt = startedAt.plus(ceilingIn),
         )
 
     /**
@@ -803,15 +817,35 @@ class MainActivityEndRowsTest {
     }
 
     @Test
-    fun `a cap already inside the floor offers nothing`() {
-        // The service declines anything inside `MIN_CAP` and honors anything
-        // at or past the cap by doing nothing, so there is no time to offer.
+    fun `a backstop already inside the floor offers nothing`() {
+        // The service declines anything inside `MIN_CAP` and clamps anything
+        // above the backstop, so with the two crossed there is no time to
+        // offer.
         ActiveSnoozeStore(context).arm(snooze(capIn = ActiveSnooze.MIN_CAP.minusMinutes(5)))
 
         val activity = screen()
         settle()
 
         assertNull(activity.rows.endCondition)
+    }
+
+    @Test
+    fun `a cap stepped down inside the floor still offers the way back out`() {
+        // Asked of the cap, the rows vanish from a snooze the user stepped
+        // down to half an hour — and vanish exactly where the way back out is
+        // what they want. The backstop is hours away and every one of those
+        // hours is still choosable, so the rows stand.
+        ActiveSnoozeStore(context).arm(
+            snooze(
+                capIn = ActiveSnooze.MIN_CAP.minusMinutes(5),
+                ceilingIn = Duration.ofHours(6),
+            ),
+        )
+
+        val activity = screen()
+        settle()
+
+        assertNotNull(activity.rows.endCondition)
     }
 
     @Test

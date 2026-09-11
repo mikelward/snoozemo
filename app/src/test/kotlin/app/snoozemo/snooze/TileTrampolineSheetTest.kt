@@ -5,6 +5,7 @@ import android.app.Application
 import android.content.Intent
 import android.os.Bundle
 import android.os.Looper.getMainLooper
+import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.EndCondition
 import java.time.Duration
 import java.time.Instant
@@ -12,6 +13,7 @@ import java.time.ZoneId
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -306,45 +308,77 @@ class TileTrampolineSheetTest {
     }
 
     @Test
-    fun `the sheet cannot offer a time later than the snooze already ends`() {
+    fun `the sheet cannot offer a time later than the snooze's own backstop`() {
         // The tile arms from its own snapshot, and a stale one sends a second
         // `ACTION_ARM` that the service answers by keeping the snooze already
-        // running — so the record can be one with hours left rather than the
-        // eight a fresh arm gets. Seeded against a constant, the sheet offered
-        // a time past the real cap and the service answered `APPLIED`, because
-        // a chosen time no earlier than the cap is honored by doing nothing.
-        // The user was shown one time and got another (Codex, PR #118).
-        val alreadyRunning = Duration.ofHours(2)
-        ActiveSnoozeStore(appContext).arm(snoozeFixture(now, capIn = alreadyRunning))
+        // running — so the record can be one that started long ago rather than
+        // the fresh eight hours an arm gets. Seeded against a constant, the
+        // sheet offered a time the service would not honor, and the user was
+        // shown one time and got another (Codex, PR #118).
+        //
+        // **Checked against the backstop rather than the cap** (maintainer,
+        // 2026-09-11). PR #118's own failure is gone at the cap: a chosen time
+        // later than it now moves the cap out rather than being honored by
+        // doing nothing. What still holds — and is what this was always really
+        // about — is that the offer comes from *this record* and not from a
+        // constant: the fixture started an hour ago, so its backstop is seven
+        // hours out, and an offer seeded from `now` would be eight.
+        val record = snoozeFixture(now, capIn = Duration.ofHours(2))
+        ActiveSnoozeStore(appContext).arm(record)
 
         val activity = tapTile()
         val condition = requireNotNull(activity.sheet.endCondition)
 
         assertEquals(
-            "the ceiling is the cap this snooze carries, not a fresh eight hours",
-            now.plus(alreadyRunning),
+            "the ceiling is this record's own backstop",
+            record.capCeilingAt,
+            condition.ceiling,
+        )
+        assertNotEquals(
+            "and not a fresh eight hours from now",
+            now.plus(ActiveSnooze.DEFAULT_CAP),
             condition.ceiling,
         )
         assertFalse(
-            "and `+` stops there rather than stepping past the moment it ends",
+            "and `+` stops at the backstop rather than stepping past it",
             condition.copy(endsAt = condition.ceiling).canStepUp,
         )
     }
 
     @Test
-    fun `a snooze already inside the floor gets no sheet at all`() {
-        // With the cap ten minutes out there is no time the sheet could set:
-        // anything inside the thirty-minute floor is declined, and the only
-        // values above it are later than the cap, which the service honors by
-        // doing nothing and reports as applied — a row promising 12:30 over a
-        // snooze ending at 12:10 (Codex, PR #118). A screen with no answer is
-        // worse than no screen, so the tap arms and gets out of the way.
-        ActiveSnoozeStore(appContext).arm(snoozeFixture(now, capIn = Duration.ofMinutes(10)))
+    fun `a snooze whose backstop is inside the floor gets no sheet at all`() {
+        // With the whole backstop ten minutes out there is no time the sheet
+        // could set: anything inside the thirty-minute floor is declined, and
+        // anything above it is clamped back down to the backstop — a row
+        // promising 12:30 over a snooze ending at 12:10 (Codex, PR #118). A
+        // screen with no answer is worse than no screen, so the tap arms and
+        // gets out of the way.
+        ActiveSnoozeStore(appContext).arm(
+            snoozeFixture(
+                now,
+                startedAgo = Duration.ofHours(8).minusMinutes(10),
+                capIn = Duration.ofMinutes(10),
+            ),
+        )
 
         val activity = tapTile()
 
         assertTrue("nothing to choose means nothing to ask", activity.isFinishing)
         assertNull("and no sheet was seeded behind it", activity.sheet.endCondition)
+    }
+
+    @Test
+    fun `a snooze inside the floor but with backstop left still gets its sheet`() {
+        // Ten minutes from its cap and seven hours from its backstop: the user
+        // shortened it, and the sheet is now where they take that back
+        // (maintainer, 2026-09-11). Read from the cap this was the case above —
+        // the tap armed and got out of the way, exactly where the way back out
+        // is the thing the user wants.
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now, capIn = Duration.ofMinutes(10)))
+
+        val activity = tapTile()
+
+        assertNotNull("there are hours left to choose from", activity.sheet.endCondition)
     }
 
     @Test

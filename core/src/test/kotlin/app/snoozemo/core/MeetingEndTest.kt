@@ -14,11 +14,15 @@ class MeetingEndTest {
 
     private val now: Instant = Instant.parse("2026-01-01T13:00:00Z")
 
-    private fun snooze(capIn: Duration = ActiveSnooze.DEFAULT_CAP) = ActiveSnooze(
+    private fun snooze(
+        capIn: Duration = ActiveSnooze.DEFAULT_CAP,
+        ceilingIn: Duration = ActiveSnooze.DEFAULT_CAP,
+    ) = ActiveSnooze(
         anchor = Anchor(capturedAt = now, ssid = "ExampleWifi"),
         startedAt = now,
         capExpiresAt = now.plus(capIn),
         mode = TrackingMode.DURATION_ONLY,
+        capCeilingAt = now.plus(ceilingIn),
     )
 
     private fun at(minutes: Long): Instant = now.plus(Duration.ofMinutes(minutes))
@@ -59,18 +63,23 @@ class MeetingEndTest {
     }
 
     @Test
-    fun `a meeting ending after the cap is not offered`() {
-        // The service honors a time past the cap by doing nothing and reports it
-        // applied, so this would be a button that looks like it worked and moved
-        // no deadline at all.
-        val short = snooze(capIn = Duration.ofHours(1))
+    fun `a meeting ending after the backstop is not offered`() {
+        // The service clamps a time past the backstop, so this would be a
+        // button that looks like it worked and set a different deadline.
+        //
+        // Asked of the backstop rather than of the cap (maintainer,
+        // 2026-09-11): a chosen time now moves the cap either way, so a
+        // meeting between a shortened cap and the backstop is a time the
+        // service will honor — see `a meeting past a shortened cap is still
+        // offered`.
+        val short = snooze(capIn = Duration.ofHours(1), ceilingIn = Duration.ofHours(1))
 
         assertNull(MeetingEnd.offerFor(short, listOf(at(90)), now))
     }
 
     @Test
-    fun `a meeting ending exactly at the cap is not offered`() {
-        val short = snooze(capIn = Duration.ofHours(1))
+    fun `a meeting ending exactly at the backstop is not offered`() {
+        val short = snooze(capIn = Duration.ofHours(1), ceilingIn = Duration.ofHours(1))
 
         assertNull(MeetingEnd.offerFor(short, listOf(at(60)), now))
     }
@@ -123,6 +132,31 @@ class MeetingEndTest {
         )
 
         assertEquals(listOf(at(90), at(180)), offers)
+    }
+
+    @Test
+    fun `a meeting past a shortened cap is still offered`() {
+        // The bound is the backstop, not the cap the snooze currently carries
+        // (maintainer, 2026-09-11). A chosen time moves the cap either way, so
+        // a meeting inside the backstop is a time the service will take — and
+        // read from the cap, stepping down to an hour took every later meeting
+        // off the screen for good.
+        val shortened = snooze(capIn = Duration.ofHours(1), ceilingIn = Duration.ofHours(8))
+
+        val offers = MeetingEnd.offersFor(shortened, listOf(at(90), at(300)), now, limit = 4)
+
+        assertEquals(listOf(at(90), at(300)), offers)
+    }
+
+    @Test
+    fun `a meeting past the backstop is still excluded`() {
+        // The backstop moved the bound out; it did not remove it. Nothing
+        // reaches past where the snooze was always going to end (SPEC.md §7).
+        val shortened = snooze(capIn = Duration.ofHours(1), ceilingIn = Duration.ofHours(2))
+
+        val offers = MeetingEnd.offersFor(shortened, listOf(at(90), at(300)), now, limit = 4)
+
+        assertEquals(listOf(at(90)), offers)
     }
 
     @Test

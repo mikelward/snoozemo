@@ -134,10 +134,11 @@ internal fun EndConditionSheetContent(
             // of which keeps the time that was just stepped to.
             //
             // It accepts the time as shown, which is the sheet's one adjustable
-            // value. Choosing a time only *lowers* the cap — departure tracking
-            // stays armed either way (§4.4) — so this is the fail-open
-            // direction (principle 1) even for a user who meant "until I
-            // leave": a shorter snooze, never a longer one.
+            // value — in whichever direction it was stepped to, since a chosen
+            // time moves the cap either way now (§4.4) and `−` is no longer a
+            // one-way door. Never past the backstop the snooze armed with,
+            // which is what keeps principle 1's guarantee whole: the cap still
+            // fires at the moment it was always going to, at the latest.
             // A tap the service refused has to say so where the tap was — the
             // sheet is about to dismiss otherwise, and the snooze would keep a
             // deadline the user did not choose with nothing to show for it.

@@ -6,6 +6,7 @@ import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.EndCondition
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -84,13 +85,27 @@ class EndChoiceControllerTest {
         zone = { zone },
     )
 
-    /** A snooze to offer times against; its `startedAt` is the offer's identity. */
-    private fun snoozeAt(startedAt: Instant, capIn: Duration = ActiveSnooze.DEFAULT_CAP) =
+    /**
+     * A snooze to offer times against; its `startedAt` is the offer's identity.
+     *
+     * Its cap is [capIn] from [startedAt] and its §7 backstop [ceilingIn] from
+     * it.
+     *
+     * The backstop is the sheet's ceiling and what decides whether a choice is
+     * offered at all, because a chosen time moves the cap either way. Defaults
+     * to the cap, which is what an unshortened snooze carries.
+     */
+    private fun snoozeAt(
+        startedAt: Instant,
+        capIn: Duration = ActiveSnooze.DEFAULT_CAP,
+        ceilingIn: Duration = capIn,
+    ) =
         ActiveSnooze(
             anchor = Anchor(capturedAt = startedAt, ssid = "ExampleWifi"),
             startedAt = startedAt,
             capExpiresAt = startedAt.plus(capIn),
             mode = TrackingMode.DURATION_ONLY,
+            capCeilingAt = startedAt.plus(ceilingIn),
         )
 
     private fun seeded(seams: Seams): EndChoiceController =
@@ -599,10 +614,11 @@ class EndChoiceControllerTest {
     }
 
     @Test
-    fun `a refusal rebuilds the offer from the cap as it is now`() {
-        // A wall-clock change reconciles `capExpiresAt` onto the new frame
-        // while `startedAt` stays put, so the ceiling this offer was built with
-        // can name an earlier instant than the snooze actually allows.
+    fun `a refusal rebuilds the offer from the backstop as it is now`() {
+        // A wall-clock change reconciles `capExpiresAt` and `capCeilingAt` onto
+        // the new frame while `startedAt` stays put, so the ceiling this offer
+        // was built with can name an earlier instant than the snooze actually
+        // allows.
         // Reseeding against that cached value could put the replacement below
         // the floor as well, refusing every retry (Codex, PR #155).
         val seams = Seams(now)
@@ -611,7 +627,13 @@ class EndChoiceControllerTest {
         controller.seed(tight, now)
         // The clock moves on past the offer, and the cap moves with it.
         val later = controller.endCondition!!.endsAt.plus(Duration.ofMinutes(1))
-        val reconciled = tight.copy(capExpiresAt = later.plus(Duration.ofHours(4)))
+        // Both move, as `ActiveSnooze.reconciledOnto` moves them: the backstop
+        // is carried in the record precisely so it stays in the deadline's
+        // frame rather than drifting off `startedAt`.
+        val reconciled = tight.copy(
+            capExpiresAt = later.plus(Duration.ofHours(4)),
+            capCeilingAt = later.plus(Duration.ofHours(4)),
+        )
         seams.live = reconciled
         seams.now = later
         seams.accepted = true
@@ -621,8 +643,8 @@ class EndChoiceControllerTest {
 
         assertTrue("the refusal is still shown", controller.commitFailed)
         assertEquals(
-            "and the rebuilt offer uses the reconciled cap",
-            reconciled.capExpiresAt,
+            "and the rebuilt offer uses the reconciled backstop",
+            reconciled.capCeilingAt,
             controller.endCondition!!.ceiling,
         )
         assertTrue(
@@ -722,16 +744,21 @@ class EndChoiceControllerTest {
     @Test
     fun `the offer takes its ceiling from the record it was seeded against`() {
         // Not from whatever the host had to hand: a stale or absent warm copy
-        // gives `now + DEFAULT_CAP`, and the offer can then walk past the
-        // running snooze's real cap — which the service honors by doing
-        // nothing while reporting it applied (Codex, PR #152).
+        // gives `now + DEFAULT_CAP`, and the offer can then walk past what the
+        // running snooze would actually accept (Codex, PR #152).
+        //
+        // The ceiling is the record's `capCeilingAt`, which for this fixture is
+        // also its cap — a snooze nobody has shortened carries the two at the
+        // same instant. Named as the backstop rather than the cap so the
+        // assertion says what it is checking.
         val seams = Seams(now)
         val controller = controller(seams)
         val nearCap = snoozeAt(now, capIn = Duration.ofHours(2))
 
         controller.seed(nearCap, now)
 
-        assertEquals(nearCap.capExpiresAt, controller.endCondition!!.ceiling)
+        assertEquals(nearCap.capCeilingAt, controller.endCondition!!.ceiling)
+        assertNotEquals(now.plus(ActiveSnooze.DEFAULT_CAP), controller.endCondition!!.ceiling)
         assertEquals(nearCap.startedAt, controller.offerFor)
     }
 
@@ -765,11 +792,23 @@ class EndConditionChoiceTest {
 
     private val now: Instant = Instant.parse("2026-01-01T13:12:00Z")
 
-    private fun snooze(capIn: java.time.Duration) = ActiveSnooze(
+    /**
+     * A running snooze whose cap is [capIn] from now and whose §7 backstop is
+     * [ceilingIn] from now.
+     *
+     * The two are separate parameters because separating them is the whole
+     * subject here: a chosen time lowers the cap and leaves the backstop where
+     * it is, and every case below turns on which of the two is being asked.
+     */
+    private fun snooze(
+        capIn: java.time.Duration,
+        ceilingIn: java.time.Duration = ActiveSnooze.DEFAULT_CAP,
+    ) = ActiveSnooze(
         anchor = app.snoozemo.core.Anchor(capturedAt = now),
         startedAt = now,
         capExpiresAt = now.plus(capIn),
         mode = app.snoozemo.core.TrackingMode.DURATION_ONLY,
+        capCeilingAt = now.plus(ceilingIn),
     )
 
     @Test
@@ -780,27 +819,73 @@ class EndConditionChoiceTest {
     }
 
     @Test
-    fun `a cap inside the floor leaves nothing to choose`() {
-        // The service declines anything inside `MIN_CAP`, and the only value
-        // above it is past the cap — a screen the user cannot answer.
-        val nearlyOver = snooze(ActiveSnooze.MIN_CAP.minusMinutes(1))
+    fun `a backstop inside the floor leaves nothing to choose`() {
+        // The service declines anything inside `MIN_CAP` and clamps anything
+        // above the ceiling; with the two crossed there is no value left in
+        // between, so the sheet would be a screen the user cannot answer.
+        val nearlyOver = snooze(
+            capIn = ActiveSnooze.MIN_CAP.minusMinutes(2),
+            ceilingIn = ActiveSnooze.MIN_CAP.minusMinutes(1),
+        )
 
         assertFalse(EndCondition.offersAChoice(nearlyOver, now))
     }
 
     @Test
-    fun `a cap above the floor does offer a choice`() {
-        assertTrue(EndCondition.offersAChoice(snooze(ActiveSnooze.MIN_CAP.plusMinutes(1)), now))
+    fun `a backstop above the floor does offer a choice`() {
+        assertTrue(
+            EndCondition.offersAChoice(
+                snooze(
+                    capIn = ActiveSnooze.MIN_CAP.plusMinutes(1),
+                    ceilingIn = ActiveSnooze.MIN_CAP.plusMinutes(1),
+                ),
+                now,
+            ),
+        )
     }
 
     @Test
-    fun `the ceiling is the running snooze's own cap, not a fresh one`() {
-        // A duplicate arm keeps the snooze already running, so the record can
-        // have started long ago; seeded against a constant the sheet would
-        // offer an hour over a snooze with ten minutes left.
-        val old = snooze(java.time.Duration.ofMinutes(45))
+    fun `a cap stepped down inside the floor still offers the way back out`() {
+        // The case the ceiling-based test exists for: the user stepped down to
+        // half an hour and time passed. Asked of the cap, the rows vanish —
+        // and they vanish exactly where the way back out is the thing the user
+        // wants. The backstop is hours away and every one of those hours is
+        // still choosable.
+        val steppedDown = snooze(
+            capIn = ActiveSnooze.MIN_CAP.minusMinutes(10),
+            ceilingIn = java.time.Duration.ofHours(6),
+        )
 
-        assertEquals(old.capExpiresAt, EndCondition.ceilingFor(old, now))
+        assertTrue(EndCondition.offersAChoice(steppedDown, now))
+    }
+
+    @Test
+    fun `the ceiling is the running snooze's own backstop, not its current cap`() {
+        // A chosen time lowers the cap, so a ceiling read from the cap came
+        // down with it and `+` could never climb back — one tap of `−` was
+        // permanent. The backstop is where this snooze was always going to end,
+        // so nothing becomes reachable that was not reachable at the arm.
+        val steppedDown = snooze(
+            capIn = java.time.Duration.ofMinutes(45),
+            ceilingIn = java.time.Duration.ofHours(6),
+        )
+
+        assertEquals(steppedDown.capCeilingAt, EndCondition.ceilingFor(steppedDown, now))
+        assertNotEquals(steppedDown.capExpiresAt, EndCondition.ceilingFor(steppedDown, now))
+    }
+
+    @Test
+    fun `the ceiling is still the record's own, not a fresh full cap`() {
+        // A duplicate arm keeps the snooze already running (SPEC.md §4.2), so
+        // the record can have started long ago. Seeded against a constant the
+        // sheet would offer eight hours over a snooze with one left.
+        val old = snooze(
+            capIn = java.time.Duration.ofHours(1),
+            ceilingIn = java.time.Duration.ofHours(1),
+        )
+
+        assertEquals(old.capCeilingAt, EndCondition.ceilingFor(old, now))
+        assertNotEquals(now.plus(ActiveSnooze.DEFAULT_CAP), EndCondition.ceilingFor(old, now))
     }
 
     @Test
