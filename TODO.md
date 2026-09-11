@@ -1857,7 +1857,53 @@ the point is that every other line of the app is worthless if it isn't true.
       way: `enableEdgeToEdge` runs inside `showEndConditionSheet`, and the sheet carries
       `navigationBarsPadding`.
 
+- [ ] **Say what `Until I move` and `Until I leave` actually do, next to the rows themselves**
+      (maintainer, 2026-09-11). The two read as near-synonyms and are not: one ends on any
+      movement away from the anchor, the other on leaving the place. A user picking between
+      them has nothing to go on but the words, and the words are the whole difference.
+      A help affordance on each row rather than a line of body copy under them — the sheet is
+      already tight, and *Concise copy* and the maintainer's standing rule on explanatory
+      blurbs both point away from prose beside a control. Copy needs approving before it is
+      translated (*Translations*), and it wants deciding alongside the headline that follows
+      the choice. Half of that is now done: a snooze that also ends on movement says so, on the
+      card and in the shade (PR #262). What is left is this copy, and the time rows, which still
+      leave the card reading `Snoozing until you leave` after the user picked a time — the same
+      confusion from the other end. Both wait on *Decide what tapping an end condition means*
+      below, since copy explaining a row cannot be written before what the row does is settled.
+
 ## Phase 5 (M5) — Edge cases and degraded modes
+
+- [ ] **Decide what tapping an end condition means** — maintainer, 2026-09-11, and the
+      question behind the report that opened PR #262. The three rows have three different
+      semantics today, which is why neither the card nor the behavior matches the row the user
+      tapped: `Until I leave` puts the duration cap *back* (the one control in the app that
+      lengthens a snooze), `Until I move` *adds* an exit with no way to take it off again, and
+      picking a time *lowers* the cap while leaving departure ending the snooze regardless. The
+      maintainer's reading is that tapping any row is clear intent to replace the current end
+      conditions with the thing tapped — so picking a time would mean "quiet until then, even
+      if I leave", which costs the cinema case (walk out at the interval, phone stays silent)
+      unless the status line's promise is taken as enough. The duration cap is in scope too
+      ("I'm not even too sure I like the default 8 hour backstop"), but it is a **separate**
+      decision and a heavier one: the other three are UI semantics, while the cap is principle
+      1's backstop and `SPEC.md` D7 — what still ends a snooze when every sensor has failed,
+      a geofence never delivered, or the process was killed. Loosening it changes what happens
+      when the app is broken, not what happens when it works. Settle the row semantics first,
+      then the cap on its own evidence. `SPEC.md` §4.4 records today's behavior and moves with
+      whatever is decided.
+
+- [ ] **The main screen never says `tracking may pause`** — deferred from PR #262 (Codex, P1
+      against the new motion clause). The ongoing card qualifies its end conditions when the
+      watch wants a foreground service and has been refused one, and the main screen's status
+      block does not — for any snooze, not just one ending on motion: `protectionMatters` is
+      already true of every `FULL` and `WIFI_ONLY` snooze, so the omission predates that clause
+      and is wider than it. There is no small fix, which is why this is not in that PR: the
+      fact is `wantsForeground() && foregroundRefused && !foregroundHeld`, live state on the
+      running `SnoozeService` instance, reached through a seam whose own contract is that it is
+      "null in every instance but the running service's" and that the clause is **omitted there
+      rather than guessed**. `ActiveSnooze` does not carry it and should not start to — a
+      mirrored copy of a live service reading is the shape that produced four bugs already
+      (`atAnchorWifi`, maintainer 2026-09-08). So this wants a seam the screen can *ask*, on the
+      same terms, and then the same clause in the same order the card builds it.
 
 - [ ] **Give `RULE_TURNED_OFF` its own copy** — deferred from PR #260 (Codex) because it is
       new user-facing text, and *Translations* has the maintainer approve English copy before
