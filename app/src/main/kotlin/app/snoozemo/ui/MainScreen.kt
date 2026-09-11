@@ -638,20 +638,50 @@ private fun SnoozeStatus(
     departure: DepartureObservation?,
     endsOnMotion: Boolean,
 ) {
-    val body = when (mode) {
-        TrackingMode.FULL -> stringResource(R.string.ongoing_ends_when_you_leave)
-        TrackingMode.WIFI_ONLY -> stringResource(R.string.ongoing_wifi_only)
-        TrackingMode.WIFI_GRACE -> stringResource(R.string.ongoing_wifi_grace)
-        TrackingMode.DURATION_ONLY -> stringResource(R.string.ongoing_timer_only)
-        // The anchor has not landed yet, so there is no mode to report — only
-        // what is still being waited on. Same strings the ongoing notification
-        // uses, since both read this one field.
-        TrackingMode.SETTLING -> stringResource(R.string.ongoing_settling)
+    // **Not while the Wi-Fi grace period is running** (Codex, PR #263, and a
+    // different argument from the degraded-mode one it follows). `WIFI_ONLY`
+    // and `DURATION_ONLY` describe how departure is being *watched*; this one
+    // is a five-minute deadline that ends the snooze on expiry whether or not
+    // the phone ever moves (`Presence.graceElapsed` falls through to
+    // `departed`, which reads nothing about the motion exit). Hiding it would
+    // put `Snoozing until you move` over a countdown to the cap — hours — on a
+    // snooze about to end in minutes for a reason the user could not
+    // reconstruct afterwards.
+    val motionOnly = endsOnMotion && mode != TrackingMode.WIFI_GRACE
+    val body = when {
+        // **The exit that was tapped, in the fallback too.** `StatusBlock`
+        // drops the one-sentence form and renders this line instead wherever
+        // the sentence will not fit — a narrow screen, a large accessibility
+        // font — so leaving it saying `Ends when you leave` would put the
+        // reported bug back exactly where a user most needs the screen to be
+        // legible (Codex, PR #263).
+        //
+        // **A motion snooze reports its own exit and nothing else**
+        // (maintainer, 2026-09-11, choosing this over keeping the degraded
+        // line). The mode and its reason describe how *departure* is being
+        // watched, and this snooze was started to end on movement — a fix, or
+        // the lack of one, has no bearing on whether the sensor fires. What it
+        // costs is stated in `SPEC.md` §4.4: departure is still a live exit
+        // underneath today, so its degradation stops being reported here until
+        // tapping a row replaces the other exits rather than adding to them.
+        motionOnly -> stringResource(R.string.ongoing_ends_when_you_move)
+        else -> when (mode) {
+            TrackingMode.FULL -> stringResource(R.string.ongoing_ends_when_you_leave)
+            TrackingMode.WIFI_ONLY -> stringResource(R.string.ongoing_wifi_only)
+            TrackingMode.WIFI_GRACE -> stringResource(R.string.ongoing_wifi_grace)
+            TrackingMode.DURATION_ONLY -> stringResource(R.string.ongoing_timer_only)
+            // The anchor has not landed yet, so there is no mode to report —
+            // only what is still being waited on. Same strings the ongoing
+            // notification uses, since both read this one field.
+            TrackingMode.SETTLING -> stringResource(R.string.ongoing_settling)
+        }
     }
     // Same two modes the notification appends to, for the same reasons: FULL
     // carries no cause by construction, and WIFI_GRACE already names the thing
-    // that matters and resolves in minutes.
-    val reason = when (mode) {
+    // that matters and resolves in minutes. And never for a motion snooze, per
+    // the decision above — the cause describes departure tracking, and this
+    // snooze does not end on departure.
+    val reason = if (motionOnly) null else when (mode) {
         TrackingMode.WIFI_ONLY, TrackingMode.DURATION_ONLY ->
             degradationReasonRes(degradation)?.let { stringResource(it) }
         // SETTLING carries no cause for the same reason FULL doesn't: nothing
@@ -660,42 +690,46 @@ private fun SnoozeStatus(
         TrackingMode.FULL, TrackingMode.WIFI_GRACE,
         TrackingMode.SETTLING -> null
     }
-    // **The exit the user chose, which the card used to leave out entirely**
-    // (maintainer, 2026-09-11: tapping `Until I move` changed nothing this
-    // screen said). `When I move` is a second ending, and the ongoing
-    // notification has always named it — so the one surface a user opens *to
-    // check* was the one promising a single exit it might not end on, which is
-    // principle 2's failure and reads as a tap that did nothing.
-    //
-    // Last, after the degradation, exactly as the notification orders it: that
-    // explains how well the promise above is being kept, while this adds a
-    // promise of its own and reads wrong wedged between a claim and its caveat.
-    val qualified = reason?.let { stringResource(R.string.ongoing_degraded_reason, body, it) }
+    val condition = reason?.let { stringResource(R.string.ongoing_degraded_reason, body, it) }
         ?: body
-    val condition = if (endsOnMotion) {
-        stringResource(R.string.ongoing_or_when_you_move, qualified)
-    } else {
-        qualified
-    }
     StatusBlock(
         headline = stringResource(R.string.ongoing_title),
-        // FULL carries no degraded reason by construction, so its one-row form
-        // can never be missing one.
+        // **The sentence names the exit the user tapped** (maintainer,
+        // 2026-09-11: tapping `Until I move` left this reading `Snoozing until
+        // you leave`, so the tap looked like it had done nothing). One or the
+        // other, never both: significant motion is the stricter trigger, so the
+        // motion sentence already covers leaving, and enumerating two endings
+        // spends a line to say what one says.
         //
-        // **But it is the whole statement or it is not offered**, because the
-        // one-row form replaces the condition line rather than sitting above it
-        // — so a motion exit would be dropped on the floor by the very case
-        // that fits. A second ending is exactly what this sentence cannot
-        // carry, so a snooze that has one takes the two-row shape and states
-        // both.
-        oneRow = stringResource(R.string.main_snoozing_until_you_leave)
-            .takeIf { mode == TrackingMode.FULL && !endsOnMotion },
+        // The sentence *replaces* the condition line rather than sitting above
+        // it, so it is only ever offered where it is the whole statement
+        // (Codex, PR #263, twice in this one mechanism). That is what always
+        // qualified full tracking — not the mode itself, but that it carries
+        // no degraded reason and its mode word *is* the exit. A motion snooze
+        // meets the same bar by the decision above: its reason is not withheld
+        // behind the sentence, it is not reported at all, because it describes
+        // an exit this snooze was not started to end on.
+        oneRow = when {
+            motionOnly -> stringResource(R.string.main_snoozing_until_you_move)
+            mode == TrackingMode.FULL ->
+                stringResource(R.string.main_snoozing_until_you_leave)
+            else -> null
+        },
         condition = condition,
         detail = remainingText(remaining),
         // Only under `FULL`. The other modes are not measuring a distance —
         // showing one from the last fix before tracking degraded would explain
         // a threshold that is no longer what ends this snooze.
-        readout = departure?.takeIf { mode == TrackingMode.FULL && it.isReportable }
+        //
+        // And never on a motion snooze, for the same reason the degraded mode
+        // and its cause are not reported there (Codex, PR #263, the third
+        // finding in this one mechanism and a straight consequence of that
+        // decision): a distance to the departure threshold is departure
+        // information, so a card saying `Snoozing until you move` above
+        // `200 m away · 23 m to go` would name one exit and then quietly put a
+        // number on a different one.
+        readout = departure
+            ?.takeIf { mode == TrackingMode.FULL && !motionOnly && it.isReportable }
             ?.let { departureText(it) },
     )
 }

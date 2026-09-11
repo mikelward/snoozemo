@@ -1891,6 +1891,28 @@ the point is that every other line of the app is worthless if it isn't true.
       then the cap on its own evidence. `SPEC.md` §4.4 records today's behavior and moves with
       whatever is decided.
 
+      **Confirmed as the direction (maintainer, 2026-09-11), detail still to work through:**
+      tapping a row replaces the current end conditions rather than adding to them. Deliberately
+      not taken in PR #263, which is copy only. What the decision still owes: whether the cinema
+      case is accepted (a chosen time outlasting departure, on the grounds that the status line
+      says so), and what happens to a snooze whose replaced exit was the only one its tracking
+      mode could serve. The duration cap stays a separate decision, below.
+
+- [ ] **During Wi-Fi grace the countdown is the cap's, not the deadline's** (maintainer,
+      2026-09-11: "why would we say 3h 40m left if there's only minutes of grace left"). A snooze
+      in `WIFI_GRACE` reads `Wi-Fi lost — ending soon` over `3h 40m left`, which is the one line
+      that contradicts the other: the grace period ends the snooze on expiry whether or not the
+      phone moves (`Presence.graceElapsed` falls through to `departed`), so the number beside the
+      warning counts down to something that will not happen. Pre-existing on `main` and not from
+      PR #263, which only kept the warning visible on a motion snooze; `detail =
+      remainingText(remaining)` is unconditional and `remaining` is the cap.
+      Not a small fix: the deadline is `graceDeadlineMs` on `PresenceState`, inside the service,
+      and `ActiveSnooze` does not carry it — and should not start to on its own, since a mirrored
+      copy of live presence state is the shape that produced four bugs (`atAnchorWifi`,
+      maintainer 2026-09-08). So this wants the screen to *ask*, like the other two live readings
+      it is owed, and then the shorter of the two deadlines shown. The ongoing notification has
+      the same line and the same problem.
+
 - [ ] **The main screen never says `tracking may pause`** — deferred from PR #262 (Codex, P1
       against the new motion clause). The ongoing card qualifies its end conditions when the
       watch wants a foreground service and has been refused one, and the main screen's status

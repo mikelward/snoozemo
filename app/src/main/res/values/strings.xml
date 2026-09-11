@@ -315,6 +315,14 @@
     <!-- TODO: translate -->
     <string name="main_snoozing_until_you_leave" tools:ignore="MissingTranslation">Snoozing until you leave</string>
     <!--
+      The same sentence for a snooze that was started with `Until I move`. One
+      or the other, never both: significant motion is the stricter trigger, so
+      naming the exit the user tapped says everything enumerating two would
+      (maintainer, 2026-09-11).
+    -->
+    <!-- TODO: translate -->
+    <string name="main_snoozing_until_you_move" tools:ignore="MissingTranslation">Snoozing until you move</string>
+    <!--
       Shown in place of the mode line while the arm is still capturing its
       anchor, by the main screen and the ongoing notification alike. Not a
       degraded state and not a mode: the record read DURATION_ONLY for the
@@ -398,6 +406,16 @@
     <string name="channel_urgent">Do Not Disturb stuck</string>
     <string name="ongoing_title">Snoozing</string>
     <string name="ongoing_ends_when_you_leave">Ends when you leave</string>
+    <!--
+      The same line for a snooze started with `Until I move`, used by the main
+      screen where its one-sentence form will not fit. Names the exit that was
+      tapped, like the sentence it falls back from — the narrow-width rendering
+      is the one a large accessibility font reaches, so it is exactly where
+      silently going back to `Ends when you leave` would read as the tap having
+      done nothing.
+    -->
+    <!-- TODO: translate -->
+    <string name="ongoing_ends_when_you_move" tools:ignore="MissingTranslation">Ends when you move</string>
     <string name="ongoing_wifi_only">Wi-Fi only</string>
     <string name="ongoing_wifi_grace">Wi-Fi lost — ending soon</string>
     <string name="ongoing_timer_only">Timer only</string>

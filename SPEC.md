@@ -856,10 +856,41 @@ will not fit. The fallback is a **deliberate** split rather than a wrap, so the 
 before the text is composed; a wrap would break it wherever the words happened to land. Only the
 full tracking mode has a one-sentence form, since `Snoozing, Wi-Fi only` does not compose, so a
 degraded snooze always takes the two-row shape and states its mode — and its reason — on the
-second row. **And a snooze with a motion exit takes that two-row shape too**, whatever its
-mode: the one-sentence form *replaces* the condition line rather than sitting above it, so a
-second ending would be dropped on the floor by the very case that fits (maintainer, 2026-09-11 —
-tapping `Until I move` changed nothing this screen said).
+second row. **A snooze started with `Until I move` gets its own sentence**, `Snoozing until you
+move` (maintainer, 2026-09-11 — tapping `Until I move` changed nothing this screen said). It
+names the exit that was tapped and only that one: significant motion is the stricter trigger,
+so it already covers leaving, and enumerating both spends a line to say what one says.
+
+**The sentence is offered only where it is the whole statement.** It *replaces* the condition
+line rather than sitting above it, so anything the condition carries and the sentence does not
+is hidden rather than moved — which is the rule full tracking was always really meeting, since
+it carries no degraded reason and its mode word *is* the exit. Where the sentence will not fit
+— a narrow screen, a large accessibility font — the two-row fallback names the same exit,
+`Ends when you move` rather than `Ends when you leave`: a split rendering of one statement must
+not quietly become a different one.
+
+**A motion snooze reports its own exit and nothing else** (maintainer, 2026-09-11), so it meets
+that bar in every mode but one: the degraded mode and its cause are not withheld behind the
+sentence, they are not reported at all. The reasoning is that they describe how *departure* is being
+watched, and a location fix — or the lack of one — has no bearing on whether the significant-
+motion sensor fires; what `Until I move` does need, the location grant for the `location`-typed
+service it rides on, is already checked at the tap rather than reported as a running
+degradation. **What it costs, stated plainly:** today the motion exit is *additive*, so
+departure is still a live exit underneath, and its degradation stops being visible on this
+screen while remaining able to end the snooze. That cost ends when tapping a row replaces the
+other exits rather than adding to them — the open question `TODO.md` records as *Decide what
+tapping an end condition means* — and this copy is deliberately written for that destination.
+The same rule takes the departure readout down with it: a distance to the departure threshold is
+departure information, so a card reading `Snoozing until you move` does not then put a number on
+an exit it is not reporting.
+
+**`WIFI_GRACE` is the one mode it does not take over**, and the distinction is deadline versus
+description. Every other mode says how departure is being *watched*; this one is a five-minute
+countdown that ends the snooze on expiry whether or not the phone ever moves. So a motion snooze
+in grace keeps `Wi-Fi lost — ending soon`. It is not shown *alongside* the motion wording, for
+the same reason no card enumerates two endings: the grace deadline is both the nearer exit and
+the certain one, so motion firing first would change which reason ended the snooze, not whether
+it is about to end. The urgent line is the one the card has room for.
 
 **Including the degraded reason, on the same line and in the same words** (landed 2026-08-30). The
 mode line joins its cause exactly as §4.3's card does — `Timer only — no location` — from the same
@@ -1638,11 +1669,11 @@ inert rows while the service is asked, the refusal shown on them, and the rows l
 retry. A tap with no row behind it says so in the shade instead, as a chosen time does.
 
 **The user can always see it.** The ongoing notification names the second exit alongside the first
-(`Ends when you leave, or when you move`), **and so does the main screen's status block** — in the
-same words and in the same order, after the mode's degraded reason rather than inside it, since
-that reason says how well the first promise is being kept while this adds a promise of its own.
-The screen is the surface a user opens *to check*, so it was the worse of the two to leave naming
-one exit. The ending says which one fired (`Snooze ended — you moved`, never "you left"). Principle 2: an exit the user cannot predict is one they cannot trust,
+(`Ends when you leave, or when you move`), and **the main screen says `Snoozing until you move`** —
+one sentence naming the exit that was tapped, not two endings enumerated (maintainer, 2026-09-11:
+"when you move is a more strict form of when you leave"). The screen is the surface a user opens
+*to check*, so it was the worse of the two to leave reading `Snoozing until you leave` after the
+other button was pressed — a committed choice that looked like a no-op. The ending says which one fired (`Snooze ended — you moved`, never "you left"). Principle 2: an exit the user cannot predict is one they cannot trust,
 and telling a movement-ending apart from a departure is also the only way an over-eager firing is
 legible as one.
 
