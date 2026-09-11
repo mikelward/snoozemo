@@ -1,6 +1,7 @@
 package app.snoozemo.ui
 
 import androidx.annotation.DrawableRes
+import androidx.annotation.StringRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -9,14 +10,20 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -29,6 +36,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import app.snoozemo.R
 import app.snoozemo.core.ActiveSnooze
+import app.snoozemo.core.Anchor
 import app.snoozemo.core.EndCondition
 import app.snoozemo.core.MeetingEnd
 import app.snoozemo.core.TrackingMode
@@ -95,6 +103,14 @@ internal fun EndConditionRows(
     /** Commits "ends when you move" — an added exit; the cap stays. */
     onChooseMotionEnd: () -> Unit = {},
     /**
+     * Whether this snooze's departure is watching the anchor's Wi-Fi, and
+     * whether it is watching the area, as `Until I leave`'s card names them
+     * (SPEC.md §4.4). Both default true: that is the pre-arm case, where
+     * there is no anchor to ask.
+     */
+    departureUsesWifi: Boolean = true,
+    departureUsesArea: Boolean = true,
+    /**
      * What a refused tap says beside the rows. A refinement that was declined
      * could not set the end time; a row that offered to *start* a snooze and
      * was refused has nothing running behind it, and says so.
@@ -102,6 +118,27 @@ internal fun EndConditionRows(
     failureText: String = stringResource(R.string.failure_could_not_set_end),
     modifier: Modifier = Modifier,
 ) {
+    // Which help card is open, if any. Local rather than hoisted: it is one
+    // dialog's visibility and nothing outside this composable acts on it, so
+    // both hosts — the sheet and the main screen — get the behavior without
+    // threading a fourth piece of state through either.
+    //
+    // Saved rather than a plain `remember`, the way the licenses dialog saves
+    // its selection: this activity handles no configuration change itself, so
+    // a rotation with the card open would close it mid-read (Codex, PR #261).
+    // The name rather than the value, since that is what a `Bundle` holds —
+    // and read back by lookup rather than `valueOf`, so a name that no longer
+    // names anything opens no card instead of throwing.
+    var openHelp by rememberSaveable { mutableStateOf<String?>(null) }
+    // Gated on the row still being offered, not only on what was tapped. A
+    // snooze can lose departure tracking while its card is open — location
+    // switched off, the grant revoked — and `tracksDeparture` then drops the
+    // row from under a card still explaining what leaving will do (Codex, PR
+    // #261). The card goes with its row, both ways.
+    val help = EndHelp.entries
+        .firstOrNull { it.name == openHelp }
+        ?.takeIf { if (it == EndHelp.LEAVE) tracksDeparture else offersMotionEnd }
+
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -165,19 +202,19 @@ internal fun EndConditionRows(
         // wording, and the same place in the group, and goes with the group
         // when the cap comes inside `MIN_CAP`.
         if (offersMotionEnd) {
-            EndChoiceRow(
+            EndChoiceRowWithHelp(
                 label = stringResource(R.string.main_until_i_move),
                 onClick = onChooseMotionEnd,
                 enabled = locationRowsEnabled && !committing,
-                modifier = Modifier.fillMaxWidth(),
+                onHelp = { openHelp = EndHelp.MOVE.name },
             )
         }
         if (tracksDeparture) {
-            EndChoiceRow(
+            EndChoiceRowWithHelp(
                 label = stringResource(R.string.main_until_i_leave),
                 onClick = onChooseDeparture,
                 enabled = locationRowsEnabled && !committing,
-                modifier = Modifier.fillMaxWidth(),
+                onHelp = { openHelp = EndHelp.LEAVE.name },
             )
         }
 
@@ -191,6 +228,123 @@ internal fun EndConditionRows(
                 color = MaterialTheme.colorScheme.error,
             )
         }
+
+        help?.let { open ->
+            // Each slot is wrapped, and the dialog hosts its own pinch: a
+            // dialog is its own window, so the theme's scaled density does not
+            // reach it and the text would come out at the system size whatever
+            // the user chose (Codex, PR #217, on the rationale dialog).
+            AlertDialog(
+                modifier = Modifier.pinchFontSizeHost(),
+                onDismissRequest = { openHelp = null },
+                title = { FontSizeWindow { Text(stringResource(open.title)) } },
+                text = {
+                    FontSizeWindow {
+                        Text(stringResource(open.body(departureUsesWifi, departureUsesArea)))
+                    }
+                },
+                confirmButton = {
+                    FontSizeWindow {
+                        TextButton(onClick = { openHelp = null }) {
+                            Text(stringResource(R.string.action_close))
+                        }
+                    }
+                },
+            )
+        }
+    }
+}
+
+/**
+ * The two end conditions that need a word of explanation, and the card each
+ * opens.
+ *
+ * `Until time` takes none: a clock time explains itself. These two are named
+ * after what the user does, not what the phone measures, so the card is where
+ * the scale difference gets stated — another room against out for the day.
+ */
+private enum class EndHelp(@StringRes val title: Int) {
+    MOVE(R.string.main_until_i_move),
+    LEAVE(R.string.main_until_i_leave),
+}
+
+/**
+ * The card's wording, which for `Until I leave` depends on what this snooze
+ * is actually watching.
+ *
+ * Both signals absent is the pre-arm and still-settling case, not a third
+ * kind of departure, so it reads as the full sentence rather than naming
+ * neither — a snooze with neither does not offer the row at all
+ * ([EndChoiceUiState.tracksDeparture]).
+ */
+@StringRes
+private fun EndHelp.body(usesWifi: Boolean, usesArea: Boolean): Int = when (this) {
+    EndHelp.MOVE -> R.string.end_help_move_body
+    EndHelp.LEAVE -> when {
+        usesWifi && !usesArea -> R.string.end_help_leave_body_wifi
+        usesArea && !usesWifi -> R.string.end_help_leave_body_area
+        else -> R.string.end_help_leave_body
+    }
+}
+
+/**
+ * A committing row with a `?` beside it.
+ *
+ * Beside, not inside: the card answers the tap over its whole surface, and a
+ * second target carved out of it would be a mis-tap on the screen where a
+ * snooze is being started. This is the shape the time row already uses for its
+ * steppers — one card weighted against small buttons in the same row — so
+ * TalkBack names each, and the two event rows line up with the `-` and `+`
+ * above them.
+ */
+@Composable
+private fun EndChoiceRowWithHelp(
+    label: String,
+    onClick: () -> Unit,
+    enabled: Boolean,
+    onHelp: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        EndChoiceRow(
+            label = label,
+            onClick = onClick,
+            enabled = enabled,
+            modifier = Modifier.weight(1f),
+        )
+        EndHelpButton(
+            description = stringResource(R.string.end_help_description, label),
+            onClick = onHelp,
+        )
+    }
+}
+
+/**
+ * The `?` beside an end-condition row.
+ *
+ * **Enabled even when the row is not.** A row held by a missing location grant
+ * is exactly the one a user wants explained, and the card explains what the
+ * row does rather than committing anything, so nothing about a refused tap
+ * applies to it.
+ *
+ * The mark is drawn, but the name announced is the whole phrase: "question
+ * mark" tells a screen-reader user nothing about which row it belongs to.
+ */
+@Composable
+private fun EndHelpButton(description: String, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = Modifier.semantics { contentDescription = description },
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_help),
+            contentDescription = null,
+            tint = LocalContentColor.current,
+            modifier = Modifier.size(20.dp),
+        )
     }
 }
 
@@ -348,6 +502,19 @@ internal data class EndChoiceUiState(
      */
     val tracksDeparture: Boolean = true,
     /**
+     * What this snooze's departure is actually watching — the anchor's Wi-Fi,
+     * the area around it, or both — which is what `Until I leave`'s card
+     * names (SPEC.md §4.4). An anchor can have one without the other: a fix
+     * too vague to test against leaves the SSID doing the work, and a capture
+     * with no network leaves the radius doing it.
+     *
+     * Both true where there is no anchor to ask — an offer to start, or a
+     * capture still settling — which is the ordinary case and the sentence
+     * the card has always read.
+     */
+    val departureUsesWifi: Boolean = true,
+    val departureUsesArea: Boolean = true,
+    /**
      * Whether a tap on these rows starts a snooze rather than refining one —
      * the idle screen's offer (SPEC.md §4.4). The rows are drawn the same;
      * what changes is where a tap goes, and that `−`/`+` arm at the stepped
@@ -449,6 +616,7 @@ internal fun endChoiceUiState(
         )
     }
     val offerRecord = record?.takeIf { it.startedAt == offerFor }
+    val signals = departureSignals(offerRecord?.anchor, offerRecord?.mode)
     // Fails closed on all three at once: no record, another snooze's record,
     // and a cap that has come inside the floor while the screen sat open.
     if (!EndCondition.offersAChoice(offerRecord, now)) return null
@@ -463,8 +631,50 @@ internal fun endChoiceUiState(
         // never offered where the restore would be declined — and never
         // withheld where it would be taken.
         tracksDeparture = offerRecord?.mode?.tracksDeparture == true,
+        // The live mode and the captured anchor together — neither answers it
+        // alone, and the anchor alone goes stale the moment a degradation
+        // lowers the mode under it (Codex, PR #261). See [departureSignals].
+        departureUsesWifi = signals.usesWifi,
+        departureUsesArea = signals.usesArea,
         offerFor = offerFor,
     )
+}
+
+/** What a departure is watching, for `Until I leave`'s card (SPEC.md §4.4). */
+internal data class DepartureSignals(val usesWifi: Boolean, val usesArea: Boolean)
+
+/**
+ * Which of the two signals a departure is watching **right now**.
+ *
+ * Neither source answers this alone, which is the whole reason this is one
+ * function rather than a field on either (Codex, PR #261, twice in the same
+ * mechanism):
+ *
+ * - **[TrackingMode] does not say which signals.** `supportedModes` enables
+ *   `FULL` from a usable fix alone and `WIFI_ONLY` from an SSID alone, so the
+ *   mode names a capability tier rather than a pair.
+ * - **[Anchor] does not say what is still working.** It is captured once and
+ *   never rewritten, so an anchor that had both still reads as both after
+ *   location stops producing fixes and [SnoozeController.modeFor] has moved
+ *   the snooze to `WIFI_ONLY`.
+ *
+ * So each answers the half it is entitled to: the live mode says whether the
+ * area is still being tested — `FULL` is the only mode that tests it, and
+ * `FULL` already implies a usable fix — and the anchor says whether there is
+ * a network to leave at all.
+ *
+ * `SETTLING`, a missing record and an anchor with neither all read as both:
+ * nothing is determined yet, and a card that narrowed during the ~10 s
+ * capture would flip its sentence as the fix landed. A snooze that really
+ * has neither is `DURATION_ONLY`, and its row is dropped before this card
+ * exists.
+ */
+internal fun departureSignals(anchor: Anchor?, mode: TrackingMode?): DepartureSignals {
+    val undetermined = DepartureSignals(usesWifi = true, usesArea = true)
+    if (anchor == null || mode == null || mode == TrackingMode.SETTLING) return undetermined
+    val wifi = anchor.ssid != null
+    val area = mode == TrackingMode.FULL
+    return if (!wifi && !area) undetermined else DepartureSignals(usesWifi = wifi, usesArea = area)
 }
 
 /**

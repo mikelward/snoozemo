@@ -1305,6 +1305,38 @@ second event-shaped row beside it (§4.4) the list reads better as *when*: the c
 can adjust, then the things that can happen — and the row the product is for closes the list
 rather than opening it. `End now` keeps the last word, below every refinement, because the order
 is what says which of them is the terminal answer.
+**A `?` beside `Until I move` and `Until I leave` opens a card saying what each means**
+(maintainer, 2026-09-11). Both rows are named after what the user does, and neither name says how
+much of it. The card states the scale: "Ends when you get up and move, like walking to another
+room" and "Ends when you leave the current Wi-Fi and area." The move example is deliberately the
+demanding one — the sensor's sensitivity differs by phone, and a snooze that ends sooner than the
+copy implies fails in the safe direction (principle 1) while one that runs on past it does not.
+The `?` sits beside the card rather than inside it, the shape the steppers already use, so the row
+keeps its whole surface as one target and a screen reader names each. It is tappable even where
+the row is not: a row held by a missing location reading is the one most worth explaining, and the
+card commits nothing. `Until time` needs none, and neither does the arm-time sheet — that is the
+fast path and stays bare.
+
+**The leave card names only the signals that snooze actually has** (maintainer, 2026-09-11). An
+anchor can carry one without the other — `supportedModes` enables the full mode from a usable fix
+alone and Wi-Fi-only from an SSID alone (§6.6, §8.4) — so a snooze can be watching the area with no
+network captured, or the network with no fix worth testing against. Naming both regardless tells
+the reader most likely to open this card, the one whose snooze ended while they were still on their
+Wi-Fi, the one thing that was not true of it. Whichever noun is not in play comes out and the
+sentence is otherwise unchanged: "…the current Wi-Fi and area", "…the current Wi-Fi", "…the current
+area".
+
+**It is read from the live mode and the anchor together, because neither answers it alone.** The
+mode does not name signals — it is a capability tier, and the full mode is reachable from a fix
+with no network. The anchor does not say what is still working — it is captured once and never
+rewritten, so one that had both still reads as both after location stops producing fixes and the
+snooze is lowered to Wi-Fi-only under it. So each answers the half it is entitled to: the mode says
+whether the area is still being tested, since the full mode is the only one that tests it, and the
+anchor says whether there is a network to leave. A settling capture, and a snooze the screen has
+not read yet, assume both rather than narrowing — a card that narrowed mid-capture would flip its
+sentence as the fix landed seconds later. A snooze with genuinely neither never reaches the card:
+it is duration-only and the row is dropped.
+
 **A meeting row is marked as one**, by a calendar glyph after its time rather than before it: every
 row's label starts at the same x and the eye scans the times, so the mark qualifies the answer
 instead of categorizing it, and it is named for a screen reader because the label alone reads

@@ -509,6 +509,32 @@
     <string name="main_until_i_leave" tools:ignore="MissingTranslation">Until I leave</string>
     <!-- TODO: translate -->
     <string name="main_until_i_move" tools:ignore="MissingTranslation">Until I move</string>
+    <!-- TODO: translate -->
+    <string name="end_help_description" tools:ignore="MissingTranslation">What %1$s means</string>
+    <!-- TODO: translate -->
+    <string name="end_help_move_body" tools:ignore="MissingTranslation">Ends when you get up and move, like walking to another room.</string>
+    <!--
+      The leave card names only the signals this snooze actually has. The
+      anchor can be one or the other: `supportedModes` enables the full mode
+      from a usable fix alone and Wi-Fi-only from an SSID alone, so a snooze
+      can be watching the area with no network captured, or the network with
+      no fix worth testing against (Codex, PR #261). Naming both regardless
+      would tell the reader most likely to open this card — the one whose
+      snooze ended while they were still on their Wi-Fi — the one thing that
+      was not true of it. Whichever noun is not in play comes out; the
+      sentence is otherwise the same in all three.
+
+      Before a snooze is armed there is no anchor to ask, and the same while
+      the capture is still settling, so both are assumed — the ordinary case,
+      and the card turns specific the moment there is something to be specific
+      about.
+    -->
+    <!-- TODO: translate -->
+    <string name="end_help_leave_body" tools:ignore="MissingTranslation">Ends when you leave the current Wi-Fi and area.</string>
+    <!-- TODO: translate -->
+    <string name="end_help_leave_body_wifi" tools:ignore="MissingTranslation">Ends when you leave the current Wi-Fi.</string>
+    <!-- TODO: translate -->
+    <string name="end_help_leave_body_area" tools:ignore="MissingTranslation">Ends when you leave the current area.</string>
     <!-- Names the calendar mark on a row whose time came from a meeting, for a
          screen reader: the label alone reads the same as the adjustable time,
          so the mark is the only thing saying where that time came from. Not

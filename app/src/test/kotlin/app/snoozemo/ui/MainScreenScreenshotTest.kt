@@ -7,6 +7,9 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 // `assertIsEnabled` / `assertIsNotEnabled` are extensions and need importing;
 // `assertExists` / `assertDoesNotExist` are members of the same type and must
@@ -14,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -477,6 +481,287 @@ class MainScreenScreenshotTest {
         composeRule.onNodeWithText("Until 1:00 PM").assertIsEnabled()
         composeRule.onNodeWithContentDescription("Half an hour later").assertIsEnabled()
         composeRule.onNodeWithText("Snooze").assertIsEnabled()
+    }
+
+    @Test
+    fun `a question mark beside each event row says what that row means`() {
+        // The two rows are named after what the user does, and neither name
+        // says how much of it. The card is where that gets stated, and it is
+        // behind a tap so the rows themselves stay bare (maintainer,
+        // 2026-09-11).
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                endChoice = idleOffer(),
+                offersMotionEnd = true,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onChooseDeparture = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithContentDescription("What Until I move means").performScrollTo().performClick()
+        composeRule
+            .onNodeWithText("Ends when you get up and move, like walking to another room.")
+            .assertExists()
+        composeRule.onNodeWithText("Close").performClick()
+        composeRule
+            .onNodeWithText("Ends when you get up and move, like walking to another room.")
+            .assertDoesNotExist()
+
+        composeRule.onNodeWithContentDescription("What Until I leave means").performScrollTo().performClick()
+        composeRule.onNodeWithText("Ends when you leave the current Wi-Fi and area.").assertExists()
+    }
+
+    @Test
+    fun `an open help card closes when its row stops being offered`() {
+        // Location can be switched off while the card is open, which drops the
+        // row — and left the card standing, explaining an end condition
+        // nothing was watching for any more (Codex, PR #261).
+        var tracks by mutableStateOf(true)
+        composeRule.setContent {
+            SnoozemoTheme {
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    MainScreen(
+                        access = PolicyAccess.GRANTED,
+                        tileAdded = true,
+                        tileBannerDismissed = true,
+                        snoozing = false,
+                        trackingMode = null,
+                        remaining = null,
+                        degradation = null,
+                        endChoice = idleOffer().copy(tracksDeparture = tracks),
+                        offersMotionEnd = true,
+                        lastOutcome = null,
+                        crashPending = false,
+                        shareFailed = false,
+                        dismissFailed = false,
+                        onOpenPermissions = {},
+                        onOpenSettings = {},
+                        onAddTile = {},
+                        onDismissTileBanner = {},
+                        onArm = {},
+                        onRelease = {},
+                        onChooseDeparture = {},
+                        onShareDebugLog = {},
+                        onDismissCrash = {},
+                    )
+                }
+            }
+        }
+
+        composeRule
+            .onNodeWithContentDescription("What Until I leave means")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithText("Ends when you leave the current Wi-Fi and area.").assertExists()
+
+        tracks = false
+        composeRule.waitForIdle()
+
+        composeRule
+            .onNodeWithText("Ends when you leave the current Wi-Fi and area.")
+            .assertDoesNotExist()
+        // The move card is a different row and is unaffected.
+        composeRule
+            .onNodeWithContentDescription("What Until I move means")
+            .performScrollTo()
+            .performClick()
+        composeRule
+            .onNodeWithText("Ends when you get up and move, like walking to another room.")
+            .assertExists()
+    }
+
+    @Test
+    fun `the leave card names only the Wi-Fi where the fix cannot test a departure`() {
+        // An anchor can have one signal without the other, so naming both
+        // regardless tells the reader most likely to open this card — the one
+        // whose snooze ended while they were still on their Wi-Fi — the one
+        // thing that was not true of it (Codex, PR #261). Each shape asserts
+        // what it names AND what it does not: the three sentences differ by
+        // one clause, so a half-assertion passes on all of them.
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                endChoice = idleOffer().copy(departureUsesWifi = true, departureUsesArea = false),
+                offersMotionEnd = true,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onChooseDeparture = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule
+            .onNodeWithContentDescription("What Until I leave means")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithText("Ends when you leave the current Wi-Fi.").assertExists()
+        composeRule.onNodeWithText("Ends when you leave the current Wi-Fi and area.").assertDoesNotExist()
+        composeRule.onNodeWithText("Ends when you leave the current area.").assertDoesNotExist()
+    }
+
+    @Test
+    fun `the leave card names only the area where no network was captured`() {
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                endChoice = idleOffer().copy(departureUsesWifi = false, departureUsesArea = true),
+                offersMotionEnd = true,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onChooseDeparture = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule
+            .onNodeWithContentDescription("What Until I leave means")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithText("Ends when you leave the current area.").assertExists()
+        composeRule.onNodeWithText("Ends when you leave the current Wi-Fi and area.").assertDoesNotExist()
+        composeRule.onNodeWithText("Ends when you leave the current Wi-Fi.").assertDoesNotExist()
+    }
+
+    @Test
+    fun `the explanation is offered even where the row cannot be tapped`() {
+        // A row held by a missing location reading is exactly the one worth
+        // explaining, and the card commits nothing — so nothing that holds
+        // the row back applies to the question mark beside it.
+        var chosenDeparture = 0
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                endChoice = idleOffer().copy(locationArmable = false),
+                offersMotionEnd = true,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onChooseDeparture = { chosenDeparture++ },
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Until I leave").assertIsNotEnabled()
+        composeRule.onNodeWithContentDescription("What Until I leave means").assertIsEnabled()
+        composeRule.onNodeWithContentDescription("What Until I leave means").performScrollTo().performClick()
+        composeRule.onNodeWithText("Ends when you leave the current Wi-Fi and area.").assertExists()
+        // Reading what a row does never arms it.
+        assertEquals(0, chosenDeparture)
+    }
+
+    @Test
+    fun `an open help card survives a configuration change`() {
+        // The card is read, not skimmed, and a rotation mid-read used to
+        // close it: plain `remember` state does not survive recreation
+        // (Codex, PR #261). This fails with `remember` and passes with
+        // `rememberSaveable`, which is the whole of what the fix changed.
+        //
+        // Its own content rather than `capture`, since the restoration
+        // harness has to own `setContent` to replay it.
+        val restoration = StateRestorationTester(composeRule)
+        restoration.setContent {
+            SnoozemoTheme {
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    MainScreen(
+                        access = PolicyAccess.GRANTED,
+                        tileAdded = true,
+                        tileBannerDismissed = true,
+                        snoozing = false,
+                        trackingMode = null,
+                        remaining = null,
+                        degradation = null,
+                        endChoice = idleOffer(),
+                        offersMotionEnd = true,
+                        lastOutcome = null,
+                        crashPending = false,
+                        shareFailed = false,
+                        dismissFailed = false,
+                        onOpenPermissions = {},
+                        onOpenSettings = {},
+                        onAddTile = {},
+                        onDismissTileBanner = {},
+                        onArm = {},
+                        onRelease = {},
+                        onChooseDeparture = {},
+                        onShareDebugLog = {},
+                        onDismissCrash = {},
+                    )
+                }
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("What Until I move means").performScrollTo().performClick()
+        composeRule
+            .onNodeWithText("Ends when you get up and move, like walking to another room.")
+            .assertExists()
+
+        restoration.emulateSavedInstanceStateRestore()
+
+        composeRule
+            .onNodeWithText("Ends when you get up and move, like walking to another room.")
+            .assertExists()
     }
 
     @Test
