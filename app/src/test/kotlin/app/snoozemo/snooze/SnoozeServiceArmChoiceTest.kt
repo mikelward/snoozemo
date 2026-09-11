@@ -2,6 +2,7 @@ package app.snoozemo.snooze
 
 import app.snoozemo.R
 import app.snoozemo.core.ActiveSnooze
+import app.snoozemo.core.SnoozeLifecycle
 import app.snoozemo.core.ZenOutcome
 import java.time.Duration
 import java.time.Instant
@@ -22,8 +23,10 @@ import org.robolectric.RobolectricTestRunner
  * with nothing running starts the snooze with that end, in one tap.
  *
  * What the row is told means something simpler than over a running snooze,
- * and both directions of it are pinned here: `APPLIED` and `GONE` say a
- * snooze is running now, `REFUSED` says none is. A plain arm carries no
+ * and every direction of it is pinned here: `APPLIED` says the snooze it
+ * asked for is running now; `GONE` says the offer is over — a snooze is
+ * running, or one came and went since the offer was drawn; `REFUSED` says
+ * none is running and the row stands for a retry. A plain arm carries no
  * request and is told nothing, as it always was.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -66,6 +69,12 @@ class SnoozeServiceArmChoiceTest {
             putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
         }
 
+    private fun armUntilDeparture(armCountAtOffer: Long? = null) =
+        startService(SnoozeService.ACTION_ARM) {
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+            armCountAtOffer?.let { putExtra(SnoozeService.EXTRA_ARM_COUNT_AT_OFFER, it) }
+        }
+
     private fun stored(): ActiveSnooze? = ActiveSnoozeStore(appContext).load()
 
     @Test
@@ -98,6 +107,68 @@ class SnoozeServiceArmChoiceTest {
 
         assertNull("nothing armed", stored())
         assertEquals(EndChoiceResult.REFUSED, reported)
+    }
+
+    @Test
+    fun `until I leave as the way to start is the plain arm, and answers the row`() {
+        // Nothing to choose: the default cap, ending on departure — what the
+        // pinned `Snooze` arms — with the row told it took (SPEC.md §4.4,
+        // maintainer, 2026-09-11).
+        armUntilDeparture()
+
+        val snooze = stored()
+        assertNotNull(snooze)
+        assertEquals(now.plus(ActiveSnooze.DEFAULT_CAP), snooze!!.capExpiresAt)
+        assertEquals(EndChoiceResult.APPLIED, reported)
+    }
+
+    @Test
+    fun `an arm from an offer the store has moved past arms nothing, and the offer is over`() {
+        // The offer was drawn over "nothing running"; a snooze came and went
+        // since — armed from the tile while the row waited on a location
+        // grant, say — and "nothing running" reads the same again. The count
+        // is checked here, where the store is already read on the arm path,
+        // rather than on the screen's main thread (Codex, PR #257). `GONE`:
+        // the screen re-reads the record and draws a fresh offer.
+        val store = ActiveSnoozeStore(appContext)
+        val atOffer = store.armCount()
+        // Confirmed — the rule went on — which is what moves the count; the
+        // provisional record an abandoned arm leaves does not (below).
+        store.arm(snoozeFixture(now).copy(lifecycle = SnoozeLifecycle.ARMED))
+        store.clear()
+
+        armUntilDeparture(armCountAtOffer = atOffer)
+
+        assertNull("nothing armed", stored())
+        assertEquals(EndChoiceResult.GONE, reported)
+    }
+
+    @Test
+    fun `an arm refused before it confirmed does not end an offer made before it`() {
+        // The tile tapped while the row waited on its grant, and the rule
+        // would not go on: the provisional record came and went, but no
+        // snooze did, so the count the offer carries still stands and the
+        // resumed tap arms (Codex, PR #257).
+        val atOffer = ActiveSnoozeStore(appContext).armCount()
+        TestSnoozeService.zen.outcome = ZenOutcome.NotApplied(app.snoozemo.core.ZenFailure.PLATFORM_REFUSED)
+        startService(SnoozeService.ACTION_ARM)
+        assertNull("the setup this rests on: nothing armed", stored())
+        TestSnoozeService.zen.outcome = ZenOutcome.Applied(OWN_RULE_ID)
+
+        armUntilDeparture(armCountAtOffer = atOffer)
+
+        assertNotNull(stored())
+        assertEquals(EndChoiceResult.APPLIED, reported)
+    }
+
+    @Test
+    fun `an arm from an offer the store still agrees with arms`() {
+        // The other direction, so the check cannot pass by refusing every
+        // arm that carries a count.
+        armUntilDeparture(armCountAtOffer = ActiveSnoozeStore(appContext).armCount())
+
+        assertNotNull(stored())
+        assertEquals(EndChoiceResult.APPLIED, reported)
     }
 
     @Test

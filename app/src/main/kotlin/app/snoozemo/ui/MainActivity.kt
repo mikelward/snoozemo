@@ -130,6 +130,8 @@ private const val KEY_SCREEN = "screen"
  */
 private const val KEY_PENDING_LOCATION_ACTION = "pending_location_action"
 private const val KEY_PENDING_LOCATION_FOR = "pending_location_for"
+private const val KEY_PENDING_LOCATION_ARM_COUNT = "pending_location_arm_count"
+private const val KEY_IDLE_OFFER_ARM_COUNT = "idle_offer_arm_count"
 private const val KEY_BACKGROUND_RATIONALE = "background_location_rationale"
 private const val KEY_PERMISSIONS_ORIGIN = "permissionsOrigin"
 private const val KEY_ROUTED_TO_PERMISSIONS_ONCE = "routedToPermissionsOnce"
@@ -398,18 +400,24 @@ class MainActivity : ComponentActivity() {
         // identity, which for a refinement would mean "no claim", is the
         // whole signal here: with `offersToStart` set below, `seed(null)` is
         // the only way this controller comes to hold an unnamed offer.
+        //
+        // An arm from an offer carries the offer's identity — the arm count
+        // the record read that drew it saw, [idleOfferArmCount] — so the
+        // service can tell a tap whose "nothing running" has since come and
+        // gone; see that field.
         chooseEnd = { endsAt, requestId, forSnooze ->
-            if (forSnooze == null) SnoozeService.armUntil(this, endsAt, requestId)
+            if (forSnooze == null) SnoozeService.armUntil(this, endsAt, requestId, idleOfferArmCount)
             else SnoozeService.chooseEnd(this, endsAt, requestId, forSnooze)
         },
-        // Wired but unreached from an offer to start: the idle rows carry no
-        // `Until I leave`, since the pinned `Snooze` beside them is that
-        // choice. Over a running snooze, exactly as before.
+        // On the idle screen `Until I leave` is the plain arm — what the
+        // pinned `Snooze` makes — with the row told the answer (SPEC.md
+        // §4.4). Over a running snooze, exactly as before.
         restoreDeparture = { requestId, forSnooze ->
-            SnoozeService.restoreEnd(this, requestId, forSnooze)
+            if (forSnooze == null) SnoozeService.armUntilDeparture(this, requestId, idleOfferArmCount)
+            else SnoozeService.restoreEnd(this, requestId, forSnooze)
         },
         chooseMotionEnd = { requestId, forSnooze ->
-            if (forSnooze == null) SnoozeService.armUntilMotion(this, requestId)
+            if (forSnooze == null) SnoozeService.armUntilMotion(this, requestId, idleOfferArmCount)
             else SnoozeService.setMotionEnd(this, true, requestId, forSnooze)
         },
         watchOutcome = EndChoiceOutcome::watch,
@@ -643,6 +651,19 @@ class MainActivity : ComponentActivity() {
      * [notifications] uses for the same reason.
      */
     private var location by mutableStateOf<LocationPermission?>(null)
+
+    /**
+     * Whether [location] was read during *this* start — the reading an idle
+     * tap rides (`EndChoiceUiState.locationArmable`). Cleared in `onStart`, set by
+     * every [refreshLocation], so a reading carried over a stop never lets
+     * a tap through: the grant can have changed in Settings behind it, and a
+     * tap on that stale reading would fall to the lookup branch on the arm
+     * path (Codex, PR #257).
+     */
+    private var locationReadThisStart by mutableStateOf(false)
+
+    /** [locationReadThisStart] for a test: what the idle offer's `locationArmable` reads. */
+    internal val idleOfferArmableForTest: Boolean get() = locationReadThisStart
 
     /**
      * The two raw location grants as [refreshLocation] last read them, so a
@@ -1353,6 +1374,12 @@ class MainActivity : ComponentActivity() {
             pendingLocationFor = it.getLong(KEY_PENDING_LOCATION_FOR, -1L)
                 .takeIf { millis -> millis >= 0L }
                 ?.let(Instant::ofEpochMilli)
+            pendingLocationArmCount = it.getLong(KEY_PENDING_LOCATION_ARM_COUNT, 0L)
+            // With the rows: they come back before this screen's first
+            // record read, and a time row tapped in that window sends the
+            // count the offer was drawn from — so it is the saved one, not a
+            // zero the service would refuse (Codex, PR #257).
+            idleOfferArmCount = it.getLong(KEY_IDLE_OFFER_ARM_COUNT, 0L)
             // And the dialog it is waiting behind. A rotation while the
             // rationale is up recreates this activity *after* the foreground
             // result has been consumed, so nothing would ever put the dialog
@@ -1559,7 +1586,20 @@ class MainActivity : ComponentActivity() {
                             committing = rows.committing,
                             failed = rows.commitFailed,
                             format = formatTime,
-                        )
+                        )?.let { choice ->
+                            // An offer to start's two location rows are
+                            // inert until the reading their tap rides has
+                            // been taken *this start* — a field read on the
+                            // arm path, never a lookup made there (Codex,
+                            // PR #257, twice: a reading from before a stop
+                            // is as unusable as none, since Settings may
+                            // have moved the grant behind it). The reading
+                            // lands a frame after every start, so this is a
+                            // frame of two gray rows, not a wait the user
+                            // can see — and the rows that arm without a
+                            // reading are not held (Codex, PR #257).
+                            if (choice.startsASnooze) choice.copy(locationArmable = locationReadThisStart) else choice
+                        }
                         val offersMotionEnd = offersMotionEnd(
                             // Warmed at startup and read here as state, so
                             // this is a field read rather than the
@@ -1661,7 +1701,9 @@ class MainActivity : ComponentActivity() {
                             onChooseEndMeeting = { index ->
                                 endChoice?.let { chooseMeetingFromScreen(it, index) }
                             },
-                            onChooseDeparture = ::chooseDepartureFromScreen,
+                            onChooseDeparture = {
+                                endChoice?.let { drawn -> onDrawnOffer(drawn) { chooseDepartureFromScreen() } }
+                            },
                             offersMotionEnd = offersMotionEnd,
                             onChooseMotionEnd = {
                                 endChoice?.let { drawn -> onDrawnOffer(drawn) { chooseMotionEndFromScreen() } }
@@ -1850,6 +1892,8 @@ class MainActivity : ComponentActivity() {
         // -1 for "no snooze", which reads back as null — the same shape the
         // action's own null takes.
         outState.putLong(KEY_PENDING_LOCATION_FOR, pendingLocationFor?.toEpochMilli() ?: -1L)
+        outState.putLong(KEY_PENDING_LOCATION_ARM_COUNT, pendingLocationArmCount)
+        outState.putLong(KEY_IDLE_OFFER_ARM_COUNT, idleOfferArmCount)
         outState.putBoolean(KEY_BACKGROUND_RATIONALE, showBackgroundLocationRationale)
         // Only the current key — the legacy one is read, never written, which
         // is what spends the rewind after the first save.
@@ -2034,6 +2078,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        // Every start re-reads the grant after its first frame, and a reading
+        // from before a stop is not one an arm may ride: the stop is how a
+        // trip to Settings looks from here, and the grant may have moved
+        // (Codex, PR #257). The reading itself stays on screen — the
+        // permission row keeps saying what was last known — only the idle
+        // offer waits for the fresh one.
+        locationReadThisStart = false
         watchAccessAfterFirstFrame()
         readNotificationsAfterFirstFrame()
         // The service can arm or end while this screen is up — the cap firing,
@@ -2279,9 +2330,15 @@ class MainActivity : ComponentActivity() {
         // Through the same seam the offer's own read uses, so a test can run
         // it inline and assert on a settled state rather than race a thread.
         runOffMainThread {
+            // **Before the record, not after it**: an arm landing between the
+            // two reads then shows up in the record rather than in the count,
+            // so a count read here never describes a moment later than the
+            // "nothing running" it is kept for (Codex, PR #257).
+            val armCountBefore = records.armCount()
             val loaded = records.load()
             runOnUiThread {
                 if (refresh != latestSnoozingRefresh) return@runOnUiThread
+                if (loaded == null) idleOfferArmCount = armCountBefore
                 val running = loaded != null
                 val changed = snoozing != running
                 snoozing = running
@@ -2697,6 +2754,10 @@ class MainActivity : ComponentActivity() {
             backgroundRequired = locationTrackingNeedsBackgroundPermission,
         )
         location = current
+        // The motion row's floor, read here with the rest so the arm path
+        // never has to; see [anyLocationGrantHeld].
+        anyLocationGrantHeld = foregroundGranted || holdsAnyLocationGrant()
+        locationReadThisStart = true
         // The banner's own reading, taken here so it moves with every other
         // permission read rather than needing its own refresh site. Gated on
         // the flavor for the same reason the history above is: `direct`
@@ -2735,12 +2796,25 @@ class MainActivity : ComponentActivity() {
         // `activeSnooze`, for the reason [refreshCalendar] gives — and only
         // on a flavor whose monitor reads location at all: `direct` watches
         // no grant, so the start would be a service woken for nothing.
+        //
+        // **The record read runs off this thread.** This reading is also what
+        // a location grant resumes a waiting idle tap through
+        // (`onForegroundLocationResult` → `resumePendingLocationAction`), so
+        // a read here sits between the grant landing and the arm going out —
+        // and the first read after a cold recreation is the preferences
+        // file loading, the wait the arm path must not carry (Codex, PR #257,
+        // the same shape as the arm-count read this branch used to sit
+        // beside). The poke is fire-and-forget and decides nothing here, so
+        // it goes through the seam every other record read uses, and the
+        // arm dispatches ahead of it.
         val previousGrants = locationGrantsRead
         val grants = LocationGrants(foregroundGranted, backgroundGranted)
         locationGrantsRead = grants
         val grantLanded = grants.risesFrom(previousGrants)
-        if (grantLanded && app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE && store.load() != null) {
-            SnoozeService.locationGranted(this)
+        if (grantLanded && app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE) {
+            val records = store
+            val context = applicationContext
+            runOffMainThread { if (records.load() != null) SnoozeService.locationGranted(context) }
         }
         return current
     }
@@ -3084,6 +3158,9 @@ class MainActivity : ComponentActivity() {
      */
     internal fun refreshAccessForTest(ruleMayHaveChanged: Boolean = true) =
         refreshAccess(ruleMayHaveChanged)
+
+    /** [refreshLocation] for a test: the reading a tap rides, taken on demand. */
+    internal fun refreshLocationForTest() = refreshLocation()
 
     /**
      * [applyAccess] for a test, as the newest reading: the real one lands
@@ -3594,7 +3671,30 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * The rows' `Until I leave`: put the cap back to its ceiling.
+     * Whether a tap on the offer to start's `Until I move` or `Until I leave`
+     * may go on to the arm path now.
+     *
+     * Those rows are drawn inert until this start's location reading exists
+     * (`locationArmable`), but that is the frame's knowledge: a tap
+     * dispatched from the last frame before `onStart` cleared the marker
+     * arrives with that frame's lambdas, and would ride a reading from
+     * before the stop — or fall to the lookup the arm path must not make
+     * (Codex, PR #257, the third finding here). So the marker is read live
+     * at the tap as well, and a tap ahead of this start's reading is
+     * dropped: the frame already on its way draws the rows gray, and the
+     * reading lands a frame after that. The time and meeting rows read no
+     * grant and are not held; over a running snooze there is no arm path to
+     * protect, and every tap goes through.
+     */
+    private fun idleTapMayArm(): Boolean {
+        if (!rows.startsASnooze || locationReadThisStart) return true
+        SnoozeDebugLog.event("tap: to start, ahead of this start's location reading; dropped")
+        return false
+    }
+
+    /**
+     * The rows' `Until I leave`: put the cap back to its ceiling — or, on the
+     * idle screen, start a snooze that runs to it (SPEC.md §4.4).
      *
      * Goes through the controller rather than starting the service directly,
      * so it gets the same commit lifecycle every other row has — inert rows
@@ -3632,6 +3732,31 @@ class MainActivity : ComponentActivity() {
     private var pendingLocationFor: Instant? = null
 
     /**
+     * [ActiveSnoozeStore.armCount] as of the record read that found nothing
+     * running — the read the idle offer is drawn from — so an arm from that
+     * offer can carry the count it was made over, and the service can refuse
+     * it once any arm has happened since (`SnoozeService.EXTRA_ARM_COUNT_AT_OFFER`).
+     * Read before the record in the same pass, so it never describes a later
+     * moment than the offer. The check itself lives in the service, where the
+     * store is already read on the arm path; this screen only carries the
+     * number, so nothing here reads the store on the main thread (Codex,
+     * PR #257). Saved and restored with the rows, since they come back
+     * ahead of the first record read and a time row can be tapped before it
+     * lands; the next read that finds nothing running refreshes it.
+     */
+    private var idleOfferArmCount: Long = 0L
+
+    /**
+     * [idleOfferArmCount] as of the pending tap, for a tap made over nothing
+     * running — the identity such a tap has, since it names no snooze. Saved
+     * with the action, so it survives a recreation with it, and put back
+     * into [idleOfferArmCount] when the tap resumes so the arm it sends
+     * carries the offer the tap was made on, not whatever this screen has
+     * read since.
+     */
+    private var pendingLocationArmCount: Long = 0L
+
+    /**
      * Whether the record read has landed at least once, whatever it found.
      *
      * `activeSnooze` is null in two different situations — before the first
@@ -3642,10 +3767,14 @@ class MainActivity : ComponentActivity() {
      */
     private var recordLoaded = false
 
-    /** A tap waiting on a location grant, and the snooze it was made on. */
+    /**
+     * A tap waiting on a location grant, and the snooze it was made on — or,
+     * for a tap made over nothing, the arm count its offer was drawn from.
+     */
     private data class PendingLocationTap(
         val action: PendingLocationAction,
         val forSnooze: Instant?,
+        val armCountAtOffer: Long,
     )
 
     /**
@@ -3667,19 +3796,53 @@ class MainActivity : ComponentActivity() {
      * into.
      */
     private fun requireLocationFor(action: PendingLocationAction): Boolean {
-        // The motion row's floor is either half of the runtime grant, and
-        // that is two package-manager cache hits — asked first, so a tap that
-        // already holds it goes straight to the service. `refreshLocation`
-        // is the full reading with its prompt-history writes, and on the
-        // idle screen this tap is the arm path (SPEC.md §6.9); it is still
-        // what decides between asking and pointing at Settings when the
-        // grant is not held, which is off that path (Codex, PR #256).
-        if (action == PendingLocationAction.MOTION_END && holdsAnyLocationGrant()) return true
+        // **The reading warmed before the tap decides, not a lookup made
+        // during it.** On the idle screen either row's tap is the arm path
+        // (SPEC.md §6.9), and a permission lookup is package-manager work
+        // between the tap and the rule going on — so the grant the engine
+        // can use is read from `location`, the reading every start refreshes
+        // after its first frame, which satisfies both rows' floors. A field
+        // read, nothing more, on the path that arms (Codex, PR #257).
+        //
+        // Stale in one direction only: a grant revoked in Settings while
+        // this reading stood. That trip backgrounds the app, so the next
+        // start re-reads before a tap can land; and a tap that slipped
+        // through would arm a snooze the engine degrades and says so, which
+        // is the safe failure. The other staleness — granted since the
+        // reading — falls through to the fresh read below and asks nothing.
+        // And a tap with no reading from *this start* does not reach the
+        // arm path at all: the two location rows are drawn inert until the
+        // reading exists (`locationArmable`), and [idleTapMayArm] drops the
+        // tap a stale frame can still deliver. The fresh read below is the
+        // ask-or-Settings decision, reached only by a tap the reading did
+        // not let through.
+        if (!idleTapMayArm()) return false
+        if (location == LocationPermission.GRANTED) return true
+        // The motion row's floor is lower — either half of the runtime
+        // grant, which `location` cannot see on its own — and that is a
+        // field of the same reading too, [anyLocationGrantHeld]: **one
+        // reading carries everything the arm path asks**, so no branch of
+        // it looks anything up. It did — a coarse-only grant was two
+        // permission lookups here, the one shape this gate exists to keep
+        // off the tap (Codex, PR #257, the second finding of that kind, so
+        // the fix is the reading rather than another cache).
+        // `refreshLocation` is that reading, with its prompt-history writes;
+        // it is still what decides between asking and pointing at Settings
+        // when the grant is not held, which is off the arm path (Codex,
+        // PR #256).
+        if (action == PendingLocationAction.MOTION_END && anyLocationGrantHeld) return true
         val permission = refreshLocation()
         if (satisfies(permission, action)) return true
         if (permission == LocationPermission.ASKABLE) {
             pendingLocationAction = action
             pendingLocationFor = activeSnooze?.startedAt
+            // What the tap was made over, for a tap made over nothing: the
+            // count the *offer* was drawn from, not the count now — the tile
+            // can have armed since the record read that drew these rows, and
+            // a count taken at the tap would then already include the snooze
+            // the tap has to be told about (Codex, PR #257). See
+            // [resumePendingLocationAction].
+            pendingLocationArmCount = if (activeSnooze == null) idleOfferArmCount else 0L
             beginLocationRequest()
         } else {
             // Asked as often as the system allows, so there is nothing left to
@@ -3712,10 +3875,20 @@ class MainActivity : ComponentActivity() {
     private fun satisfies(permission: LocationPermission, action: PendingLocationAction): Boolean =
         when (action) {
             PendingLocationAction.DEPARTURE -> permission == LocationPermission.GRANTED
-            PendingLocationAction.MOTION_END -> holdsAnyLocationGrant()
+            // Both callers have just taken the reading `permission` came
+            // from, and this is the other half of it.
+            PendingLocationAction.MOTION_END -> anyLocationGrantHeld
         }
 
-    /** Either half of the runtime location grant — the foreground service's own floor. */
+    /**
+     * Either half of the runtime location grant — the foreground service's
+     * own floor, and so `Until I move`'s — as of the last [refreshLocation].
+     * A field beside [location] for the same reason it is one: the motion
+     * row's tap reads it on the arm path, and reads nothing else.
+     */
+    private var anyLocationGrantHeld = false
+
+    /** Either half of the runtime location grant, looked up; [refreshLocation]'s read. */
     private fun holdsAnyLocationGrant(): Boolean =
         checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PERMISSION_GRANTED ||
             checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PERMISSION_GRANTED
@@ -3735,10 +3908,24 @@ class MainActivity : ComponentActivity() {
      * Silent to the user either way, since the row they are looking at is
      * already showing the running snooze's own truth. It goes to the debug
      * log, which is where a snooze that behaved unexpectedly gets explained.
+     *
+     * A tap made over nothing names no snooze, so the identity check here
+     * cannot see a snooze that came *and went* under the dialog: "nothing
+     * running" reads the same on both sides of it. That tap's identity is
+     * the store's arm count as of its offer instead, which every confirmed
+     * arm bumps and a clear keeps — and it travels *with the arm* for the service to
+     * check, rather than being checked here: the store is already read there
+     * on the arm path, and reading it here would put a preferences load on
+     * the main thread the first time after a recreation (Codex, PR #257,
+     * twice). Same outcome either way — the tap ends rather than starting a
+     * snooze on a moment that has passed (SPEC.md D7's direction) — whether
+     * the arm happened while this screen watched, while it was stopped
+     * behind Settings, or across a recreation.
      */
     private fun takePendingLocationTap(): PendingLocationTap? {
         val action = pendingLocationAction ?: return null
         val forSnooze = pendingLocationFor
+        val armCountAtOffer = pendingLocationArmCount
         pendingLocationAction = null
         pendingLocationFor = null
         // Only once the record is actually known — see [recordLoaded]. Until
@@ -3750,7 +3937,7 @@ class MainActivity : ComponentActivity() {
             SnoozeDebugLog.event("a tap waiting on location outlived its snooze; dropped")
             return null
         }
-        return PendingLocationTap(action, forSnooze)
+        return PendingLocationTap(action, forSnooze, armCountAtOffer)
     }
 
     /**
@@ -3767,6 +3954,30 @@ class MainActivity : ComponentActivity() {
             lastOutcome = getString(R.string.failure_needs_location)
             return
         }
+        // The commit goes out on the offer [rows] holds *now* — dispatch takes
+        // its identity from the controller — so the tap has to have been made
+        // on that offer, exactly as a direct tap is matched in [onDrawnOffer].
+        // The check in [takePendingLocationTap] waits for the record; this
+        // one does not need to, and that is the gap it closes: before a
+        // recreated screen's first record read, `rows` is whatever was
+        // saved, and it can have moved onto a snooze the tile armed while the
+        // tap waited — a tap made over nothing would then go out as a
+        // *refinement* of that snooze, `Until I leave` putting its cap back
+        // to the ceiling, past the count the arm path checks, because the
+        // lambda branches on the controller's identity rather than the
+        // tap's (Codex, PR #257). Dropped, since the rows on screen already
+        // show the snooze the user would be refining.
+        if (tap.forSnooze != rows.offerFor) {
+            SnoozeDebugLog.event("a tap waiting on location was made on an offer the rows no longer hold; dropped")
+            return
+        }
+        // The arm a resumed tap sends carries the offer the tap was made on,
+        // not the one this screen has read since: the count went into the
+        // pending tap at the ask, and comes back out here for the commit
+        // lambdas to read. Synchronous through to the send, so no record
+        // read lands in between; the next one that finds nothing running
+        // puts the current count back.
+        if (tap.forSnooze == null) idleOfferArmCount = tap.armCountAtOffer
         when (tap.action) {
             PendingLocationAction.DEPARTURE -> rows.commitDeparture()
             PendingLocationAction.MOTION_END -> rows.commitMotionEnd()

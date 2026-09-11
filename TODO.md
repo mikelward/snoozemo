@@ -4724,10 +4724,11 @@ Nothing here is scheduled; each is a sequel that follows from something already 
 - [x] **Move `Snooze now` to the footer, and offer the `Until …` rows when idle**
       (maintainer, 2026-09-10). Two halves of one restructure, both the maintainer's
       call. **Landed 2026-09-10**: `Snooze` shares the pinned footer slot with `End now`,
-      the idle screen carries the time row and steppers, the meeting rows and
-      `Until I move` — no `Until I leave`, since the pinned `Snooze` is that choice — and
-      each arms in one tap through `SnoozeService.armUntil` / `armUntilMotion`, reported
-      to the rows on simpler terms than a refinement (`SPEC.md` §4.4). The label stays
+      the idle screen carries the time row and steppers, the meeting rows, `Until I move`
+      and — since 2026-09-11, reversing the first cut's "the pinned `Snooze` is that
+      choice" — `Until I leave`, and each arms in one tap through
+      `SnoozeService.armUntil` / `armUntilMotion` / `armUntilDeparture`, reported to the
+      rows on simpler terms than a refinement (`SPEC.md` §4.4). The label stays
       `Snooze`; a rewording is the maintainer's copy to approve. What is left is the device
       pass the pinned-exit entry above already owes.
       - **`Snooze now` pinned beside `End now`**, only one of the two showing at a
@@ -4746,6 +4747,17 @@ Nothing here is scheduled; each is a sequel that follows from something already 
         when nothing is running, so they come from the clock, the settings' default
         cap and the calendar; and the arm path's guarantee still governs (`SPEC.md`
         §4.1, §6.9): a row that arms must not wait on anything.
+- [ ] **Decide what the pinned `Snooze` is for** (maintainer, 2026-09-11, undecided). With
+      `Until I leave` on the idle screen too, the footer's `Snooze` is the same arm as that row —
+      a duplicate control, not a distinct choice. Three ways it could go: **remove it**, so the
+      idle screen is the rows and `End now` alone keeps the pinned slot while running; **keep
+      it** as the plain arm and accept the redundancy; or **make it configurable** — `Snooze`
+      means *until I leave* / *until I move* / a duration, chosen once in Settings. The
+      maintainer leans configurable, for symmetry with the Quick Settings tile: the tile is
+      where a one-tap default earns its keep, and the same setting would give both the button
+      and the tile the user's usual choice. Not decided; nothing built. If it goes the
+      configurable way it is a settings row, copy to approve, and the tile's arm reading the
+      setting (§4.2, D9) — a product decision, not one to take on autopilot.
 - [ ] **Does `When I move` fire usefully, or too eagerly?** The on-device question this
       shipped to answer (`SPEC.md` §4.4), and the one that decides whether it stays.
       Arm a snooze with the row on, sit through a real meeting, and record what happens:

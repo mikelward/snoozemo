@@ -12,6 +12,7 @@ import androidx.test.core.app.ApplicationProvider
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.Anchor
 import app.snoozemo.core.PolicyAccess
+import app.snoozemo.core.SnoozeLifecycle
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.snooze.ActiveSnoozeStore
 import app.snoozemo.snooze.EndChoiceOutcome
@@ -19,6 +20,7 @@ import app.snoozemo.snooze.EndChoiceResult
 import app.snoozemo.snooze.SnoozeService
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -62,6 +64,12 @@ class MainActivityEndRowsTest {
             capExpiresAt = startedAt.plus(capIn),
             mode = TrackingMode.DURATION_ONLY,
         )
+
+    /**
+     * A snooze whose rule went on — what "came and went" means to the arm
+     * count, which an `ARMING` record the arm path abandoned never moves.
+     */
+    private fun confirmedSnooze() = snooze().copy(lifecycle = SnoozeLifecycle.ARMED)
 
     /**
      * The record read runs inline, so each test asserts on a settled state
@@ -145,6 +153,30 @@ class MainActivityEndRowsTest {
     }
 
     @Test
+    fun `the idle offer's count survives a recreation, for a time row tapped before the first read`() {
+        // The rows are restored ahead of the recreated screen's record read,
+        // and the time row needs no reading to be tapped — so the count the
+        // arm carries has to come back with the rows, or a tap in that
+        // window would send zero and be refused for an offer that is fine
+        // (Codex, PR #257).
+        ActiveSnoozeStore(context).clear()
+        ActiveSnoozeStore(context).arm(confirmedSnooze())
+        ActiveSnoozeStore(context).clear()
+        val expected = ActiveSnoozeStore(context).armCount()
+        assertTrue("the setup this rests on: a count a zero would not match", expected > 0L)
+        val controller = controller()
+        settle()
+
+        controller.recreate()
+        // No `settle()`: the recreated screen's record read is still posted.
+        forgetServiceStarts()
+        val activity = controller.get()
+        activity.rows.commit(activity.rows.endCondition!!.endsAt)
+
+        assertEquals(expected, sentArm()?.getLongExtra(SnoozeService.EXTRA_ARM_COUNT_AT_OFFER, -1L))
+    }
+
+    @Test
     fun `a stepper on the idle screen starts a snooze at the stepped time`() {
         // Every tap on the idle screen starts (maintainer, 2026-09-10): `−`
         // and `+` arm at the stepped time rather than moving a row the user
@@ -207,6 +239,430 @@ class MainActivityEndRowsTest {
         assertNotNull("an arm, not a choice over a snooze that does not exist", arm)
         assertTrue(arm!!.getBooleanExtra(SnoozeService.EXTRA_ENDS_ON_MOTION, false))
         assertFalse(sentMotionEnd())
+    }
+
+    @Test
+    fun `until I leave on the idle screen starts the plain snooze`() {
+        // The same location gate the running row has, then the arm the
+        // pinned `Snooze` makes — nothing chosen, so no cap and no motion
+        // extra — carrying the row's request (maintainer, 2026-09-11).
+        shadowApp().grantPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+        )
+        ActiveSnoozeStore(context).clear()
+        val activity = screen()
+        settle()
+        forgetServiceStarts()
+
+        activity.chooseDepartureFromScreen()
+        settle()
+
+        val arm = sentArm()
+        assertNotNull("an arm, not a restore over a snooze that does not exist", arm)
+        assertEquals(0L, arm!!.getLongExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, 0L))
+        assertFalse(arm.getBooleanExtra(SnoozeService.EXTRA_ENDS_ON_MOTION, false))
+        assertTrue("the row hears the answer", arm.getLongExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, 0L) != 0L)
+        assertEquals(
+            "carrying the offer's identity, which nothing has moved",
+            ActiveSnoozeStore(context).armCount(),
+            arm.getLongExtra(SnoozeService.EXTRA_ARM_COUNT_AT_OFFER, -1L),
+        )
+        assertTrue("and the rows wait on it", activity.rows.committing)
+        assertFalse(sentDeparture())
+    }
+
+    @Test
+    fun `an idle tap waiting on location arms once the grant lands`() {
+        // The positive half of the ones below: nothing moved under the tap,
+        // so the grant replays it and the arm goes out carrying a count the
+        // store still agrees with.
+        ActiveSnoozeStore(context).clear()
+        val activity = screen()
+        settle()
+        activity.chooseDepartureFromScreen()
+        settle()
+        forgetServiceStarts()
+        shadowApp().grantPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+        )
+        activity.onForegroundLocationResult(fineGranted = true)
+        settle()
+
+        val arm = sentArm()
+        assertNotNull("the tap the user made before the dialog was replayed", arm)
+        assertEquals(
+            ActiveSnoozeStore(context).armCount(),
+            arm!!.getLongExtra(SnoozeService.EXTRA_ARM_COUNT_AT_OFFER, -1L),
+        )
+    }
+
+    @Test
+    fun `an idle tap resumed over rows that moved onto a snooze is dropped, not sent as its refinement`() {
+        // The tile arms while the tap waits; the observer moves the rows onto
+        // that snooze; a rotation saves them so. The grant then lands before
+        // the recreated screen's record read, which is the one moment the
+        // identity check has to let a tap over nothing through — and the
+        // commit would take the controller's identity, going out as
+        // `Until I leave` over the tile's snooze, restoring a cap the user
+        // never touched, past the count the arm path checks (Codex, PR #257).
+        ActiveSnoozeStore(context).clear()
+        val controller = controller()
+        settle()
+        controller.get().chooseDepartureFromScreen()
+        settle()
+        ActiveSnoozeStore(context).arm(confirmedSnooze())
+        settle()
+        assertNotNull("the setup this rests on: the rows moved on", controller.get().rows.offerFor)
+
+        controller.recreate()
+        // No `settle()`: the recreated screen's record read is still posted.
+        forgetServiceStarts()
+        shadowApp().grantPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+        )
+        controller.get().onForegroundLocationResult(fineGranted = true)
+
+        assertFalse("not a refinement of the tile's snooze", sentDeparture())
+        assertNull("and not an arm", sentArm())
+        assertFalse(controller.get().rows.committing)
+    }
+
+    @Test
+    fun `a grant resumes the waiting tap ahead of the record read it also makes`() {
+        // The reading a grant lands through also pokes the monitor, which
+        // reads the record — and after a cold recreation that first read is
+        // the preferences file loading. It runs off the main thread, so the
+        // arm goes out before it rather than behind it (Codex, PR #257).
+        // Pinned by holding the off-thread work back and looking at what
+        // was sent in the meantime.
+        ActiveSnoozeStore(context).clear()
+        val activity = screen()
+        settle()
+        activity.chooseDepartureFromScreen()
+        settle()
+        forgetServiceStarts()
+        val heldBack = mutableListOf<() -> Unit>()
+        activity.runOffMainThread = { work -> heldBack += work }
+        shadowApp().grantPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+        )
+
+        activity.onForegroundLocationResult(fineGranted = true)
+
+        assertNotNull("the arm went out with the record read still held back", sentArm())
+        // The poke, and so its read, exists only on a build whose monitor
+        // reads location; `direct` schedules nothing here, and the arm
+        // going out first is what this pins on both.
+        if (app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE) {
+            assertTrue("the setup this rests on: there was a read to hold back", heldBack.isNotEmpty())
+        }
+        heldBack.forEach { it() }
+    }
+
+    /**
+     * The arm a resumed idle tap sent, which has to carry [countAtOffer] —
+     * the store's arm count as the offer was drawn — while the store itself
+     * has moved on; the service refuses exactly that pair
+     * (`SnoozeServiceArmChoiceTest`). The screen sends rather than drops,
+     * because dropping would mean reading the store on the main thread
+     * (Codex, PR #257).
+     */
+    private fun assertArmCarriesStaleOffer(countAtOffer: Long) {
+        val arm = sentArm()
+        assertNotNull("the tap goes out for the service to judge", arm)
+        assertEquals(
+            "carrying the count the offer was drawn from",
+            countAtOffer,
+            arm!!.getLongExtra(SnoozeService.EXTRA_ARM_COUNT_AT_OFFER, -1L),
+        )
+        assertNotEquals("which the store has moved past", countAtOffer, ActiveSnoozeStore(context).armCount())
+    }
+
+    @Test
+    fun `an idle tap waiting on location is dropped once a snooze has come and gone`() {
+        // The tap carries no snooze identity — it was made over nothing — and
+        // "nothing" is what the record reads again after the tile armed a
+        // snooze and it ended under the dialog. Replaying it as a plain arm
+        // would start a snooze over a screen the user last saw quiet (Codex,
+        // PR #257): the tap's identity is the store's arm count as of its
+        // offer instead, and the arm carries it for the service to refuse.
+        ActiveSnoozeStore(context).clear()
+        val countAtOffer = ActiveSnoozeStore(context).armCount()
+        val activity = screen()
+        settle()
+        activity.chooseDepartureFromScreen()
+        settle()
+
+        ActiveSnoozeStore(context).arm(confirmedSnooze())
+        settle()
+        ActiveSnoozeStore(context).clear()
+        settle()
+        forgetServiceStarts()
+        shadowApp().grantPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+        )
+        activity.onForegroundLocationResult(fineGranted = true)
+        settle()
+
+        assertArmCarriesStaleOffer(countAtOffer)
+    }
+
+    @Test
+    fun `an idle tap carries its offer past a snooze that came and went while the screen was stopped`() {
+        // Background-location Settings is a full screen, so the tap can wait
+        // behind a stop — and a stopped screen watches no record changes.
+        // The restart's own record read finds nothing running and takes the
+        // count as it stands now; the resumed tap still sends the count its
+        // offer was drawn from, which is the one the service refuses
+        // (Codex, PR #257).
+        ActiveSnoozeStore(context).clear()
+        val countAtOffer = ActiveSnoozeStore(context).armCount()
+        val controller = controller()
+        settle()
+        controller.get().chooseDepartureFromScreen()
+        settle()
+
+        controller.stop()
+        ActiveSnoozeStore(context).arm(confirmedSnooze())
+        ActiveSnoozeStore(context).clear()
+        controller.start()
+        forgetServiceStarts()
+        shadowApp().grantPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+        )
+        controller.get().onForegroundLocationResult(fineGranted = true)
+        settle()
+
+        assertArmCarriesStaleOffer(countAtOffer)
+    }
+
+    @Test
+    fun `an idle tap carries the count its offer was drawn from, not the count at the tap`() {
+        // The tile can arm between the record read that drew the idle rows
+        // and the tap on them — the observer's refresh has not run yet — and
+        // a count taken at the tap would already include that snooze. Its
+        // ending then leaves the count where the tap found it, and the arm
+        // would pass the service's check (Codex, PR #257). The count rides
+        // the offer.
+        ActiveSnoozeStore(context).clear()
+        val countAtOffer = ActiveSnoozeStore(context).armCount()
+        val activity = screen()
+        settle()
+        // Armed off the main thread — the tile's arm lands from the service
+        // — so the store's change notification is posted rather than run in
+        // place, and the observer's refresh is still queued: the rows the
+        // user sees are the idle ones.
+        Thread { ActiveSnoozeStore(context).arm(confirmedSnooze()) }.apply { start(); join() }
+        assertTrue("the setup this rests on", activity.rows.startsASnooze)
+        activity.chooseDepartureFromScreen()
+
+        ActiveSnoozeStore(context).clear()
+        settle()
+        forgetServiceStarts()
+        shadowApp().grantPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+        )
+        activity.onForegroundLocationResult(fineGranted = true)
+        settle()
+
+        assertArmCarriesStaleOffer(countAtOffer)
+    }
+
+    @Test
+    fun `an idle tap's arm count rides the saved state across a recreation`() {
+        // The identity the tap carries has to survive what the pending action
+        // survives, or a rotation under the dialog would forget what the tap
+        // was made over and send whatever the new screen read instead.
+        ActiveSnoozeStore(context).clear()
+        val countAtOffer = ActiveSnoozeStore(context).armCount()
+        val controller = controller()
+        settle()
+        controller.get().chooseDepartureFromScreen()
+        settle()
+
+        controller.recreate()
+        settle()
+        ActiveSnoozeStore(context).arm(confirmedSnooze())
+        ActiveSnoozeStore(context).clear()
+        settle()
+        forgetServiceStarts()
+        shadowApp().grantPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+        )
+        controller.get().onForegroundLocationResult(fineGranted = true)
+        settle()
+
+        assertArmCarriesStaleOffer(countAtOffer)
+    }
+
+    @Test
+    fun `a tap to start ahead of this start's location reading is dropped, not armed on the last one`() {
+        // The location rows are drawn inert until the reading exists, but a
+        // tap dispatched from the frame before `onStart` cleared the marker
+        // arrives with that frame's lambdas — so the marker is read again at
+        // the tap (Codex, PR #257).
+        shadowApp().grantPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+        )
+        ActiveSnoozeStore(context).clear()
+        val controller = controller()
+        settle()
+        val activity = controller.get()
+        assertTrue("the setup this rests on: read once", activity.idleOfferArmableForTest)
+        controller.stop().start()
+        assertFalse("and cleared by the restart", activity.idleOfferArmableForTest)
+        forgetServiceStarts()
+
+        activity.chooseDepartureFromScreen()
+        activity.chooseMotionEndFromScreen()
+        settle()
+
+        assertNull("nothing armed on the reading from before the stop", sentArm())
+        assertFalse(activity.rows.committing)
+
+        // That idle ran the restart's own reading; the same tap goes out now.
+        assertTrue(activity.idleOfferArmableForTest)
+        activity.chooseDepartureFromScreen()
+        settle()
+
+        assertNotNull("and the same tap goes out once this start has read the grant", sentArm())
+    }
+
+    @Test
+    fun `a time row to start needs no reading and is not held for one`() {
+        // Only the two location rows wait on the reading: a time arms
+        // without any grant, so holding it for a frame would drop a tap it
+        // was entitled to (Codex, PR #257). Same stale frame as above.
+        ActiveSnoozeStore(context).clear()
+        val controller = controller()
+        settle()
+        val activity = controller.get()
+        controller.stop().start()
+        assertFalse("the setup this rests on", activity.idleOfferArmableForTest)
+        // The offer as the frame before the stop drew it: still the
+        // controller's, so nothing about the offer drops the tap.
+        val drawn = EndChoiceUiState(
+            condition = activity.rows.endCondition!!,
+            formattedTime = "",
+            startsASnooze = true,
+            locationArmable = true,
+        )
+        forgetServiceStarts()
+
+        activity.chooseEndTimeFromScreen(drawn)
+        settle()
+
+        assertEquals(
+            drawn.condition.endsAt.toEpochMilli(),
+            sentArm()?.getLongExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, 0L),
+        )
+    }
+
+    @Test
+    fun `until I move on the idle screen rides the warmed reading too, not a lookup made during it`() {
+        // The motion row's floor is the lower one — either half of the
+        // grant — and `location` alone cannot see it, so it used to be two
+        // permission lookups on the arm path. It is a field of the same
+        // reading now: shown, as for `Until I leave`, by taking the grant
+        // away *after* the reading (Codex, PR #257).
+        shadowApp().grantPermissions(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+        ActiveSnoozeStore(context).clear()
+        val activity = screen()
+        settle()
+        shadowApp().denyPermissions(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+        forgetServiceStarts()
+
+        activity.chooseMotionEndFromScreen()
+        settle()
+
+        val arm = sentArm()
+        assertNotNull(arm)
+        assertTrue(arm!!.getBooleanExtra(SnoozeService.EXTRA_ENDS_ON_MOTION, false))
+    }
+
+    @Test
+    fun `the offer to start's location rows are armable only once this start has read the grant`() {
+        // A reading from before a stop is not one an arm may ride: Settings
+        // may have moved the grant behind it, and a tap on the stale reading
+        // would fall to the lookup branch on the arm path (Codex, PR #257).
+        ActiveSnoozeStore(context).clear()
+        val controller = controller()
+        val activity = controller.get()
+        settle()
+        // Robolectric's `setup()` runs the first frame in place, so the
+        // reading is taken by the time it returns and the inert frame after
+        // a *first* start is not observable here; the restart is, since its
+        // frame waits for the looper idle.
+        assertTrue("read on the frame after the start", activity.idleOfferArmableForTest)
+
+        controller.stop().start()
+
+        assertFalse("a reading from before the stop does not count", activity.idleOfferArmableForTest)
+        settle()
+        assertTrue("until the restart's own lands", activity.idleOfferArmableForTest)
+    }
+
+    @Test
+    fun `an idle tap rides the reading warmed before it, not a lookup made during it`() {
+        // The arm path looks nothing up (SPEC.md §6.9): the reading every
+        // start refreshes is what lets the tap through. Shown by taking the
+        // grant away *after* the reading — a lookup would refuse, the reading
+        // does not, and the engine degrades and says so if that ever happens
+        // for real (Codex, PR #257).
+        shadowApp().grantPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+        )
+        ActiveSnoozeStore(context).clear()
+        val activity = screen()
+        settle()
+        activity.refreshLocationForTest()
+        shadowApp().denyPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION,
+            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+        )
+        forgetServiceStarts()
+
+        activity.chooseDepartureFromScreen()
+        settle()
+
+        assertNotNull(sentArm())
+    }
+
+    @Test
+    fun `until I leave on the idle screen asks for location rather than arming without it`() {
+        // A departure nothing can watch for is not what the row names: with
+        // no grant the tap asks, and nothing is armed until it lands.
+        ActiveSnoozeStore(context).clear()
+        val activity = screen()
+        settle()
+        forgetServiceStarts()
+
+        activity.chooseDepartureFromScreen()
+        settle()
+
+        assertNull(sentArm())
+        assertFalse(activity.rows.committing)
     }
 
     @Test

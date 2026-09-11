@@ -323,8 +323,7 @@ open class ActiveSnoozeStore(
      * An arm and not an update, so it clears the markers an earlier snooze may
      * have left behind — see [update] for why the two are different writes.
      */
-    fun arm(snooze: ActiveSnooze): Boolean =
-        prefs.edit().putAll(snooze, allowLookup = true, newArm = true).commit()
+    fun arm(snooze: ActiveSnooze): Boolean = write(snooze, allowLookup = true, newArm = true)
 
     /**
      * Rewrites a **live** record — a clock-frame rebase, an extension, a
@@ -344,13 +343,67 @@ open class ActiveSnoozeStore(
     // `open` for the seam in `SnoozeService`: a `commit()` to SharedPreferences
     // always succeeds under Robolectric, so a refused record write — and what
     // the service does about one — is otherwise unreachable by any test.
-    open fun update(snooze: ActiveSnooze): Boolean =
-        prefs.edit().putAll(snooze, allowLookup = true, newArm = false).commit()
+    open fun update(snooze: ActiveSnooze): Boolean = write(snooze, allowLookup = true, newArm = false)
+
+    /**
+     * The durable write behind [arm] and [update]: the record, and the arm
+     * count where this write confirms a snooze — put back if the write did
+     * not land.
+     *
+     * `commit` applies the editor to the in-process map *before* the disk
+     * write it reports on, so a refused commit leaves memory holding the new
+     * record and the moved count while the caller is told neither landed.
+     * The record the caller unwinds; the count it cannot see, and a count
+     * moved by a confirmation that never reached disk would end a tap
+     * waiting on its location grant over a snooze the user never saw
+     * (Codex, PR #257, the third finding in this mechanism — a count kept
+     * *in* the record's own file, in the same commit, was chosen over any
+     * separate write for exactly the failure this rolls back, so the
+     * rollback is the design's own cost rather than a reason to move it).
+     */
+    private fun write(snooze: ActiveSnooze, allowLookup: Boolean, newArm: Boolean): Boolean {
+        val stored = state().lifecycle
+        val before = armCount()
+        if (persist(prefs.edit().putAll(snooze, allowLookup, newArm, stored))) return true
+        if (confirms(snooze, newArm, stored)) {
+            // What this puts back is the in-process count, which is what the
+            // next read in this process sees; its own result is deliberately
+            // not read, since the disk that just refused is the one it
+            // reports on, and the disk holds no moved count either way. The
+            // map it carries down includes the record the caller has been
+            // told did not land — the safer half of that pair, since a record
+            // with a cap bounds a rule the unwind fails to turn off, and no
+            // record would not (SPEC.md §7).
+            prefs.edit().putLong(KEY_ARM_COUNT, before).commit()
+        }
+        return false
+    }
+
+    /**
+     * The disk write proper, reported as `commit` reports it. A seam so a
+     * test can have it refuse: a `commit()` to SharedPreferences always
+     * succeeds under Robolectric.
+     */
+    internal open fun persist(editor: SharedPreferences.Editor): Boolean = editor.commit()
+
+    /**
+     * Whether a write of [snooze] over a record at [stored] confirms a
+     * snooze — first records the rule as on — and so moves the arm count.
+     */
+    private fun confirms(snooze: ActiveSnooze, newArm: Boolean, stored: SnoozeLifecycle): Boolean =
+        snooze.lifecycle >= SnoozeLifecycle.ARMED && (newArm || stored == SnoozeLifecycle.ARMING)
 
     private fun SharedPreferences.Editor.putAll(
         snooze: ActiveSnooze,
         allowLookup: Boolean,
         newArm: Boolean,
+    ): SharedPreferences.Editor = putAll(snooze, allowLookup, newArm, stored = state().lifecycle)
+
+    private fun SharedPreferences.Editor.putAll(
+        snooze: ActiveSnooze,
+        allowLookup: Boolean,
+        newArm: Boolean,
+        stored: SnoozeLifecycle,
     ): SharedPreferences.Editor = this
         // A new snooze clears any marker left by one whose erase failed —
         // otherwise this record would be born already invisible to [load] —
@@ -359,13 +412,26 @@ open class ActiveSnoozeStore(
         // may belong to a release of *this* snooze that is still in flight.
         .apply {
             if (newArm) remove(KEY_RELEASING_REASON)
+            // Counted with the record, in the same commit — the count is
+            // what tells a tap made over "nothing running" that a snooze has
+            // since come and gone, so it must not persist apart from the
+            // write it counts — and counted **at confirmation**: the write
+            // that first records the rule as on, whether the arm that made
+            // it (`arm` after the zen write; [armAsync] writes `ARMING` and
+            // counts nothing) or a restore finishing an `ARMING` record. An
+            // arm the zen or record write refused leaves an `ARMING` record
+            // that is cleared again, and no snooze the user could have seen
+            // came or went — so it must not end an offer made before it
+            // (Codex, PR #257, twice); [write] puts the count back when the
+            // confirming commit itself is refused.
+            if (confirms(snooze, newArm, stored)) putLong(KEY_ARM_COUNT, armCount() + 1)
         }
         // Promoted, never demoted, unless this is a new arm — the rule the
         // lifecycle's ordering exists to enforce, applied at the one point
         // records reach disk rather than in each caller's head.
         .putString(
             KEY_LIFECYCLE,
-            (if (newArm) snooze.lifecycle else maxOf(snooze.lifecycle, state().lifecycle)).name,
+            (if (newArm) snooze.lifecycle else maxOf(snooze.lifecycle, stored)).name,
         )
         .putLong(KEY_STARTED_AT, snooze.startedAt.toEpochMilli())
         .putLong(KEY_CAP_EXPIRES_AT, snooze.capExpiresAt.toEpochMilli())
@@ -586,7 +652,18 @@ open class ActiveSnoozeStore(
      * the cap alarm armed on a false, so even a stale record is bounded by the
      * original cap rather than being open-ended.
      */
-    fun clear(): Boolean = prefs.edit().clear().commit()
+    /**
+     * How many snoozes have ever been **confirmed** on this device — the rule
+     * recorded as on, so a snooze the user could have seen — the one thing
+     * that survives [clear], since its whole use is to say whether a snooze
+     * came and went while nobody was watching (see `MainActivity`'s pending
+     * location tap and `SnoozeService.EXTRA_ARM_COUNT_AT_OFFER`). An arm that
+     * was refused before confirmation never counts. Reads as zero on a fresh
+     * install and after a wipe.
+     */
+    fun armCount(): Long = prefs.getLong(KEY_ARM_COUNT, 0L)
+
+    fun clear(): Boolean = prefs.edit().clear().putLong(KEY_ARM_COUNT, armCount()).commit()
 
     /**
      * Calls [onChange] whenever the record changes, until the returned handle is
@@ -615,6 +692,7 @@ open class ActiveSnoozeStore(
         const val TAG = "ActiveSnoozeStore"
         const val FILE_NAME = "active_snooze"
         const val KEY_STARTED_AT = "started_at"
+        const val KEY_ARM_COUNT = "arm_count"
         const val KEY_LIFECYCLE = "lifecycle"
         const val KEY_RELEASED = "released"
         const val KEY_RELEASING_REASON = "releasing_reason"

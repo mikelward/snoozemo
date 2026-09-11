@@ -330,8 +330,9 @@ internal class EndChoiceController(
         // way. Whatever ended it has posted its own card.
         //
         // For an offer that starts a snooze the two mean the same simpler
-        // thing — a snooze is running now, so this offer is over — and the
-        // host's dismissal re-reads the record that replaces it.
+        // thing — this offer is over: a snooze is running now, or one came
+        // and went since the offer was drawn — and the host's dismissal
+        // re-reads the record that says which, and draws what there is.
         if (result != EndChoiceResult.REFUSED) {
             dismiss()
             return
