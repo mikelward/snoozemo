@@ -398,6 +398,10 @@ internal fun MainScreen(
                     locationRowsEnabled = choice.locationArmable,
                     failed = choice.failed,
                     tracksDeparture = choice.tracksDeparture,
+                    // What `Until I leave`'s card names: only the signals this
+                    // snooze actually has (SPEC.md §4.4).
+                    departureUsesWifi = choice.departureUsesWifi,
+                    departureUsesArea = choice.departureUsesArea,
                     // Inside the group, as one of the *whens* (maintainer,
                     // 2026-09-10). It sat outside as a switch that had to
                     // outlive the time offers; as a choice it has nothing to

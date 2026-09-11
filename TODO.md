@@ -7705,6 +7705,42 @@ what sets it off.
   that fix. The seam is worth having for the recovery branch's own behavior, which is a
   bigger and better-motivated piece of work than the ordering that surfaced it.
 
+## Deferred review findings (Codex, PR #261)
+
+- [ ] **`Until I leave`'s card claims more than the engine does under `FULL`** (Codex, PR
+  #261; **wording kept as written**, maintainer, 2026-09-11). The card reads "Ends when you
+  leave the current Wi-Fi and area" whenever the snooze has both signals. Under `FULL` the
+  Wi-Fi is not an end condition at all, so the sentence is broader than the mechanism in
+  both directions — it implies you must leave both, and it implies leaving the network
+  counts on its own.
+
+  Verified, twice over:
+
+  - `Presence.escalate` takes a fix on a geofence exit **even while the anchor SSID is
+    associated** ("the two subsystems disagreeing is exactly when a fix is worth taking"),
+    and `DepartureVerdict.DEPARTED -> departed(accepted, anchor)` neither clears nor
+    consults the association. A `FULL` snooze can therefore end with the phone still on the
+    network.
+  - `Presence.graceFrom`'s `anchor.hasUsableFix && state.degradation == null -> null` arms
+    no grace deadline for a healthy `FULL` snooze, so Wi-Fi loss cannot end one either — it
+    escalates to a check that a fix then settles. `SPEC.md` D4 states it: *"Never end a
+    snooze on Wi-Fi loss alone"*, and §6.3 has Wi-Fi as a power-saving suppressor and an
+    escalation hint, "never as the thing that ends a snooze".
+
+  The accurate mapping would be two forms rather than three — `FULL` → "Ends when you leave
+  the current area", `WIFI_ONLY`/`WIFI_GRACE` → "Ends when you leave the current Wi-Fi" —
+  and the "Wi-Fi and area" sentence would never appear.
+
+  **Not changed, deliberately.** The copy is the maintainer's and they confirmed it twice.
+  The error is in the conservative direction for principle 1: the card names a more
+  demanding condition than the engine enforces, so a snooze ends *sooner* than the sentence
+  implies, never later. What it costs is precision for the reader whose snooze ended while
+  they were still on their Wi-Fi — the reader most likely to have opened the card. Revisit
+  with the mapping above if that ever turns up in a real report.
+
+  The narrowing that *did* ship stands: whichever signal the snooze does not have comes out
+  of the sentence (`departureSignals`, `SPEC.md` §4.4).
+
 ## Deferred review findings (Codex, PR #229)
 
 - [x] **The anchor-Wi-Fi level has drawn four findings, and the fourth says the class is

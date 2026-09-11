@@ -24,13 +24,23 @@ class EndChoiceUiStateTest {
 
     private val now: Instant = Instant.parse("2026-09-08T12:00:00Z")
 
+    /** An anchor with both signals: a fix precise enough to test, and an SSID. */
+    private fun bothSignals(at: Instant = now) = Anchor(
+        capturedAt = at,
+        lat = 0.0,
+        lon = 0.0,
+        fixAccuracyM = 25f,
+        ssid = "ExampleWifi",
+    )
+
     private fun snooze(
         startedAt: Instant = now,
         capIn: Duration = ActiveSnooze.DEFAULT_CAP,
         mode: TrackingMode = TrackingMode.FULL,
         endsOnMotion: Boolean = false,
+        anchor: Anchor = Anchor(capturedAt = startedAt, ssid = "ExampleWifi"),
     ) = ActiveSnooze(
-        anchor = Anchor(capturedAt = startedAt, ssid = "ExampleWifi"),
+        anchor = anchor,
         startedAt = startedAt,
         capExpiresAt = startedAt.plus(capIn),
         mode = mode,
@@ -75,6 +85,84 @@ class EndChoiceUiStateTest {
                 format = { "" },
             ),
         )
+    }
+
+    // `Until I leave`'s card names only the signals the snooze actually has
+    // (SPEC.md §4.4). Asserted in every direction, because each wrong answer
+    // is a sentence that reads fine and is false about this snooze.
+
+    @Test
+    fun `both signals name both`() {
+        val state = state(snooze(anchor = bothSignals()))!!
+        assertTrue(state.departureUsesWifi)
+        assertTrue(state.departureUsesArea)
+    }
+
+    @Test
+    fun `an anchor with no network names only the area`() {
+        val state = state(snooze(anchor = bothSignals().copy(ssid = null)))!!
+        assertFalse(state.departureUsesWifi)
+        assertTrue(state.departureUsesArea)
+    }
+
+    @Test
+    fun `an anchor with no usable fix names only the Wi-Fi`() {
+        // A fix this vague cannot distinguish leaving from standing still, so
+        // the SSID is doing the whole job.
+        val vague = bothSignals().copy(fixAccuracyM = 5_000f)
+        assertFalse(vague.hasUsableFix)
+        val state = state(snooze(anchor = vague, mode = TrackingMode.WIFI_ONLY))!!
+        assertTrue(state.departureUsesWifi)
+        assertFalse(state.departureUsesArea)
+    }
+
+    @Test
+    fun `a degraded snooze stops naming the area its anchor still carries`() {
+        // The anchor is captured once and never rewritten, so it still has a
+        // usable fix long after location stopped producing them and
+        // `modeFor` lowered the snooze to WIFI_ONLY. Reading the anchor alone
+        // would go on claiming the area while only Wi-Fi can end this snooze
+        // (Codex, PR #261).
+        val anchor = bothSignals()
+        assertTrue(anchor.hasUsableFix)
+        val state = state(snooze(anchor = anchor, mode = TrackingMode.WIFI_ONLY))!!
+        assertTrue(state.departureUsesWifi)
+        assertFalse(state.departureUsesArea)
+    }
+
+    @Test
+    fun `a grace period names the Wi-Fi that is bounding it`() {
+        val state = state(snooze(anchor = bothSignals(), mode = TrackingMode.WIFI_GRACE))!!
+        assertTrue(state.departureUsesWifi)
+        assertFalse(state.departureUsesArea)
+    }
+
+    @Test
+    fun `a settling snooze names both rather than narrowing mid-capture`() {
+        // Nothing determined yet. Narrowing here would flip the sentence as
+        // the fix landed, a few seconds after the card was opened; the row's
+        // own gate is what keeps a snooze that really has neither from
+        // reaching this card at all.
+        val settling = Anchor(capturedAt = now)
+        assertFalse(settling.hasUsableFix)
+        val state = state(snooze(anchor = settling, mode = TrackingMode.SETTLING))!!
+        assertTrue(state.departureUsesWifi)
+        assertTrue(state.departureUsesArea)
+    }
+
+    @Test
+    fun `a settling snooze that already has its SSID still names both`() {
+        val settling = Anchor(capturedAt = now, ssid = "ExampleWifi")
+        val state = state(snooze(anchor = settling, mode = TrackingMode.SETTLING))!!
+        assertTrue(state.departureUsesWifi)
+        assertTrue(state.departureUsesArea)
+    }
+
+    @Test
+    fun `an offer to start names both`() {
+        val state = state(record = null, offerFor = null)!!
+        assertTrue(state.departureUsesWifi)
+        assertTrue(state.departureUsesArea)
     }
 
     @Test
