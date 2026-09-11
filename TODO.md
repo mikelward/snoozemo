@@ -1859,6 +1859,25 @@ the point is that every other line of the app is worthless if it isn't true.
 
 ## Phase 5 (M5) — Edge cases and degraded modes
 
+- [ ] **Bound the stale-loan hand-back that an arm can run before `STATE_TRUE`** (`SPEC.md`
+      §5.9). Deferred from PR #259 (Codex): the ceiling-before-rule order put
+      `quietLocked`'s `handBackFirst` branch in front of the zen write, so an arm that
+      *replaces* a ceiling record still carrying an earlier snooze's loan hands that loan
+      back first — and that hand-back is the release path's full ladder: up to three writes
+      with read-backs, a preference commit, and an escalation that schedules an alarm.
+      **The write itself cannot move.** It is an audible-direction `setRingerMode`, so it
+      trips the same coupling this order exists for; run after `STATE_TRUE` it would
+      deactivate the rule just set. What is deferred is the *cost*, not the ordering.
+      In the common case it is one write with a read-back and one commit; the three-write
+      ladder only runs when writes are already failing, and the alarm only when they all
+      do. The candidate fix is to give the arm path a single attempt and leave the retries
+      to the release, the retry alarm and startup reconciliation, all of which already come
+      back for the loan — at the cost of a slower recovery in exactly the case where the
+      ringer is misbehaving.
+      Worth measuring before building: the device check PR #259 already owes — whether the
+      tap still feels instant with the persistence ahead of the rule — is what would say
+      whether this is perceptible at all.
+
 - [ ] **Un-stick the rule on a re-assertion that finishes an earlier loan** (`SPEC.md` §5.9).
       Split out of PR #259 so the ordering fix could land (maintainer, 2026-09-11); the work is
       written and reviewed, on `claude/rule-unstick`.
