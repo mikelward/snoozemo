@@ -50,6 +50,7 @@ import app.snoozemo.core.ruleSubject
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.presence.AnchorCaptureRunner
 import app.snoozemo.presence.MotionEndWatch
+import app.snoozemo.presence.PostureTrace
 import app.snoozemo.presence.defaultPresenceMonitor
 import com.mikelward.androidlog.safe
 import java.time.Duration
@@ -327,6 +328,76 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      */
     internal open fun createMotionEndWatch(onMoved: () -> Unit): MotionEndWatch =
         app.snoozemo.presence.motionEndWatch(applicationContext, onMoved)
+
+    /**
+     * The posture trace (SPEC.md §4.6) — a measurement, not a control: how
+     * the phone was lying at each transition, and every pick-up gesture while
+     * a snooze runs, written to the log so `TODO.md`'s flip-to-snooze question
+     * can be answered from a real week rather than guessed. Built on demand
+     * like [motionEnd], and for the same reason: the first `SensorManager`
+     * lookup waits for `ARMED`, so nothing sits on the arm path.
+     */
+    private var postureTrace: PostureTrace? = null
+
+    /**
+     * The state the last [onStateChanged] delivered. The controller calls it
+     * for more than a transition — an extension, a lowered cap, the
+     * motion-end toggle and a clock-frame rewrite all restate the running
+     * state — and the trace promises a reading per *transition* (SPEC.md
+     * §4.6, `docs/PRIVACY.md`), so a reading is taken only where the state
+     * actually moved (Codex, PR #258). Everything else in that callback
+     * still runs on every delivery, as before.
+     */
+    private var postureState: SnoozeState? = null
+
+    /** The posture seam, like [createMotionEndWatch]: a test is the sensors. */
+    internal open fun createPostureTrace(): PostureTrace =
+        app.snoozemo.presence.postureTrace(applicationContext)
+
+    /**
+     * One reading per transition. Skips `ARMING`, the one transition between
+     * the tap and the rule going on (`AGENTS.md`, the arm path); `ARMED`
+     * follows it within the same arm and takes the snooze's first reading.
+     *
+     * **When it is called matters, and differs by transition** (Codex, PR
+     * #258). A reading arrives only while the process is foreground, and
+     * [onStateChanged] is where the foreground service is taken and given
+     * back: an arm takes it inside the ongoing card's post, an ending gives
+     * it back inside the ended card's. So an ending samples *before* its
+     * branch runs, while the service still holds the process, and every
+     * other transition samples *after* its branch, once it does.
+     *
+     * A transition with no snooze takes no reading (Codex, PR #258, twice):
+     * a refused arm reaches `IDLE` synchronously, inside the tile tap, with
+     * nothing armed, so there is no posture to compare with and building the
+     * trace there would put the `SensorManager` lookup on the arm path after
+     * all. Any transition that carries a snooze builds the trace on demand —
+     * including an ending on a fresh service, where `End now` from the app
+     * screen adopts the record and reaches `RELEASED` without ever having
+     * been `ARMED` here; that ending is half of what the trial compares, and
+     * with the screen open its reading can land.
+     */
+    private fun samplePosture(state: SnoozeState, snooze: ActiveSnooze?, reason: EndReason?) {
+        if (state == SnoozeState.ARMING) return
+        val trace = postureTrace
+            ?: if (snooze == null) return else createPostureTrace().also { postureTrace = it }
+        trace.sample("after state → $state" + (reason?.let { " ($it)" } ?: ""))
+    }
+
+    /**
+     * The pick-up watch matched to whether a snooze is running — and only
+     * while the foreground service holds the process: a one-shot sensor
+     * delivers nothing to a background app (see [wantsForeground]), and the
+     * trace says so rather than sitting on a watch that cannot fire.
+     * Restated after every transition's branch, where `foregroundHeld` is
+     * already that transition's answer, and from the two writes that move
+     * the flag, so a repaint that takes or gives back the service without a
+     * transition — a tracking change — restates it too.
+     */
+    private fun reconcilePickUpTrace() {
+        val trace = postureTrace ?: return
+        trace.reconcilePickUp(controller.active != null, processHeld = foregroundHeld)
+    }
 
     /**
      * Matches the motion watch to the running record — armed exactly while a
@@ -2537,6 +2608,13 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             if (snooze != null) safe("; ") else safe(""),
             snooze?.logSummary() ?: safe(""),
         )
+        // The ending's posture is read while the process is still foreground
+        // — the branch below gives the service back (see [samplePosture]).
+        val ending = state == SnoozeState.RELEASED || state == SnoozeState.IDLE
+        // Only a state that moved is a transition (see [postureState]).
+        val moved = state != postureState
+        postureState = state
+        if (ending && moved) samplePosture(state, snooze, reason)
         when (state) {
             // The one transition on the arm path, between the tap and the rule
             // going on, so the write is handed to a background thread rather
@@ -2627,6 +2705,17 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // — `RELEASED`, `IDLE`, or a snooze simply gone — tears it down,
         // because `controller.active` is null by the time this runs.
         reconcileMotionEnd()
+        if (!ending && moved) samplePosture(state, snooze, reason)
+        reconcilePickUpTrace()
+        // The trace is the snooze's: retired with it, once the ending's
+        // reading is in flight, so an end-and-re-arm on this same instance
+        // starts the next snooze on a fresh one — its own latches, its own
+        // last-seen posture, and no reach into the ending's reading (Codex,
+        // PR #258). Closing lets that reading land.
+        if (ending) {
+            postureTrace?.close()
+            postureTrace = null
+        }
         // Every transition except `ARMING`, which is the one that sits between
         // the tile tap and the rule going on. Nothing is lost by skipping it:
         // a refused arm reaches `IDLE`, which refreshes here, and a successful
@@ -3296,6 +3385,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 )
                 foregroundHeld = true
                 noteForegroundOutcome(refused = false)
+                // The watch follows the flag, from wherever the flag moves
+                // (Codex, PR #258, second finding in this mechanism): a
+                // tracking change repaints the card without a state
+                // transition, so reconciling only at transitions left it
+                // stale there.
+                reconcilePickUpTrace()
                 true
             }.getOrElse {
                 // Every refusal lands here and none of them may take the snooze
@@ -3390,7 +3485,10 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // return above and the location service is held until the snooze ends.
         // Left set, the next post retries it.
         runCatching { exitForeground() }.fold(
-            onSuccess = { foregroundHeld = false },
+            onSuccess = {
+                foregroundHeld = false
+                reconcilePickUpTrace()
+            },
             onFailure = {
                 Log.w(TAG, "Releasing the foreground service failed; it stays held.", it)
             },
@@ -3508,6 +3606,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // no registration behind for the new instance to double up on.
         motionEnd?.close()
         motionEnd = null
+        // Same for the posture trace's pick-up watch, where a snooze is still
+        // running (an ending retires its trace itself); a reading still in
+        // flight is left to land, since an ending's own `stopSelf` brings the
+        // instance here before the sensor has answered (Codex, PR #258).
+        postureTrace?.close()
+        postureTrace = null
         // Each gated on its **own** flag, and neither on the other's (Codex, PR
         // #36). A registration the platform refused is a state this class knows
         // about, so unregistering it is not something to attempt and then

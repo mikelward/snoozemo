@@ -304,6 +304,14 @@ back on — and only as which of the two reasons it is: that this build of
 Snoozemo carries no foreground service, or that this phone has no significant-motion
 sensor. It names no device and reads nothing from the sensor; it is there so a missing
 row can be told apart from a version of Snoozemo that predates it,
+**how the phone was lying** each time a snooze moved from one step to the next — face up,
+face down or on edge, and whether something was covering the sensor beside the earpiece —
+and that the phone's own pick-up gesture fired while a snooze was running. Those are there
+to answer one question, whether turning the phone face down or picking it up could one day
+start or end a snooze; nothing acts on them yet, and they read no movement beyond that —
+no orientation stream, no step count, no location. Where a step could not be read, the
+line names the last posture this log took; turning the log off stops the readings and forgets it
+with the rest,
 **which control you tapped** — the Quick Settings tile, a button on the ongoing
 notification, a button in the app, or an end time you chose — what Snoozemo found when it
 checked whether its rule was still holding the phone quiet, and what it concluded from that;

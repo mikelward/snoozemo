@@ -304,6 +304,24 @@ class SnoozeDebugLogTest {
         assertTrue("a number is carried", line.contains("12.5"))
     }
 
+    @Test
+    fun `turning recording off counts as an erasure, turning it on does not`() {
+        // Off is delete, so a value kept beside the log has to know the log it
+        // came from is gone (Codex, PR #258).
+        val before = SnoozeDebugLog.erasures
+        try {
+            SnoozeDebugLog.applyRecording(false)
+            assertFalse(SnoozeDebugLog.isRecording)
+            assertEquals(before + 1, SnoozeDebugLog.erasures)
+
+            SnoozeDebugLog.applyRecording(true)
+            assertTrue(SnoozeDebugLog.isRecording)
+            assertEquals("an enable erases nothing", before + 1, SnoozeDebugLog.erasures)
+        } finally {
+            SnoozeDebugLog.setRecording(true)
+        }
+    }
+
     private companion object {
         /** `MM-DD HH:MM:SS.mmm L `, the shared logger's own line prefix. */
         val TIMESTAMPED_PREFIX = Regex("""^\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [A-Z] """)

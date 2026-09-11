@@ -219,6 +219,10 @@ internal class TestSnoozeService : SnoozeService() {
             onMoved,
         ).also { motionWatchesBuilt++ }
 
+    /** The posture seam: the test is the sensors, and a reading is a method call. */
+    override fun createPostureTrace(): app.snoozemo.presence.PostureTrace =
+        app.snoozemo.presence.PostureTrace(postureSensors).also { postureTracesBuilt++ }
+
     /**
      * Robolectric's shadow accepts every `startForeground`, so a test that
      * needs the platform's refusal has to inject it here — the one thing the
@@ -314,10 +318,71 @@ internal class TestSnoozeService : SnoozeService() {
             }
         }
 
+        /**
+         * Stands in for the gravity, proximity and pick-up sensors. A sample is
+         * held until the test delivers it, so the order the service asks in
+         * is observable; `firePickUp()` is one pick-up as the platform would
+         * deliver it.
+         */
+        class FakePostureSensors : app.snoozemo.presence.PostureSensors {
+            /** Readings asked for and not yet delivered, oldest first: moment-less, so the log line names the moment. */
+            val pendingSamples = mutableListOf<(app.snoozemo.presence.PostureSample?) -> Unit>()
+
+            /** Every reading ever asked for. */
+            var samplesAsked: Int = 0
+
+            /**
+             * [foregroundExits] as of each reading asked for, oldest first —
+             * so a test can say whether the service still held the process
+             * when it asked.
+             */
+            val foregroundExitsAtAsk = mutableListOf<Int>()
+
+            /** Null answers stand in for a phone with none of the sensors. */
+            var available: Boolean = true
+
+            private var pickUpPending: (() -> Unit)? = null
+
+            val watchingPickUp: Boolean get() = pickUpPending != null
+
+            override fun sample(
+                onSample: (app.snoozemo.presence.PostureSample?) -> Unit,
+            ): AutoCloseable? {
+                samplesAsked++
+                foregroundExitsAtAsk += foregroundExits
+                if (!available) return null
+                pendingSamples += onSample
+                return AutoCloseable { pendingSamples.remove(onSample) }
+            }
+
+            override fun watchPickUp(onFired: () -> Unit): AutoCloseable? {
+                if (!available) return null
+                pickUpPending = onFired
+                return AutoCloseable { if (pickUpPending === onFired) pickUpPending = null }
+            }
+
+            /** Delivers the oldest reading still asked for; null is the deadline passing. */
+            fun deliver(sample: app.snoozemo.presence.PostureSample?) {
+                val callback = pendingSamples.removeAt(0)
+                callback(sample)
+            }
+
+            fun firePickUp() {
+                val callback = pickUpPending ?: return
+                pickUpPending = null
+                callback()
+            }
+        }
+
+        var postureSensors: FakePostureSensors = FakePostureSensors()
+
         var motionRegistrar: FakeMotionRegistrar = FakeMotionRegistrar()
 
         /** How many motion watches the service built — one per snooze, at most. */
         var motionWatchesBuilt: Int = 0
+
+        /** How many posture traces the service built; a refused arm builds none. */
+        var postureTracesBuilt: Int = 0
 
         /**
          * Makes every `ActiveSnoozeStore.update` refuse, as a full disk would —
@@ -398,6 +463,8 @@ internal class TestSnoozeService : SnoozeService() {
             presence = FakePresenceMonitor()
             motionRegistrar = FakeMotionRegistrar()
             motionWatchesBuilt = 0
+            postureTracesBuilt = 0
+            postureSensors = FakePostureSensors()
             refuseRecordUpdates = false
             testReading = ClockReading(
                 wallMillis = now.toEpochMilli(),

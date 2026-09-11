@@ -53,7 +53,41 @@ import kotlin.math.roundToLong
  *   bundled library's. Accepted rather than scrubbed — see SPEC.md §4.6,
  *   which records the trade and the reason a per-app opt-out was rejected.
  */
-object SnoozeDebugLog : DebugLog()
+object SnoozeDebugLog : DebugLog() {
+
+    /**
+     * How many times recording has been turned off through [applyRecording].
+     *
+     * Off is delete: the buffer empties and the saved copy goes with it (see
+     * `DebugLogFiles`). So a value a caller derived from log content and kept
+     * beside the log — the posture trace's last-seen reading — is stale across
+     * any change here, or it would resurface, after a re-enable, exactly what
+     * the user asked the app to delete (Codex, PR #258). A reader records the
+     * count with what it keeps and treats a mismatch as nothing kept. Written
+     * on the debug log's one worker, read from main, hence volatile; there is
+     * no second writer to race the increment.
+     */
+    @Volatile
+    var erasures: Int = 0
+        private set
+
+    /**
+     * The app's one way to turn recording on or off — [setRecording] through
+     * this, so an off also counts as an erasure. Tests that only need a line
+     * withheld still call [setRecording] directly; that is a withheld line,
+     * not a deleted log.
+     */
+    fun applyRecording(enabled: Boolean) {
+        // Gate first, publish second (Codex, PR #258). A reader that sees the
+        // new count while the log still accepts a line would keep that line's
+        // value under the new count, and the disable a moment later would
+        // then erase the log but not the value. With the gate closed first, a
+        // line landing between the two is refused, and nothing is kept from a
+        // refused line.
+        setRecording(enabled)
+        if (!enabled) erasures++
+    }
+}
 
 /**
  * The one sanctioned way to put a snooze in the log.

@@ -4783,6 +4783,32 @@ Nothing here is scheduled; each is a sequel that follows from something already 
         mean I decided it's ever worth requesting yet another permission"). Recorded as
         the known alternative, not as a plan. `MotionEndWatch` takes a
         `TriggerRegistrar`, so swapping the source is an implementation of that seam.
+- [ ] **Could flipping the phone face down start a snooze, and picking it up end one?**
+      (maintainer, 2026-09-11.) The sensors need no permission — gravity, proximity and the
+      pick-up gesture are all unrestricted — so the question is only whether they track what
+      the user means. **Measured first, before anything is built on it**: the posture trace
+      (`SPEC.md` §4.6) logs how the phone was lying at every transition and every pick-up
+      gesture during a snooze, acting on none of it. Run a week of ordinary snoozes on `play`
+      and read the log against what actually happened: was the phone face down when the
+      snooze was armed, did a pick-up precede the ending — and by how long — and how often
+      did the gesture fire on a phone that was only shifted. Ends on this one being decided:
+      either becomes a fourth exit / a way to start, or the trace comes out.
+      - **Ending on pick-up is the cheap half** if it measures well: the gesture is a
+        hardware-batched one-shot, the same shape as `When I move`, and would ride the
+        `TriggerRegistrar`-style seam `PostureTrace` already takes.
+      - **Starting on a flip is the expensive half**: noticing a flip while nothing runs needs
+        a process alive to hear it, which is a standing battery cost against §9 and a
+        foreground-service question on `play` (`SPEC.md` §3). Not authorized by this item;
+        a distribution decision if the measurement says it is worth it.
+      - **An ending away from the screen mostly reads `no reading arrived; last seen …`**
+        (Codex, PR #258). The ended card's post gives the foreground service back in the
+        same pass that asks for the ending's reading, and the read's events land after
+        that, so the line carries the last posture the process could see instead. Holding
+        the service until the read settles — up to two seconds past the end, for a sensor
+        read — crosses §3.4's line (a location service for a snooze doing no location
+        work) and was not done here. **Maintainer's call** if the last-seen posture turns
+        out not to be enough for the trial: hold the service for the read, or accept the
+        gap.
 - [ ] **Explicit fallback end conditions** (`until Wi-Fi goes`) — only if
       hardware item 2 shows the three-source layering isn't enough. Preference order is:
       fix it invisibly, then have the app pick the fallback itself and say so, and only

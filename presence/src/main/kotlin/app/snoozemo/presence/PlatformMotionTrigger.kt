@@ -36,39 +36,53 @@ internal class PlatformMotionTrigger(
         // running device, but a null manager already forced the null-check
         // above, and one more getter costs nothing next to the registration.
         val sensor = manager.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION) ?: return null
+        return manager.armTrigger(sensor, handler, onFired)
+    }
+}
 
-        // Two flags, not one, because firing and canceling are different
-        // facts about the same registration and a single flag conflated them
-        // (Codex, PR #119). `onTrigger` arrives on the sensor's thread and
-        // hands the callback to the main thread, so a cancel can land in
-        // between; with one flag the firing had already cleared it, the cancel
-        // returned early, and the queued callback ran anyway — delivering a
-        // motion signal for a registration its owner had already given up on.
-        // Atomics because the two threads really do both touch these.
-        val fired = AtomicBoolean(false)
-        val canceled = AtomicBoolean(false)
-        val listener = object : TriggerEventListener() {
-            override fun onTrigger(event: TriggerEvent?) {
-                if (canceled.get() || !fired.compareAndSet(false, true)) return
-                // Re-checked on the main thread, not only here: the cancel this
-                // is racing may not have happened yet at this point.
-                handler.post { if (!canceled.get()) onFired() }
-            }
+/**
+ * Arms one firing of a one-shot [sensor] through `requestTriggerSensor` —
+ * the only registration a one-shot sensor accepts; `registerListener` throws
+ * on one — and marshals the callback onto [handler]. Shared by the motion
+ * trigger and the posture trace's pick-up watch, so the flag discipline below
+ * is written once.
+ *
+ * Two flags, not one, because firing and canceling are different facts about
+ * the same registration and a single flag conflated them (Codex, PR #119).
+ * `onTrigger` arrives on the sensor's thread and hands the callback to the
+ * main thread, so a cancel can land in between; with one flag the firing had
+ * already cleared it, the cancel returned early, and the queued callback ran
+ * anyway — delivering a signal for a registration its owner had already
+ * given up on. Atomics because the two threads really do both touch these.
+ */
+internal fun SensorManager.armTrigger(
+    sensor: Sensor,
+    handler: Handler,
+    onFired: () -> Unit,
+): AutoCloseable? {
+    val fired = AtomicBoolean(false)
+    val canceled = AtomicBoolean(false)
+    val listener = object : TriggerEventListener() {
+        override fun onTrigger(event: TriggerEvent?) {
+            if (canceled.get() || !fired.compareAndSet(false, true)) return
+            // Re-checked on the main thread, not only here: the cancel this
+            // is racing may not have happened yet at this point.
+            handler.post { if (!canceled.get()) onFired() }
         }
-        return if (manager.requestTriggerSensor(listener, sensor)) {
-            AutoCloseable {
-                if (!canceled.compareAndSet(false, true)) return@AutoCloseable
-                // A trigger sensor disarms itself when it fires, so canceling
-                // after that has nothing left to cancel. Setting the flag above
-                // still matters — it is what suppresses the queued callback.
-                if (!fired.get()) manager.cancelTriggerSensor(listener, sensor)
-            }
-        } else {
-            // A refusal is not an exception here — the platform returns
-            // false — so it is mapped to the same "no trigger available"
-            // answer a missing sensor gives, which is the one [MotionTrigger]
-            // records once and stops asking about.
-            null
+    }
+    return if (requestTriggerSensor(listener, sensor)) {
+        AutoCloseable {
+            if (!canceled.compareAndSet(false, true)) return@AutoCloseable
+            // A trigger sensor disarms itself when it fires, so canceling
+            // after that has nothing left to cancel. Setting the flag above
+            // still matters — it is what suppresses the queued callback.
+            if (!fired.get()) cancelTriggerSensor(listener, sensor)
         }
+    } else {
+        // A refusal is not an exception here — the platform returns false —
+        // so it is mapped to the same "no trigger available" answer a
+        // missing sensor gives, which is the one [MotionTrigger] records once
+        // and stops asking about.
+        null
     }
 }

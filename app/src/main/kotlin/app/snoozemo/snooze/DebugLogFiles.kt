@@ -473,7 +473,7 @@ internal object DebugLogging {
             // The recording gate first, so a disabled install stops collecting
             // — and drops whatever was buffered before this read — rather than
             // only not persisting (Codex, PR #62).
-            SnoozeDebugLog.setRecording(enabled)
+            SnoozeDebugLog.applyRecording(enabled)
             // Only now is the user's stored choice actually in force; the read
             // above can throw and the runCatching would return normally with
             // recording still permissive (Codex, PR #125).
@@ -629,7 +629,7 @@ internal object DebugLogging {
                     // and the library's sink answers the same call by deleting
                     // this run's saved copy, so the two stay in step without a
                     // second switch to keep aligned.
-                    SnoozeDebugLog.setRecording(enabled)
+                    SnoozeDebugLog.applyRecording(enabled)
                 }
                 // A re-enable's log starts from an emptied buffer — disabling
                 // dropped everything, the run-context line included — so the

@@ -1773,6 +1773,35 @@ happened:
 - Permission and capability state at each decision — notification-policy access, location permission
   and its precision, whether location services are on system-wide, battery-saver state. A denied
   permission is often the whole answer to "why didn't it end".
+- **The phone's posture at each transition, and every pick-up gesture while a snooze runs**
+  (maintainer, 2026-09-11) — a measurement with an expiry, like the ringer-write reads above. The
+  question is whether flipping the phone face down, or picking it back up, tracks the user's own
+  snooze boundaries closely enough to be a way to start or end one; a week of real snoozes answers
+  it and a design session does not. So the service takes one gravity and proximity reading on every
+  transition except `ARMING` — the arm path takes no sensor lookup (§4.1) — and holds the pick-up
+  gesture as a one-shot for the life of the snooze, and writes what it saw: `face down, sensor
+  covered`, `pick-up gesture fired; nothing acted on it`. Sampled rather than streamed, so it costs
+  a registration that lasts one event and a hardware-batched one-shot, nothing while the phone sits
+  still (§9). Nothing acts on a reading. The vocabulary is fixed and the raw numbers stay out; a
+  posture is not a place. **A reading arrives only while the process is foreground**: Android
+  withholds sensor events from a background app, so the readings come from a snooze whose
+  foreground service holds the process — a tracked one, on `play` — and from transitions the
+  screen is open for; everywhere else the read gives up after two seconds of real time — real time,
+  so a phone that slept through the window does not record the posture it wakes to against a
+  transition long over — and the line says `no reading arrived`, which is itself the measurement of which transitions the trial cannot see.
+  A reading is never taken later and attributed to an earlier transition; an ending's reading is
+  asked for before the ending gives the foreground service back, and left to land after the
+  service has stopped, since the ending posture is half of what the trial compares — and where
+  it still cannot land, the line carries the last posture the process could see, which for a
+  phone lying still is the posture it ended in — a posture the log itself took, and forgotten
+  when the log is turned off, since off empties it and a reading kept beside it would
+  resurface what was deleted (the once-per-snooze explanations follow the log the same way, and
+  are said again in a fresh one). No reading is taken while the log is off — the line would be
+  refused, so the registration would be paid for nothing; holding the service until the read settles
+  would cross §3.4's line and is recorded in `TODO.md` as the maintainer's call. The pick-up gesture is held only while the snooze's foreground service holds
+  the process, for the same reason; for a snooze that takes none the line says pick-ups cannot
+  be observed, so a silent week reads as unobserved rather than as no pick-ups. `TODO.md` carries
+  the trial, and the trace comes out with it either way.
 - **Why the previous processes ended**, read from the platform at startup: Android's own exit
   reason, the process importance at the time — the priority Android had assigned the process, which
   says whether the system counted it as work the user was aware of (a visible screen, but equally a
