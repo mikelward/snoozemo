@@ -856,7 +856,10 @@ will not fit. The fallback is a **deliberate** split rather than a wrap, so the 
 before the text is composed; a wrap would break it wherever the words happened to land. Only the
 full tracking mode has a one-sentence form, since `Snoozing, Wi-Fi only` does not compose, so a
 degraded snooze always takes the two-row shape and states its mode — and its reason — on the
-second row.
+second row. **And a snooze with a motion exit takes that two-row shape too**, whatever its
+mode: the one-sentence form *replaces* the condition line rather than sitting above it, so a
+second ending would be dropped on the floor by the very case that fits (maintainer, 2026-09-11 —
+tapping `Until I move` changed nothing this screen said).
 
 **Including the degraded reason, on the same line and in the same words** (landed 2026-08-30). The
 mode line joins its cause exactly as §4.3's card does — `Timer only — no location` — from the same
@@ -1635,8 +1638,11 @@ inert rows while the service is asked, the refusal shown on them, and the rows l
 retry. A tap with no row behind it says so in the shade instead, as a chosen time does.
 
 **The user can always see it.** The ongoing notification names the second exit alongside the first
-(`Ends when you leave, or when you move`), and the ending says which one fired (`Snooze ended — you
-moved`, never "you left"). Principle 2: an exit the user cannot predict is one they cannot trust,
+(`Ends when you leave, or when you move`), **and so does the main screen's status block** — in the
+same words and in the same order, after the mode's degraded reason rather than inside it, since
+that reason says how well the first promise is being kept while this adds a promise of its own.
+The screen is the surface a user opens *to check*, so it was the worse of the two to leave naming
+one exit. The ending says which one fired (`Snooze ended — you moved`, never "you left"). Principle 2: an exit the user cannot predict is one they cannot trust,
 and telling a movement-ending apart from a departure is also the only way an over-eager firing is
 legible as one.
 

@@ -1622,6 +1622,9 @@ class MainActivity : ComponentActivity() {
                             trackingMode = activeSnooze?.mode,
                             remaining = activeSnooze?.remaining(now),
                             degradation = activeSnooze?.degradation,
+                            // What this snooze will end on, not what this build
+                            // can offer — see `MainScreen`'s own parameter doc.
+                            endsOnMotion = activeSnooze?.endsOnMotion == true,
                             // Freshness decided here, against the same tick
                             // the countdown uses: a reading older than
                             // [DepartureObservation.FRESH_FOR_MS] describes

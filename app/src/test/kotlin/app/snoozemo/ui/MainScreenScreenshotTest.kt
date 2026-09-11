@@ -1058,6 +1058,77 @@ class MainScreenScreenshotTest {
     }
 
     @Test
+    fun `a snooze that also ends on motion says so`() {
+        capture("main-screen-snoozing-ends-on-motion.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.FULL,
+                remaining = Duration.ofHours(3).plusMinutes(40),
+                degradation = null,
+                endsOnMotion = true,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        // The report this fixes: tapping `Until I move` left this screen saying
+        // exactly what it said before, so the tap read as having done nothing.
+        // The one-row sentence cannot carry a second ending — it *replaces* the
+        // condition line rather than sitting above it — so a snooze with a
+        // motion exit takes the two-row shape and states both.
+        composeRule.onNodeWithText("Snoozing").assertExists()
+        composeRule.onNodeWithText("Ends when you leave, or when you move").assertExists()
+        composeRule.onNodeWithText("Snoozing until you leave").assertDoesNotExist()
+        composeRule.onNodeWithText("3h 40m left").assertExists()
+    }
+
+    @Test
+    fun `the motion exit is stated after the degraded reason, not inside it`() {
+        capture("main-screen-snoozing-ends-on-motion-degraded.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.WIFI_ONLY,
+                remaining = Duration.ofMinutes(45),
+                degradation = DegradationCause.NO_LOCATION_FIX,
+                endsOnMotion = true,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        // The ordering the ongoing notification already uses: the mode and why
+        // it degraded, then the second ending. Wedged between the claim and its
+        // caveat it would read as a qualification of the reason.
+        composeRule.onNodeWithText("Wi-Fi only — no location, or when you move").assertExists()
+    }
+
+    @Test
     fun `a Wi-Fi-only snooze says so`() {
         capture("main-screen-snoozing-wifi-only.png") {
             MainScreen(
