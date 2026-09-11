@@ -1619,9 +1619,20 @@ class MainActivity : ComponentActivity() {
                             tileBannerDismissed = tileBannerDismissed,
                             showReplayHint = showReplayHint,
                             snoozing = snoozing,
-                            trackingMode = activeSnooze?.mode,
+                            // `effectiveMode`, not `mode`: a snooze the user
+                            // narrowed to its timer ends on the timer whatever
+                            // the machinery could still watch for, and the
+                            // screen must not name an exit that is off
+                            // (principle 2). One property rather than the mode
+                            // and the flag, so this cannot be half-remembered.
+                            trackingMode = activeSnooze?.effectiveMode,
                             remaining = activeSnooze?.remaining(now),
-                            degradation = activeSnooze?.degradation,
+                            // Narrowed with the mode above, not beside it: a
+                            // cause explains tracking that is still trying, and
+                            // a snooze the user gave a time reported its old
+                            // cause as the reason for the timer (Codex,
+                            // PR #267).
+                            degradation = activeSnooze?.effectiveDegradation,
                             // What this snooze will end on, not what this build
                             // can offer — see `MainScreen`'s own parameter doc.
                             endsOnMotion = activeSnooze?.endsOnMotion == true,

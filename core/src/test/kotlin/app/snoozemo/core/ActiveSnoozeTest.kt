@@ -601,6 +601,41 @@ class ActiveSnoozeTest {
         )
     }
 
+    /**
+     * Principle 2's distinction, kept at the record rather than left to each
+     * renderer: `Timer only` because the user asked has to stay tellable from
+     * `Timer only` because location died, and a cause that outlived the
+     * tracking it explained made the first read as the second — the shade said
+     * `Timer only — weak signal` over a time the user chose deliberately
+     * (Codex, PR #267).
+     *
+     * Both directions, because only one of them is the bug: a cause dropped
+     * from a snooze that is still trying to track would lose exactly what the
+     * field exists to say.
+     */
+    @Test
+    fun `a chosen timer reports no cause, a degraded one still does`() {
+        val degraded = snooze().copy(
+            mode = TrackingMode.WIFI_ONLY,
+            degradation = DegradationCause.FIXES_TOO_VAGUE,
+        )
+
+        assertEquals(
+            "something is still watching, so the cause explains it",
+            DegradationCause.FIXES_TOO_VAGUE,
+            degraded.effectiveDegradation,
+        )
+        assertNull(
+            "nothing is watching by the user's own choice, so there is nothing to explain",
+            degraded.copy(endsOnDeparture = false).effectiveDegradation,
+        )
+        assertEquals(
+            "and the raw cause is still there for the debug log",
+            DegradationCause.FIXES_TOO_VAGUE,
+            degraded.copy(endsOnDeparture = false).degradation,
+        )
+    }
+
     @Test
     fun `reconciling an undisturbed clock changes nothing`() {
         // The common case: TIME_SET fires for a trivial correction and both

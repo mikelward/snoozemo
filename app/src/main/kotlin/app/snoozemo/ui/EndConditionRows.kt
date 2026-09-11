@@ -728,6 +728,16 @@ internal fun endChoiceUiState(
         // The same predicate the service honors the tap with, so the row is
         // never offered where the restore would be declined — and never
         // withheld where it would be taken.
+        //
+        // **`mode`, deliberately, not `effectiveMode`.** This asks whether the
+        // machinery *can* watch for a departure, not whether this snooze
+        // currently ends on one — and those part company exactly when the row
+        // matters most. A snooze the user narrowed to its timer has
+        // `endsOnDeparture` false and is precisely the one whose `Until I
+        // leave` row is the way back; asking `effectiveMode` would withhold the
+        // row from every snooze that needs it and leave the choice one-way
+        // again. The same distinction holds for `departureSignals` above: the
+        // help card describes what leaving *would* do if chosen.
         tracksDeparture = offerRecord?.mode?.tracksDeparture == true,
         // The live mode and the captured anchor together — neither answers it
         // alone, and the anchor alone goes stale the moment a degradation

@@ -492,10 +492,12 @@ class SnoozeController(
      * moment the user just picked, which is principle 1's failure rather than a
      * cosmetic disagreement.
      *
-     * §4.4 is explicit that this is not a fourth exit. It moves the one
-     * deadline the cap alarm already watches, so departure tracking is
-     * untouched and whichever comes first still wins (§7) — there is nothing
-     * here to tell the presence engine about.
+     * **This moves the cap and nothing else.** It is not a fourth exit: it
+     * shifts the one deadline the cap alarm already watches, so there is
+     * nothing here to tell the presence engine about. That is a statement
+     * about this function, not about what choosing a time *means* — since
+     * 2026-09-11 a chosen time also takes the movement exit and departure
+     * tracking off (§4.4), and the caller does that either side of this call.
      *
      * Clamping is the caller's: this refuses a value it cannot honor rather
      * than quietly substituting a different one, so a sheet that computed its
@@ -549,6 +551,39 @@ class SnoozeController(
         val snooze = active ?: return null
         if (snooze.endsOnMotion == value) return null
         val updated = snooze.copy(endsOnMotion = value)
+        active = updated
+        listener.onStateChanged(state, updated, null)
+        return updated
+    }
+
+    /**
+     * Turns leaving on or off as an end condition for the running snooze
+     * (SPEC.md §4.4). Returns the updated snooze, or null when there is nothing
+     * running or the flag already reads [value].
+     *
+     * **The mirror of [setEndsOnMotion], and the same contract**: the caller
+     * has a watch to start or stop either side of it, so the null return is
+     * load-bearing rather than a courtesy — a no-op reported as a change would
+     * tear down a live geofence and rebuild an identical one on every
+     * recomputation that restated the same value.
+     *
+     * **Says nothing about [TrackingMode].** The mode is what the machinery can
+     * do and is recomputed from the anchor on every presence update; this is
+     * what the user asked for. [ActiveSnooze.effectiveMode] is where they meet.
+     * Turning it off does not make the snooze `DURATION_ONLY` — it makes it a
+     * snooze that *ends* as a duration-only one would while still knowing what
+     * it could have watched, which is what lets `Until I leave` put it back and
+     * what keeps a chosen `Timer only` distinguishable from a failed one in the
+     * debug log (principle 2).
+     *
+     * Emits a transition, because the ongoing notification has to stop or start
+     * saying that leaving ends this snooze — an exit that silently went away is
+     * exactly the surprise principle 2 exists to prevent.
+     */
+    fun setEndsOnDeparture(value: Boolean): ActiveSnooze? {
+        val snooze = active ?: return null
+        if (snooze.endsOnDeparture == value) return null
+        val updated = snooze.copy(endsOnDeparture = value)
         active = updated
         listener.onStateChanged(state, updated, null)
         return updated
@@ -680,11 +715,24 @@ class SnoozeController(
                 listener.onStateChanged(state, snooze, null)
             }
 
-            PresenceEvent.Departed -> end(EndReason.DEPARTURE)
-
-            // Fail open: tracking cannot be done at all, so the snooze ends
-            // rather than staying armed on state nothing can verify.
-            is PresenceEvent.CapabilityLost -> end(EndReason.LOST_CAPABILITY)
+            // **Both endings ask [endReasonFor], which is where the gate on
+            // the user's choice lives.** Fail open is the rule for a snooze
+            // that still ends on leaving — tracking that cannot be done at
+            // all ends it rather than leaving it armed on state nothing can
+            // verify — and it is not the rule for one narrowed to its timer,
+            // whose cap is what guarantees it ends. Asking one function keeps
+            // this branch and the service's escalation from answering
+            // differently; a null is the answer, not an oversight.
+            PresenceEvent.Departed, is PresenceEvent.CapabilityLost -> {
+                val reason = event.endReasonFor(snooze)
+                if (reason != null) {
+                    end(reason)
+                } else {
+                    SnoozeDebugLog.event(
+                        "presence ending ignored: this snooze ends on its timer only",
+                    )
+                }
+            }
         }
     }
 

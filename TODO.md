@@ -1878,11 +1878,13 @@ the point is that every other line of the app is worthless if it isn't true.
 ## Phase 5 (M5) — Edge cases and degraded modes
 
 - [ ] **Decide what tapping an end condition means** — maintainer, 2026-09-11, and the
-      question behind the report that opened PR #262. The three rows have three different
-      semantics today, which is why neither the card nor the behavior matches the row the user
-      tapped: `Until I leave` puts the duration cap *back* (the one control in the app that
+      question behind the report that opened PR #262. **As raised**, the three rows had three
+      different semantics, which is why neither the card nor the behavior matched the row the
+      user tapped: `Until I leave` puts the duration cap *back* (the one control in the app that
       lengthens a snooze), `Until I move` *adds* an exit with no way to take it off again, and
-      picking a time *lowers* the cap while leaving departure ending the snooze regardless. The
+      picking a time *lowers* the cap while leaving departure ending the snooze regardless. Two
+      of those three have since been answered — see *Confirmed as the direction* below; a chosen
+      time is also now the way to take a movement exit back off. The
       maintainer's reading is that tapping any row is clear intent to replace the current end
       conditions with the thing tapped — so picking a time would mean "quiet until then, even
       if I leave", which costs the cinema case (walk out at the interval, phone stays silent)
@@ -1895,15 +1897,32 @@ the point is that every other line of the app is worthless if it isn't true.
       then the cap on its own evidence. `SPEC.md` §4.4 records today's behavior and moves with
       whatever is decided.
 
-      **Confirmed as the direction (maintainer, 2026-09-11), detail still to work through:**
-      tapping a row replaces the current end conditions rather than adding to them. Deliberately
-      not taken in PR #263, which is copy only. **One direction has since landed:** `Until I leave`
-      clears `endsOnMotion`, so the movement exit has a way back and the card follows it
-      (`SPEC.md` §4.4). What the decision still owes: the reverse, `Until I move` over a departure
-      snooze, which is the harder half because departure is the tracking mode rather than a flag; whether the cinema
-      case is accepted (a chosen time outlasting departure, on the grounds that the status line
-      says so), and what happens to a snooze whose replaced exit was the only one its tracking
-      mode could serve. The duration cap stays a separate decision, below.
+      **Confirmed as the direction (maintainer, 2026-09-11):** tapping a row replaces the current
+      end conditions rather than adding to them. **Two of the three rows have landed**, not the
+      model whole: `Until I leave` clears `endsOnMotion`, and a chosen time clears both the
+      movement exit and departure tracking, so `Until (time)` starts or switches to a timer-only
+      snooze ("The Until (time) button should start/switch to a timer only snooze"). The half
+      that made this hard is gone — departure is a flag on the record now
+      (`ActiveSnooze.endsOnDeparture`, kept apart from `mode`, which stays capability) rather
+      than the tracking mode itself.
+
+      **`Until I move` is the row still to decide, and nothing has changed about it**: it adds an
+      exit and takes none off, so a departure snooze given a movement exit still ends on either.
+      Making it replace is now merely a product call rather than a blocked one, and it is not
+      one to take on autopilot — it would mean a tap on `Until I move` silently ending departure
+      tracking, which is the direction that can leave a phone quiet after the user walks out.
+
+      **The cinema case is answered by the replacement model rather than accepted as a cost:**
+      walk out at the interval and a snooze narrowed to a time does stay silent until that time,
+      because that is what the row said it would do. What made the old behavior wrong was not
+      which exit won but that the row promised one thing and the snooze did another. `Until I
+      leave` is one tap away and is offered from the machinery's capability, so the way back is
+      always there.
+
+      **Still open:** what happens to a snooze whose replaced exit was the only one its tracking
+      mode could serve — today a duration-only snooze simply has no `Until I leave` row, which
+      is consistent but has not been looked at on a device. The duration cap stays a separate
+      decision, below.
 
 - [ ] **During Wi-Fi grace the countdown is the cap's, not the deadline's** (maintainer,
       2026-09-11: "why would we say 3h 40m left if there's only minutes of grace left"). A snooze

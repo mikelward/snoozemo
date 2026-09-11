@@ -24,7 +24,6 @@ import app.snoozemo.core.EndReason
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.PolicyAccessAction
 import app.snoozemo.core.PolicyAccessChange
-import app.snoozemo.core.PresenceEvent
 import app.snoozemo.core.PresenceMonitor
 import app.snoozemo.core.ReleaseEscalation
 import app.snoozemo.core.ReleaseProgress
@@ -44,6 +43,7 @@ import app.snoozemo.core.ZenRuleStatusAction
 import app.snoozemo.core.ZenRuleStatusChange
 import app.snoozemo.core.ZenTrigger
 import app.snoozemo.core.endReason
+import app.snoozemo.core.endReasonFor
 import app.snoozemo.core.endingFor
 import app.snoozemo.core.logSummary
 import app.snoozemo.core.ruleSubject
@@ -288,6 +288,21 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     private var anchorCapture: AutoCloseable? = null
 
     /**
+     * Whether an anchor capture is still out — asked instead of
+     * `anchorCapture != null`, which cannot answer it.
+     *
+     * A capture can finish **inside** `begin`: `start()` runs there, and both
+     * halves can settle synchronously — no location permission plus a refused
+     * Wi-Fi callback, or no `ConnectivityManager` at all. The callback then
+     * nulls the field before the assignment that would set it, so the
+     * already-completed handle is what lands, and a predicate reading the
+     * field stays true for the life of the snooze. [wantsForeground] read it
+     * that way, which held the location foreground service to the cap for a
+     * snooze that had stopped tracking anything (Codex, PR #267).
+     */
+    private var capturePending: Boolean = false
+
+    /**
      * Collects the presence monitor while a snooze runs; this service's
      * main thread, because the controller is confined to it.
      */
@@ -432,6 +447,45 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * one, and liveness alone cannot tell an end-and-re-arm apart.
      */
     private fun startPresence(snooze: ActiveSnooze) {
+        // **The backstop first, and above the timer-only return below.** It is
+        // not the presence probe's own schedule: a wake also re-arms the cap,
+        // re-asserts the zen rule and reconciles policy access (SPEC.md §6.10),
+        // which a snooze running on its timer needs exactly as much as any
+        // other — more, since the timer is now the only thing ending it. Below
+        // the return it would be skipped for the one snooze whose backstop is
+        // load-bearing, which is §7's second layer quietly coming off.
+        // `KEEP` makes the re-arm free on every path that reaches here.
+        SnoozeBackstop.schedule(applicationContext)
+        // **A snooze the user narrowed to its timer is not watched** (SPEC.md
+        // §4.4). Guarded here rather than at each caller because the callers
+        // are every path that arms or restores a watch — the arm's capture, the
+        // cold restore, the warm re-arm, the re-grant — and one of them
+        // forgetting is a geofence quietly back on for an exit the user
+        // replaced, costing battery for a departure that can no longer end
+        // anything. The record is the durable copy the restore paths read, so
+        // asking it here is what makes the answer survive a process death —
+        // but answering is only half of it; see the teardown below.
+        if (!snooze.endsOnDeparture) {
+            SnoozeDebugLog.event("presence not started: this snooze ends on its timer only")
+            // **Take it down rather than merely decline to start it.** Not
+            // starting is not the same as nothing running, and the comment
+            // above used to claim the record covered the process-death case
+            // "by construction" — it does not. A geofence is *durable*: it
+            // outlives the process that registered it. So a death between the
+            // record write and [stopDepartureWatch] leaves a fence registered
+            // for a snooze that is now timer-only, and a cold restore reaching
+            // a bare `return` here left it waking the app to measure a
+            // distance for the rest of the snooze (Codex, PR #267).
+            //
+            // `stop()` is documented idempotent and releases everything
+            // `start` acquired, so the ordinary case — nothing registered —
+            // costs a no-op, and this is the one place every arm, restore and
+            // re-grant passes through. Reconciling here rather than adding a
+            // fourth caller that has to remember is the point of the choke
+            // point.
+            stopDepartureWatch()
+            return
+        }
         // Replaces only the collection — never through [stopPresence], whose
         // `monitor.stop()` means *the snooze is over*: it settles the bridge's
         // held exit and takes down the durable fence, and on the restore path
@@ -441,11 +495,6 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // re-registers the fence under the same id, which replaces in place.
         presenceJob?.cancel()
         presenceJob = null
-        // The periodic backstop rides with the watch (SPEC.md §6.10): armed
-        // here because every path that starts a watch — arm and restore
-        // alike — is a path the backstop must outlive, and KEEP makes the
-        // re-arm free.
-        SnoozeBackstop.schedule(applicationContext)
         val startedAt = snooze.startedAt
         val seed = presenceSeedFor(snooze)
         presenceJob = presenceScope.launch {
@@ -467,13 +516,16 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 // only caller left to escalate. Same pairing as `End now` and
                 // the clock-change ends; the helper no-ops when the end
                 // actually landed (Codex, PR #73).
-                when (update.event) {
-                    PresenceEvent.Departed ->
-                        ensureCapAfterRefusedEnd(EndReason.DEPARTURE)
-                    is PresenceEvent.CapabilityLost ->
-                        ensureCapAfterRefusedEnd(EndReason.LOST_CAPABILITY)
-                    else -> Unit
-                }
+                //
+                // **Through [endReasonFor], so this asks exactly what the
+                // controller asked.** Reading the event type alone made this
+                // escalate an ending the controller had just declined to
+                // make: on a snooze narrowed to its timer, a late departure
+                // was ignored there and then ended here a moment later, since
+                // "still active" is the same shape as a refused release
+                // (Codex, PR #267). A null reason means nothing was supposed
+                // to end, so there is nothing to escalate.
+                update.event?.endReasonFor(running)?.let { ensureCapAfterRefusedEnd(it) }
             }
         }
     }
@@ -511,6 +563,13 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     private fun repairDegradedWatch() {
         val running = controller.active ?: return
         if (!running.anchor.hasUsableFix) return
+        // **Its own return, not `effectiveMode` in the guard below.** That
+        // guard returns early when the watch is *healthy*, so reading it
+        // through `effectiveMode` inverts the meaning for exactly the case
+        // this is about: a timer-only snooze reads `DURATION_ONLY`, falls
+        // through, and pokes a repair for the fence it just had taken down.
+        // A snooze the user narrowed to its timer has no watch to repair.
+        if (!running.endsOnDeparture) return
         if (running.mode == app.snoozemo.core.TrackingMode.FULL) return
         SnoozeDebugLog.event("watch degraded on a warm wake; re-attempting the fence")
         pokeWatchRepair()
@@ -589,6 +648,38 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // this path never reaches (cold death) costs one empty backstop
         // wake, which retires itself.
         SnoozeBackstop.cancel(applicationContext)
+    }
+
+    /**
+     * Takes the departure watch down while the snooze **keeps running** — what
+     * choosing a time does to a snooze that was ending on leaving (SPEC.md
+     * §4.4).
+     *
+     * Deliberately not [stopPresence], and the difference is the whole reason
+     * this exists: that one means *the snooze is over*, and cancels
+     * [SnoozeBackstop] with it. The backstop is not only the presence probe —
+     * it re-arms the cap, re-asserts the zen rule, and reconciles policy access
+     * on a cold wake (SPEC.md §6.10) — so cancelling it here would take §7's
+     * second layer off a snooze that still has hours to run, to save a wake
+     * that is deferrable and batched anyway. The cap alarm would still be the
+     * floor, but the layer that catches *it* failing would be gone, which is
+     * the one invariant this app does not get to weaken.
+     *
+     * What does stop is the expensive half: the geofence comes off, the
+     * location requests end, and nothing wakes the app to measure a distance
+     * again. On an eight-hour snooze that is the battery cost `AGENTS.md` asks
+     * to be stated rather than assumed — it goes to roughly what a duration-only
+     * snooze costs, because that is now what this is.
+     */
+    private fun stopDepartureWatch() {
+        presenceJob?.cancel()
+        presenceJob = null
+        presenceMonitor.stop()
+        // Same reasoning as in [stopPresence]: nothing is measuring a distance
+        // any more, so a reading left standing is stale by construction and
+        // the screen would go on showing how far away the user was when the
+        // watch came down.
+        DepartureObservations.clear()
     }
 
     /** Restoring is attempted once per service instance, from onStartCommand. */
@@ -1680,6 +1771,37 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             decidingArm = false
         }
         if (!armed) return EndChoiceResult.REFUSED
+
+        // **A chosen time starts a timer-only snooze** (maintainer,
+        // 2026-09-11: "The Until (time) button should start/switch to a timer
+        // only snooze"). The idle rows' time row is the same choice the running
+        // rows make, so it has to mean the same thing on both — a snooze armed
+        // from it that still ended on leaving would be the row naming one thing
+        // and the snooze doing another, which is the whole defect.
+        //
+        // Gated on the extra rather than on the cap, because the two are not
+        // the same question: a plain `Snooze` tap arms with the *default* cap
+        // and chose nothing, so it keeps departure. Only a row that named a
+        // time narrows the snooze to it.
+        //
+        // After the arm rather than before it, like the movement choice below
+        // and for the same reason: the snooze has to exist before a choice can
+        // be applied to it. A failure here leaves a snooze that is running and
+        // watched — the state it would have had anyway — so it reports through
+        // the shade rather than stranding the tap.
+        val choseATime = (intent?.getLongExtra(EXTRA_CAP_EXPIRES_AT, 0L) ?: 0L) > 0L
+        if (choseATime) {
+            controller.active?.let { running ->
+                SnoozeDebugLog.event("arm: until a chosen end, and on the timer alone")
+                // The same helper the running rows use, so the row means one
+                // thing on both paths and neither can grow an exit the other
+                // takes off. A fresh arm has no movement exit to clear, so in
+                // practice this is the departure half — but saying so in code
+                // rather than in a comment is what keeps it true.
+                makeTimerOnly(running, restoring = false)
+            }
+        }
+
         if (intent?.getBooleanExtra(EXTRA_ENDS_ON_MOTION, false) != true) return EndChoiceResult.APPLIED
 
         // `Until I move` chosen as the way to start: the same choice the
@@ -1875,6 +1997,9 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // that is now legitimately ours.
         pendingFailure.clearRuleStuck()
         notifications.cancelStuckRule()
+        // And an exit warning, which belongs to whatever snooze came before
+        // this one — the same reason the one-shot above comes down here.
+        notifications.cancelExitWarning()
         // A leftover `Couldn't end the snooze — trying again` is stale for the
         // same reason: whatever release it was promising, this arm now owns
         // the rule, and the retry machinery drops stale releases on its own.
@@ -1930,8 +2055,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      */
     private fun beginAnchorCaptureFor(snooze: ActiveSnooze) {
         anchorCapture?.close()
+        anchorCapture = null
+        capturePending = true
         val startedAt = snooze.startedAt
-        anchorCapture = beginAnchorCapture(snooze.anchor.capturedAt) { anchor ->
+        val handle = beginAnchorCapture(snooze.anchor.capturedAt) { anchor ->
+            capturePending = false
             anchorCapture = null
             val running = controller.active
             if (running == null || running.startedAt != startedAt) {
@@ -1948,6 +2076,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // finds the armed snooze; identity-guarded either way.
             controller.active?.let(::startPresence)
         }
+        // **Only held while it is actually out.** A synchronous completion has
+        // already run its own cleanup and cleared the flag, so storing the
+        // handle here would leave a finished capture looking live — see
+        // [capturePending]. Nothing to close either: `close()` is a no-op once
+        // the session is done.
+        if (capturePending) anchorCapture = handle
     }
 
     /**
@@ -2171,8 +2305,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * have left the user told nothing.
      */
     private fun setMotionEnd(intent: Intent?) {
+        // The previous attempt's card comes down as this one starts, not when
+        // it succeeds — see [setCap] — and from inside [applyMotionEndChoice],
+        // past its validation, so a stale intent for a snooze that has already
+        // ended cannot take down the running snooze's card on its way to
+        // `GONE`.
         val result = applyMotionEndChoice(intent)
-        if (result == EndChoiceResult.APPLIED) notifications.cancelFailure()
         val requestId = intent?.getLongExtra(EXTRA_CHOICE_REQUEST_ID, 0L) ?: 0L
         // No request id means no row behind this — nowhere to show a refusal
         // inline — so it says so in the shade instead, on the same terms as a
@@ -2221,7 +2359,15 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             SnoozeDebugLog.event("until-i-move: the choice was for a snooze that is no longer running")
             return EndChoiceResult.GONE
         }
-        return applyMotionEnd(snooze, wanted)
+        // **On the outcome, not on reaching this line** — the same rule
+        // [makeTimerOnly] keeps, and the same defect it was fixing: this ran
+        // ahead of [applyMotionEnd], which refuses without posting when the
+        // phone cannot hold the sensor, so a refused tap deleted a warning
+        // that was still true and put nothing in its place. `APPLIED` is the
+        // one outcome with nothing left to say about this snooze.
+        return applyMotionEnd(snooze, wanted).also {
+            if (it == EndChoiceResult.APPLIED) notifications.cancelFailure()
+        }
     }
 
     /**
@@ -2231,6 +2377,10 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * hold the sensor is rolled back — and reported — the same way on both.
      */
     private fun applyMotionEnd(snooze: ActiveSnooze, wanted: Boolean): EndChoiceResult {
+        // Noted before the write: a second tap on a row that is already set
+        // changes nothing, and must not retire a warning about an exit that is
+        // still armed.
+        val changing = snooze.endsOnMotion != wanted
         if (snooze.endsOnMotion != wanted) {
             // **The record first, and only then the controller** — [extend]'s
             // ordering, for [extend]'s reason. The record is what the restore
@@ -2278,17 +2428,92 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // that is what they are told. The card follows the record and the log
         // has the detail; the row is where the tap was.
         val armed = controller.active?.endsOnMotion == true && motionEnd?.listening == true
-        return if (!wanted || armed) EndChoiceResult.APPLIED else EndChoiceResult.REFUSED
+        val result = if (!wanted || armed) EndChoiceResult.APPLIED else EndChoiceResult.REFUSED
+        // [applyDepartureEnd]'s rule, for this exit: a change that landed makes
+        // any warning about it false, whichever way it went.
+        if (changing && result == EndChoiceResult.APPLIED) notifications.cancelExitWarning()
+        return result
+    }
+
+    /**
+     * Turns leaving on or off as an end condition for [snooze], the running
+     * one, and starts or stops the watch to match (SPEC.md §4.4).
+     *
+     * **The record first, then the controller, then the watch** — the ordering
+     * [applyMotionEnd] keeps, for the same reason. The record is what a restore
+     * re-decides the watch from after a process death, so nothing may act on
+     * this choice until the copy that survives one carries it; a watch stopped
+     * against a record that still says `true` would come back on the next wake
+     * and quietly re-arm an exit the user replaced.
+     *
+     * **Unlike [applyMotionEnd] this cannot be refused by the hardware.** That
+     * one asks for a sensor the phone may not have and reports what it actually
+     * got; taking an exit *away* always succeeds, and putting one back is bounded
+     * by the tracking mode the caller has already checked rather than by
+     * anything discovered here. So there is no reconcile and no rollback — only
+     * the persist, which the caller treats as fatal because an unpersisted
+     * choice is one the next wake undoes.
+     */
+    private fun applyDepartureEnd(snooze: ActiveSnooze, wanted: Boolean): Boolean {
+        if (snooze.endsOnDeparture == wanted) return true
+        if (!updateRecordOrUndo(snooze.copy(endsOnDeparture = wanted), snooze)) {
+            Log.w(TAG, "Recording the departure-exit choice failed; the stored choice stands.")
+            SnoozeDebugLog.warning("departure exit not persisted; the stored choice stands")
+            return false
+        }
+        controller.setEndsOnDeparture(wanted)
+        // **An exit that just changed retires the warning about it.** The card
+        // means "the time you chose did not take this off", and either
+        // direction of this write makes that false: taking departure off is
+        // the removal finally landing, and putting it back is the user
+        // choosing the exit deliberately. The restore path clears the movement
+        // exit through [applyMotionEnd], which retires it there for the same
+        // reason — so `Still ends if you move or leave` could not survive a
+        // successful `Until I leave` (Codex, PR #267). [makeTimerOnly] posts
+        // again afterwards if its own attempt left one armed.
+        notifications.cancelExitWarning()
+        // The watch follows the record, and only now. Stopping is the narrow
+        // teardown — the snooze keeps running on its cap, so [SnoozeBackstop]
+        // stays with it (see [stopDepartureWatch]).
+        val current = controller.active
+        if (wanted) {
+            current?.let(::startPresence)
+        } else {
+            stopDepartureWatch()
+        }
+        // **Repaint here rather than leaving it to the transition.**
+        // `setEndsOnDeparture` does deliver one, but [onStateChanged]'s
+        // `ARMING` branch deliberately posts no card — it runs from inside
+        // `beginArming`, before the rule goes on, and a `notify` there sits on
+        // the tap-to-`STATE_TRUE` stretch — and the tile refresh is skipped for
+        // the same window. That is right for the arm's own delivery and wrong
+        // for this one: choosing a time from the tile sheet lands inside the
+        // up-to-ten-second anchor capture, so the state is still `ARMING` and
+        // the card and tile went on saying the snooze ends when you leave until
+        // the capture happened to finish (Codex, PR #267).
+        //
+        // Safe on the arm path: `armAsAsked` reaches this only through
+        // `makeTimerOnly`, which runs after `armWithCap` has both turned the
+        // rule on and posted the card, so nothing is added between the tap and
+        // the phone going quiet.
+        restateOngoingCard()
+        SnoozeTileBridge.refresh()
+        SnoozeDebugLog.event(
+            if (wanted) "departure exit armed again" else "departure exit off; the timer is the only end",
+        )
+        return true
     }
 
     /**
      * A row committed in the end-condition sheet (SPEC.md §4.4).
      *
      * Choosing a time **moves the cap**, in whichever direction the chosen
-     * time lies (maintainer, 2026-09-11) and never past [ActiveSnooze.capCeilingAt];
-     * it does not add a fourth exit and it does not disable departure tracking.
-     * Walking out earlier still ends the snooze earlier — whichever comes first
-     * wins (§7) — so there is nothing here to tell the presence engine about.
+     * time lies (maintainer, 2026-09-11) and never past [ActiveSnooze.capCeilingAt],
+     * **and replaces the other end conditions**: both the movement exit and
+     * departure tracking come off, so a snooze told to end at 14:00 ends at
+     * 14:00 and not when the user walks out at 13:40 ([makeTimerOnly]). This
+     * paragraph said the opposite until the replacement model reached the time
+     * row — it is the premise that changed, not a correction.
      *
      * The sheet does its own arithmetic against the clock, because §6.9 forbids
      * it waiting on the record to exist. So the value arriving here was computed
@@ -2313,18 +2538,29 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * exit, and it holds for exits nobody has written yet.
      */
     private fun setCap(intent: Intent?) {
-        val result = applyChosenEnd(intent)
         // A retry that took must not leave the previous attempt's card standing
         // in the shade saying it didn't. The one-shot carries its own id, so
         // the ongoing card reposting over the new cap does not replace it, and
         // a notifications-denied user aside, the shade is exactly where this
         // user was told to look (Codex, PR #118).
         //
-        // Keyed off the result rather than added beside one `return`, for the
-        // reason `applyChosenEnd` is a total function at all: every `APPLIED`
-        // exit clears it, including the one that applies by doing nothing and
-        // any written later.
-        if (result == EndChoiceResult.APPLIED) notifications.cancelFailure()
+        // **There is no cancel here, and that is the fix rather than an
+        // omission.** Three rounds placed one at a *position* in this sequence
+        // and each position was wrong in its own way: keyed off `APPLIED` it
+        // deleted the warning `makeTimerOnly` had just posted; at the top of
+        // this function it let a stale intent take down a *different* snooze's
+        // card on its way to `GONE`; past the identity check it still ran
+        // ahead of the floor and exit validation, so a choice that was then
+        // refused deleted a warning that was still true and posted nothing in
+        // its place (Codex, PR #267, three times).
+        //
+        // What the position was standing in for is an outcome. A card that
+        // says something still true comes down only when something truer
+        // replaces it, and every post below shares this id, so a replacement
+        // is what a post *is*. The one outcome with nothing to post and
+        // nothing left to warn about — the choice fully applied — cancels, in
+        // [makeTimerOnly], where that is known.
+        val result = applyChosenEnd(intent)
         val requestId = intent?.getLongExtra(EXTRA_CHOICE_REQUEST_ID, 0L) ?: 0L
         // No request id means no sheet behind this choice — the ongoing
         // notification's `Until <time>` action, which has nowhere to show a
@@ -2438,20 +2674,47 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // **Before the cap work, and the snooze re-read from the controller
         // after**, because both writes copy from a snapshot: clearing second
         // would have the cap write's copy carry the flag straight back, and
-        // carrying on from the stale snapshot would put the old cap back. It
-        // also fails in the safer direction — a clear that lands over a cap
-        // restore that does not leaves the snooze ending *earlier* than asked,
-        // which is where D7 sends every ambiguity.
+        // carrying on from the stale snapshot would put the old cap back.
         //
-        // Only this direction: the reverse — `Until I move` over a departure
-        // snooze — is the harder half, since departure is the tracking mode
-        // rather than a flag (`TODO.md`, *Decide what tapping an end condition
-        // means*).
-        val snooze = if (restoring && running.endsOnMotion) {
-            if (applyMotionEnd(running, wanted = false) != EndChoiceResult.APPLIED) {
+        // A restore *adds* an exit and lengthens the cap, so its exits go
+        // first: a clear that lands over a cap restore that does not leaves
+        // the snooze ending *earlier* than asked, which is where D7 sends
+        // every ambiguity. A chosen time is the mirror — it *removes* exits —
+        // so its narrowing runs after the cap work instead; see
+        // [makeTimerOnly] for why that asymmetry is the rule rather than an
+        // inconsistency.
+        //
+        // **And within the exits, the same rule again: the addition first,
+        // the removal after.** This ran the clear first, so a movement clear
+        // that landed over a departure write that did not left *both* flags
+        // off under the still-shortened cap — nothing watching at all, from
+        // the one control the user reached for to put an exit back (Codex,
+        // PR #267). The removal is always the half whose failure can make a
+        // snooze outlast something, so it is always the half that goes last.
+        val restored = if (restoring && !running.endsOnDeparture) {
+            if (!applyDepartureEnd(running, wanted = true)) return EndChoiceResult.REFUSED
+            controller.active ?: run {
+                SnoozeDebugLog.event("end-condition: the snooze ended while its departure exit came back")
+                return EndChoiceResult.GONE
+            }
+        } else {
+            running
+        }
+
+        val snooze = if (restoring && restored.endsOnMotion) {
+            if (applyMotionEnd(restored, wanted = false) != EndChoiceResult.APPLIED) {
                 SnoozeDebugLog.warning(
                     "end-condition: could not take the movement exit off for a departure restore",
                 )
+                // **Stated after both halves, like [makeTimerOnly]'s.** A
+                // restore is two independent writes, and the per-exit retire
+                // in [applyDepartureEnd] has already run for the first — so
+                // without this the movement exit survives with nothing saying
+                // so, which is the failure the warning exists to prevent
+                // (Codex, PR #267). The retire is right for a single-exit row
+                // and wrong mid-transaction; the transaction's owner is what
+                // reconciles.
+                notifications.showMovementExitStayedOn()
                 return EndChoiceResult.REFUSED
             }
             // The clear is a transition, so the controller is authoritative
@@ -2462,18 +2725,18 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 return EndChoiceResult.GONE
             }
         } else {
-            running
+            restored
         }
 
         val target = if (restoring) snooze.capCeilingAt else requested.coerceAtMost(snooze.capCeilingAt)
-        // **A restore is the one choice that lengthens**, and it is bounded by
-        // the same ceiling everything else is: `capCeilingAt` is where this
-        // snooze was always going to end before the user shortened it, so
-        // nothing becomes possible that was not a moment earlier. `+30 min`
-        // already moves a cap this way (§4.3) — this is that, in one tap
-        // instead of sixteen, and it exists because "until I leave" has to be
-        // choosable *after* a time or the row is a label rather than a control
-        // (maintainer, 2026-09-08).
+        // **A restore goes straight to the ceiling**, and is bounded by the
+        // same one everything else is: `capCeilingAt` is where this snooze was
+        // always going to end before the user shortened it, so nothing becomes
+        // possible that was not a moment earlier. No longer the only choice
+        // that lengthens — a chosen time moves the cap either way now — but
+        // still the only one that names no time, and it exists because "until
+        // I leave" has to be choosable *after* a time or the row is a label
+        // rather than a control (maintainer, 2026-09-08).
         // **A chosen time moves the cap either way** (maintainer, 2026-09-11:
         // "the plus button should always be available to increase that time").
         // This read `!target.isBefore(...)` — anything not earlier was "changes
@@ -2503,7 +2766,10 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // Clearing before this return is what keeps that from being a tap
             // that does nothing at all.
             SnoozeDebugLog.event("end-condition: the chosen end changes nothing; leaving the cap")
-            return EndChoiceResult.APPLIED
+            // The cap being already right is not a reason to leave exits the
+            // user replaced: a time chosen over a snooze that already ends at
+            // that moment still means "and nothing else ends it".
+            return makeTimerOnly(snooze, restoring)
         }
 
         // The alarm first, exactly as `+30 min` does it, and for the same reason
@@ -2579,6 +2845,100 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         } else {
             controller.lowerCapTo(target)
         }
+        return makeTimerOnly(controller.active ?: snooze, restoring)
+    }
+
+    /**
+     * Takes the other end conditions off a snooze a time was just chosen for,
+     * so the timer really is the only one (SPEC.md §4.4). A no-op for a
+     * departure restore, which is adding an exit rather than replacing them.
+     *
+     * **After the cap work, not before it, and that is the whole ordering
+     * rule**: whichever half is done first has to be the one whose failure
+     * leaves the snooze ending *earlier*. Removing an exit is never that half —
+     * it can only make a snooze outlast something — so it goes last, once the
+     * deadline it is being traded for is actually in place. Done first, a
+     * refused `CapAlarm.arm` left an eight-hour snooze with its eight hours and
+     * nothing watching for a departure, which is a phone quiet all afternoon
+     * after the user walked out (Codex, PR #267). The restore is the mirror and
+     * runs the other way round, above.
+     *
+     * **Both exits, not only departure.** `Until (time)` replaces the end
+     * conditions, and a significant-motion listener left armed ends a
+     * "timer-only" snooze the moment the user stands up (Codex, PR #267).
+     *
+     * A failure here is reported but not fatal: the deadline the user picked is
+     * already in place, and an exit that stayed armed only ends the snooze
+     * sooner. So the sheet hears `APPLIED` — the time was applied — and the
+     * shade carries what did not.
+     *
+     * **This is also where the shade is cleared**, on the one outcome that has
+     * nothing to say: the choice applied and left no exit armed. Everything
+     * else posts to the same id, so it replaces; a refusal that posts nothing
+     * leaves whatever was there, because a warning about an exit that is still
+     * armed is still true. See [setCap] for what cancelling by position cost.
+     */
+    private fun makeTimerOnly(snooze: ActiveSnooze, restoring: Boolean): EndChoiceResult {
+        if (restoring) {
+            // The restore applied, so whatever the shade was saying about this
+            // snooze is now the previous attempt's and stale.
+            notifications.cancelFailure()
+            // **Including the exit warning, and here rather than only in the
+            // per-exit helpers**: a restore over a snooze whose departure was
+            // never taken off changes neither exit, so neither helper runs and
+            // a `Still ends when you leave` stayed up after the user had
+            // deliberately put that exit back (Codex, PR #267). The restore
+            // reaching this line is the whole choice having succeeded, which
+            // is the condition the card's own rule names.
+            notifications.cancelExitWarning()
+            return EndChoiceResult.APPLIED
+        }
+
+        var running = snooze
+
+        // **Two independent removals, and one failing must not abandon the
+        // other.** A transient refusal on the movement write used to `return`
+        // here, so departure stayed armed too and the card named only the
+        // movement exit — the snooze then ended on a departure the user had
+        // just been told nothing about (Codex, PR #267). Neither write depends
+        // on the other, so both are attempted and what survived is reported
+        // from what is actually left.
+        var movementStayed = false
+        if (running.endsOnMotion) {
+            if (applyMotionEnd(running, wanted = false) == EndChoiceResult.APPLIED) {
+                running = controller.active ?: run {
+                    SnoozeDebugLog.event("end-condition: the snooze ended while its movement exit came off")
+                    return EndChoiceResult.GONE
+                }
+            } else {
+                movementStayed = true
+                SnoozeDebugLog.warning("end-condition: the movement exit stayed armed on a chosen time")
+            }
+        }
+
+        val departureStayed =
+            running.endsOnDeparture && !applyDepartureEnd(running, wanted = false)
+        if (departureStayed) {
+            SnoozeDebugLog.warning("end-condition: departure stayed armed on a chosen time")
+        }
+
+        // Named from what is left rather than posted per failure: the two share
+        // one one-shot id, so a second post would replace the first and the
+        // user would hear about one exit while two were armed.
+        // **The choice applied, so the previous attempt's failure card is now
+        // false** — this outcome clears it, rather than any position in the
+        // sequence above. A refusal that posts nothing leaves the shade alone;
+        // every refusal with something to say posts to that id, which replaces.
+        notifications.cancelFailure()
+        // The exit warning describes the *snooze* rather than the attempt, so
+        // it is posted or retired by what is actually left armed — on its own
+        // id, which is what lets the two have different lifetimes at all.
+        when {
+            movementStayed && departureStayed -> notifications.showBothExitsStayedOn()
+            movementStayed -> notifications.showMovementExitStayedOn()
+            departureStayed -> notifications.showDepartureExitStayedOn()
+            else -> notifications.cancelExitWarning()
+        }
         return EndChoiceResult.APPLIED
     }
 
@@ -2647,6 +3007,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 // wake-up nobody wants.
                 anchorCapture?.close()
                 anchorCapture = null
+                capturePending = false
                 snooze?.let { erasing = it.startedAt }
                 forget()
                 // After the record is gone, like the refused-arm transition:
@@ -2669,6 +3030,14 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 // would send the next start off to drive an already-off rule
                 // off again — harmless, but a promise outliving its cause.
                 notifications.cancelStuckRule()
+                // And an exit warning, for the same reason: it describes a
+                // snooze that no longer exists, and nothing else takes it
+                // down — the ended card is a different id, and a manual
+                // ending posts none at all (Codex, PR #267). Only reachable
+                // because the warning has its own id: on the one-shots'
+                // shared one this cancel would also delete `Couldn't forget
+                // this snooze`, which `forget()` just above can post.
+                notifications.cancelExitWarning()
                 if (pendingFailure.ruleMayBeStuck()) pendingFailure.clearRuleStuck()
                 // So does `Couldn't end the snooze — trying again`: the retry
                 // it promised is the release that just confirmed, and leaving
@@ -2764,6 +3133,9 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 notifications.cancelStuckRule()
             }
             notifications.cancelEndFailure()
+            // Nothing on disk describes a snooze, so an exit warning describes
+            // nothing either. The `CapAlarm` twin of this cleanup does the same.
+            notifications.cancelExitWarning()
             return
         }
 
@@ -3279,7 +3651,26 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // is tracking and is a stated compromise on a motion-only snooze —
         // `TODO.md` carries it as release-blocking rather than as a note to
         // remember.
-        return snooze.mode.keepsProcessResident || snooze.endsOnMotion
+        // `effectiveMode`: a snooze narrowed to its timer has no departure to
+        // stay resident for, so it holds no foreground service on that account
+        // — the battery half of what `Until (time)` now means (AGENTS.md, the
+        // battery budget). `endsOnMotion` still counts, since the movement exit
+        // is a separate choice and does need the process.
+        //
+        // **But not while a capture is still out.** Choosing a time during the
+        // arm's up-to-ten-second anchor capture — the ordinary tile-sheet
+        // flow — makes `effectiveMode` duration-only at once, and the repost
+        // that announces it runs `promote`, which demotes the service on the
+        // spot. The capture is deliberately left running (§4.4) because its
+        // anchor is what `Until I leave` goes back to; demoting while it is in
+        // flight means a process killed before the callback lands leaves a
+        // record still `SETTLING` with an empty anchor, and the way back is
+        // gone for the life of that snooze — the capture kept, and its whole
+        // point lost anyway (Codex, PR #267). So the window it needs is held,
+        // and the demotion happens on the repost after it lands.
+        return snooze.effectiveMode.keepsProcessResident ||
+            snooze.endsOnMotion ||
+            capturePending
     }
 
     /**
@@ -3503,7 +3894,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // FULL on a level-only update carrying no fix, and the pre-outage
         // number would reappear as if it were current — where the phone
         // *was*, presented as where it is.
-        if (current.mode != TrackingMode.FULL) DepartureObservations.clear()
+        if (current.effectiveMode != TrackingMode.FULL) DepartureObservations.clear()
         if (!store.update(current)) {
             Log.w(TAG, "Recording the tracking mode failed; a restart would misstate tracking.")
         }
@@ -3555,6 +3946,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // early, not a new failure mode.
         anchorCapture?.close()
         anchorCapture = null
+        capturePending = false
         // The *collection* dies with this instance — the next one restores
         // the record and re-collects — but deliberately not through
         // [stopPresence]: `stop()` removes the geofence, and Android destroys

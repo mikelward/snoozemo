@@ -239,7 +239,71 @@ data class ActiveSnooze(
      * armed a watch for it.
      */
     val endsOnMotion: Boolean = false,
+    /**
+     * Whether leaving still ends this snooze — the user's choice, not the
+     * machinery's ability (SPEC.md §4.4).
+     *
+     * **The mirror of [endsOnMotion], and a mirror in the awkward direction:**
+     * that one adds an exit and defaults off, this one *removes* one and
+     * defaults on. Choosing a time is what takes it off (maintainer,
+     * 2026-09-11: "The Until (time) button should start/switch to a timer only
+     * snooze"), and `Until I leave` is what puts it back.
+     *
+     * **Intent, kept apart from capability.** [mode] answers "what can this
+     * snooze watch for", is recomputed from the anchor and the engine's health
+     * on every presence update, and would overwrite a choice stored in it
+     * within seconds. It also has to stay distinguishable: a card reading
+     * `Timer only` because the user asked is a different thing from one
+     * reading it because location died, and principle 2 is that the user can
+     * tell. [effectiveMode] is where the two meet for rendering.
+     *
+     * On the record rather than beside it, for the reason [endsOnMotion] is:
+     * the watch is decided from a restored record after every process death,
+     * and a flag held only in memory would come back `true`, quietly re-arming
+     * a departure the user had replaced.
+     *
+     * Defaults to true, which is what every record written before this field
+     * existed meant: departure tracking was not something a user could switch
+     * off, so an old record is one that still ends on leaving.
+     */
+    val endsOnDeparture: Boolean = true,
 ) {
+    /**
+     * What this snooze actually ends on, for anything that renders or reasons
+     * about departure — [mode] narrowed by the user's [endsOnDeparture] choice.
+     *
+     * One property rather than two halves at every call site, because "the mode
+     * *and* the flag" is a pair somebody eventually forgets one of, and the
+     * half that gets forgotten is the one that promises an exit nothing is
+     * watching for (principle 1). [mode] stays available for the debug log and
+     * for `Until I leave`, which need to know what the machinery *could* do.
+     */
+    val effectiveMode: TrackingMode
+        get() = if (endsOnDeparture) mode else TrackingMode.DURATION_ONLY
+
+    /**
+     * [degradation] narrowed the same way [effectiveMode] is: no cause at all
+     * once the user has chosen a timer, because there is nothing left for a
+     * cause to explain.
+     *
+     * The pair, not the mode alone. [effectiveMode] promises above that a card
+     * reading `Timer only` because the user asked stays distinguishable from
+     * one reading it because location died — and narrowing only the mode
+     * breaks exactly that promise, since a snooze that was `WIFI_ONLY` for a
+     * weak signal and then had a time chosen for it rendered
+     * `Timer only — weak signal`: the user's own choice reported as a failure
+     * of the machinery (Codex, PR #267). A degradation is a statement about
+     * tracking that is *trying*, so it survives only as long as something is.
+     *
+     * Beside [effectiveMode] rather than left to each render site to remember,
+     * for the reason that property exists: two halves at a call site is a pair
+     * somebody eventually takes one of. [degradation] stays available for the
+     * debug log and for `Until I leave`, which need to know what the machinery
+     * would be contending with if the exit went back on.
+     */
+    val effectiveDegradation: DegradationCause?
+        get() = if (endsOnDeparture) degradation else null
+
     /**
      * How long is left before the cap fires, floored at zero. Never negative: an
      * overdue cap is expressed as [isExpired], not as a negative countdown that a

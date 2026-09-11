@@ -79,7 +79,25 @@ internal data class TileSnapshot(
     companion object {
 
         /**
-         * Whether the stored mode is a settled claim that nothing is watching.
+         * Whether the record is a settled claim that nothing is watching.
+         *
+         * **Any event exit at all disqualifies the claim.** `Timer only` says
+         * nothing but the clock can end this snooze, so the movement exit
+         * counts as much as departure does — and a time chosen *then*
+         * `Until I move` is a state this change made newly reachable, which
+         * the tile alone rendered as `Timer only` while the notification and
+         * the screen both named the movement exit (Codex, PR #267).
+         *
+         * **The user's choice first, then the mode.** `ends_on_departure` is
+         * the tile's half of [app.snoozemo.core.ActiveSnooze.effectiveMode]:
+         * a snooze narrowed to its timer keeps the capability `mode` it was
+         * tracking with, deliberately, so `Until I leave` can put the exit
+         * back — and reading the mode alone therefore left the shade showing
+         * an unqualified countdown, as though a departure were still watched,
+         * while the screen and the notification said `Timer only` (Codex,
+         * PR #267). Missing reads as `true`, matching the record's own
+         * default: a record written before the flag existed comes from a build
+         * where leaving always ended a snooze.
          *
          * Parsed to the enum and decided by an exhaustive `when` rather than
          * compared to the string `"FULL"`, which is how the tile came to
@@ -108,8 +126,21 @@ internal data class TileSnapshot(
             stored: String?,
             startedAtMillis: Long,
             nowMillis: Long,
+            endsOnDeparture: Boolean = true,
+            endsOnMotion: Boolean = false,
         ): Boolean =
-            when (TrackingMode.entries.firstOrNull { it.name == stored }) {
+            if (endsOnMotion) {
+                // An armed movement exit ends this snooze on something other
+                // than the clock, whatever the mode says and whatever the
+                // departure choice was. Asked first, because it is the one
+                // answer no other input can override.
+                false
+            } else if (!endsOnDeparture) {
+                // Nothing pending and nothing to wait for: the user answered
+                // this question themselves, so no mode — a settling one
+                // included — can soften it.
+                true
+            } else when (TrackingMode.entries.firstOrNull { it.name == stored }) {
                 TrackingMode.DURATION_ONLY -> true
                 // Watched, by something, so the countdown stands unqualified.
                 TrackingMode.FULL, TrackingMode.WIFI_ONLY, TrackingMode.WIFI_GRACE -> false
@@ -152,6 +183,8 @@ internal data class TileSnapshot(
                     stored = prefs.getString("mode", null),
                     startedAtMillis = prefs.getLong("started_at", 0L),
                     nowMillis = System.currentTimeMillis(),
+                    endsOnDeparture = prefs.getBoolean("ends_on_departure", true),
+                    endsOnMotion = prefs.getBoolean("ends_on_motion", false),
                 ),
                 bootReference = if (prefs.contains("boot_reference")) {
                     prefs.getLong("boot_reference", 0L)

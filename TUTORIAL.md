@@ -222,9 +222,10 @@ The calendar is read only to offer that `Until <time>` action, seeded from the n
 meeting's end, and the app never triggers itself from the calendar (§1, §4.3); both
 the row's sentence and the card's second line are worded as a tap for that reason,
 so a user who tapped `Allow` is not told the meeting competes with departure and
-the timer by itself (Codex, PR #193, and again on PR #198). The footer's cap (§7) and the rule that a chosen time never switches
-departure tracking off (§4.4, "the helper line is not decoration") are what the
-first body line says. The tile tap is D6. The notification is the status surface and
+the timer by itself (Codex, PR #193, and again on PR #198). The footer's cap (§7) is what the
+first body line says. It used to also carry the rule that a chosen time never switches
+departure tracking off; that reversed on 2026-09-11 — a chosen time now replaces the other
+exits (§4.4), and `Until I leave` is the way back. The tile tap is D6. The notification is the status surface and
 the only place the countdown, the reason, and the way to extend or end all live
 (§4.2, "nothing the user needs to know may live only on the tile"). The card does
 not say what happens when notifications are denied; the permissions recap does.

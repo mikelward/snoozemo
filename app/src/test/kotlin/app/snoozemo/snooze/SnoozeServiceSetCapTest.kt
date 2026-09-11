@@ -213,19 +213,451 @@ class SnoozeServiceSetCapTest {
     }
 
     @Test
-    fun `a chosen time leaves the movement exit alone`() {
-        // Only `Until I leave` replaces it. A time lowers the cap and says
-        // nothing about which exits are armed, so a snooze that ends on
-        // movement still does.
+    fun `a chosen time takes departure tracking off`() {
+        // The maintainer's ask: `Until (time)` starts or switches to a
+        // timer-only snooze. A chosen time used to add a deadline beside
+        // whatever else was armed, so 14:00 on a departure snooze still ended
+        // when the user walked out at 13:40 — the row naming one thing and the
+        // snooze doing another (SPEC.md §4.4, §7).
+        val record = snoozeFixture(now, capIn = Duration.ofHours(5))
+        assertTrue("the fixture has to start with departure armed", record.endsOnDeparture)
+
+        chooseEnd(now.plus(Duration.ofHours(2)), record)
+
+        assertEquals(
+            "the timer is the only exit now",
+            false,
+            ActiveSnoozeStore(appContext).load()?.endsOnDeparture,
+        )
+        assertEquals(EndChoiceResult.APPLIED, reported)
+    }
+
+    @Test
+    fun `restoring departure puts the exit back`() {
+        // The way out of the one above, and why the `Until I leave` row is
+        // offered from what the machinery can do rather than from what this
+        // snooze currently does: a snooze narrowed to its timer is exactly the
+        // one whose row has something to do.
+        val record = snoozeFixture(now, capIn = Duration.ofHours(2))
+            .copy(endsOnDeparture = false)
+
+        restoreEnd(record)
+
+        assertEquals(
+            "departure ends this snooze again",
+            true,
+            ActiveSnoozeStore(appContext).load()?.endsOnDeparture,
+        )
+    }
+
+    /**
+     * The mirror of the first P1 on this PR, and the rule generalized: within
+     * the exits as well as between the exits and the cap, **the addition goes
+     * first and the removal last**, because the removal is the half whose
+     * failure can make a snooze outlast something.
+     *
+     * `Until I leave` over a timer-only snooze that has since taken a movement
+     * exit has two writes to do. Clearing movement first meant a clear that
+     * landed over a departure write that did not left *both* flags off under
+     * the still-shortened cap — nothing watching at all, produced by the one
+     * control the user reached for to put an exit back (Codex, PR #267).
+     *
+     * Refuses the departure write by name rather than refusing everything: a
+     * switch that fails every write never gets past the first one, so it
+     * cannot tell the two orderings apart.
+     */
+    @Test
+    fun `a departure restore never leaves both exits off`() {
+        val record = snoozeFixture(now, capIn = Duration.ofHours(2))
+            .copy(endsOnDeparture = false, endsOnMotion = true)
+        val service = startService(SnoozeService.ACTION_RESTORE, record)
+
+        TestSnoozeService.refuseRecordUpdateWhen = { it.endsOnDeparture }
+        service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
+            putExtra(SnoozeService.EXTRA_RESTORE_END, true)
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+            putExtra(SnoozeService.EXTRA_CHOICE_FOR_SNOOZE, record.startedAt.toEpochMilli())
+        }
+
+        val after = ActiveSnoozeStore(appContext).load()
+        assertTrue(
+            "a refused restore must still leave something ending this snooze",
+            after != null && (after.endsOnDeparture || after.endsOnMotion),
+        )
+        assertEquals(
+            "and the choice is reported as refused, since it did not take",
+            EndChoiceResult.REFUSED,
+            reported,
+        )
+    }
+
+    @Test
+    fun `a chosen time that changes no cap still takes departure off`() {
+        // The exits and the cap move together, and the cap being already right
+        // is not a reason to leave an exit the user replaced. Picking the time
+        // the snooze already ends at is the one no-op left for the *cap* — it
+        // is not a no-op for what ends the snooze.
+        val record = snoozeFixture(now, capIn = Duration.ofHours(2))
+
+        chooseEnd(record.capExpiresAt, record)
+
+        assertEquals(
+            "the cap is unchanged",
+            record.capExpiresAt,
+            ActiveSnoozeStore(appContext).load()?.capExpiresAt,
+        )
+        assertEquals(
+            "and the timer is still made the only exit",
+            false,
+            ActiveSnoozeStore(appContext).load()?.endsOnDeparture,
+        )
+    }
+
+    @Test
+    fun `a chosen time takes the movement exit off too`() {
+        // `Until (time)` replaces the end conditions rather than adding to
+        // them, so *both* go — a significant-motion listener left armed ends a
+        // "timer-only" snooze the moment the user stands up (Codex, PR #267).
+        // This test asserted the opposite until the replacement model reached
+        // the time row; it is the premise that changed, not the test.
         val record = snoozeFixture(now).copy(endsOnMotion = true)
         val chosen = now.plus(Duration.ofHours(1))
 
         chooseEnd(chosen, record)
 
         val after = ActiveSnoozeStore(appContext).load()
-        assertEquals("the movement exit stands", true, after?.endsOnMotion)
+        assertEquals("the movement exit is off", false, after?.endsOnMotion)
+        assertEquals("and so is departure", false, after?.endsOnDeparture)
         assertEquals(chosen, after?.capExpiresAt)
         assertEquals(EndChoiceResult.APPLIED, reported)
+    }
+
+    /**
+     * The repaint the state machine will not do for this change.
+     *
+     * [SnoozeService.onStateChanged]'s `ARMING` branch deliberately posts no
+     * card and skips the tile refresh — it runs from inside `beginArming`,
+     * before the rule goes on, and a `notify` there would sit on the
+     * tap-to-`STATE_TRUE` stretch. Right for the arm's own delivery, wrong for
+     * a choice the user makes during that window — and choosing a time from
+     * the tile sheet lands squarely in it, since the anchor capture can hold
+     * `ARMED` off for ten seconds. The card went on saying the snooze ends when
+     * you leave until the capture happened to finish (Codex, PR #267).
+     *
+     * The capture is deliberately never delivered here, which is what keeps
+     * the state at `ARMING` — the ordinary tile-sheet window, not an edge of
+     * it.
+     */
+    @Test
+    fun `choosing a time repaints the card before the capture lands`() {
+        val service = startService(SnoozeService.ACTION_ARM)
+        // The arm's own card, posted the moment the rule went on. The mode is
+        // `SETTLING` until the capture lands, so this is `Waiting for
+        // location` rather than `Ends when you leave` — which is the state the
+        // choice below has to move it off.
+        assertTrue(
+            "precondition: the card should still be waiting on the capture",
+            shadeText().contains(stringOf(R.string.ongoing_settling)),
+        )
+
+        service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
+            putExtra(
+                SnoozeService.EXTRA_CAP_EXPIRES_AT,
+                now.plus(Duration.ofHours(1)).toEpochMilli(),
+            )
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+
+        val text = shadeText()
+        assertTrue(
+            "the card has to say what the snooze now ends on, not what it did",
+            text.contains(stringOf(R.string.ongoing_timer_only)),
+        )
+        assertFalse(
+            "and must stop waiting on a location it will never use",
+            text.contains(stringOf(R.string.ongoing_settling)),
+        )
+    }
+
+    /**
+     * A stale intent must not take down the running snooze's card on its way
+     * to `GONE`.
+     *
+     * The previous attempt's warning is cleared as an attempt *starts* rather
+     * than when one succeeds, which is what lets this attempt's own warnings
+     * survive. Done at the top of the action that runs for *every* intent, it
+     * also cleared for intents that turn out not to be about the running
+     * snooze at all — so an old action arriving late silently removed a
+     * current `Still ends when you leave` and then returned `GONE` without
+     * replacing it (Codex, PR #267). Nothing clears by position any more: a
+     * card comes down when something truer replaces it, or on the one outcome
+     * that has nothing left to say.
+     */
+    @Test
+    fun `a stale choice does not clear the running snooze's warning`() {
+        val record = snoozeFixture(now).copy(endsOnMotion = true)
+        val service = startService(SnoozeService.ACTION_RESTORE, record)
+
+        // Leaves both exits armed and posts the combined card.
+        TestSnoozeService.refuseRecordUpdates = true
+        service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
+            putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, record.capExpiresAt.toEpochMilli())
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+        val warning = stringOf(R.string.failure_both_exits_stayed_on)
+        assertTrue("precondition: the warning is posted", shadeShows(warning))
+
+        // A choice for a snooze that is no longer running — the sheet that
+        // outlived its snooze, which is the case the identity check is for.
+        service.send(SnoozeService.ACTION_SET_CAP, startId = 3) {
+            putExtra(
+                SnoozeService.EXTRA_CAP_EXPIRES_AT,
+                now.plus(Duration.ofHours(1)).toEpochMilli(),
+            )
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+            putExtra(
+                SnoozeService.EXTRA_CHOICE_FOR_SNOOZE,
+                record.startedAt.minus(Duration.ofHours(2)).toEpochMilli(),
+            )
+        }
+
+        assertEquals("the stale choice is gone, not applied", EndChoiceResult.GONE, reported)
+        assertTrue(
+            "and it must not have taken the running snooze's warning with it",
+            shadeShows(warning),
+        )
+    }
+
+    @Test
+    fun `a refused choice leaves a warning that is still true standing`() {
+        // The third round on where this clear belongs, and the one that says
+        // the answer is not a place (Codex, PR #267). Past the identity check
+        // is still ahead of the floor and the exit work, so a sheet whose
+        // displayed time had aged inside `MIN_CAP` deleted a warning about an
+        // exit that was still armed — and, being a sheet choice, posted
+        // nothing in its place. The exit outlives the refusal, so the warning
+        // has to as well.
+        val record = snoozeFixture(now).copy(endsOnMotion = true)
+        val service = startService(SnoozeService.ACTION_RESTORE, record)
+
+        TestSnoozeService.refuseRecordUpdates = true
+        service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
+            putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, record.capExpiresAt.toEpochMilli())
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+        val warning = stringOf(R.string.failure_both_exits_stayed_on)
+        assertTrue("precondition: the warning is posted", shadeShows(warning))
+
+        // A time that has fallen inside the floor — the sheet left open too
+        // long, which is the case the floor check exists for.
+        service.send(SnoozeService.ACTION_SET_CAP, startId = 3) {
+            putExtra(
+                SnoozeService.EXTRA_CAP_EXPIRES_AT,
+                now.plus(Duration.ofMinutes(5)).toEpochMilli(),
+            )
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+
+        assertEquals("the floor declines it", EndChoiceResult.REFUSED, reported)
+        assertTrue(
+            "and a refusal that posts nothing must leave the warning standing",
+            shadeShows(warning),
+        )
+    }
+
+    @Test
+    fun `an exit warning comes down with the snooze it is about`() {
+        // The fourth finding on this card's lifetime, and the one the shared
+        // id made unfixable: the warning describes a snooze, so it has to go
+        // when that snooze does — but the teardown that would clear it also
+        // posts `Couldn't forget this snooze` on the very same path, so on one
+        // id a clear there would delete the wrong card (Codex, PR #267). Its
+        // own id is what lets the teardown retire it.
+        val record = snoozeFixture(now).copy(endsOnMotion = true)
+        val service = startService(SnoozeService.ACTION_RESTORE, record)
+
+        TestSnoozeService.refuseRecordUpdates = true
+        service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
+            putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, record.capExpiresAt.toEpochMilli())
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+        val warning = stringOf(R.string.failure_both_exits_stayed_on)
+        assertTrue("precondition: the warning is posted", shadeShows(warning))
+
+        TestSnoozeService.refuseRecordUpdates = false
+        service.send(SnoozeService.ACTION_END, startId = 3)
+
+        assertNull("precondition: the snooze really ended", ActiveSnoozeStore(appContext).load())
+        assertFalse(
+            "a card about a snooze that no longer exists must not stand",
+            shadeShows(warning),
+        )
+    }
+
+    @Test
+    fun `restoring departure retires the warning a chosen time left`() {
+        // The way back from a chosen time clears the movement exit and puts
+        // departure back, so a card naming either is false the moment it
+        // lands — and with the warning on its own id, the restore's clear of
+        // the *failure* card no longer takes it down as a side effect (Codex,
+        // PR #267). Retired by the exit changing, which is the one event that
+        // makes the card untrue whichever way it went.
+        val record = snoozeFixture(now)
+            .copy(capExpiresAt = now.plus(Duration.ofHours(1)), endsOnMotion = true)
+        val service = startService(SnoozeService.ACTION_RESTORE, record)
+
+        TestSnoozeService.refuseRecordUpdates = true
+        service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
+            putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, record.capExpiresAt.toEpochMilli())
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+        val warning = stringOf(R.string.failure_both_exits_stayed_on)
+        assertTrue("precondition: the warning is posted", shadeShows(warning))
+
+        TestSnoozeService.refuseRecordUpdates = false
+        service.send(SnoozeService.ACTION_SET_CAP, startId = 3) {
+            putExtra(SnoozeService.EXTRA_RESTORE_END, true)
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+
+        assertEquals("the restore applied", EndChoiceResult.APPLIED, reported)
+        assertFalse(
+            "so nothing may still claim the exits it just changed",
+            shadeShows(warning),
+        )
+    }
+
+    @Test
+    fun `a restore that cannot clear the movement exit says so`() {
+        // A restore is two independent writes, and the retire that belongs to
+        // the first must not hide what the second failed to do. Departure goes
+        // back — which retires any warning about it — and then the movement
+        // clear is refused, leaving an exit armed that the user has just been
+        // shown nothing about (Codex, PR #267). `makeTimerOnly` states what
+        // survived after both halves; this is the mirror case.
+        val record = snoozeFixture(now).copy(
+            capExpiresAt = now.plus(Duration.ofHours(1)),
+            endsOnDeparture = false,
+            endsOnMotion = true,
+        )
+        val service = startService(SnoozeService.ACTION_RESTORE, record)
+
+        // By name rather than refusing everything: the departure write has to
+        // land for this to be the case it is about.
+        TestSnoozeService.refuseRecordUpdateWhen = { !it.endsOnMotion }
+        service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
+            putExtra(SnoozeService.EXTRA_RESTORE_END, true)
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+
+        assertEquals("the restore could not finish", EndChoiceResult.REFUSED, reported)
+        assertTrue(
+            "and the exit it could not clear has to be said",
+            shadeShows(stringOf(R.string.failure_movement_exit_stayed_on)),
+        )
+    }
+
+    @Test
+    fun `a restore that changes no exit still retires the warning`() {
+        // The per-exit retires cover a restore that actually moves something;
+        // this one moves nothing. A chosen time whose departure removal alone
+        // failed leaves departure armed and movement off, so `Until I leave`
+        // has no write to make — and the warning about the exit the user has
+        // now deliberately accepted stayed in the shade (Codex, PR #267).
+        // The restore completing is itself the condition.
+        val record = snoozeFixture(now).copy(capExpiresAt = now.plus(Duration.ofHours(1)))
+        val service = startService(SnoozeService.ACTION_RESTORE, record)
+
+        TestSnoozeService.refuseRecordUpdates = true
+        service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
+            putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, record.capExpiresAt.toEpochMilli())
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+        val warning = stringOf(R.string.failure_departure_exit_stayed_on)
+        assertTrue("precondition: only the departure exit stayed armed", shadeShows(warning))
+
+        TestSnoozeService.refuseRecordUpdates = false
+        service.send(SnoozeService.ACTION_SET_CAP, startId = 3) {
+            putExtra(SnoozeService.EXTRA_RESTORE_END, true)
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+
+        assertEquals("the restore applied", EndChoiceResult.APPLIED, reported)
+        assertFalse(
+            "so the warning about the exit it just accepted must go",
+            shadeShows(warning),
+        )
+    }
+
+    /**
+     * The on-disk name, spelled out rather than read off the store's own
+     * constant — because the reader that matters is in another module and
+     * cannot use it. `TileSnapshot.read` names this key as a literal, the way
+     * it names `mode` and `released`, so the two halves of the contract are two
+     * strings that have to match and nothing checks them against each other.
+     *
+     * A mismatch is silent in the worst direction: the tile falls back to the
+     * default, `true`, and goes on showing an unqualified countdown — which is
+     * precisely the bug the flag was added to fix (Codex, PR #267), still
+     * there, with the fix apparently in place.
+     */
+    @Test
+    fun `the departure choice is written under the name the tile reads`() {
+        val record = snoozeFixture(now)
+
+        chooseEnd(now.plus(Duration.ofHours(1)), record)
+
+        val prefs = appContext.getSharedPreferences("active_snooze", android.content.Context.MODE_PRIVATE)
+        assertTrue("the key has to exist for the tile to read it", prefs.contains("ends_on_departure"))
+        assertFalse(
+            "and it has to carry the choice, not the default",
+            prefs.getBoolean("ends_on_departure", true),
+        )
+    }
+
+    /**
+     * The warning `makeTimerOnly` posts has to survive the call that posts it.
+     *
+     * `setCap` clears the previous attempt's failure card, and it used to do
+     * that *after* running the attempt, keyed off `APPLIED` — so an exit that
+     * would not come off posted its card and had it deleted a line later, and
+     * the user was told the whole choice took while a movement exit was still
+     * armed to end their "timer-only" snooze (Codex, PR #267).
+     *
+     * The time chosen is the one the record already ends at, which is the
+     * branch that reaches the narrowing with no cap write of its own — so the
+     * refused write below is the exit's, not the cap's, and the outcome really
+     * is a partial success rather than a plain refusal.
+     */
+    @Test
+    fun `an exit that will not come off says so in the shade`() {
+        val record = snoozeFixture(now).copy(endsOnMotion = true)
+        val service = startService(SnoozeService.ACTION_RESTORE, record)
+
+        TestSnoozeService.refuseRecordUpdates = true
+        service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
+            putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, record.capExpiresAt.toEpochMilli())
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+
+        assertEquals(
+            "the time the user picked did apply, so the sheet closes",
+            EndChoiceResult.APPLIED,
+            reported,
+        )
+        // Both writes are refused here, so both exits survive — and the card
+        // has to say so. Naming only the one that failed first left the snooze
+        // ending on a departure the user had just been told nothing about
+        // (Codex, PR #267); the three warnings share one id, so the combined
+        // line is the only way to report two.
+        assertTrue(
+            "both exits stayed armed, so both have to be said",
+            shadeShows(stringOf(R.string.failure_both_exits_stayed_on)),
+        )
+        assertFalse(
+            "and not as a failure to set the time, which did apply",
+            shadeShows(stringOf(R.string.failure_could_not_set_end)),
+        )
     }
 
     private fun chooseEnd(endsAt: Instant, record: ActiveSnooze?) =
@@ -421,6 +853,13 @@ class SnoozeServiceSetCapTest {
         }
 
         assertEquals(record.capExpiresAt, ActiveSnoozeStore(appContext).load()?.capExpiresAt)
+        assertEquals(
+            "and the exits it was being traded for stay armed: a cap that did " +
+                "not move plus a departure that came off is eight hours of " +
+                "silence after the user leaves (Codex, PR #267)",
+            true,
+            ActiveSnoozeStore(appContext).load()?.endsOnDeparture,
+        )
         assertTrue(
             "a refused change has to be said, not swallowed",
             shadeShows(stringOf(R.string.failure_could_not_set_end)),

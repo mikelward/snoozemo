@@ -478,6 +478,20 @@
     <!-- TODO: translate -->
     <string name="failure_could_not_set_end" tools:ignore="MissingTranslation">Couldn\'t set the end time</string>
     <!--
+      A chosen time that applied, over an exit that would not come off. The end
+      time is set, so "Couldn't set the end time" describes the opposite
+      failure; what the user needs is what the snooze will actually still do
+      (principle 2). Named per exit rather than one shared line, because the two
+      leave the user watching for different things.
+    -->
+    <!-- TODO: translate -->
+    <string name="failure_movement_exit_stayed_on" tools:ignore="MissingTranslation">Still ends if you move</string>
+    <!-- TODO: translate -->
+    <string name="failure_departure_exit_stayed_on" tools:ignore="MissingTranslation">Still ends when you leave</string>
+    <!-- Both at once: the two share one card, so neither may be named alone. -->
+    <!-- TODO: translate -->
+    <string name="failure_both_exits_stayed_on" tools:ignore="MissingTranslation">Still ends if you move or leave</string>
+    <!--
       Both end conditions need the location grant: `Until I leave` to measure a
       departure, `When I move` because the foreground service that keeps the
       sensor alive is typed `location` and the platform refuses it without one

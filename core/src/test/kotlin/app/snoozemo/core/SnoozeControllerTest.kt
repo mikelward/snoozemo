@@ -631,6 +631,77 @@ class SnoozeControllerTest {
     }
 
     @Test
+    fun `leaving can be turned off and back on, and only a change reports`() {
+        armFully()
+        assertTrue("a snooze ends on leaving unless the user says otherwise", controller.active!!.endsOnDeparture)
+
+        assertNotNull(controller.setEndsOnDeparture(false))
+        assertFalse(controller.active!!.endsOnDeparture)
+        // The same contract `setEndsOnMotion` keeps, for the same reason: the
+        // service starts and stops a watch on every reported transition, so a
+        // no-op reported as a change would churn a live geofence.
+        assertNull(controller.setEndsOnDeparture(false))
+
+        assertNotNull(controller.setEndsOnDeparture(true))
+        assertTrue(controller.active!!.endsOnDeparture)
+    }
+
+    @Test
+    fun `turning leaving off does not touch the tracking mode`() {
+        // Intent and capability stay apart (SPEC.md §4.4). `mode` answers what
+        // the machinery can watch for and is recomputed from the anchor on
+        // every presence update, so a choice stored in it would be overwritten
+        // within seconds — and a card reading `Timer only` because the user
+        // asked has to stay distinguishable from one reading it because
+        // location died (principle 2).
+        armFully()
+        val watched = controller.active!!.mode
+
+        controller.setEndsOnDeparture(false)
+
+        assertEquals("the machinery can still do what it could", watched, controller.active!!.mode)
+        assertEquals(
+            "but what this snooze ends on is the timer",
+            TrackingMode.DURATION_ONLY,
+            controller.active!!.effectiveMode,
+        )
+    }
+
+    @Test
+    fun `a departure that lands after leaving was turned off does not end the snooze`() {
+        // The service stops the watch, so ordinarily nothing arrives — but a
+        // geofence already in flight, or a held exit collected on a restore,
+        // can still land after the choice. Ending on one would end the phone's
+        // silence early on an exit the user had just replaced.
+        armFully()
+        controller.setEndsOnDeparture(false)
+
+        controller.onPresenceUpdate(update(event = PresenceEvent.Departed))
+
+        assertNotNull("the snooze is still running", controller.active)
+    }
+
+    @Test
+    fun `a tracking failure that lands after leaving was turned off does not end the snooze`() {
+        // The sibling of the departure above, and the one the first version of
+        // this guard missed: fail open answers "is it safe to stay armed on
+        // state nothing can verify", and for a snooze narrowed to its timer
+        // nothing is being verified in the first place. The cap is still armed
+        // and is still what guarantees it ends, so ignoring this costs nothing
+        // the cap does not already cover. `an unexplainable loss of tracking
+        // ends the snooze rather than staying armed` is the other direction:
+        // while leaving still ends it, this still ends it too.
+        armFully()
+        controller.setEndsOnDeparture(false)
+
+        controller.onPresenceUpdate(
+            update(PresenceEvent.CapabilityLost(CapabilityLossCause.MONITORING_UNAVAILABLE)),
+        )
+
+        assertNotNull("the snooze is still running", controller.active)
+    }
+
+    @Test
     fun `a duration-only snooze may take when I move`() {
         // The case the row exists for: a meeting room where location can see
         // nothing. The service keeps the process resident for an armed motion

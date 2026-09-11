@@ -272,9 +272,13 @@ internal fun EndConditionBottomSheet(
                 condition = condition,
                 formattedTime = formattedTime,
                 onChooseTime = onChooseTime,
-                // The departure row commits by changing nothing: tracking is
-                // already armed and the default cap is already the backstop, so
-                // "until I leave" is the snooze exactly as it stands (§4.4).
+                // The departure row commits by changing nothing **on this
+                // sheet**: it is the arm-time one, so tracking is already armed
+                // and the default cap is already the backstop, and "until I
+                // leave" is the snooze exactly as it stands (§4.4). The row of
+                // the same name over a *running* snooze is not a no-op — there
+                // it is the way back from a chosen time, and it restores both
+                // the exit and the cap.
                 onChooseDeparture = onDismiss,
                 onStepDown = onStepDown,
                 onStepUp = onStepUp,

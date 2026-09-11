@@ -32,6 +32,84 @@ class TileSnapshotModeTest {
         assertTrue(justArmed(TrackingMode.DURATION_ONLY.name))
     }
 
+    /**
+     * The tile's half of `ActiveSnooze.effectiveMode`. A snooze narrowed to
+     * its timer keeps the capability mode it was tracking with — deliberately,
+     * so `Until I leave` can put the exit back — so the mode alone still reads
+     * `FULL` and left the shade showing an unqualified countdown while the
+     * screen and the notification both said `Timer only` (Codex, PR #267).
+     *
+     * Every mode, not just the tracked ones: a settling record is the case
+     * that softens the qualifier on its own, and the user's answer has to
+     * outrank that too — nothing is pending once they have decided it.
+     */
+    @Test
+    fun `a snooze the user gave a time is a timer whatever it could watch`() {
+        for (mode in TrackingMode.entries) {
+            assertTrue(
+                "mode=$mode",
+                TileSnapshot.claimsTimerOnly(
+                    mode.name,
+                    startedAtMillis = STARTED_AT,
+                    nowMillis = STARTED_AT + 500,
+                    endsOnDeparture = false,
+                ),
+            )
+        }
+    }
+
+    /**
+     * An armed movement exit outranks every other input, including the
+     * departure choice: `Timer only` claims nothing but the clock ends this
+     * snooze, and the movement exit is not the clock.
+     *
+     * Newly reachable because of this change — choose a time, then tap
+     * `Until I move` — and the tile alone rendered it as `Timer only` while
+     * the notification and the screen both named the movement exit (Codex,
+     * PR #267).
+     */
+    @Test
+    fun `an armed movement exit is never a timer`() {
+        assertFalse(
+            "a chosen time plus a movement exit still ends on movement",
+            TileSnapshot.claimsTimerOnly(
+                TrackingMode.DURATION_ONLY.name,
+                startedAtMillis = STARTED_AT,
+                nowMillis = STARTED_AT + 500,
+                endsOnDeparture = false,
+                endsOnMotion = true,
+            ),
+        )
+        assertTrue(
+            "and without it the same record is a timer",
+            TileSnapshot.claimsTimerOnly(
+                TrackingMode.DURATION_ONLY.name,
+                startedAtMillis = STARTED_AT,
+                nowMillis = STARTED_AT + 500,
+                endsOnDeparture = false,
+                endsOnMotion = false,
+            ),
+        )
+    }
+
+    /**
+     * The default a record written before the flag existed reads as, matching
+     * the record's own: departure tracking was not something a user could
+     * switch off then, so an old record still ends on leaving and its mode is
+     * the whole answer.
+     */
+    @Test
+    fun `a record with no flag is read as still watching`() {
+        assertFalse(
+            TileSnapshot.claimsTimerOnly(
+                TrackingMode.FULL.name,
+                startedAtMillis = STARTED_AT,
+                nowMillis = STARTED_AT + 500,
+                endsOnDeparture = true,
+            ),
+        )
+    }
+
     @Test
     fun `a watched snooze shows its countdown unqualified`() {
         assertFalse(justArmed(TrackingMode.FULL.name))
