@@ -177,6 +177,57 @@ class SnoozeServiceSetCapTest {
         assertEquals("and the tap is not left looking accepted", EndChoiceResult.REFUSED, reported)
     }
 
+    @Test
+    fun `restoring takes the movement exit off`() {
+        // The maintainer's case (2026-09-11): tap `Until I move`, then tap
+        // `Until I leave`. `Until I move` moves no cap, so this snooze is still
+        // at its ceiling and the cap half of the restore has nothing to do —
+        // which is exactly why the clear cannot live behind that early return,
+        // or the second tap would change nothing at all.
+        val record = snoozeFixture(now).copy(endsOnMotion = true)
+
+        restoreEnd(record)
+
+        val after = ActiveSnoozeStore(appContext).load()
+        assertEquals("the movement exit is forgotten", false, after?.endsOnMotion)
+        assertEquals("and the cap it never moved stands", record.capExpiresAt, after?.capExpiresAt)
+        assertEquals(EndChoiceResult.APPLIED, reported)
+    }
+
+    @Test
+    fun `restoring takes the movement exit off and puts the cap back together`() {
+        // Both halves in one tap, and the ordering that makes it possible: the
+        // cap write copies from a snapshot, so clearing after it would carry
+        // the flag straight back in.
+        val record = snoozeFixture(now).copy(
+            capExpiresAt = now.plus(Duration.ofHours(1)),
+            endsOnMotion = true,
+        )
+
+        restoreEnd(record)
+
+        val after = ActiveSnoozeStore(appContext).load()
+        assertEquals("the movement exit is forgotten", false, after?.endsOnMotion)
+        assertEquals("and the cap is back at its ceiling", record.capCeilingAt, after?.capExpiresAt)
+        assertEquals(EndChoiceResult.APPLIED, reported)
+    }
+
+    @Test
+    fun `a chosen time leaves the movement exit alone`() {
+        // Only `Until I leave` replaces it. A time lowers the cap and says
+        // nothing about which exits are armed, so a snooze that ends on
+        // movement still does.
+        val record = snoozeFixture(now).copy(endsOnMotion = true)
+        val chosen = now.plus(Duration.ofHours(1))
+
+        chooseEnd(chosen, record)
+
+        val after = ActiveSnoozeStore(appContext).load()
+        assertEquals("the movement exit stands", true, after?.endsOnMotion)
+        assertEquals(chosen, after?.capExpiresAt)
+        assertEquals(EndChoiceResult.APPLIED, reported)
+    }
+
     private fun chooseEnd(endsAt: Instant, record: ActiveSnooze?) =
         startService(SnoozeService.ACTION_SET_CAP, record) {
             putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, endsAt.toEpochMilli())

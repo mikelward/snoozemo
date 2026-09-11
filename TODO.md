@@ -1893,7 +1893,10 @@ the point is that every other line of the app is worthless if it isn't true.
 
       **Confirmed as the direction (maintainer, 2026-09-11), detail still to work through:**
       tapping a row replaces the current end conditions rather than adding to them. Deliberately
-      not taken in PR #263, which is copy only. What the decision still owes: whether the cinema
+      not taken in PR #263, which is copy only. **One direction has since landed:** `Until I leave`
+      clears `endsOnMotion`, so the movement exit has a way back and the card follows it
+      (`SPEC.md` §4.4). What the decision still owes: the reverse, `Until I move` over a departure
+      snooze, which is the harder half because departure is the tracking mode rather than a flag; whether the cinema
       case is accepted (a chosen time outlasting departure, on the grounds that the status line
       says so), and what happens to a snooze whose replaced exit was the only one its tracking
       mode could serve. The duration cap stays a separate decision, below.

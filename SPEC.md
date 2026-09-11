@@ -1657,8 +1657,22 @@ question the user had not asked. `Until I leave` is not revocable either — you
 row — and this is the same kind of answer: an end condition, chosen by tapping, adding an exit the
 cap still bounds. So the row reads `Until I move`, matching its sibling, is drawn as the same card,
 and sits in the same group, which it leaves with the others once the cap comes inside `MIN_CAP`
-(§7). Tapping it on a snooze that already ends on motion changes nothing; there is no off. Where it
-sits in the group is §4.2's order.
+(§7). Tapping it on a snooze that already ends on motion changes nothing. Where it sits in the
+group is §4.2's order.
+
+**`Until I leave` takes the movement exit off** (maintainer, 2026-09-11: "if I tap until I move
+then tap until I leave it should switch to until I leave and forget the until I move"), which is
+what makes "you choose a different row" true rather than merely said. Until this, the row above
+had no way back: a tap on `Until I move` was permanent for the life of the snooze, and the status
+went on naming it. So the departure row now takes the movement exit off as well as putting the cap
+back — one tap, one answer — and the card reads `Snoozing until you leave`.
+**Half of it landing alone is a D7 question, and it is answered the D7 way**: the exit comes off
+first, so the case that can be left behind is a snooze that ends *earlier* than the user asked
+rather than later.
+**This is one direction of the replacement model, not the whole of it.** The reverse — `Until I
+move` over a departure snooze — is the harder half, since departure is the tracking mode rather
+than a flag, and stays open (`TODO.md`, *Decide what tapping an end condition means*). A chosen
+time still replaces neither: it lowers the cap and says nothing about which exits are armed.
 
 **A refused choice says so where the tap happened, like a declined time** (Codex, PR #255). The
 switch answered only through the record the screen observed, which was enough while a refused tap

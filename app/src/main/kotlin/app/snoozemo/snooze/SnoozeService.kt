@@ -2362,7 +2362,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             SnoozeDebugLog.warning("end-condition: a chosen end carried no time; leaving the cap alone")
             return EndChoiceResult.REFUSED
         }
-        val snooze = controller.active ?: run {
+        val running = controller.active ?: run {
             // The sheet outlived its snooze: the arm was refused, or the cap or
             // a departure got there first. Nothing to shorten, and nothing to
             // say either — whichever of those happened has already posted its
@@ -2386,7 +2386,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // existed still works; a claim that does not match is `GONE`, since the
         // snooze this choice was for really is over.
         val claimedMillis = intent?.getLongExtra(EXTRA_CHOICE_FOR_SNOOZE, 0L) ?: 0L
-        if (claimedMillis > 0L && Instant.ofEpochMilli(claimedMillis) != snooze.startedAt) {
+        if (claimedMillis > 0L && Instant.ofEpochMilli(claimedMillis) != running.startedAt) {
             SnoozeDebugLog.event("end-condition: the chosen end was for a snooze that is no longer running")
             return EndChoiceResult.GONE
         }
@@ -2424,10 +2424,49 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // silent by a control that said otherwise, which is principle 1's
         // failure (Codex, PR #234). The service is the only place holding the
         // live record, so this is where the question gets answered.
-        if (restoring && !snooze.mode.tracksDeparture) {
+        if (restoring && !running.mode.tracksDeparture) {
             SnoozeDebugLog.event("end-condition: declining a departure restore; this snooze tracks no departure")
             return EndChoiceResult.REFUSED
         }
+
+        // **`Until I leave` takes the movement exit off** (maintainer,
+        // 2026-09-11: tap `Until I move`, then `Until I leave`, and it should
+        // switch to leaving and forget the movement). The rows were already
+        // written as "a choice, not a switch — you pick a different row"
+        // (`EndConditionRows`, maintainer 2026-09-10); what was missing is that
+        // picking the different row did not take the first one off, so
+        // `Until I move` had no way back and the card went on naming it.
+        //
+        // **Before the cap work, and the snooze re-read from the controller
+        // after**, because both writes copy from a snapshot: clearing second
+        // would have the cap write's copy carry the flag straight back, and
+        // carrying on from the stale snapshot would put the old cap back. It
+        // also fails in the safer direction — a clear that lands over a cap
+        // restore that does not leaves the snooze ending *earlier* than asked,
+        // which is where D7 sends every ambiguity.
+        //
+        // Only this direction: the reverse — `Until I move` over a departure
+        // snooze — is the harder half, since departure is the tracking mode
+        // rather than a flag (`TODO.md`, *Decide what tapping an end condition
+        // means*).
+        val snooze = if (restoring && running.endsOnMotion) {
+            if (applyMotionEnd(running, wanted = false) != EndChoiceResult.APPLIED) {
+                SnoozeDebugLog.warning(
+                    "end-condition: could not take the movement exit off for a departure restore",
+                )
+                return EndChoiceResult.REFUSED
+            }
+            // The clear is a transition, so the controller is authoritative
+            // now — and a snooze that ended inside it is `GONE` rather than
+            // something to write a cap onto.
+            controller.active ?: run {
+                SnoozeDebugLog.event("end-condition: the snooze ended while its movement exit came off")
+                return EndChoiceResult.GONE
+            }
+        } else {
+            running
+        }
+
         val target = if (restoring) snooze.capCeilingAt else requested.coerceAtMost(snooze.capCeilingAt)
         // **A restore is the one choice that lengthens**, and it is bounded by
         // the same ceiling everything else is: `capCeilingAt` is where this
@@ -2446,6 +2485,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // Not a failure: the snooze already ends no later than the moment
             // the user picked — or, restoring, already runs to its ceiling — so
             // their choice is honored by doing nothing.
+            //
+            // This is the ordinary path for the switch above rather than an
+            // edge of it: `Until I move` moves no cap, so a snooze that took it
+            // is still running to its ceiling and has nothing left to do here.
+            // Clearing before this return is what keeps that from being a tap
+            // that does nothing at all.
             SnoozeDebugLog.event("end-condition: the chosen end changes nothing; leaving the cap")
             return EndChoiceResult.APPLIED
         }
