@@ -4,16 +4,20 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.view.View
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-// `assertIsEnabled` / `assertIsNotEnabled` are extensions and need importing;
-// `assertExists` / `assertDoesNotExist` are members of the same type and must
-// not be, which is a compile error that reads like a missing dependency.
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -23,25 +27,27 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.unit.dp
 import app.snoozemo.PlayUpdateState
+import app.snoozemo.R
 import app.snoozemo.core.DegradationCause
-import app.snoozemo.core.EndCondition
 import app.snoozemo.core.DepartureObservation
+import app.snoozemo.core.EndCondition
 import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.TrackingMode
 import com.github.takahirom.roborazzi.captureRoboImage
+import java.time.Duration
+import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.robolectric.RuntimeEnvironment
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import java.time.Duration
-import java.time.Instant
 
 /**
  * The home screen in each state it can actually be in, light and dark.
@@ -481,6 +487,106 @@ class MainScreenScreenshotTest {
         composeRule.onNodeWithText("Until 1:00 PM").assertIsEnabled()
         composeRule.onNodeWithContentDescription("Half an hour later").assertIsEnabled()
         composeRule.onNodeWithText("Snooze").assertIsEnabled()
+    }
+
+    @Test
+    fun `the help cards are recorded`() {
+        // The rows' snapshots show the `?`; these show what it opens, which is
+        // the whole of the feature and is otherwise invisible in a diff. The
+        // content is recorded directly rather than through `EndHelpCard`,
+        // because a dialog is its own window and `captureSnapshot` draws the
+        // activity's `decorView` — a snapshot with the real dialog open would
+        // record the screen behind it and show none of this copy.
+        capture("help-card-move.png", heightPx = CARD_FRAME_HEIGHT_PX) {
+            HelpCardFrame {
+                EndHelpCardContent(
+                    title = stringResource(R.string.main_until_i_move),
+                    body = stringResource(R.string.end_help_move_body),
+                    onClose = {},
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `the leave help card is recorded with both signals`() {
+        capture("help-card-leave.png", heightPx = CARD_FRAME_HEIGHT_PX) {
+            HelpCardFrame {
+                EndHelpCardContent(
+                    title = stringResource(R.string.main_until_i_leave),
+                    body = stringResource(R.string.end_help_leave_body),
+                    onClose = {},
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `a help card's title is a heading`() {
+        // A modal's one title is what TalkBack's heading navigation is for,
+        // and nothing supplies it: `BasicAlertDialog` restores the container's
+        // semantics, not a slot's, so this card states it itself (Codex, PR
+        // #265 — asked for as a regression, taken as an improvement; Material's
+        // own title slot styles and pads without marking a heading).
+        composeRule.setContent {
+            SnoozemoTheme {
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    HelpCardFrame {
+                        EndHelpCardContent(
+                            title = stringResource(R.string.main_until_i_leave),
+                            body = stringResource(R.string.end_help_leave_body),
+                            onClose = {},
+                        )
+                    }
+                }
+            }
+        }
+
+        composeRule
+            .onNodeWithText("Until I leave")
+            .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h220dp-420dpi")
+    fun `a help card keeps its close action on a short screen`() {
+        // The body is measured before the `Close` row, so an unweighted one
+        // took the whole window: at a large system font compounded with the
+        // app's own 160% setting, or in short landscape, the action was left
+        // clipped or measured to zero — a modal with no visible way out
+        // (Codex, PR #265). A short frame and a body far longer than it fits
+        // is that case, made reproducible.
+        composeRule.setContent {
+            SnoozemoTheme {
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    HelpCardFrame {
+                        EndHelpCardContent(
+                            title = stringResource(R.string.main_until_i_leave),
+                            body = List(40) { stringResource(R.string.end_help_leave_body) }
+                                .joinToString(" "),
+                            onClose = {},
+                        )
+                    }
+                }
+            }
+        }
+
+        composeRule.onNodeWithText("Close").assertIsDisplayed()
+    }
+
+    @Test
+    fun `the leave help card is recorded narrowed to one signal`() {
+        // The narrowing is the part that was hardest to settle, so it gets an
+        // image rather than only a text assertion.
+        capture("help-card-leave-wifi.png", heightPx = CARD_FRAME_HEIGHT_PX) {
+            HelpCardFrame {
+                EndHelpCardContent(
+                    title = stringResource(R.string.main_until_i_leave),
+                    body = stringResource(R.string.end_help_leave_body_wifi),
+                    onClose = {},
+                )
+            }
+        }
     }
 
     @Test
@@ -2726,6 +2832,43 @@ class MainScreenScreenshotTest {
         tracksDeparture = true,
         startsASnooze = true,
     )
+
+    /**
+     * How tall a frame the help cards are recorded in.
+     *
+     * **Not a cosmetic crop.** [captureSnapshot] re-measures the root at this
+     * height *after* composition has settled, so the card is laid out on a
+     * screen this tall — and the card's body scrolls rather than growing past
+     * the `Close` row it is weighted against. On a frame too short the layout
+     * does the right thing and the image shows the wrong one: a body cut off
+     * mid-line, which is exactly the copy these snapshots exist to show. A
+     * static PNG cannot scroll, so the frame has to be tall enough not to make
+     * it.
+     *
+     * Short screens are covered by assertion instead — see
+     * `a help card keeps its close action on a short screen`, which asks the
+     * question an image cannot.
+     */
+    private val CARD_FRAME_HEIGHT_PX = 900
+
+    /**
+     * Draws a help card at its own size, the way its dialog window would.
+     *
+     * [capture]'s own `Surface` propagates its minimum constraints, so a card
+     * handed to it directly is stretched to the whole frame — an image that
+     * shows the right words at a shape the user never sees. Centering it in a
+     * padded box is the closest this can get to a dialog's own sizing without
+     * the dialog window the capture cannot reach.
+     */
+    @Composable
+    private fun HelpCardFrame(content: @Composable () -> Unit) {
+        Box(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            content()
+        }
+    }
 
     private fun capture(
         name: String? = null,
