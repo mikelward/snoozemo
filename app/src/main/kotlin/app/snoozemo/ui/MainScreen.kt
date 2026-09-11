@@ -151,6 +151,13 @@ internal fun MainScreen(
     endChoice: EndChoiceUiState? = null,
     /** Whether `Until I move` is offered among the end-condition rows (SPEC.md §4.4). */
     offersMotionEnd: Boolean = false,
+    /**
+     * Whether the running snooze *has* a motion exit — which is a different
+     * question from [offersMotionEnd], and the status line's to report: one is
+     * about what this build can be asked for, the other about what this snooze
+     * will actually end on.
+     */
+    endsOnMotion: Boolean = false,
     onOpenPermissions: () -> Unit,
     onOpenSettings: () -> Unit,
     /**
@@ -354,7 +361,7 @@ internal fun MainScreen(
             // first would only read as filler.
             when {
                 snoozing == true && trackingMode != null && remaining != null ->
-                    SnoozeStatus(trackingMode, remaining, degradation, departure)
+                    SnoozeStatus(trackingMode, remaining, degradation, departure, endsOnMotion)
                 snoozing == false -> NotSnoozingStatus()
                 // Nothing yet: either the record is still being read, or it read
                 // as running but without the mode and cap the line reports. Same
@@ -629,6 +636,7 @@ private fun SnoozeStatus(
     remaining: Duration,
     degradation: DegradationCause?,
     departure: DepartureObservation?,
+    endsOnMotion: Boolean,
 ) {
     val body = when (mode) {
         TrackingMode.FULL -> stringResource(R.string.ongoing_ends_when_you_leave)
@@ -652,14 +660,37 @@ private fun SnoozeStatus(
         TrackingMode.FULL, TrackingMode.WIFI_GRACE,
         TrackingMode.SETTLING -> null
     }
+    // **The exit the user chose, which the card used to leave out entirely**
+    // (maintainer, 2026-09-11: tapping `Until I move` changed nothing this
+    // screen said). `When I move` is a second ending, and the ongoing
+    // notification has always named it — so the one surface a user opens *to
+    // check* was the one promising a single exit it might not end on, which is
+    // principle 2's failure and reads as a tap that did nothing.
+    //
+    // Last, after the degradation, exactly as the notification orders it: that
+    // explains how well the promise above is being kept, while this adds a
+    // promise of its own and reads wrong wedged between a claim and its caveat.
+    val qualified = reason?.let { stringResource(R.string.ongoing_degraded_reason, body, it) }
+        ?: body
+    val condition = if (endsOnMotion) {
+        stringResource(R.string.ongoing_or_when_you_move, qualified)
+    } else {
+        qualified
+    }
     StatusBlock(
         headline = stringResource(R.string.ongoing_title),
         // FULL carries no degraded reason by construction, so its one-row form
         // can never be missing one.
+        //
+        // **But it is the whole statement or it is not offered**, because the
+        // one-row form replaces the condition line rather than sitting above it
+        // — so a motion exit would be dropped on the floor by the very case
+        // that fits. A second ending is exactly what this sentence cannot
+        // carry, so a snooze that has one takes the two-row shape and states
+        // both.
         oneRow = stringResource(R.string.main_snoozing_until_you_leave)
-            .takeIf { mode == TrackingMode.FULL },
-        condition = reason?.let { stringResource(R.string.ongoing_degraded_reason, body, it) }
-            ?: body,
+            .takeIf { mode == TrackingMode.FULL && !endsOnMotion },
+        condition = condition,
         detail = remainingText(remaining),
         // Only under `FULL`. The other modes are not measuring a distance —
         // showing one from the last fix before tracking degraded would explain
