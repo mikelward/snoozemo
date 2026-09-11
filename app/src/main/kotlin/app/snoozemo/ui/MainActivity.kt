@@ -2422,7 +2422,7 @@ class MainActivity : ComponentActivity() {
             // once one of them slid inside the floor, a third meeting that was
             // still perfectly offerable could never take its place, because it
             // had already been discarded and nothing re-runs the query
-            // (Codex, PR #234). The provider's own window is still the cap, so
+            // (Codex, PR #234). The provider's own window still bounds it, so
             // this holds no more of the user's calendar than the query
             // returned — and it is times only, as `NextMeetings` keeps it.
             // `applicationContext`, not `this`: the worker outlives a rotation
@@ -2432,7 +2432,20 @@ class MainActivity : ComponentActivity() {
             // start (SPEC.md §4.4), bounded by the cap a snooze started now
             // would carry — the window a plain arm opens a moment later, so
             // no further into the calendar than `docs/PRIVACY.md` promises.
-            val cap = loaded?.capExpiresAt ?: ActiveSnooze.capExpiryFor(wallNow)
+            //
+            // **`capCeilingAt` for a running snooze, not `capExpiresAt`**
+            // (maintainer, 2026-09-11: "when I choose a fixed end time, the
+            // next meeting times should not disappear"). A chosen time lowers
+            // the cap, so bounded by it this window shrank with every `−` and
+            // the meeting rows past the chosen time went with it — for good,
+            // since nothing re-widens a window the query never asked for.
+            //
+            // This calls the `cap` overload directly rather than the `snooze`
+            // one, which is how it was missed when that overload moved to the
+            // backstop: the notification's read goes through `snooze` and was
+            // fixed, and this one, the *screen's*, kept the old bound. Both
+            // callers now name the same instant.
+            val cap = loaded?.capCeilingAt ?: ActiveSnooze.capExpiryFor(wallNow)
             val ends = NextMeetings.endsBefore(applicationContext, cap, wallNow, reading)
             runOnUiThread {
                 // The same generation guard, plus the record's own identity:
