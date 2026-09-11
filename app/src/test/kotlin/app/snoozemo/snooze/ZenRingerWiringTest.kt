@@ -14,6 +14,7 @@ import app.snoozemo.core.ZenTrigger
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.dnd.RingerController
 import app.snoozemo.dnd.RingerOutcome
+import app.snoozemo.dnd.StuckRuleStore
 import app.snoozemo.dnd.ZenRuleIdStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -72,6 +73,7 @@ class ZenRingerWiringTest {
         store = NoRuleStore,
         configurationActivity = ComponentName(context.packageName, "app.snoozemo.ui.MainActivity"),
         ringer = ringer,
+        stuckRule = InMemoryStuckStore(),
     )
 
     @Test
@@ -107,6 +109,7 @@ class ZenRingerWiringTest {
             store = RememberingStore(),
             configurationActivity = ComponentName(context.packageName, "app.snoozemo.ui.MainActivity"),
             ringer = ringer,
+            stuckRule = InMemoryStuckStore(),
         ).setSnoozed(true, ZenTrigger.USER_ACTION, "Home", snooze)
 
         assertTrue(outcome.toString(), outcome is ZenOutcome.Applied)
@@ -142,6 +145,7 @@ class ZenRingerWiringTest {
             store = store,
             configurationActivity = ComponentName(context.packageName, "app.snoozemo.ui.MainActivity"),
             ringer = ringer,
+            stuckRule = InMemoryStuckStore(),
         ).setSnoozed(true, ZenTrigger.USER_ACTION, "Home", SnoozeIdentity(1_000L))
 
         assertTrue(outcome.toString(), outcome is ZenOutcome.Applied)
@@ -152,6 +156,236 @@ class ZenRingerWiringTest {
         // And the arm really did mint one, so the null above is ordering rather
         // than a rule write that never happened.
         assertNotNull(store.ruleId())
+    }
+
+    /**
+     * The one case ordering cannot reach (Codex, PR #259).
+     *
+     * A re-assertion — a cap re-arm, or a restore after process death — runs
+     * with our rule *already active*, and `RingerHandover.quiet` writes the
+     * ringer on one of those: the `unfinished` branch, finishing a loan whose
+     * own write never landed. That write deactivates the rule, and `STATE_TRUE`
+     * cannot revive it, so the rule is turned off first to un-stick it.
+     *
+     * Driven through the ringer's reported outcome rather than by staging a
+     * real half-written loan, because the flag is the contract between the two:
+     * `AudioRingerController` decides what finishing means, and this asserts
+     * what the controller does when told. `AudioRingerControllerTest` owns the
+     * other half.
+     */
+    @Test
+    fun `a ceiling write that finished an earlier loan turns the rule off before on`() {
+        val ringer = RecordingRinger(
+            quietOutcome = RingerOutcome.Set(RingerMode.VIBRATE, finishedAnEarlierLoan = true),
+        )
+        shadowOf(context.getSystemService(NotificationManager::class.java))
+            .setNotificationPolicyAccessGranted(true)
+
+        val outcome = AndroidZenController(
+            context = context,
+            store = RememberingStore(),
+            configurationActivity = ComponentName(context.packageName, "app.snoozemo.ui.MainActivity"),
+            ringer = ringer,
+            stuckRule = InMemoryStuckStore(),
+        ).setSnoozed(true, ZenTrigger.CONTEXT, "Home", SnoozeIdentity(1_000L))
+
+        assertTrue(outcome.toString(), outcome is ZenOutcome.Applied)
+        assertTrue(
+            SnoozeDebugLog.snapshot().toString(),
+            SnoozeDebugLog.snapshot().any { it.contains("turning it off so it can go on again") },
+        )
+    }
+
+    /**
+     * The un-stick's own failure, through the adapter: an arm that turned the
+     * rule off and could not get it back on must not leave a snooze reporting
+     * itself over an audible phone.
+     *
+     * Asserted as the *property* rather than one code, because which refusal
+     * the platform produces is the platform's business and `:core` owns the
+     * mapping (`RingerHandoverTest`, the `unstuckArmOutcome` cases). What this
+     * pins is that the adapter reaches that decision at all, and that the arm
+     * ends rather than staying armed for a retry.
+     */
+    @Test
+    fun `a rule turned off that will not go back on says so, not that it may retry`() {
+        shadowOf(context.getSystemService(NotificationManager::class.java))
+            .setNotificationPolicyAccessGranted(true)
+        val ringer = RecordingRinger(
+            quietOutcome = RingerOutcome.Set(RingerMode.VIBRATE, finishedAnEarlierLoan = true),
+        )
+
+        val outcome = AndroidZenController(
+            context = context,
+            // A rule this store names but the platform does not have, so the
+            // re-arm cannot take however the write is answered.
+            store = FixedStore("not-a-real-rule"),
+            configurationActivity = ComponentName(context.packageName, "app.snoozemo.ui.MainActivity"),
+            ringer = ringer,
+            stuckRule = InMemoryStuckStore(),
+        ).setSnoozed(true, ZenTrigger.CONTEXT, "Home", SnoozeIdentity(1_000L))
+
+        assertTrue(outcome.toString(), outcome is ZenOutcome.NotApplied)
+        assertTrue(
+            outcome.toString(),
+            (outcome as ZenOutcome.NotApplied).reason.nothingLeftToRelease,
+        )
+        // And the ringer this arm took goes back, so a snooze that is not being
+        // enforced leaves the phone where the user had it.
+        assertTrue(ringer.handedBack)
+    }
+
+    /**
+     * And the half that makes the requirement survive a retry (PR #260): an arm
+     * that finishes no loan still un-sticks the rule when a previous one wrote
+     * the requirement down — which is the only way the retry an unconfirmed arm
+     * asks for can know, since the finishing write marks the loan applied and
+     * the next `quiet` reports nothing.
+     */
+    @Test
+    fun `a recorded requirement makes the next arm un-stick the rule, then clears`() {
+        val ringer = RecordingRinger(quietOutcome = RingerOutcome.Set(RingerMode.VIBRATE))
+        val stuckRule = InMemoryStuckStore(stuck = true)
+        shadowOf(context.getSystemService(NotificationManager::class.java))
+            .setNotificationPolicyAccessGranted(true)
+
+        val outcome = AndroidZenController(
+            context = context,
+            store = RememberingStore(),
+            configurationActivity = ComponentName(context.packageName, "app.snoozemo.ui.MainActivity"),
+            ringer = ringer,
+            stuckRule = stuckRule,
+        ).setSnoozed(true, ZenTrigger.USER_ACTION, "Home", SnoozeIdentity(1_000L))
+
+        assertTrue(outcome.toString(), outcome is ZenOutcome.Applied)
+        assertTrue(
+            SnoozeDebugLog.snapshot().toString(),
+            SnoozeDebugLog.snapshot().any { it.contains("turning it off so it can go on again") },
+        )
+        // And an arm that got the rule back on drops the requirement, so the
+        // flag costs exactly one extra cycle rather than every arm from here.
+        assertEquals(false, stuckRule.stuck())
+    }
+
+    /**
+     * And the ambiguous read goes the same way (Codex, PR #260): an unreadable
+     * record says nothing, and answering "not stuck" would skip the cycle on
+     * exactly the retry the record exists for.
+     */
+    @Test
+    fun `an unreadable requirement is read as needing the cycle`() {
+        val ringer = RecordingRinger(quietOutcome = RingerOutcome.Set(RingerMode.VIBRATE))
+        shadowOf(context.getSystemService(NotificationManager::class.java))
+            .setNotificationPolicyAccessGranted(true)
+
+        AndroidZenController(
+            context = context,
+            store = RememberingStore(),
+            configurationActivity = ComponentName(context.packageName, "app.snoozemo.ui.MainActivity"),
+            ringer = ringer,
+            stuckRule = ThrowingStuckStore,
+        ).setSnoozed(true, ZenTrigger.USER_ACTION, "Home", SnoozeIdentity(1_000L))
+
+        assertTrue(
+            SnoozeDebugLog.snapshot().toString(),
+            SnoozeDebugLog.snapshot().any { it.contains("turning it off so it can go on again") },
+        )
+        // And the throw is reported rather than swallowed into the guess.
+        assertTrue(
+            SnoozeDebugLog.snapshot().toString(),
+            SnoozeDebugLog.snapshot().any { it.contains("needs un-sticking threw") },
+        )
+    }
+
+    /**
+     * And a read that threw is not a durable record (Codex, PR #260): the arm
+     * whose signal is new must still write it, since the guess that kept the
+     * cycle running lives only in this process. A read can fail transiently
+     * where the commit after it lands.
+     */
+    @Test
+    fun `an unreadable record does not pass for one already on disk`() {
+        val ringer = RecordingRinger(
+            quietOutcome = RingerOutcome.Set(RingerMode.VIBRATE, finishedAnEarlierLoan = true),
+        )
+        val stuckRule = UnreadableStuckStore()
+        shadowOf(context.getSystemService(NotificationManager::class.java))
+            .setNotificationPolicyAccessGranted(true)
+
+        AndroidZenController(
+            context = context,
+            store = RememberingStore(),
+            configurationActivity = ComponentName(context.packageName, "app.snoozemo.ui.MainActivity"),
+            ringer = ringer,
+            stuckRule = stuckRule,
+        ).setSnoozed(true, ZenTrigger.USER_ACTION, "Home", SnoozeIdentity(1_000L))
+
+        assertTrue(
+            SnoozeDebugLog.snapshot().toString(),
+            SnoozeDebugLog.snapshot().any { it.contains("turning it off so it can go on again") },
+        )
+        // The requirement was written down rather than assumed already there.
+        assertTrue(stuckRule.written.toString(), stuckRule.written.contains(true))
+    }
+
+    /** Unreadable, but writable — the pair that tells the two apart. */
+    private class UnreadableStuckStore : StuckRuleStore {
+        val written = mutableListOf<Boolean>()
+        override fun stuck(): Boolean = error("the record is unreadable")
+        override fun setStuck(stuck: Boolean): Boolean {
+            written += stuck
+            return true
+        }
+    }
+
+    /** A record no one can read, which is the ambiguity the arm has to resolve. */
+    private object ThrowingStuckStore : StuckRuleStore {
+        override fun stuck(): Boolean = error("the record is unreadable")
+        override fun setStuck(stuck: Boolean): Boolean = error("the record is unwritable")
+    }
+
+    /**
+     * The un-stick requirement, in memory: the real one is a preferences file
+     * shared process-wide, which would carry a flag one test set into the next.
+     */
+    private class InMemoryStuckStore(private var stuck: Boolean = false) : StuckRuleStore {
+        override fun stuck(): Boolean = stuck
+        override fun setStuck(stuck: Boolean): Boolean {
+            this.stuck = stuck
+            return true
+        }
+    }
+
+    /** A store pinned to one id, so every write goes to the same rule. */
+    private class FixedStore(private val id: String) : ZenRuleIdStore {
+        override fun ruleId(): String = id
+        override fun setRuleId(id: String) = true
+        override fun clear() = true
+    }
+
+    /**
+     * And the negative, which is what keeps the un-stick off the common path: a
+     * fresh arm takes the ringer without finishing anything, has no rule of its
+     * own to lose, and must not turn Do Not Disturb off on its way in.
+     */
+    @Test
+    fun `a fresh arm does not turn the rule off first`() {
+        val ringer = RecordingRinger(quietOutcome = RingerOutcome.Set(RingerMode.VIBRATE))
+        shadowOf(context.getSystemService(NotificationManager::class.java))
+            .setNotificationPolicyAccessGranted(true)
+
+        AndroidZenController(
+            context = context,
+            store = RememberingStore(),
+            configurationActivity = ComponentName(context.packageName, "app.snoozemo.ui.MainActivity"),
+            ringer = ringer,
+            stuckRule = InMemoryStuckStore(),
+        ).setSnoozed(true, ZenTrigger.USER_ACTION, "Home", SnoozeIdentity(1_000L))
+
+        assertTrue(
+            SnoozeDebugLog.snapshot().toString(),
+            SnoozeDebugLog.snapshot().none { it.contains("turning it off so it can go on again") },
+        )
     }
 
     /** A store that keeps what it is given, so an arm can actually succeed. */

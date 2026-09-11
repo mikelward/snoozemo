@@ -256,6 +256,7 @@ fun ringerFollowUp(
     outcome: ZenOutcome,
     ringerDisowned: Boolean = false,
     freshlyBorrowed: Boolean = false,
+    nothingEnforcing: Boolean = false,
 ): RingerFollowUp = when {
     snoozed && outcome is ZenOutcome.Applied -> RingerFollowUp.QUIET
     // Both directions of "nothing of ours is silencing the phone" agree: no
@@ -266,7 +267,181 @@ fun ringerFollowUp(
     // it here would find no loan, borrow again, and lower the very ringer the
     // hand-back had just left as theirs (Codex, PR #176).
     ringerDisowned -> RingerFollowUp.NOTHING
+    // The same conclusion from the other direction (Codex, PR #260). The
+    // re-quiet above rests on the snooze still being *enforced* — a refused
+    // release means the rule still exists and may accept the change next time,
+    // so the phone is still quiet and the ceiling still belongs under it. Where
+    // the caller already knows our rule is deactivated, that premise is false:
+    // lowering the ringer again would leave the phone under a ceiling with
+    // nothing silencing it, until a retry or the cap. Principle 1 says leave it
+    // audible, and the hand-back this release already ran is what does.
+    nothingEnforcing -> RingerFollowUp.NOTHING
     else -> RingerFollowUp.RE_QUIET
+}
+
+/**
+ * What an arm that had to un-stick its own rule may claim (SPEC.md §5.9).
+ *
+ * A ceiling write that *finishes an earlier loan* runs with our rule possibly
+ * active, and the platform's coupling turns Do Not Disturb off in response. So
+ * that arm turns the rule off and on again — and when the "on" half does not
+ * take, the phone is audible and the arm must not report something that keeps
+ * the snooze armed over it.
+ *
+ * Only one failure needs saying differently. Every other [ZenFailure] already
+ * reports `nothingLeftToRelease`, so it already ends the snooze; only
+ * [ZenFailure.PLATFORM_REFUSED] keeps it, on the promise that a rule which
+ * still exists may accept the change next time. After this write that promise
+ * can be false in the worst way.
+ *
+ * But the same code arrives from a second place with the opposite need: a rule
+ * the user disabled whose condition could not be reset, where the record is
+ * what will eventually drive that condition off. Ending there leaves a trap —
+ * the day they re-enable the rule it starts silencing the phone with nothing in
+ * the app that knows to end it, which is principle 1's failure and the worse of
+ * the two.
+ *
+ * The code cannot tell those apart, so this does not try to: [activation] is
+ * the platform's own answer, read only on this branch. `INACTIVE` or `MISSING`
+ * is the first case; `DISABLED` is the second.
+ *
+ * **An accepted re-arm is checked too, but only when [resetLanded] is false**
+ * (Codex, PR #259). The un-stick is an off-then-on pair, and the off half is
+ * what makes the on half mean anything: a deactivated rule stays deactivated
+ * until its owner sets `STATE_FALSE` first, so a `STATE_TRUE` accepted after a
+ * refused reset lands on a rule the platform goes on ignoring — and the arm's
+ * own confirmation only checks that the rule exists and is enabled, which a
+ * deactivated one still is. Reported `Applied`, that is `Snoozing` over an
+ * audible phone.
+ *
+ * It is gated on the reset rather than asked of every un-stuck arm because a
+ * read taken microseconds after a successful `STATE_TRUE` is where a lagging
+ * answer would do most damage, so the platform is only asked where there is
+ * already reason to doubt the arm.
+ *
+ * **And where it cannot answer, that arm is reported unconfirmed rather than
+ * either applied or ended.** `PLATFORM_REFUSED` is the third answer and the
+ * only true one there: the snooze stays, the cap keeps retrying, the release
+ * still runs, and a later re-assertion can un-stick the rule properly — where
+ * `Applied` would stop the retry over a snooze that may not exist and an ending
+ * would erase the record of one that may, leaving Do Not Disturb on with
+ * nothing that knows to turn it off.
+ *
+ * **[reArmAccepted] is what finally parts the two**, and it is the fact rather
+ * than an inference from one (Codex, PR #259, the fifth round on this handling).
+ * The trap needs a `STATE_TRUE` the platform *accepted* — that is what sets the
+ * condition, and the refusal comes afterwards, from the arm's own confirmation
+ * noticing the rule is switched off. A refusal over a write that never landed
+ * cannot have armed anything. So a refusal after an accepted write keeps its
+ * retry unconditionally, whatever any read says, and only the other kind is
+ * eligible to be called an ending.
+ *
+ * With that in hand [ZenRuleActivation.UNKNOWN] can fall back to
+ * [resetLanded] — the only evidence left where the platform offers none, and
+ * API 34 offers none ever, since below API 35 neither that read nor the
+ * `DEACTIVATED` broadcast exists. A reset that landed is knowledge of its own:
+ * we turned the rule off and the platform accepted, so a re-arm that wrote
+ * nothing leaves nothing enforcing, and keeping the snooze armed would report
+ * `Snoozing` over a phone this path made audible. Where neither landed there is
+ * no evidence at all and the retry stands.
+ *
+ * The earlier version of this traded the trap for that case on API 34 and said
+ * so. It no longer has to: the two are told apart by what was written, which
+ * every platform can answer.
+ *
+ * **The requirement outlives the arm, so it is state rather than an
+ * inference** (Codex, PR #260; maintainer's call, 2026-09-11). The un-stick
+ * fires on a one-shot signal — a ceiling write that finished an earlier loan —
+ * and that write marks the loan applied, so the retry this function's own
+ * `PLATFORM_REFUSED` asks for would see an ordinary re-assertion and report
+ * `Applied` over a rule the platform is still ignoring. The caller records the
+ * requirement before the cycle and clears it only on an `Applied` outcome —
+ * which, after the checks below, is the one answer that means the rule really
+ * is on; the alternative was cycling on *every*
+ * re-assertion, which needs no state and pays the flicker on every cap re-arm
+ * and every restore instead of only on the rare finishing arm.
+ *
+ * **The retry it asks for is the next arm reading the requirement off disk**,
+ * so a write of that record which did not land leaves the promise unbacked.
+ * That residual is open and recorded in `TODO.md` rather than patched: both
+ * ways out of it have now been tried in review and each broke the other's
+ * case.
+ *
+ * All of it arrives as inputs rather than as conditionals at the call site
+ * because that is the only way any of it is testable: `PLATFORM_REFUSED` — the
+ * one refusal that keeps a snooze armed — cannot be produced through the
+ * adapter under Robolectric, which is how this family of cases kept arriving as
+ * review findings rather than test failures.
+ */
+fun unstuckArmOutcome(
+    reArmed: ZenOutcome,
+    unstuck: Boolean,
+    resetLanded: Boolean,
+    reArmAccepted: Boolean,
+    activation: () -> ZenRuleActivation,
+): ZenOutcome {
+    if (!unstuck) return reArmed
+    val worthChecking = when (reArmed) {
+        is ZenOutcome.Applied -> !resetLanded
+        // A refusal *after* an accepted write may have left a condition set on
+        // a rule the user switched off, and the record is what will eventually
+        // drive it back off. That one is never an ending.
+        is ZenOutcome.NotApplied ->
+            reArmed.reason == ZenFailure.PLATFORM_REFUSED && !reArmAccepted
+    }
+    if (!worthChecking) return reArmed
+    val activation = activation()
+    return when (activation) {
+        ZenRuleActivation.ACTIVE -> reArmed
+        ZenRuleActivation.INACTIVE, ZenRuleActivation.MISSING ->
+            ZenOutcome.NotApplied(ZenFailure.RULE_TURNED_OFF)
+        // **An un-stick nobody could verify is never reported as confirmed**
+        // (Codex, PR #259, the sixth round here). The remaining case is an
+        // accepted `STATE_TRUE` over a reset that did not land, which the
+        // platform will not adjudicate — and always will not, below API 35. It
+        // is one of two things: a rule the ringer write deactivated and this
+        // write could not revive, or one that really did arm because nothing
+        // was active to deactivate.
+        //
+        // Neither `Applied` nor an ending is honest about that. `Applied` stops
+        // the retry and claims a snooze that may not exist; an ending erases
+        // the record of one that may, leaving Do Not Disturb on with nothing
+        // that knows to turn it off — principle 1's failure, and the reason the
+        // earlier version reached for `Applied` here. `PLATFORM_REFUSED` is the
+        // third answer and the only true one: *not confirmed, come back for it*.
+        // The snooze stays, the cap keeps retrying, the release still runs, and
+        // a later re-assertion can un-stick the rule properly.
+        // A rule the user switched off keeps its retry **only while there is a
+        // condition left to drive off**. That is what the retry is for: a
+        // disabled rule whose condition is still set starts silencing the phone
+        // the day they re-enable it, and the record is the only thing that
+        // would ever clear it.
+        //
+        // Where our own reset landed and no re-arm was accepted, the condition
+        // is already clear, so there is no trap to keep the record for — and a
+        // disabled rule enforces nothing, so keeping the snooze would show
+        // `Snoozing` over a phone that is not quiet (Codex, PR #260). That is
+        // the failure the ending exists to report, and `RULE_DISABLED` is both
+        // its honest reason and one the release paths already treat as over.
+        //
+        // Only this arm's own reset counts here. `confirmSilenced` runs a
+        // `STATE_FALSE` of its own when an accepted `STATE_TRUE` turns out to
+        // have hit a disabled rule, but it reports `RULE_DISABLED`, which never
+        // reaches this branch — the check above admits only `PLATFORM_REFUSED`
+        // (Codex, PR #260, after an earlier round added an inference for it
+        // that could not fire).
+        ZenRuleActivation.DISABLED ->
+            if (resetLanded && !reArmAccepted) {
+                ZenOutcome.NotApplied(ZenFailure.RULE_DISABLED)
+            } else {
+                reArmed
+            }
+        ZenRuleActivation.UNKNOWN -> when {
+            reArmed is ZenOutcome.Applied -> ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED)
+            resetLanded -> ZenOutcome.NotApplied(ZenFailure.RULE_TURNED_OFF)
+            else -> reArmed
+        }
+    }
 }
 
 /**

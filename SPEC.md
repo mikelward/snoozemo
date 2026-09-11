@@ -2402,6 +2402,9 @@ back on disk before the ringer moves, and declines the borrow outright if it can
 so none of it pays for a cold file load. A re-assertion normally writes nothing, since an
 outstanding loan is never overwritten; the one exception is a loan whose own write never landed,
 which it finishes. A `Ring` ceiling imposes nothing and returns before any platform call at all.
+The un-stick record below adds one more read, from the same warmed file the rule id uses, and
+writes only where the signal is new — the finishing branch, an arm that confirms the rule on,
+and a release.
 
 **An arm always has priority over startup reconciliation.** The ringer's lock is
 process-wide, and the recovery check that hands back a loan a dead process left behind wants
@@ -2422,15 +2425,93 @@ the app is opened. The retry alarm's own path still waits on the lock, because i
 alarm is already spent and a stand-down there would leave a stranded loan with nothing
 scheduled.
 
-**A re-assertion is the one arm this order cannot help**, and it is deliberately left for its
-own change (`TODO.md`). A cap re-arm or a restore after process death runs with the rule
+**A re-assertion is the one arm the order cannot help, so there the rule is un-stuck**
+(maintainer, 2026-09-11). A cap re-arm or a restore after process death runs with the rule
 already active, and rule 1's own recovery writes the ringer on one of those: the case where a
 loan was recorded but its write never landed, which the next arm *finishes*. That write trips
-the coupling, and `STATE_TRUE` cannot undo it — a deactivated rule stays deactivated until its
-owner sets `STATE_FALSE` first (§5.8). Fixing it means turning Do Not Disturb off and on again
-on that path, which is a real cost on a rare path and a decision of its own. Until then the
-exposure is strictly narrower than it was: before this order, every arm wrote the ringer under
-its own rule.
+the coupling like any other, and `STATE_TRUE` cannot undo it — a deactivated rule stays
+deactivated until its owner sets `STATE_FALSE` first (§5.8). Left alone, the re-assertion
+would report itself applied over a rule the platform is ignoring and then end the snooze as a
+user-initiated ending, which is this whole section's bug reached by the one path reordering
+cannot reach. So that arm turns the rule off and on again.
+
+The cost is stated rather than hidden: Do Not Disturb is genuinely off between those two
+calls, so a call arriving in that window rings. It is accepted **only here** — the same
+off-and-on cycle was rejected as the general design, because on every arm it is a visible
+flicker for no gain, where this is one rare recovery path, mid-snooze, against a snooze that
+silently stops being one. The alternative, skipping the finish while the rule may be active,
+is worse: it restores the failure rule 1's finish exists to prevent, leaving the phone above
+its ceiling for the snooze's whole length.
+
+**If the rule will not go back on, the snooze ends and says so.** The ceiling write is what
+leaves the phone audible here — it turned Do Not Disturb off — so a re-assertion that then
+cannot get the rule back on reports an ending rather than a refusal worth retrying. Keeping
+the snooze armed on the platform's "refused, may work next time" would ring until the
+duration cap under a card reading `Snoozing`, which is principle 2's failure.
+
+Only one refusal needs saying differently: every other reason already means nothing is left
+to release. That one, though, arrives from two places with opposite needs — this one, and a
+rule the user disabled whose condition could not be reset, where the record is what will
+eventually drive that condition off, and ending would leave a trap that silences the phone
+the day they switch the rule back on. **What parts them is what was actually written**: the
+trap needs a state change the platform *accepted*, since that is what sets the condition and
+the refusal comes afterwards, from the arm's own confirmation noticing the rule is off. A
+refusal over a write that never landed cannot have armed anything, so only that kind is ever
+called an ending. Beyond that the platform is asked — the rule's live activation, read only
+after a refused re-assertion on the branch that finished a loan — and where it will not say,
+which is always below API 35 (§5.8), the reset's own result stands in: one that landed means
+we turned the rule off ourselves and nothing is enforcing.
+
+**The trap's own retry is kept only while a condition is actually left set.** A rule the user
+disabled keeps the record because that record is what will eventually drive its condition off
+— but where our own reset landed and no re-arm was accepted, the condition is already clear,
+so there is nothing to come back for and a disabled rule enforces nothing. Keeping the snooze
+there would read `Snoozing` over a phone that is not quiet, so the arm ends and names the
+disabled rule.
+
+**The requirement to un-stick outlives the arm, so it is written down** (maintainer,
+2026-09-11). The signal that starts an un-stick is one-shot: the finishing ceiling write marks
+the loan applied, so the next `quiet` reports nothing and the next arm sees an ordinary
+re-assertion. That matters because this path can end *unconfirmed* — always, below API 35 —
+which keeps the snooze for the cap to retry, and the retry would otherwise report `Applied`
+over a rule the platform is still ignoring. So an arm that cannot point at a live rule records
+that the rule still needs the cycle, every arm reads that record, and **only a rule confirmed
+on clears it** — an arm that ends up `Applied`, or a release whose own `STATE_FALSE` lands.
+Every other answer leaves it, deliberately: it is also what tells a *refused* release that
+nothing is enforcing, so clearing it on an ending — which looks right, since the reset that
+produced the ending did land — takes that away exactly where it is needed. A record that
+cannot be read is treated as set, the same direction: an unreadable one says nothing, and
+reading it as clear would skip the cycle on exactly the retry it exists for. It is not,
+though, treated as one already on disk — an arm whose signal is new still writes it, since a
+guess lives only in this process and a read can fail where the commit after it lands. It is written **before** the cycle
+for the reason rule 1 writes the way back before the ringer mode: a process that dies between
+the two calls leaves a rule the platform is ignoring, and the record is the only thing that
+would know.
+
+**And it is what a refused release reads.** Rule 3's re-quiet rests on the snooze still being
+*enforced*: the rule exists, the platform may accept the change next time, and the phone is
+quiet meanwhile. A rule recorded stuck is one the platform is ignoring, so lowering the ringer
+again there would leave the phone under a ceiling with nothing silencing it until a retry or
+the cap — principle 1's failure. The release reads the record before its own write, since the
+refusal itself cannot tell the two apart, and leaves the phone as the hand-back left it.
+
+The alternative was cycling on *every* re-assertion, which needs no record at all — and pays
+the flicker above on every cap re-arm and every restore rather than on the rare finishing arm.
+A stale record is bounded the other way: it costs exactly one extra cycle, since the next arm
+does it, confirms, and clears — and on a fresh arm that cycle is not even visible, because Do
+Not Disturb is off before it anyway. The residual is narrower than the one it replaces: a
+process that dies between the ringer write itself and the record.
+
+**An unconfirmed arm's retry is only as good as the record behind it, and that is open.** The
+retry is the next arm reading this record, so a write of it that did not land leaves the
+promise unbacked: a process dying there leaves a rule the platform ignores, a loan already
+marked applied so nothing re-derives the signal, and a restore reporting `Snoozing` over an
+audible phone. Ending the snooze instead is not the answer it looks like — `RULE_TURNED_OFF`
+is `nothingLeftToRelease`, and callers take that at its word, discarding the record and the
+cap **without** a release, so an ending claimed over a rule that was in fact active leaves it
+on with nothing left to turn it off, which is principle 1's failure rather than principle 2's.
+Both ways out were tried in review and each broke the other's case; the residual and the
+candidate designs are in `TODO.md`.
 
 **A refused arm gives back only what it took itself.** Under this order a *fresh* arm has already
 taken the ringer by the time the rule write is refused, so it hands it back and leaves the phone

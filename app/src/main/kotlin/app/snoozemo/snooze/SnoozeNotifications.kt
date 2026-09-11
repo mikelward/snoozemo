@@ -1075,7 +1075,7 @@ class SnoozeNotifications(private val context: Context) {
         val text = when (failure) {
             ZenFailure.NO_POLICY_ACCESS -> R.string.failure_no_access
             ZenFailure.RULE_DISABLED -> R.string.failure_rule_disabled
-            ZenFailure.NO_RULE, ZenFailure.PLATFORM_REFUSED -> when {
+            ZenFailure.NO_RULE, ZenFailure.PLATFORM_REFUSED, ZenFailure.RULE_TURNED_OFF -> when {
                 whileArming -> R.string.failure_could_not_start
                 // Nothing owed, deliberately — so "delivered" is the honest
                 // answer, not a failure a caller should keep retrying.

@@ -1859,6 +1859,97 @@ the point is that every other line of the app is worthless if it isn't true.
 
 ## Phase 5 (M5) — Edge cases and degraded modes
 
+- [ ] **Give `RULE_TURNED_OFF` its own copy** — deferred from PR #260 (Codex) because it is
+      new user-facing text, and *Translations* has the maintainer approve English copy before
+      anything is written. Today it falls into the `whileArming` group and shows
+      `failure_could_not_start`, "Couldn't snooze", which is wrong twice over on the paths that
+      actually produce it: a restore or a cap re-assertion, where the snooze **did** start and
+      has now ended, and where the reason — Do Not Disturb was turned off to be re-armed and
+      would not go back on — is the one thing the user could act on. This outcome exists to
+      name that transition, so showing the generic message throws away the whole point of it.
+      Proposed, following the two-part shape `failure_rule_stuck` already uses:
+      `Snooze ended` / `Do Not Disturb wouldn't turn back on.` Needs sign-off, then the base
+      string with `tools:ignore="MissingTranslation"` and a `<!-- TODO: translate -->` until the
+      locales are fanned out.
+
+- [ ] **`AudioRingerControllerTest` shares process-wide ringer state with the rest of the
+      suite** — seen failing once on PR #260 and green on every run around it, so it is
+      intermittent rather than broken. `an arm that arrives mid-hand-back sends reconciliation
+      away, loan intact` asserted `Untouched` and got `null`, which is the *pre-lock*
+      stand-down: either the arm predicate was consulted out of order or `tryLock` lost the
+      process-wide `RINGER` lock to a thread another test left running. Both the lock and
+      `ARMS_WAITING` are statics by design — the ringer is one device-wide thing — so any test
+      that starts a hand-back on a background thread can reach into another's. The two
+      stand-downs are also indistinguishable by return value, which is what makes the failure
+      read as a wrong answer rather than as contention.
+      Not from that PR's diff, which touches neither file. Fix by making the contention
+      explicit rather than by retrying: give the stand-downs distinguishable outcomes, and have
+      every test that starts one join it before returning (`RingerReconcileTest` already does).
+
+- [ ] **Decide what an unconfirmed un-stick may promise when its record did not land** —
+      maintainer's call, raised on PR #260 (Codex, two findings that cancel each other).
+      An un-stick that cannot be confirmed — always, below API 35 — returns `PLATFORM_REFUSED`,
+      which keeps the snooze for the cap to retry. The retry *is* the next arm reading the
+      stuck record, so a `setStuck(true)` that did not reach disk leaves that promise unbacked:
+      a process dying there leaves a deactivated rule, a loan already marked applied so nothing
+      re-derives the signal, and a restore reporting `Snoozing` over an audible phone.
+      The obvious fix is not one. Ending instead (`RULE_TURNED_OFF`) is `nothingLeftToRelease`,
+      and `SnoozeController.end` / `restore` take that at its word — they discard the record and
+      the cap **without** calling the controller again, on the grounds that a second call would
+      fail the same way. So an ending claimed over a rule that really was active leaves it on
+      with nothing left to turn it off, which is principle 1's failure and worse than the one it
+      replaces. That version was on the branch briefly and is reverted.
+      Three candidates, none taken:
+      - *Leave it.* What is on the branch: the retry stands, unbacked in the narrow case where
+        the write failed **and** the process dies before the cap fires. Documented in `SPEC.md`
+        §5.9, and the smaller of the two failures.
+      - *Discharge, then end.* Drive `STATE_FALSE` ourselves before claiming `RULE_TURNED_OFF`,
+        and fall back to the retryable answer if that write is refused too. Makes the ending
+        true, at one more policy call on a path where writes are already failing — and one more
+        conditional on a decision that has now drawn six review findings.
+      - *Use the loan as the record.* The signal originally comes from a ringer loan whose write
+        never landed; leaving that loan unfinished when the flag write fails would let the next
+        arm re-derive the un-stick exactly as this one did, from a record that is already
+        durable and already on this path. Costs a second ringer write to the same ceiling, and
+        couples `:dnd`'s zen half to its ringer half in a new place.
+      **The shape of this is the real question.** Six findings on one mechanism, and the design
+      the maintainer declined on 2026-09-11 — cycle on every re-assertion, no record at all —
+      has none of them: no durability, no unbacked retry, no clearing rule, no unreadable read.
+      Its whole cost is the flicker, paid on every cap re-arm and restore rather than on the
+      rare finishing arm.
+
+- [ ] **Decide whether a disabled-rule cleanup should clear the un-stick record** — raised on
+      PR #260 (Codex), declined there for now. When an accepted `STATE_TRUE` reaches a disabled
+      rule, `confirmSilenced` resets its condition and reports `RULE_DISABLED`; that reset means
+      the rule is no longer stuck, but the record is not cleared, so the next arm pays one
+      off-and-on cycle before its rule write.
+      Clearing it there reopens the P1 from the round before: the record is also what tells a
+      *refused* release that nothing is enforcing, and this outcome ends the snooze, which sends
+      the reboot fallback into exactly that redundant release. The cost of not clearing is
+      bounded and self-limiting — one cycle on the next arm, which then clears it — where the
+      cost of clearing is the ringer being re-borrowed under a rule confirmed off.
+      What would settle it is a way for the release to know "nothing is enforcing" that does not
+      come from this record, which is the same question as the entry above.
+
+- [ ] **Decide where `resetLanded` comes from** — maintainer's call, raised on PR #260
+      (Codex, third finding in the same mechanism). The un-stick's `stillStuck` turns on
+      whether a `STATE_FALSE` the platform accepted lies behind this arm, and that fact is
+      currently assembled at the call site: the arm's own reset, plus an inference for the
+      one `confirmSilenced` issues when an accepted `STATE_TRUE` turns out to have hit a
+      disabled rule. Two of the three findings were the same shape — a reset that landed
+      somewhere the flag did not look — so the plumbing is the thing under review, not the
+      cases.
+      - *Leave it assembled.* What is on the branch. Cheapest, and every future site that
+        lands a `STATE_FALSE` is a fresh instance of the same bug.
+      - *Observe it once.* Every rule-state write already funnels through `trySetState`, so
+        a witness created per arm and threaded through `setRuleState` / `writeRuleState` /
+        `confirmSilenced` / `resetCondition` would record an accepted reset wherever it
+        happened, and the call-site assembly would go away. Deletes the class; costs a
+        parameter on five signatures in the file this PR has already reworked most, and
+        wants its own review.
+      Not urgent either way: what a missed reset costs is one redundant policy call in
+      front of a later arm's rule write, not a snooze.
+
 - [ ] **Bound the recovery work that can sit in front of `STATE_TRUE`** (`SPEC.md`
       §5.9). Deferred from PR #259 (Codex): the ceiling-before-rule order put
       `quietLocked`'s `handBackFirst` branch in front of the zen write, so an arm that
@@ -1885,25 +1976,31 @@ the point is that every other line of the app is worthless if it isn't true.
       whether the tap still feels instant with the persistence ahead of the rule — is what
       would say whether any of it is perceptible.
 
-- [ ] **Un-stick the rule on a re-assertion that finishes an earlier loan** (`SPEC.md` §5.9).
-      Split out of PR #259 so the ordering fix could land (maintainer, 2026-09-11); the work is
-      written and reviewed, on `claude/rule-unstick`.
+- [x] **Decide how the un-stick requirement survives a retry** — **persist it** (maintainer,
+      2026-09-11), raised on PR #260 (Codex) and done there. The un-stick fires when an arm's
+      ceiling write *finishes* an earlier loan, which is a one-shot signal: the write marks the
+      loan applied, so the next arm's `RingerHandover.quiet` returns `Nothing` and sees an
+      ordinary re-assertion. That matters on the path that returns an unconfirmed refusal —
+      always, below API 35 — where the snooze is kept for the cap to retry and the retry would
+      report `Applied` over a rule still deactivated.
+      `StuckRuleStore` records it, written before the off-and-on cycle and cleared when an arm
+      confirms the rule active or a release turns it off. The alternative — cycling on *every*
+      re-assertion, no state at all — was declined because it pays the flicker on every cap
+      re-arm and every restore, where a stale record costs one extra cycle that a fresh arm
+      cannot even show (Do Not Disturb is off before it anyway). Residual, narrower than the
+      one it replaces: a process that dies between the ringer write and the record.
+
+- [x] **Un-stick the rule on a re-assertion that finishes an earlier loan** (`SPEC.md` §5.9).
+      Split out of PR #259 so the ordering fix could land on its own (maintainer, 2026-09-11).
       The ceiling-before-rule order solves a *fresh* arm, which has no rule of ours to lose. It
       cannot solve a re-assertion — a cap re-arm or a restore after process death — because the
       rule is already active there, and `RingerHandover.quiet` still writes on one of those: the
       `unfinished` branch, finishing a loan whose own write never landed. That write trips the
       coupling, and `STATE_TRUE` cannot undo it, so the re-assertion reports itself applied over a
       rule the platform is ignoring and the `DEACTIVATED` broadcast ends the snooze.
-      The fix is to turn the rule off and on again on that one path, which costs a real window
-      where Do Not Disturb is genuinely off, and a `ZenFailure.RULE_TURNED_OFF` for the case where
-      it will not go back on. Getting the second part right took six review rounds, because
-      `PLATFORM_REFUSED` names two opposite states of the world — nothing enforcing, and a
-      condition left set on a rule the user disabled — and what parts them is whether the platform
-      *accepted* the write. The last open question is what to report when the reset was refused,
-      the re-arm was accepted, and the platform will not say whether the rule is on: `Applied`
-      claims a snooze that may not exist, and an ending would erase the record of one that may.
-      Narrower than it was either way: before that order, every arm wrote the ringer under its own
-      rule.
+      Fixed by turning the rule off and on again on that one path, at the cost of a real window
+      where Do Not Disturb is genuinely off, plus a `ZenFailure.RULE_TURNED_OFF` for the case
+      where it will not go back on.
 
 - [x] **Make the refused-release escalation one pure decision in `:core`** (`SPEC.md` §7.1).
       **Landed** as `ReleaseEscalation` + `ReleaseProgress` + `ReleaseStep`, with the service and
