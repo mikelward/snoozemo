@@ -1614,6 +1614,23 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // `APPLIED`: the end it chose was not applied to anything.
             return EndChoiceResult.GONE
         }
+        // A row's offer to start was drawn over "nothing running" at some
+        // moment, and it carries that moment as the store's arm count. A
+        // count that has moved since means a snooze came *and went* under
+        // the offer — armed from the tile while the row waited on a location
+        // grant, say — and "nothing running" reads the same on both sides of
+        // that. The tap is not what the user is looking at any more, so the
+        // offer is over: `GONE`, and the screen's next record read draws a
+        // fresh one. Checked here rather than on the screen because this is
+        // where the store is already read on the arm path (the record check
+        // above), while the screen would be reading it on the main thread
+        // (Codex, PR #257). Ambiguity ends a tap rather than starting a
+        // snooze on one (SPEC.md D7's direction).
+        val armCountAtOffer = intent?.getLongExtra(EXTRA_ARM_COUNT_AT_OFFER, -1L) ?: -1L
+        if (armCountAtOffer >= 0L && store.armCount() != armCountAtOffer) {
+            SnoozeDebugLog.event("arm: a tap to start outlived the offer it was made on; nothing armed")
+            return EndChoiceResult.GONE
+        }
 
         // The cap alarm is armed first, before anything that can throw: a snooze
         // whose cap was never scheduled has lost the exit that holds when every
@@ -3682,6 +3699,16 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         const val EXTRA_ENDS_ON_MOTION = "app.snoozemo.extra.ENDS_ON_MOTION"
 
         /**
+         * The identity of an idle-screen offer to start: `ActiveSnoozeStore.armCount`
+         * as of the record read that drew it. An [ACTION_ARM] carrying it is
+         * refused (`GONE`) once any snooze has been confirmed since — the
+         * offer was made over a "nothing running" that has come and gone; an
+         * arm refused before confirmation moves nothing. Absent, or negative,
+         * means no claim: the tile's arm, and the pinned `Snooze`.
+         */
+        const val EXTRA_ARM_COUNT_AT_OFFER = "app.snoozemo.extra.ARM_COUNT_AT_OFFER"
+
+        /**
          * Which surface a tap came from, for the debug log and nothing else.
          *
          * `RELEASED (MANUAL)` says a person ended the snooze and says nothing
@@ -3747,14 +3774,19 @@ open class SnoozeService : Service(), SnoozeController.Listener {
          * as the way to start rather than as a refinement (SPEC.md §4.4).
          *
          * Reported through [requestId] like any other row, on simpler terms:
-         * `APPLIED` or `GONE` means a snooze is running now and the offer is
-         * over; `REFUSED` means none is. Returns false if the service would
-         * not start, which the row reports where the tap happened.
+         * `APPLIED` means a snooze is running now; `GONE` means the offer is
+         * over — a snooze is running, or one came and went since the offer
+         * was drawn, which [armCountAtOffer] is what detects — and the
+         * screen's next record read says which; `REFUSED` means none is
+         * running and the row stands for a retry. Returns false if the
+         * service would not start, which the row reports where the tap
+         * happened.
          */
-        fun armUntil(context: Context, endsAt: Instant, requestId: Long): Boolean =
+        fun armUntil(context: Context, endsAt: Instant, requestId: Long, armCountAtOffer: Long): Boolean =
             start(context, ACTION_ARM) {
                 it.putExtra(EXTRA_CAP_EXPIRES_AT, endsAt.toEpochMilli())
                 it.putExtra(EXTRA_CHOICE_REQUEST_ID, requestId)
+                it.putExtra(EXTRA_ARM_COUNT_AT_OFFER, armCountAtOffer)
             }
 
         /**
@@ -3763,10 +3795,25 @@ open class SnoozeService : Service(), SnoozeController.Listener {
          * a sensor the platform will not register after the arm is said in
          * the shade, since by then the rows have moved on to the snooze.
          */
-        fun armUntilMotion(context: Context, requestId: Long): Boolean =
+        fun armUntilMotion(context: Context, requestId: Long, armCountAtOffer: Long): Boolean =
             start(context, ACTION_ARM) {
                 it.putExtra(EXTRA_ENDS_ON_MOTION, true)
                 it.putExtra(EXTRA_CHOICE_REQUEST_ID, requestId)
+                it.putExtra(EXTRA_ARM_COUNT_AT_OFFER, armCountAtOffer)
+            }
+
+        /**
+         * Arm a new snooze that runs until departure on the default cap —
+         * the idle screen's `Until I leave` (SPEC.md §4.4, maintainer,
+         * 2026-09-11). The same arm the pinned `Snooze` makes, carrying the
+         * row's request so the row hears the answer: nothing to choose, so
+         * nothing beyond [requestId] and the offer's identity, and reported
+         * as [armUntil] is.
+         */
+        fun armUntilDeparture(context: Context, requestId: Long, armCountAtOffer: Long): Boolean =
+            start(context, ACTION_ARM) {
+                it.putExtra(EXTRA_CHOICE_REQUEST_ID, requestId)
+                it.putExtra(EXTRA_ARM_COUNT_AT_OFFER, armCountAtOffer)
             }
 
         fun end(context: Context) = start(context, ACTION_END)

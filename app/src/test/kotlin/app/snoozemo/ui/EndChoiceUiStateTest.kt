@@ -48,6 +48,7 @@ class EndChoiceUiStateTest {
         offerFor: Instant? = now,
         meetingEnds: List<Instant> = emptyList(),
         at: Instant = now,
+        buildTracksDeparture: Boolean = app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE,
     ) = endChoiceUiState(
         condition = condition,
         offerFor = offerFor,
@@ -56,6 +57,7 @@ class EndChoiceUiStateTest {
         now = at,
         committing = false,
         failed = false,
+        buildTracksDeparture = buildTracksDeparture,
         format = { "at ${it.epochSecond}" },
     )
 
@@ -284,10 +286,18 @@ class EndChoiceUiStateTest {
         val offer = state(record = null, offerFor = null)!!
 
         assertTrue(offer.startsASnooze)
-        // No `Until I leave`: the pinned `Snooze` beside the rows is that
-        // choice, and one control per answer.
-        assertFalse(offer.tracksDeparture)
+        // `Until I leave` too, as the plain arm (maintainer, 2026-09-11) —
+        // wherever this build can track one at all.
+        assertEquals(app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE, offer.tracksDeparture)
         assertEquals("at ${condition.endsAt.epochSecond}", offer.formattedTime)
+    }
+
+    @Test
+    fun `the offer to start withholds until I leave on a build that cannot track one`() {
+        // The sheet's rule, applied to the idle rows: a departure nothing
+        // will watch for is not what the row names.
+        assertFalse(state(record = null, offerFor = null, buildTracksDeparture = false)!!.tracksDeparture)
+        assertTrue(state(record = null, offerFor = null, buildTracksDeparture = true)!!.tracksDeparture)
     }
 
     @Test

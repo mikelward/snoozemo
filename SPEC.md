@@ -1330,15 +1330,28 @@ tap starts. Three things follow:
   the idle rows, and the record read that moves the offer onto it lands a frame before the redraw,
   so a tap in that gap is dropped rather than sent as a refinement of a snooze it was never offered
   over.
-- **No `Until I leave` on the idle screen.** The pinned `Snooze` is that choice — a plain arm runs
-  until departure on the default cap — and one control per answer.
+- **`Until I leave` is on the idle screen too** (maintainer, 2026-09-11). It reverses the first
+  cut's "no `Until I leave` on the idle screen; the pinned `Snooze` is that choice, one control per
+  answer": the rows are the one set of end conditions the app has, and the idle screen offers
+  every one of them as a way to start, so the row's absence read as a missing option rather than
+  a deduplicated one. It starts the plain arm the pinned `Snooze` makes — the default cap, ending
+  on departure — carrying the row's request so a refusal shows where the tap happened; the
+  footer's `Snooze` stays as the unqualified arm for now — with every row a way to start, it
+  duplicates `Until I leave`, and whether it stays, goes, or becomes a configurable default in
+  step with the tile is an open decision (`TODO.md`). Withheld only on a build that cannot track a
+  departure at all, as the sheet withholds it, and gated on the same location grant the running
+  row needs, since a departure nothing can watch for is not what the row names.
 - **The arm path's guarantee still governs** (§4.1, §6.9): a row that arms waits on nothing. The
   chosen end goes into the same cap alarm the plain arm sets, bounded by the same ceiling; a time
   that has fallen inside the floor is declined *before* anything is armed, not moved. What the row
-  is told is therefore simpler than over a running snooze: `applied` or `gone` means a snooze is
-  running now and the offer is over (`gone` when one was already running — the tile got there first
-  — or when the snooze started but the exit it asked for could not be kept), `refused` means none
-  is, and the rows stand for a retry saying `Couldn't snooze`. `Until I move` is the one choice that
+  is told is therefore simpler than over a running snooze: `applied` means the snooze it asked for
+  is running now; `gone` means the offer is over — a snooze is running (one was already running,
+  the tile got there first; or the snooze started but the exit it asked for could not be kept), or
+  one came and went since the offer was drawn (a tap that waited on its location grant while the
+  tile armed and ended a snooze underneath it — the offer was made over a "nothing running" that
+  has passed, and starting on it would silence a phone the user last saw quiet), and the screen's
+  next record read draws what there is; `refused` means none is running, and the rows stand for a
+  retry saying `Couldn't snooze`. `Until I move` is the one choice that
   can be declined *after* the arm, when the platform will not register the sensor; by then the rows
   have moved on to the running snooze, so that refusal goes to the shade as a tap with no row behind
   it does.

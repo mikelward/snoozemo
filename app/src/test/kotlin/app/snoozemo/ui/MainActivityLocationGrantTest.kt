@@ -49,6 +49,15 @@ class MainActivityLocationGrantTest {
         ActiveSnoozeStore(app).clear()
     }
 
+    /**
+     * The screen with its record reads run inline — the grant's poke reads
+     * the record off the main thread, so the seam goes in before `setup()`
+     * for the reason `MainActivityEndRowsTest` gives.
+     */
+    private fun built() = Robolectric.buildActivity(MainActivity::class.java)
+        .also { it.get().runOffMainThread = { work -> work() } }
+        .setup()
+
     /** Runs the deferred first-frame reads the screen queues on every start. */
     private fun settle() {
         shadowOf(Looper.getMainLooper()).idle()
@@ -92,7 +101,7 @@ class MainActivityLocationGrantTest {
     fun `a grant taken in Settings re-asks the running monitor`() {
         ActiveSnoozeStore(app).arm(snoozeFixture(java.time.Instant.now()))
         shadowOf(app).denyPermissions(*locationPermissions)
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        val controller = built()
         settle()
         // Everything the screen did while starting is not what this is about.
         drainStartedServices()
@@ -111,7 +120,7 @@ class MainActivityLocationGrantTest {
         // The runtime prompt's own result, delivered through the same read.
         ActiveSnoozeStore(app).arm(snoozeFixture(java.time.Instant.now()))
         shadowOf(app).denyPermissions(*locationPermissions)
-        val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
+        val activity = built().get()
         settle()
         drainStartedServices()
 
@@ -131,7 +140,7 @@ class MainActivityLocationGrantTest {
         // PR #185).
         ActiveSnoozeStore(app).arm(snoozeFixture(java.time.Instant.now()))
         shadowOf(app).denyPermissions(*locationPermissions)
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        val controller = built()
         settle()
         drainStartedServices()
 
@@ -156,7 +165,7 @@ class MainActivityLocationGrantTest {
         ActiveSnoozeStore(app).arm(snoozeFixture(java.time.Instant.now()))
         shadowOf(app).grantPermissions(*locationPermissions)
 
-        Robolectric.buildActivity(MainActivity::class.java).setup()
+        built()
         settle()
 
         assertGrantPoked("a first read over a running snooze has to re-ask")
@@ -167,7 +176,7 @@ class MainActivityLocationGrantTest {
         // Nothing is watching, so there is nothing to re-ask — and a service
         // started on every grant with no snooze would be a start for nobody.
         shadowOf(app).denyPermissions(*locationPermissions)
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        val controller = built()
         settle()
         drainStartedServices()
 
@@ -185,7 +194,7 @@ class MainActivityLocationGrantTest {
         // opens the app; the transition is what this is about.
         ActiveSnoozeStore(app).arm(snoozeFixture(java.time.Instant.now()))
         shadowOf(app).grantPermissions(*locationPermissions)
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        val controller = built()
         settle()
         drainStartedServices()
 
@@ -202,7 +211,7 @@ class MainActivityLocationGrantTest {
         // loss itself from the refusal it gets.
         ActiveSnoozeStore(app).arm(snoozeFixture(java.time.Instant.now()))
         shadowOf(app).grantPermissions(*locationPermissions)
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        val controller = built()
         settle()
         drainStartedServices()
 

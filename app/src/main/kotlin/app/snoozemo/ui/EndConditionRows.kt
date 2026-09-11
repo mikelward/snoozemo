@@ -19,6 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -77,6 +78,14 @@ internal fun EndConditionRows(
     committing: Boolean = false,
     failed: Boolean = false,
     tracksDeparture: Boolean = true,
+    /**
+     * Whether `Until I move` and `Until I leave` can be tapped right now,
+     * apart from a commit being out — false while an offer to start is
+     * drawn ahead of the location reading a tap on either rides
+     * ([EndChoiceUiState.locationArmable]). The time row, the meeting rows
+     * and the steppers need no reading and are never held by this.
+     */
+    locationRowsEnabled: Boolean = true,
     /**
      * Whether to offer `Until I move` (SPEC.md §4.4) — false on a build with
      * no foreground service or a phone with no significant-motion sensor,
@@ -159,7 +168,7 @@ internal fun EndConditionRows(
             EndChoiceRow(
                 label = stringResource(R.string.main_until_i_move),
                 onClick = onChooseMotionEnd,
-                enabled = !committing,
+                enabled = locationRowsEnabled && !committing,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -167,7 +176,7 @@ internal fun EndConditionRows(
             EndChoiceRow(
                 label = stringResource(R.string.main_until_i_leave),
                 onClick = onChooseDeparture,
-                enabled = !committing,
+                enabled = locationRowsEnabled && !committing,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -235,7 +244,12 @@ internal fun EndChoiceRow(
             if (outlined) MaterialTheme.colorScheme.onSurface
             else MaterialTheme.colorScheme.onSurfaceVariant,
         border = if (outlined) BorderStroke(1.dp, MaterialTheme.colorScheme.outline) else null,
-        modifier = modifier,
+        // A row that will not take a tap looks like one — the steppers beside
+        // it already do, through `OutlinedButton`, and a card that ignores a
+        // tap while looking live reads as the app having missed it (Codex,
+        // PR #257). Material's disabled-content alpha, over the whole card
+        // so the outlined exit dims the same way as a filled row.
+        modifier = modifier.alpha(if (enabled) 1f else DISABLED_ALPHA),
     ) {
         Row(
             modifier = Modifier
@@ -341,6 +355,17 @@ internal data class EndChoiceUiState(
      */
     val startsASnooze: Boolean = false,
     /**
+     * Whether a tap on the offer to start's `Until I move` or `Until I leave`
+     * can go out now. A tap on either arms on the location reading warmed
+     * before it, never a lookup made during it (SPEC.md §6.9), so until that
+     * reading exists those two rows are drawn inert rather than letting a
+     * tap fall through to the lookup — a frame or so after a start, before
+     * the post-first-frame refresh lands. The time row, the meeting rows and
+     * the steppers arm without any reading and are never held (Codex, PR
+     * #257). Always true for a refinement, which arms nothing.
+     */
+    val locationArmable: Boolean = true,
+    /**
      * Which snooze this offer was drawn for — its `startedAt` — or null for
      * an offer to start. Carried so a tap can be matched against the offer
      * the controller holds *now*: the record observer can move it onto a
@@ -388,6 +413,12 @@ internal fun endChoiceUiState(
     committing: Boolean,
     failed: Boolean,
     format: (Instant) -> String,
+    /**
+     * Whether this build can track a departure at all — the flavor constant,
+     * injectable so a test can ask both answers. Only the offer to start
+     * reads it; a running snooze's own mode answers for its rows.
+     */
+    buildTracksDeparture: Boolean = app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE,
 ): EndChoiceUiState? {
     if (condition == null) return null
     // **An offer to start, named by having no snooze to name** (SPEC.md §4.4).
@@ -407,9 +438,12 @@ internal fun endChoiceUiState(
                 .map { MeetingChoice(at = it, label = format(it)) },
             committing = committing,
             failed = failed,
-            // No `Until I leave`: the pinned `Snooze` beside these rows is
-            // that choice, and one control per answer.
-            tracksDeparture = false,
+            // `Until I leave` too (maintainer, 2026-09-11): every row the
+            // running screen has is a way to start, and this one starts the
+            // plain arm the pinned `Snooze` makes. Withheld only where this
+            // build cannot track a departure at all, as the sheet withholds
+            // it — a row naming an end nothing will watch for.
+            tracksDeparture = buildTracksDeparture,
             startsASnooze = true,
             offerFor = null,
         )
@@ -493,6 +527,9 @@ internal fun motionEndUnavailability(deviceHasMotionSensor: () -> Boolean): Stri
     !deviceHasMotionSensor() -> "this device has no significant-motion sensor"
     else -> null
 }
+
+/** Material 3's disabled-content alpha, which `OutlinedButton` applies to the steppers on its own. */
+private const val DISABLED_ALPHA = 0.38f
 
 /**
  * How many meeting ends the screen offers.

@@ -368,6 +368,7 @@ class MainScreenScreenshotTest {
         var chosenMeeting = -1
         var stepped = 0
         var chosenMotion = 0
+        var chosenDeparture = 0
 
         capture("main-screen-idle.png") {
             MainScreen(
@@ -379,8 +380,8 @@ class MainScreenScreenshotTest {
                 remaining = null,
                 degradation = null,
                 // The idle screen's own offer (maintainer, 2026-09-10): the
-                // same rows, as a way to start, without `Until I leave` —
-                // the pinned `Snooze` is that choice.
+                // same rows, every one of them, as a way to start —
+                // `Until I leave` included (maintainer, 2026-09-11).
                 endChoice = idleOffer(),
                 offersMotionEnd = true,
                 lastOutcome = null,
@@ -397,6 +398,7 @@ class MainScreenScreenshotTest {
                 onChooseEndMeeting = { chosenMeeting = it },
                 onStepEndDown = { stepped-- },
                 onStepEndUp = { stepped++ },
+                onChooseDeparture = { chosenDeparture++ },
                 onChooseMotionEnd = { chosenMotion++ },
                 onShareDebugLog = {},
                 onDismissCrash = {},
@@ -427,7 +429,54 @@ class MainScreenScreenshotTest {
         assertEquals(1, stepped)
         composeRule.onNodeWithText("Until I move").performScrollTo().performClick()
         assertEquals(1, chosenMotion)
-        composeRule.onNodeWithText("Until I leave").assertDoesNotExist()
+        composeRule.onNodeWithText("Until I leave").performScrollTo().performClick()
+        assertEquals(1, chosenDeparture)
+    }
+
+    @Test
+    fun `the offer to start's location rows are inert until the reading a tap rides exists`() {
+        // A tap that arms on location reads the warmed permission state and
+        // looks nothing up (SPEC.md §6.9); before that reading lands — a
+        // frame after a start — those two rows are drawn rather than hidden,
+        // and cannot be tapped. The rows that arm without a reading are not
+        // held (Codex, PR #257).
+        var chosenDeparture = 0
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = false,
+                trackingMode = null,
+                remaining = null,
+                degradation = null,
+                endChoice = idleOffer().copy(locationArmable = false),
+                offersMotionEnd = true,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onChooseDeparture = { chosenDeparture++ },
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Until I leave").assertIsNotEnabled()
+        composeRule.onNodeWithText("Until I move").assertIsNotEnabled()
+        composeRule.onNodeWithText("Until I leave").performScrollTo().performClick()
+        assertEquals(0, chosenDeparture)
+        // A time arms with no grant at all, steppers included, and is not
+        // held back — nor is the plain arm beside them, which reads nothing.
+        composeRule.onNodeWithText("Until 1:00 PM").assertIsEnabled()
+        composeRule.onNodeWithContentDescription("Half an hour later").assertIsEnabled()
+        composeRule.onNodeWithText("Snooze").assertIsEnabled()
     }
 
     @Test
@@ -2209,7 +2258,7 @@ class MainScreenScreenshotTest {
         ),
         formattedTime = "1:00 PM",
         meetings = listOf(MeetingChoice(NOON.plus(Duration.ofMinutes(90)), "1:30 PM")),
-        tracksDeparture = false,
+        tracksDeparture = true,
         startsASnooze = true,
     )
 

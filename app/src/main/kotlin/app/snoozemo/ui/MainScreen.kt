@@ -388,6 +388,7 @@ internal fun MainScreen(
                     onStepDown = onStepEndDown,
                     onStepUp = onStepEndUp,
                     committing = choice.committing,
+                    locationRowsEnabled = choice.locationArmable,
                     failed = choice.failed,
                     tracksDeparture = choice.tracksDeparture,
                     // Inside the group, as one of the *whens* (maintainer,
