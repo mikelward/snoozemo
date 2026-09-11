@@ -1058,7 +1058,7 @@ class MainScreenScreenshotTest {
     }
 
     @Test
-    fun `a snooze that also ends on motion says so`() {
+    fun `a snooze started with Until I move says until you move`() {
         capture("main-screen-snoozing-ends-on-motion.png") {
             MainScreen(
                 access = PolicyAccess.GRANTED,
@@ -1069,6 +1069,16 @@ class MainScreenScreenshotTest {
                 remaining = Duration.ofHours(3).plusMinutes(40),
                 degradation = null,
                 endsOnMotion = true,
+                // The same reportable observation the departure cases use, so
+                // this asserts the readout is *withheld* rather than merely
+                // absent — a null here would pass on nothing being measured.
+                departure = DepartureObservation(
+                    distanceM = 200.0,
+                    accuracyM = 10f,
+                    anchorAccuracyM = 20f,
+                    radiusM = 150,
+                    elapsedRealtimeMs = 0L,
+                ),
                 lastOutcome = null,
                 crashPending = false,
                 shareFailed = false,
@@ -1086,17 +1096,21 @@ class MainScreenScreenshotTest {
 
         // The report this fixes: tapping `Until I move` left this screen saying
         // exactly what it said before, so the tap read as having done nothing.
-        // The one-row sentence cannot carry a second ending — it *replaces* the
-        // condition line rather than sitting above it — so a snooze with a
-        // motion exit takes the two-row shape and states both.
-        composeRule.onNodeWithText("Snoozing").assertExists()
-        composeRule.onNodeWithText("Ends when you leave, or when you move").assertExists()
+        // The sentence names the exit that was tapped, and names only that one —
+        // exact matches, so neither can be satisfied by the other still being
+        // there, and nothing enumerates two endings.
+        composeRule.onNodeWithText("Snoozing until you move").assertExists()
         composeRule.onNodeWithText("Snoozing until you leave").assertDoesNotExist()
+        composeRule.onNodeWithText("Ends when you leave, or when you move").assertDoesNotExist()
         composeRule.onNodeWithText("3h 40m left").assertExists()
+        // Departure information, on a snooze that does not report departure:
+        // naming one exit and then putting a number on a different one is the
+        // same inconsistency from a third direction (Codex, PR #263).
+        composeRule.onNodeWithText("200 m away ±25 m · 23 m to go").assertDoesNotExist()
     }
 
     @Test
-    fun `the motion exit is stated after the degraded reason, not inside it`() {
+    fun `a motion snooze reports its own exit, not degraded departure tracking`() {
         capture("main-screen-snoozing-ends-on-motion-degraded.png") {
             MainScreen(
                 access = PolicyAccess.GRANTED,
@@ -1122,10 +1136,105 @@ class MainScreenScreenshotTest {
             )
         }
 
-        // The ordering the ongoing notification already uses: the mode and why
-        // it degraded, then the second ending. Wedged between the claim and its
-        // caveat it would read as a qualification of the reason.
-        composeRule.onNodeWithText("Wi-Fi only — no location, or when you move").assertExists()
+        // The maintainer's call (2026-09-11): the mode and its cause describe
+        // how *departure* is being watched, and a fix has no bearing on whether
+        // the sensor fires — so a snooze started on movement says what ends it
+        // and stops there. Exact matches, so the degraded line cannot survive
+        // as a second row.
+        composeRule.onNodeWithText("Snoozing until you move").assertExists()
+        composeRule.onNodeWithText("Wi-Fi only — no location").assertDoesNotExist()
+        composeRule.onNodeWithText("Wi-Fi only").assertDoesNotExist()
+        composeRule.onNodeWithText("Wi-Fi only — no location, or when you move")
+            .assertDoesNotExist()
+        composeRule.onNodeWithText("45m left").assertExists()
+    }
+
+    /**
+     * The fallback the one-sentence form falls back *to*, which is where a
+     * large accessibility font lands (Codex, PR #263).
+     *
+     * No snapshot: the point is the words, and a 200dp-wide PNG of a layout
+     * nobody's device renders would be a recorded artifact with nothing to
+     * compare against.
+     */
+    @Test
+    @Config(qualifiers = "w200dp-h914dp-420dpi")
+    fun `the narrow fallback still names the exit that was tapped`() {
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.FULL,
+                remaining = Duration.ofHours(3).plusMinutes(40),
+                degradation = null,
+                endsOnMotion = true,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        // Too narrow for the sentence, so the block splits into the title over
+        // its condition — and the condition names the same exit the sentence
+        // would have. Going back to `Ends when you leave` here would put the
+        // reported bug back exactly where the screen most needs to be legible.
+        composeRule.onNodeWithText("Ends when you move").assertExists()
+        composeRule.onNodeWithText("Ends when you leave").assertDoesNotExist()
+        composeRule.onNodeWithText("Snoozing until you move").assertDoesNotExist()
+    }
+
+    /**
+     * The one mode the motion sentence does not take over, because it is a
+     * deadline rather than a description (Codex, PR #263).
+     *
+     * No snapshot: this is about which of two lines is rendered, and the shape
+     * is already recorded by the sibling cases.
+     */
+    @Test
+    fun `the Wi-Fi grace warning survives a motion exit`() {
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.WIFI_GRACE,
+                remaining = Duration.ofHours(3).plusMinutes(40),
+                degradation = null,
+                endsOnMotion = true,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        // The grace period ends the snooze on expiry whether or not the phone
+        // moves, so `3h 40m left` beside `Snoozing until you move` would be a
+        // countdown to the wrong thing on a snooze minutes from ending.
+        composeRule.onNodeWithText("Snoozing").assertExists()
+        composeRule.onNodeWithText("Wi-Fi lost — ending soon").assertExists()
+        composeRule.onNodeWithText("Snoozing until you move").assertDoesNotExist()
+        composeRule.onNodeWithText("Ends when you move").assertDoesNotExist()
     }
 
     @Test
