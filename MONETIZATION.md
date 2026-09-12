@@ -7,49 +7,37 @@ why; `TODO.md` records the plan. This page records the money argument — but it
 first conclusion is that nothing here should be built yet, and the reason is
 worth stating before anything else.
 
-## Two prerequisites — and a recommendation — come before a price
+**`direct` was retired (2026-09-12), so this is now a single-build question.**
+The sideload flavor hedged against Play rejecting the app; `play` is
+Play-approved, so the hedge is spent and Snoozemo ships one build. This page used
+to price two flavors and turn on which one a decision applied to; that split is
+gone, and what follows prices the single `play` build. See `SPEC.md` §3.
 
-**The heading said "three gates" until the sixth correction of that phrase**
-(Codex, 2026-09-03). Items 1 and 2 are prerequisites: an unverified departure
-detector has nothing to sell, and a refused declaration decides which flavor is
-priced. Item 3, discovery, is a **recommendation** — it blocks charging from
-being *measurable*, not from being right — and it does not gate anything unless
-the maintainer adopts it as a gate.
+## A prerequisite — and a recommendation — come before a price
 
-1. **Presence has never run on a handset — and each flavor needs its own run**
-   (Codex, 2026-09-03). Snoozemo's whole promise is *"until you leave"*, and the
-   two flavors detect departure by different means: `play` by geofence,
-   `direct` by `ForegroundPresenceMonitor` (Phase 7). Phase 3's device
-   verification and hardware item 2 exercise the `play` path, so **they do not
-   clear this gate for `direct`** — which matters precisely in the case that
-   sends you there, a refused declaration. `TODO.md` records that.
-   Continuing: Charging for a departure detector that has never detected a real
-   departure — no emulator has the hardware, and `TODO.md` Phase 3 still owes the
-   device verification — is selling a claim nobody has checked. The app's own
-   first principle is *never leave the phone silently quiet*; a paid app that
-   fails it is a refund, a one-star review, and the end of the listing.
-2. **The Play background-location declaration is unresolved.** `SPEC.md` §3.2 is
-   blunt about it: `ACCESS_BACKGROUND_LOCATION` is a restricted permission, the
-   Permissions Declaration Form gates *every* track including internal, and an
-   internal-only track buys no exemption. If that declaration is refused, the
-   `play` flavor cannot ship at all — and with it every Play Billing option, which
-   is what the rest of this page prices. It is the riskiest open item in the
-   project. **It does not end the discussion, though**: `direct` stays shippable
-   by design, so a refusal turns the question into "is the sideload build sold, and
-   how" (see `direct` below) rather than "there is nothing to sell". Scope this
-   gate to `play` and Play Billing, not to pricing as such.
-3. **Nobody has discovered it.** True of every app in this family, and honestly
+Item 1 is a prerequisite: an unverified departure detector has nothing to sell.
+Item 2, discovery, is a **recommendation** — it blocks charging from being
+*measurable*, not from being right — and it does not gate anything unless the
+maintainer adopts it as a gate.
+
+1. **Presence has never run on a handset** (Codex, 2026-09-03). Snoozemo's whole
+   promise is *"until you leave"*, and charging for a departure detector that has
+   never detected a real departure — no emulator has the hardware, and `TODO.md`
+   Phase 3 still owes the device verification — is selling a claim nobody has
+   checked. The app's own first principle is *never leave the phone silently
+   quiet*; a paid app that fails it is a refund, a one-star review, and the end of
+   the listing.
+2. **Nobody has discovered it.** True of every app in this family, and honestly
    the binding constraint. See "Marketing" — the cheap work is there, not here.
 
 None of that argues against monetizing eventually. It argues for an ordering:
-*ship it, prove it on hardware, get it found, then price it.* Two of those are
-gates on the product being real at all — an unverified departure detector has
-nothing to sell, and a refused declaration decides which flavor is being priced.
-Discovery is the one that is genuinely a judgment call rather than a
-prerequisite: pricing before anyone has found the app is not *wrong*, it just has
-nothing to price against, and a maintainer who wants the billing plumbing built
-early has a reasonable case. This page recommends the ordering; it does not claim
-to settle it.
+*ship it, prove it on hardware, get it found, then price it.* One of those is a
+gate on the product being real at all — an unverified departure detector has
+nothing to sell. Discovery is the one that is genuinely a judgment call rather
+than a prerequisite: pricing before anyone has found the app is not *wrong*, it
+just has nothing to price against, and a maintainer who wants the billing
+plumbing built early has a reasonable case. This page recommends the ordering; it
+does not claim to settle it.
 
 ---
 
@@ -98,74 +86,6 @@ And the one-sentence product is *"Silence your phone until you leave or your
 meeting ends."* Sell the "until you leave" and the free app cannot say its own
 tagline.
 
-**And it cannot be drawn along the flavor line either.** `direct` is duration-only
-*today*, but that is an implementation state, not the design: `SPEC.md` §3.4
-settles two flavors "differing only below `PresenceMonitor`", and `TODO.md` Phase 7
-adds `ForegroundPresenceMonitor` + `SnoozeService` so `direct` detects departure
-too — by foreground service (option A) rather than geofence (option B). Since
-pricing is deferred until after the gates above, and Phase 7 is one of the things
-that may land in between, a tier built on "only `play` has presence" would be
-pricing a temporary gap. **Both flavors detect departure; they differ in
-mechanism, battery profile and Play exposure** — which is a difference in *how*,
-not in whether there is a product.
-
----
-
-## `direct` should be free — as a decision, not because it has to be
-
-**Play Billing is out for `direct`, but not for the reason it first appears.**
-The Billing library talks to the installed Play Store app over IPC rather than
-opening its own sockets, so "no `INTERNET`" is not what rules it out. What rules
-it out is distribution: `direct` is a sideload build, and Play Billing is for
-apps Play distributed. Keeping `direct` networkless costs nothing here.
-
-**And that leaves other ways to charge, which are choices rather than
-impossibilities:** an offline license key or license file, or simply selling the
-sideload build outright somewhere else. None needs `INTERNET`, and none touches
-the reason the flavor exists.
-
-**The recommendation is still that `direct` is free forever** — but as a product
-decision with a reason, which is a different thing from a constraint. `SPEC.md`
-§3.2 and goal 4 make `direct` the fallback if the Play background-location
-declaration is refused: a fully-functional sideload build needing no restricted
-permissions. That makes it insurance, and insurance with a price on it is not
-insurance — the users who would reach for it are the ones Play has already
-failed, and charging them for the workaround is the wrong moment to introduce a
-transaction. It also has no billing surface to maintain, which for a build that
-may never be needed is most of its value.
-
-Two things worth writing down rather than leaving to be rediscovered:
-
-- The alternative reading — **retire `direct` so the billing story is uniform** —
-  would throw away the contingency that exists precisely because Play might say
-  no. Don't take it as a side effect of a pricing decision.
-- **If `direct` ever is priced, two mechanisms stay open** and this page does not
-  pick between them (Codex, 2026-09-03) — the open decision below leaves both
-  live, so naming one here would have closed it by accident:
-  - **Sell the APK outright.** Simplest: no in-app entitlement at all, no license
-    check, no *key* to lose or reissue. The build the buyer downloaded *is* the
-    entitlement — but the file itself can still be lost, and then the channel
-    decides (Codex, 2026-09-03): a storefront offers a redownload, a payment link
-    and a manual send do not. **Updates take the same qualifier** (Codex,
-    2026-09-03): a storefront usually ships its own update service, so it is only
-    the payment-link route that owes an update channel of its own — an earlier
-    draft said the option had none unless one was built, which made the mechanism
-    look intrinsically worse to maintain than the channel makes it. Its cost is
-    that distribution choice — **and refunds are one-way** (Codex, 2026-09-03): with no license check there is nothing to revoke, so a refunded
-    buyer keeps a working app. That is the same enforceability gap listed under
-    the license option below, not an advantage this option has over it.
-  - **An offline license key or file**, which allows a free download and a paid
-    unlock, matching the `play` flavor's shape. Its cost is a support surface:
-    lost keys, reinstalls, device changes — and **refunds are one-way here too**
-    (Codex, 2026-09-03). An earlier draft said "no refund path", which is wrong
-    in the same way the paid-APK bullet above was: the seller can always return
-    the money. What a networkless app cannot do is *revoke* the key or file it
-    already issued, so the buyer keeps working software after the refund. The two
-    mechanisms are level on this, which is why it is now stated under both.
-  Either way the cost is support and distribution rather than a technical veto,
-  and either way it is a real decision — which is the argument for `direct`
-  staying free above.
-
 ---
 
 ## What could actually be sold
@@ -178,9 +98,9 @@ is load-bearing for the core promise, and the free app is complete without them.
    duration cap; the tile long-press becomes a picker. The `Anchor` type is
    already shaped for it. **The strongest candidate** — it is the feature a happy
    user asks for after a month, which is exactly when they will pay.
-2. **Auto-arm on arrival.** The sequel, and §14 notes the *permission* is free in
-   the `play` flavor because the background-location declaration is already paid
-   for — §14 now says the battery is not, which is this bullet's point.
+2. **Auto-arm on arrival.** The sequel, and §14 notes the *permission* is free
+   because the background-location declaration is already paid for — §14 now says
+   the battery is not, which is this bullet's point.
    High perceived value ("it just knows"), no recurring **developer** cost, and
    completely absent from the free experience rather than removed from it.
    **But it is not free to the user, and "nearly free" was only ever about the
@@ -213,22 +133,11 @@ is load-bearing for the core promise, and the free app is complete without them.
    (§5.5). Pure delight, zero risk, and it makes the paid tier *visible* every time
    a snooze is armed, which a background feature never is.
 5. **"Until I get home"** and other saved-place reverse geofences, which follow
-   from saved places anyway — **`play`-only, and that matters here.** `SPEC.md`
-   §4.4 marks this exit deferred and `play`-flavor only because it needs
-   background location on top of saved places (§14), and `direct` intentionally
-   declares no restricted permissions. So if `direct` ever carries a paid tier,
-   this candidate is not in it, and the tier is not identical across the two
-   flavors (Codex, 2026-09-03). Candidates 1, 3 and 4 are flavor-neutral;
-   candidate 2 (auto-arm on arrival) needs the same background location and is
-   `play`-only for the same reason. Any `direct` tier is therefore **saved places,
-   meeting chaining and `ZenDeviceEffects`** — thinner, and a thing to know before
-   pricing the two flavors the same.
+   from saved places anyway. `SPEC.md` §4.4 marks this exit deferred because it
+   needs background location on top of saved places (§14).
 
 That is a coherent tier with a name: **places and automation.** The free app is
-*one tap, here, now*; the paid app remembers your places — and on `play`, arms
-itself. The "arms itself" half is the `play`-only part, per the split above, so
-copy that promises automatic arming is `play` copy; a `direct` tier's honest
-promise stops at remembering places (Codex, 2026-09-03).
+*one tap, here, now*; the paid app remembers your places and arms itself.
 
 **Not on the list:** anything that changes what happens when a sensor fails. Every
 degraded path and every fallback in the §3.6 ladder is identical at both tiers, and
@@ -357,15 +266,13 @@ has them. What spends the asset is **shipping a candidate free**, once, per
 feature — and that is the only clock here.
 
 That is an argument for *deciding* the tier early, not for shipping it early —
-**the two prerequisites above still stand, and the discovery recommendation with
-them**, and it is worth being precise about which this argument is and isn't in
-tension with (Codex, 2026-09-03; "all three gates" here was the fifth copy of a
-phrase the sections below retract):
+**the prerequisite above still stands, and the discovery recommendation with
+it**, and it is worth being precise about which this argument is and isn't in
+tension with (Codex, 2026-09-03):
 
-- **The two prerequisites block shipping a price**, and they are upstream of
-  everything here: an unverified departure detector has nothing to sell, and a
-  refused declaration decides *which flavor* is even being priced.
-- **Discovery — the recommendation, not a third gate — bears on charging, not
+- **The prerequisite blocks shipping a price**, and it is upstream of everything
+  here: an unverified departure detector has nothing to sell.
+- **Discovery — the recommendation, not a gate — bears on charging, not
   deciding.** Nothing about settling
   the tier's shape competes with the marketing work — they use different hours
   and neither waits on the other. The ordering this page *recommends* is *ship,
@@ -429,7 +336,7 @@ mechanism is weaker than it looks and should not be promised as permanent:
   above retracts and which this bullet then quietly reinstated: every candidate is
   `SPEC.md` §14-deferred and absent, so the first public build creates nobody to
   grandfather whether or not it carries a tier, and a deadline there would push
-  billing work ahead of the two prerequisites and the discovery recommendation
+  billing work ahead of the prerequisite and the discovery recommendation
   alike. What is actually true is narrower —
   **decide "is this one paid?" before the feature ships free**, once, per feature.
 - **Gating new installs is fine; revoking is the move to avoid.** A feature that
@@ -496,14 +403,6 @@ better distribution than any listing edit.
 
 ## What this shares with the sibling apps
 
-- **`direct` is why this app cannot follow a fleet-wide billing plan
-  uniformly**, per above: Play Billing is out for a sideload build, so any shared
-  approach has to tolerate one flavor with no Play billing surface. Three
-  possibilities, and this page picks only the first: **free** (the recommendation),
-  **sold as a paid APK** (no entitlement at all — the download *is* the purchase),
-  or **an offline license**. Naming only the license route here would send a future
-  shared plan off to design and maintain a licensing system when treating the APK
-  as the purchase may be all that is needed (Codex, 2026-09-03).
 - **Build billing once, in one app, end to end** — do not start with a shared
   library. Extract only after a second app needs it and the shape has settled, the
   order `androidlog` was extracted in.
@@ -513,13 +412,11 @@ better distribution than any listing edit.
 - **`docs/PRIVACY.md` changes for any purchase flow; the Play Data Safety form
   changes only if the flow actually collects something.** A local-only entitlement
   flag is on-device processing, which `SPEC.md` §12 already distinguishes from
-  collection, so it is not a Data Safety disclosure on its own — and `direct` is
-  not distributed through Play at all, so no `direct` mechanism reaches that form.
-  What would is whatever the `play` purchase flow sends off the device (a purchase
-  token to a server, say, as ClothesCast's design does). Scope the declaration to
-  that, verified against the current policy text, rather than declaring by default:
-  an over-broad declaration is a false statement about this app as surely as a
-  missing one is.
+  collection, so it is not a Data Safety disclosure on its own. What would be is
+  whatever the purchase flow sends off the device (a purchase token to a server,
+  say, as ClothesCast's design does). Scope the declaration to that, verified
+  against the current policy text, rather than declaring by default: an over-broad
+  declaration is a false statement about this app as surely as a missing one is.
 
 ---
 
@@ -530,52 +427,20 @@ monetizing Snoozemo is premature. Each question is written as the choice plus
 what each branch costs, so the reasoning is on the page when one of them does
 come up.
 
-**1. Nothing before the gates**, and they are not the same kind of gate — but
-only two of the three are prerequisites.
+**1. Nothing before the gate**, and it is not the only consideration.
 - Hardware verification of departure detection comes first and **can end the
   discussion outright**: an undetected departure means there is no product to
-  price. It is per flavor, since `play` and `direct` use different detectors.
-- The Play declaration outcome comes first too, but a refusal only closes Play
-  Billing and **redirects** the question to `direct` rather than ending it.
-- **Discovery is the recommendation, not a third prerequisite** (Codex,
+  price.
+- **Discovery is the recommendation, not a prerequisite** (Codex,
   2026-09-03). It is listed here because a summary that omitted it let a reader
-  proceed straight from the other two — but it blocks charging from being
+  proceed straight from the verification gate — but it blocks charging from being
   *measurable*, not from being right, and it gates nothing unless the maintainer
-  adopts it. The first two are prerequisites; this one is a judgment call.
+  adopts it. The verification is the prerequisite; this one is a judgment call.
 
-**2. `direct`'s price.** This page recommends free forever, because `direct` is
-insurance against a Play refusal rather than a product — and that reading is
-confirmed rather than changed by the maintainer intending a public Play release
-for every app in the fleet (2026-09-03): `play` is the destination, `direct` the
-contingency, so the refusal outcome above matters more, not less.
-- *Free*: `direct` stays the escape hatch it exists to be, and the sideload
-  audience — the one most likely to pay for exactly this app — pays nothing.
-- *Paid APK*: a price with no billing integration at all — the build the buyer
-  downloaded *is* the entitlement, so there is no key to lose or reissue. **The
-  file itself is another matter, and depends on the channel** (Codex,
-  2026-09-03): a buyer who deletes it or changes device needs a redownload,
-  which a storefront gives and a manual send does not — see the distribution
-  bullet below. What this option removes is the licensing system, not every
-  support request.
-- *Offline license key*: a free download with a paid unlock, matching `play`'s
-  shape, and a licensing system to build for what is currently zero users.
-- **Restore and updates belong to the distribution channel, not to either
-  mechanism** (Codex, 2026-09-03). A paid APK sold through a storefront can have
-  redownload and updates; sold as a payment link and a manual send it has
-  neither. An offline key is restorable only if something reissues it — the
-  section above lists lost keys and reinstalls as exactly its support burden. So
-  the question under both is *what distribution is being paid for*, and neither
-  option is intrinsically the recoverable one.
-- Whichever way, it should be chosen rather than inherited from "Billing doesn't
-  reach `direct`" — Play Billing is IPC, so the real blocker is sideload
-  distribution, not the permission set.
-
-**3. What the paid tier actually is.** `SPEC.md` §14's places-and-automation
+**2. What the paid tier actually is.** `SPEC.md` §14's places-and-automation
 candidates are the strongest set on offer.
 - *Places + automation (saved places, per-place policy, auto-arm)*: the only
-  candidates that are recurring-value rather than one-off, and the `play`-only
-  ones (auto-arm, reverse geofences) split the tier by flavor, so `direct` buyers
-  would be paying for a smaller thing.
+  candidates that are recurring-value rather than one-off.
 - *Something else entirely*: nothing else in the spec is both absent today and
   plausibly worth money.
 - *No tier*: entirely defensible while the app has no users, and it is the
@@ -585,7 +450,7 @@ candidates are the strongest set on offer.
   input to whether it can headline a paid tier, and a candidate that fails the
   gate is not one to price.
 
-**4. The price, if there is one.** $3–5 one-time is what this page argues for,
+**3. The price, if there is one.** $3–5 one-time is what this page argues for,
 against the instinct that $10 is reachable.
 - *$3–5*: matches a utility that does one thing, and it is the range where an
   unknown app from an unknown developer gets an impulse yes.
@@ -601,7 +466,7 @@ against the instinct that $10 is reachable.
   to an unenrolled one-time product, which makes it an argument for enrolling in
   Play Console rather than an argument for a subscription.
 
-**5. Which candidates are paid, asked per feature.** Not a release deadline —
+**4. Which candidates are paid, asked per feature.** Not a release deadline —
 there isn't one, since every candidate is deferred and absent today (see the
 timing section, which retracts the earlier "before the first public release"
 framing).
@@ -622,10 +487,8 @@ question and then over shipping a price; both made an explicitly unadopted
 prerequisite read as a gate, which is the thing five other corrections on this
 page were about. What is true without overstating it: charging into an audience
 nobody has assembled cannot be *measured*, so a price shipped first teaches
-little. What is also true: question 5 is due before any candidate ships free,
+little. What is also true: question 4 is due before any candidate ships free,
 which can easily come first, and the forum outreach waits on a **public install
-path** that does not exist yet — an open or production Play track, or the
-`direct` route, whichever arrives (`TODO.md`, "Public rollout and discovery").
-Naming both matters, because if the background-location declaration is refused
-the Play half never arrives and `direct` is the only path there is. Nothing here
-gates anything unless the maintainer says it does.
+path** that does not exist yet — an open or production Play track (`TODO.md`,
+"Public rollout and discovery"). Nothing here gates anything unless the maintainer
+says it does.

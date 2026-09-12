@@ -31,13 +31,15 @@ release rather than dropped.
       classpath at all, so the seam is enforced by the build rather than by discipline, and
       CI runs `:core:test` on its own as the check that keeps it that way.
 - [x] Two product flavors, `play` and `direct` (`SPEC.md` §3.4), differing only below
-      `PresenceMonitor`. `play` is the default; CI's `assembleRelease` builds both on a
-      pull request, since a change that compiles in one can break the other. On main
-      only `play` is built, by `deploy`'s `bundlePlayRelease`.
-- [x] CI workflow (`.github/workflows/ci.yml`): build both flavors, `:core:test` on
+      `PresenceMonitor`. `play` was the default; CI's `assembleRelease` built both on a
+      pull request, since a change that compiled in one could break the other. On main
+      only `play` was built, by `deploy`'s `bundlePlayRelease`. **`direct` retired
+      2026-09-12 (`SPEC.md` §3.4); `play` is now the only flavor and CI builds it alone.**
+- [x] CI workflow (`.github/workflows/ci.yml`): build the flavor(s), `:core:test` on
       its own, unit tests with failing-test PR comments, lint. The Roborazzi screenshot job
       lands with the first real UI (Phase 2/4) and the `deploy` job with the release
       plumbing (Phase 6) — an empty screenshot allow-list is only a check nobody reads.
+      (Built both flavors until `direct` was retired 2026-09-12; `play` only since.)
 - [x] Roborazzi screenshot job, now that there is a screen to record (`DebugScreen`, Phase 2).
       Eight snapshots — every state the screen can be in, light and dark, including the two
       *unread* states, since what this screen must never do is answer a question it hasn't
@@ -103,10 +105,8 @@ release rather than dropped.
       manifest and background location in `play`'s (2026-08-22), so the earlier note that
       the app declared none of them is stale (Codex, PR #102). What is still ahead of the
       build is behavior: it describes **v1 as specified**, including the departure
-      detection that ends a snooze on leaving. That is built and wired on `play` (though
-      never yet run on a handset); on `direct` it genuinely is ahead of the build, since
-      `DurationOnlyPresenceMonitor` is a stand-in until Phase 7 and every `direct` snooze
-      is a timer today. This bullet said "every snooze is duration-only" until the
+      detection that ends a snooze on leaving. That is built and wired (though never yet
+      run on a handset). This bullet said "every snooze is duration-only" until the
       2026-08-25 audit. A policy promising less than the app does is the harmful
       direction, so this is the safe one to be wrong in, but what it says Snoozemo keeps
       and does has to match the shipped build on the day it is hosted, not merely
@@ -3814,9 +3814,8 @@ the point is that every other line of the app is worthless if it isn't true.
       the deferred "Ship a price" item, which had the effect of postponing it
       behind prerequisites it does not share.
 - [ ] Ship to the internal track — the point at which the declaration outcome becomes
-      known. Phase 7 follows this item; the public rollout and discovery work
-      that also follows it lives in its own section below, since it gates
-      nothing here.
+      known. The public rollout and discovery work that follows it lives in its
+      own section below, since it gates nothing here.
 
 - [x] **Welcome flow before the permissions screen** (maintainer, 2026-09-05). A
       fresh install lands on `PermissionsScreen` with nothing that says what the app
@@ -3865,40 +3864,28 @@ the point is that every other line of the app is worthless if it isn't true.
   committed. CI behavior itself does not depend on the answer — the skip gates
   on fork status rather than on the secret, so it holds under either scope.
 
-## Phase 7 (M7) — The `direct` flavor
+## Phase 7 (M7) — The `direct` flavor — CANCELLED (2026-09-12)
 
-Insurance, not a parallel product (`SPEC.md` §3.4). It sits after the internal-track
-release; bring it forward only if the declaration is refused, at which point it becomes the
-whole project.
+`direct` was retired once `play` was approved on the internal track (`SPEC.md` §3.4): the
+sideload build existed to survive a Play refusal, and there was none, so a second build that
+detects departure by a different mechanism is cost with no risk left to cover. Everything this
+phase would have built — `ForegroundPresenceMonitor` + its `location` foreground service, the
+§6.7 duty cycle for it, the `LocationManager` fallback for Play-Services-less devices, the
+networkless-manifest / no-Play-Services-dependency guards, and its on-handset departure
+verification and battery measurement — is dropped with the flavor. Kept as a heading rather
+than deleted so the plan's history reads straight; `SPEC.md` §3.4 records the retirement.
 
-- [ ] `ForegroundPresenceMonitor` + `SnoozeService` behind the same interface, with the
-      `location` foreground-service type.
-- [ ] The §6.7 duty cycle: no location work while on the anchor SSID; significant-motion
-      trigger plus a 10-minute sanity fix while off it; 90 s balanced-power fixes only while
-      resolving.
-- [ ] `LocationManager` fallback (`PROVIDER_FUSED`, or `NETWORK_PROVIDER` below API 31) for
-      devices without Play Services.
-- [ ] No restricted permissions, no Play Services dependency — verify by inspecting the
-      merged manifest of the `direct` variant in CI. *(The permission half landed:
-      `verifyDirectReleaseManifest` fails a `direct` release whose merged manifest carries
-      `INTERNET`, `ACCESS_BACKGROUND_LOCATION`, or `AD_ID`, on every CI run and every
-      release build. The dependency half is still open — a Play Services artifact on the
-      `direct` classpath is not something the manifest shows.)*
-- [ ] **`direct`'s departure detection verified on a handset, with its duty cycle**
-      (hardware item 2b). Phase 3 and hardware item 2 measure the **`play` geofence**;
-      `ForegroundPresenceMonitor` is a different detector, so none of that carries over.
-      Log departures against ground truth over ordinary use, and measure what the §6.7
-      duty cycle actually costs in battery over an eight-hour armed snooze,
-      **compared against §9's existing `direct` figures** — which are estimates from
-      the mechanism for a *four-hour* snooze (<0.5% on anchor Wi-Fi, ~1% stationary,
-      ~2–3% intermittent movement), not measurements, and are exactly what this run
-      exists to confirm or replace. **Run the four-hour window, or normalize before
-      comparing**: drain accumulates with runtime, so an eight-hour run of a
-      correct implementation reads about double and would be misfiled as over
-      budget. If the full-length case matters on its own — an eight-hour snooze is
-      the app's own worst case — measure both and say which is which. This is a gate on pricing `direct` at all
-      (`MONETIZATION.md`), and it is here rather than "to be added later" so that
-      advancing Phase 7 on a declaration refusal cannot ship the detector without it.
+- [ ] **Remove the flavor concept entirely** — collapse `play` from a product flavor into the
+      default variant, so Gradle tasks read plain `installDebug` / `assembleRelease` /
+      `testDebugUnitTest` rather than `…PlayDebug…`. Left as a flavor when `direct` was deleted
+      because collapsing it is a larger, riskier change than the deletion was: move `src/play`
+      into `src/main` across `:app` and `:presence`, merge each `src/play` `AndroidManifest.xml`
+      into the base manifest, fold `playImplementation` dependencies into `implementation`,
+      simplify the release-manifest guard and the licenses export (no flavor axis left to
+      select on), and rewrite the CI job/task names and `SPEC.md` §3 to match. None of it
+      builds in the sandbox, so it lands blind on CI — pilot it carefully, and expect the
+      manifest merge to be the fiddly part (the `play` manifest carries the background-location
+      and foreground-service declarations the guard checks).
 
 ## Phase 8 (M8) — Samsung One UI
 
@@ -3915,16 +3902,14 @@ from the start so this is additive rather than surgery.
       into the label if it doesn't.
 - [ ] Re-measure geofence delivery under Sleeping Apps (hardware item 2 on Samsung).
 
-## Public rollout and discovery — after the internal track, and not a Phase 7 predecessor
+## Public rollout and discovery — after the internal track
 
-**Deliberately outside the numbered phases** (Codex, 2026-09-03). These two items
-follow the internal-track release in Phase 6, but Phase 7 follows that release
-too, and they do not gate it: leaving them inside Phase 6 made the phased order
-read as "ship publicly, then build `direct`", which is backwards in the one case
-that matters — **if the declaration is refused, the Play release below cannot
-happen at all and Phase 7 becomes the whole project.** That case is why the
-section carries two rollout routes rather than one: on a refusal, the `direct`
-route is the only one left, and it depends on Phase 7 rather than preceding it.
+**Deliberately outside the numbered phases** (Codex, 2026-09-03). These items
+follow the internal-track release in Phase 6 and do not gate it. This section used
+to carry two rollout routes — a public Play release and a sideload `direct` route
+for the case where Play refused the background-location declaration — but the
+declaration was accepted on the internal track and `direct` was retired
+(`SPEC.md` §3.4), so there is one route now: the public Play release.
 
 - [ ] **Ship a public Play release** — intended, and every app in the fleet is
       meant to be on the Play Store (maintainer, 2026-09-03). **Blocked on the
@@ -3939,33 +3924,21 @@ route is the only one left, and it depends on Phase 7 rather than preceding it.
       exists only because it is the predecessor the outreach item below needs —
       the internal track is a tester channel and gives a stranger no install
       path.
-- [ ] **A public `direct` route, if the declaration is refused** (Codex,
-      2026-09-03) — conditional on that outcome, and not startable until Phase 7
-      is built. `SPEC.md` §3 names `direct` via sideload or F-Droid as the
-      complete fallback — *"you lose distribution reach, not the app"* — but
-      Phase 7 only **builds** the flavor, and nothing in this plan ever puts it
-      where a stranger can install it. The release pipeline does not close that
-      gap either: `deploy` publishes `app-play-release.aab`, which is the `play`
-      flavor and is a bundle, not something anyone can sideload. So on a refusal
-      the fallback exists and is undiscoverable, and the outreach item below has
-      no predecessor it could ever reach. **What that route is stays open**: a
-      signed `direct` APK attached to a GitHub release is the cheap version and
-      the repo already publishes releases; F-Droid is `SPEC.md`'s intended path
-      at scale and is a submission with its own review and its own
-      reproducible-build constraints. Which, or both, is a distribution decision
-      for the maintainer — this item exists so the refusal case has a rollout
-      step at all, not to pick one.
+- [x] ~~**A public `direct` route, if the declaration is refused**~~ — **dropped
+      2026-09-12.** This existed only for the case where Play refused the
+      background-location declaration: `SPEC.md` §3 named `direct` via sideload or
+      F-Droid as the complete fallback. The declaration was accepted and `direct`
+      was retired (`SPEC.md` §3.4), so there is no sideload build to make
+      discoverable and no refusal case to route around. The public Play release
+      above is the one route.
 - [ ] **The outreach half, which needs a public install path first** (Codex,
       2026-09-03): answer "how do I make my phone shut up in meetings" in the
       digital-wellbeing and Android-automation forums where it is asked —
       `MONETIZATION.md`'s Marketing section argues this is better distribution
       than any listing edit. It goes **after a public install path** — an open or
-      production Play track, or the `direct` route above — and not after the
-      internal one: the internal track is a tester channel, so posting earlier
-      either advertises an app a reader cannot install, or lets the item be
-      checked off having reached nobody. **Naming both routes matters on a
-      refusal**: tied to Play alone, this item would be unreachable in exactly
-      the case where `direct` is the whole product.
+      production Play track — and not after the internal one: the internal track
+      is a tester channel, so posting earlier either advertises an app a reader
+      cannot install, or lets the item be checked off having reached nobody.
 
 ## Hardware verification
 
@@ -4007,21 +3980,10 @@ that can only be settled on a real device, ordered by risk.
        `direct` is unaffected where the sensor exists: Phase 7's foreground
        service keeps the process resident, which is the remedy the platform
        names.
-- [ ] **2b. The same, for `direct`'s `ForegroundPresenceMonitor`** — conditional on Phase 7
-       being built, and tracked there too. Item 2 measures the `play` geofence; the
-       foreground detector and its §6.7 duty cycle are a separate measurement, including
-       the battery cost over an armed snooze **against §9's existing
-       `direct` estimates** — three duty-cycle scenarios, derived from the mechanism
-       for a four-hour snooze and never measured, so this run is what turns them into
-       figures rather than filling a gap. **Run the four-hour window, or normalize
-       before comparing** (Codex, 2026-09-03): the default snooze is eight hours and
-       drain accumulates with runtime, so a full-length run of a correct
-       implementation lands at roughly twice the §9 figure and reads as over budget
-       to anyone working from this list alone. The Phase 7 item carries the same
-       instruction and the reasoning behind it; this is the measurement, that is the
-       method. Charging for a departure detector that has never detected a
-       departure is what `MONETIZATION.md`'s first gate exists to prevent, and the
-       two flavors do not share one.
+- [x] ~~**2b. The same, for `direct`'s `ForegroundPresenceMonitor`**~~ — **dropped
+       2026-09-12.** It was conditional on Phase 7, which is cancelled: `direct` is
+       retired and `ForegroundPresenceMonitor` was never built (`SPEC.md` §3.4). Item 2's
+       `play` geofence measurement is the only presence verification now.
 
 3. [ ] `setAutomaticZenRuleState` genuinely silences the device. A formality on Pixel — do
        it at Phase 1 anyway, since every other line of the app assumes it.
@@ -4257,52 +4219,47 @@ question.
 - [ ] **Decide whether a paid tier exists at all, and what is in it** — this half
   does **not** wait for discovery, and asking it late is what creates the problem
   it exists to avoid. Per-feature: before any `SPEC.md` §14 candidate ships free,
-  decide once whether that candidate is paid. Gates 1 and 2 below bear on it
-  (they decide whether there is a product and which flavor is being priced);
+  decide once whether that candidate is paid. The verification prerequisite below
+  bears on it (it decides whether there is a product worth pricing);
   discovery does not — it is the recommendation, not a third gate, and it blocks
   charging from being *measurable* rather than from being right (Codex,
   2026-09-03). Detail in
   [MONETIZATION.md](MONETIZATION.md); the split is spelled out under the next
   item.
 
-- [ ] **Ship a price once the two prerequisite gates clear.** Written up in
+- [ ] **Ship a price once the prerequisite clears.** Written up in
   [MONETIZATION.md](MONETIZATION.md) — what a paid tier would sell, what it must
-  not, the `direct` pricing question, and the fail-open entitlement policy that
+  not, and the fail-open entitlement policy that
   page proposes but does not adopt. Grandfathering is deliberately *not* a policy
   there: at this user count it is decided case by case on the evidence
   (maintainer, 2026-09-03). There is no release deadline on that — see the note
   below.
-  Deliberately not scheduled into a phase, because **two prerequisites** stand
+  Deliberately not scheduled into a phase, because **one prerequisite** stands
   ahead of it — plus a discovery recommendation that is not one (see the split
   below; an earlier version of this line said "three things gate it", which read
-  the recommendation back as a requirement). Neither prerequisite is a pricing
-  question. First, **on-device verification that departure detection works** —
-  Phase 3 covers that for `play`, but **`direct` needs its own**, since Phase 3
-  and hardware item 2 exercise the `play` geofence path while Phase 7's
-  implementation work and a manifest inspection do not exercise the detector at
-  all. So if the declaration is refused and the question redirects to `direct`,
-  this gate is **not** cleared by Phase 3's results: it needs Phase 7's detector
-  and its duty cycle run on a handset. **Both checks now exist** (Codex,
-  2026-09-03) — the Phase 7 battery item and hardware item 2b — so this is a
-  pointer to them, not a note to add them later. Charging for a departure
-  detector that has never detected a departure is the thing this gate exists to
-  prevent, and the two flavors have different detectors. Then **the Play background-location declaration outcome** (a refusal
-  closes Play Billing and redirects the question to `direct` rather than ending
-  it), and
-  **discovery** — which that page calls the binding constraint of the three, and
+  the recommendation back as a requirement). The prerequisite is not a pricing
+  question: **on-device verification that departure detection works** — Phase 3
+  and hardware item 2 exercise the `play` geofence path, and until a real
+  departure has been detected on a handset, charging for the detector is selling
+  a claim nobody has checked. That check exists, so this is a pointer to it, not
+  a note to add it later. The Play background-location declaration was a second
+  prerequisite until it cleared — it was accepted on the internal track
+  (`SPEC.md` §3.5), which is also what retired the `direct` fallback (§3.4), so
+  there is one build to price and no refusal path left to gate this. Then
+  **discovery** — which that page calls the binding constraint, and
   **recommends** the ordering *ship it, prove it on hardware, get it found, then
   price it* rather than settling it (Codex, 2026-09-03; an earlier version of
   this line called that ordering "not negotiable", which read an exploratory
-  recommendation back as an adopted prerequisite). Only the first two are
-  prerequisites: an unverified detector has nothing to sell, and a refused
-  declaration decides which flavor is priced. Discovery blocks *charging* as a
-  judgment call — building the billing plumbing before anyone has found the app
-  is not wrong, just unmeasurable — so it does not gate this item unless the
-  maintainer records that it does. So the cheap work is the marketing items in that page's Marketing
-  section — the 30-character listing title spent on terms people actually search,
-  a screenshot of the Quick Settings tile, and answering "how do I make my phone
-  shut up in meetings" in the forums where it is asked, which that section argues
-  is better distribution than any listing edit. Not anything here.
+  recommendation back as an adopted prerequisite). Only the verification is a
+  prerequisite: an unverified detector has nothing to sell. Discovery blocks
+  *charging* as a judgment call — building the billing plumbing before anyone
+  has found the app is not wrong, just unmeasurable — so it does not gate this
+  item unless the maintainer records that it does. So the cheap work is the
+  marketing items in that page's Marketing section — the 30-character listing
+  title spent on terms people actually search, a screenshot of the Quick
+  Settings tile, and answering "how do I make my phone shut up in meetings" in
+  the forums where it is asked, which that section argues is better distribution
+  than any listing edit. Not anything here.
 
   **Two separable pieces, and they are two checklist items** (Codex, 2026-09-03):
   the heading above used to cover both as "revisit monetization once the gates
@@ -4312,19 +4269,19 @@ question.
   to prevent.
 
   1. **Decide whether the tier exists and what is in it** — the item above. Not
-     gated by discovery, which blocks charging rather than deciding. Gates 1 and 2
-     still bear on it, since they decide whether there is a product and which
-     flavor is being priced.
-  2. **Ship a price** — this item. Waits for gates 1 and 2, the two
-     prerequisites. **And it does not ship without the privacy work** (Codex,
+     gated by discovery, which blocks charging rather than deciding. The
+     verification prerequisite still bears on it, since it decides whether there
+     is a product worth pricing.
+  2. **Ship a price** — this item. Waits for the verification prerequisite.
+     **And it does not ship without the privacy work** (Codex,
      2026-09-03), which this checklist described nowhere even though
      `MONETIZATION.md` requires it: `docs/PRIVACY.md` is updated for **any**
-     purchase flow, `direct` included, since the policy currently describes only
+     purchase flow, since the policy currently describes only
      the crash and analytics channels and would otherwise still say so with
      Billing live. The Play **Data Safety** form is the narrower half and changes
-     only if the `play` flow actually sends something off the device — a
+     only if the purchase flow actually sends something off the device — a
      local-only entitlement flag is on-device processing under `SPEC.md` §12 and
-     is not a disclosure, and `direct` is not distributed through Play at all, so
+     is not a disclosure — so
      scope the declaration to what is really transmitted rather than declaring by
      default. Both are completion steps of this item, not follow-ups. **Discovery is not a gate on it unless the maintainer
      adopts it as one** (Codex, 2026-09-03): `MONETIZATION.md` recommends the
@@ -5257,27 +5214,20 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     against this question in the meantime; the engine work already landed stands either way, since
     a snooze that ends on a duration cap needs the same controller.
 
-## Phase 7 cleanup the foreground service enables
+## Foreground-service cleanup — folded into the flavor-concept removal (2026-09-12)
 
-- [ ] **`direct`'s foreground-service work shrank** (2026-09-08, PR #230; maintainer asked whether
-  the flavors could now merge — they cannot, and this is what actually simplifies). The service
-  plumbing PR #230 adds is flavor-agnostic and lives in `:app`'s main source set: the
-  `OngoingForegroundHost` seam, `wantsForeground()`, the refusal handling and the card's
-  `tracking may pause` clause. So Phase 7 no longer needs a foreground-service lifecycle for
-  `direct` — it needs a `PresenceMonitor` that watches location without geofencing, and nothing
-  else.
-- [ ] **Move the foreground-service declarations from `play`'s manifest to `main` at Phase 7.**
-  They are `play`-only today because `direct` runs duration-only snoozes and would be holding a
-  permission it cannot use. Once `direct` watches, both flavors need them, and moving them also
-  deletes the `ACCESS_FINE_LOCATION` duplicate in `play`'s manifest — which exists only because
-  lint's `ForegroundServicePermission` reads the manifest the `<service>` is declared in rather
-  than the merged one. `DeclaredPermissionsTest` and `verifyPlayReleaseManifest`'s rules both
-  encode the current split and would move with it.
-
-  **What does *not* move**: `ACCESS_BACKGROUND_LOCATION`, `INTERNET`, and the Play Services
-  dependency. Those are what `direct` exists to ship without (SPEC.md §3.4), and PR #230 makes
-  `play` owe Play two declarations rather than one — so §3.5's risk went up and `direct` is worth
-  more, not less.
+PR #230's foreground-service plumbing is flavor-agnostic and already lives in `:app`'s main
+source set (the `OngoingForegroundHost` seam, `wantsForeground()`, the refusal handling, the
+`tracking may pause` clause). This section used to track two Phase-7 follow-ups: giving
+`direct` a non-geofencing `PresenceMonitor`, and moving the foreground-service declarations out
+of `play`'s manifest once `direct` also watched. `direct` is retired (`SPEC.md` §3.4), so the
+first is gone. The second survives as part of *Remove the flavor concept entirely* (Phase 7
+above): when `src/play`'s manifest merges into the base manifest, the foreground-service
+declarations move with it, and the `ACCESS_FINE_LOCATION` duplicate — which exists only because
+lint's `ForegroundServicePermission` reads the manifest the `<service>` is declared in rather
+than the merged one — can be dropped. `DeclaredPermissionsTest` and `verifyPlayReleaseManifest`'s
+rules move with them. `ACCESS_BACKGROUND_LOCATION`, `INTERNET`, and the Play Services dependency
+are simply what the one build ships.
 
 ## Decisions needing review
 

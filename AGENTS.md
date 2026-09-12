@@ -8,12 +8,12 @@ Launcher (`mikelward/typelauncher`) and Simmo (`mikelward/simmo`) repos; when a 
 is underspecified here, Simmo's `AGENTS.md` is the tiebreaker.
 
 **Status: both halves are built; presence has never run on a handset.** The Gradle build,
-the module split, the two flavors and CI are green, and so is the DND half: the tile arms
+the module split, the `play` build and CI are green, and so is the DND half: the tile arms
 and ends a snooze, the record survives process death and reboots, and the duration cap holds
-across a clock change. On `play`, presence ends a snooze when you leave — three wake-up
+across a clock change. Presence ends a snooze when you leave — three wake-up
 sources feeding one departure test — and degrades to duration-only, saying so, when the
-anchor supports nothing better; `direct` is duration-only until Phase 7, and a degraded card now
-names its reason as well as its mode. What Phase 3 still owes is on-device verification
+anchor supports nothing better, and a degraded card now names its reason as well as its mode.
+What Phase 3 still owes is on-device verification
 (`TODO.md` Phase 3).
 Every rule below is live, screenshot tests included: the four screens (`MainScreen`,
 `PermissionsScreen`, `SettingsScreen`, `LicensesScreen`) each record through their own
@@ -31,7 +31,7 @@ nothing.
 - **`SPEC.md` records product, functionality, and architecture decisions — not low-level
   implementation detail.** It captures *what* Snoozemo does and *why* a design was chosen
   (the zen-rule mechanism, the Wi-Fi-as-suppressor asymmetry, the three independent exits,
-  the two distribution flavors), so a reader can understand and QA the product from the
+  the single-build distribution decision), so a reader can understand and QA the product from the
   spec. Ask "would this still be true and worth stating if the implementation were
   rewritten?" — if not, leave it in the code and its comments. Exact dp values, private
   helper names, and which composable holds a flag are code, not spec.
@@ -327,8 +327,8 @@ it in the same commit.
   `TODO.md` note doesn't retract it.
 - **Play policy questions are never autopilot's to guess.** `SPEC.md` §3 turns on what
   Google's policy currently says, and it has already moved once (the April 2026 removal of
-  geofencing as an approved foreground-service use case). A change to the flavor split, the
-  declared permissions, the foreground-service type, or the Data Safety answers is a
+  geofencing as an approved foreground-service use case). A change to the declared
+  permissions, the foreground-service type, or the Data Safety answers is a
   distribution decision with a real chance of sinking the project — bring it to the user
   with the policy text you are reading it from, whatever mode is in effect.
 
@@ -725,10 +725,10 @@ takes the `TODO` comment, the only record that its locales are stale. Escape apo
   $/month at expected traffic — and note reliability implications: new failure modes, rate
   limits, added latency, extra points of failure, and what the user sees if the dependency
   is down. If the impact is effectively zero, say so rather than omitting the note.
-- **`INTERNET` has landed on `play` and stays off `direct`** — Crashlytics, `SPEC.md` §12,
-  `docs/crashlytics.md`. So the line to hold now is the flavor split, not the permission:
-  anything that would give `direct` network access, or that would add a second thing using
-  `play`'s, is a distribution decision to bring to the user, with its Data Safety
+- **`INTERNET` ships in the build** — Crashlytics and Analytics, `SPEC.md` §12,
+  `docs/crashlytics.md`, behind one consent and carrying no location or PII. So the line to
+  hold is what uses the network, not the permission: anything that adds a second thing sending
+  off the device is a distribution decision to bring to the user, with its Data Safety
   consequence named alongside the dollar figure. See *Privacy*.
 - **Battery is this app's other running cost, paid by the user.** A snooze can be armed for
   eight hours, so a change that adds a wakeup, a location request, a sensor registration,

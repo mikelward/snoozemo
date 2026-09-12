@@ -16,8 +16,7 @@ take — if either one fails to stop — Snoozemo says so rather than leaving yo
 tries again the next time the app opens. Saying **yes** is not treated the same way on
 purpose: if one of the two then fails to start, Snoozemo does not interrupt you about it,
 because the result is that *less* is collected than you allowed, never more. That is noted
-in the debug log and retried at the next launch. The version distributed outside Google Play
-cannot send either at all. Details under **Crash reports**.
+in the debug log and retried at the next launch. Details under **Crash reports**.
 
 **Where you are is never part of that, and never leaves your phone.** Snoozemo does need to
 know where you are — that is the whole point of "stay quiet until I leave here" — but that
@@ -50,13 +49,6 @@ or not the app went looking for it, so declaring it is the honest answer even th
 alternative would read better on the store page. It is nothing your phone measured and
 nothing this app looked up: turn the switch off, or never answer the question, and no request
 is made for a country to be worked out from.
-
-**The version distributed outside Google Play sends nothing at all.** Snoozemo ships in two
-builds. The sideloaded / F-Droid one does not ask Android for the `INTERNET` permission, so
-it cannot open a network connection under any circumstances — nothing from that build is
-ever an upload, and that is not a promise you have to take on trust: Android enforces it,
-and the permission list is in the app's manifest, which anyone can read in the source at
-<https://github.com/mikelward/snoozemo>.
 
 Two further things can move Snoozemo's data off a phone, and both are things you do, not
 things Snoozemo does on its own. Android itself, when you set up a new phone from your old
@@ -132,9 +124,6 @@ still send a report it was already holding. Snoozemo turns it off and clears wha
 as soon as it runs, and from the next launch onward it starts off. A fresh install is never
 in this position, because the library was never on.
 
-**The version distributed outside Google Play has no crash reporting at all** — no switch,
-because there is nothing to switch. It cannot open a network connection.
-
 **When it is sent**: on the next launch after a crash — never at the moment of the crash,
 and never on a schedule of its own. Crash reporting adds no background wake-up, no extra
 location check, and nothing that runs on its own while you are snoozed. A snooze can outlive
@@ -198,11 +187,10 @@ armed the snooze. The only other thing it captures is the access point note desc
   distance, not a place: it says how far, never from where, and it is not saved, not put
   in the notification, and not sent anywhere. It disappears a few minutes after the last
   reading, and it is gone when the snooze ends.
-- **Background location.** The Google Play build uses Android's geofencing, which needs
+- **Background location.** Snoozemo uses Android's geofencing, which needs
   permission to check your location while the app is not open — otherwise a snooze could
   only end while you were staring at the app, which defeats the purpose. Snoozemo explains
-  this before Android's permission prompt, and the build distributed outside Play does not
-  ask for it at all.
+  this before Android's permission prompt.
 
 If you deny location, Snoozemo still works, but it cannot tell when you have left — and
 that includes the Wi-Fi hint below, because Android puts the name of your current network

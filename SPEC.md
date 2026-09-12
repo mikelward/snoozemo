@@ -24,8 +24,9 @@ DND back off.
 3. **Never silently strand the user.** A hard maximum duration and an unmistakable "you are snoozed"
    affordance, so a failed sensor can't silence the phone indefinitely.
 4. **Distributable on Google Play**, accepting that this means passing a background-location
-   declaration (§3) — with a fully-functional sideload build that needs no restricted permissions as
-   the fallback if that fails.
+   declaration (§3). A fully-functional sideload build that needs no restricted permissions once
+   stood as the fallback if that declaration failed; it was accepted (§3.5), so that sideload
+   fallback was retired (§3.4).
 5. **Both Pixel and Samsung One UI, in that order.** Samsung is a real target, not a maybe — but
    Pixel and Play distribution lead the sequence. Where the two conflict, Pixel wins; where they
    don't, nothing should be built in a way that makes One UI support harder later.
@@ -37,9 +38,8 @@ DND back off.
   never triggers itself from your calendar. Nothing watches it: no observer, no sync adapter, no
   background job, and a time already chosen does not move when the meeting does.
 - Cross-device sync or accounts. Nothing about a snooze, a place, or the user's settings leaves
-  the phone. The `play` flavor does declare `INTERNET`, for crash reporting and Firebase
-  Analytics, both behind one consent the user has to give first (§12); `direct` declares none
-  at all.
+  the phone. The app does declare `INTERNET`, for crash reporting and Firebase
+  Analytics, both behind one consent the user has to give first (§12).
 - Wear OS, tablets, foldable-specific UI.
 - Automatic *arming* on arrival at a place (geofence enter). Deliberately deferred — see §14.
 
@@ -54,13 +54,13 @@ DND back off.
 | # | Decision | Rationale |
 |---|---|---|
 | D1 | Control DND via **`AutomaticZenRule`**, never `setInterruptionFilter` | Required for apps targeting Android 15+; also composes correctly with the user's other rules |
-| D2 | **Two flavors, chosen by distribution channel** — `play` uses the Geofencing API and `ACCESS_BACKGROUND_LOCATION`, plus a `location` foreground service while something is watching; `direct` uses a foreground service and no restricted permissions | Play's April 2026 policy removed geofencing as an approved foreground-service use case and directs it to the Geofence API, so an FGS cannot be the *mechanism* on Play — and it is not: the fence still delivers the exit. **Amended 2026-09-08**: the fence delivering it is worth nothing with no process left to hear it (a field log: the watch closed 67 s after arming, the exit arrived to a refused service start, the snooze did not end), so `play` now holds an FGS for process survival, gated on the snooze actually watching (§3.4) |
-| D3 | The presence engine is **behind one interface with two implementations** | The flavors differ only below `PresenceMonitor` (§6.1); all product behavior, DND handling, and UI is shared |
+| D2 | **One build, `play`** — the Geofencing API and `ACCESS_BACKGROUND_LOCATION`, plus a `location` foreground service while something is watching (`direct`, a second flavor using a foreground service and no restricted permissions, retired 2026-09-12; see §3.4) | Play's April 2026 policy removed geofencing as an approved foreground-service use case and directs it to the Geofence API, so an FGS cannot be the *mechanism* on Play — and it is not: the fence still delivers the exit. **Amended 2026-09-08**: the fence delivering it is worth nothing with no process left to hear it (a field log: the watch closed 67 s after arming, the exit arrived to a refused service start, the snooze did not end), so `play` now holds an FGS for process survival, gated on the snooze actually watching (§3.4) |
+| D3 | The presence engine is **behind one interface** | Keeps all product behavior, DND handling, and UI above `PresenceMonitor` (§6.1) and independent of it. (Had two implementations, one per flavor; `direct` retired 2026-09-12, §3.4) |
 | D4 | **Wi-Fi is a suppressor, not a trigger** | Still on the anchor SSID ⇒ definitely still here (skip location entirely). Wi-Fi dropped ⇒ *maybe* left, so escalate to a location check. Never end a snooze on Wi-Fi loss alone |
 | D5 | **Implicit anchor**: the tile captures "here" at arm time | Zero setup. Saved places are a later addition, not a prerequisite |
 | D6 | **Three independent exits**: departure, max duration, manual | Any one sensor can fail; the phone must always come back |
 | D7 | **Fail open, always** | Every ambiguous state resolves toward ending the snooze, not extending it |
-| D8 | **Build the `play` flavor first, on Pixel** | Pixel and Play are the priority targets. Nothing blocks developing `play` — the declaration gates *distribution*, not local installs — so the earlier testability argument for `direct`-first does not hold |
+| D8 | **Build the `play` flavor first, on Pixel** | Pixel and Play are the priority targets. Nothing blocks developing `play` — the declaration gates *distribution*, not local installs — so the earlier testability argument for `direct`-first did not hold. (`direct` retired 2026-09-12; `play` is now the only build — §3.4) |
 | D9 | **Arm first, refine second** — the tile arms on tap, and a sheet then offers a time (default now + 1 h) or "until I leave" | Keeps the zero-friction one-tap path intact while making a time bound one tap away. The calendar landed instead on the ongoing notification (§4.3), leaving the arm path untouched |
 
 ---
@@ -143,12 +143,15 @@ materially stronger case than §3.3's, which fails on a named exclusion rather t
 down here so it does not have to be reconstructed later.
 
 **Scope of the "no": not on Play, and not for v1** (maintainer, 2026-08-12) — deliberately narrower
-than a permanent ruling. On the `play` flavor such a service would buy nothing the Geofencing API
-does not already do; it would exist only to hold a permission-revocation watch and some retry state,
-and **a permission is not spent on revocation handling**. That leaves two doors open on purpose: the
-`direct` flavor has a foreground service anyway (§3.4), where none of this review applies, and a
-later version may find core functionality that genuinely requires one on Play. If it does, the case
-above is the one to build — not a fresh one improvised under time pressure.
+than a permanent ruling. Such a *process-holding* service would buy nothing the Geofencing API does
+not already do; it would exist only to hold a permission-revocation watch and some retry state, and
+**a permission is not spent on revocation handling**. (This is distinct from the `location`
+foreground service `play` now runs *while watching*, added 2026-09-08 — see §3.4.) That leaves one
+door open on purpose: a later version may find core functionality that genuinely requires a
+process-holding service on Play. If it does, the case above is the one to build — not a fresh one
+improvised under time pressure. Until 2026-09-12 a second door stood open — the sideload `direct`
+flavor had a foreground service anyway, where none of this review applied — but `direct` has been
+retired (§3.4).
 
 ### 3.4 Recommendation — **agreed**
 
@@ -156,7 +159,8 @@ above is the one to build — not a fresh one improvised under time pressure.
 > build on the Geofencing API. §3.5's risk assessment stands, and §6.10 covers what to do about the
 > API's reliability, but the direction is no longer open.
 
-**Two product flavors, differing only below `PresenceMonitor` (§6.1):**
+**One build, `play` — the Play Store build (§6.1).** It used to be one of two product flavors; the
+retirement note after it records why the second, `direct`, was dropped.
 
 - **`play`** — option B. Geofencing API, `ACCESS_BACKGROUND_LOCATION`, and — since 2026-09-08 — a
   **`location` foreground service while something is watching**. This is the shipping build for any
@@ -219,15 +223,22 @@ above is the one to build — not a fresh one improvised under time pressure.
   > foreground service would be the detection mechanism itself. That is the difference the
   > Console declaration turns on, and it is why the reasoning above is amended rather than
   > deleted.
-- **`direct`** — option A. Foreground service, no restricted permissions, no Play Services
-  dependency. For sideloaded APKs and F-Droid, and the better build on Samsung. **Insurance, not a
-  parallel product**: it exists so a refused declaration is a distribution setback rather than a dead
-  project, and it should never hold up `play`.
-
-This is not hedging. The two channels genuinely have different constraints and the divergence is
-confined to one interface. But the priority is not symmetric: **`play` on Pixel is the product**, and
-`direct` is the fallback that makes §3.5's risk survivable. Build `play` first (D8); keep `direct`
-compiling and tested, but do not let it set the schedule.
+> **`direct` retired 2026-09-12** (maintainer). There used to be a second flavor here —
+> option A: a foreground service, no restricted permissions, no Play Services dependency, for
+> sideloaded APKs and F-Droid, and the better build on Samsung. It was **insurance, not a parallel
+> product**: it existed so a refused Play declaration would be a distribution setback rather than a
+> dead project (§3.5), and it was never meant to hold up `play`. That insurance can be let go now
+> that the risk it hedged has resolved: `play` was accepted on the internal track, so the
+> background-location declaration §3.5 worried about went through. A second build that would detect
+> departure by a different mechanism — option A's `ForegroundPresenceMonitor`, which was never built
+> (it was Phase 7) — is now cost with no risk left to cover, and every place the two flavors diverged
+> (the `PresenceMonitor` split, per-flavor manifests, the sideload attribution list, the CI matrix)
+> is complexity carried for a build nobody ships. So `play` is the only build, and D8's "build `play`
+> first, keep `direct` compiling" collapses to "there is one build." The reasoning above is kept
+> rather than deleted because §3.5's risk was real and this retirement only makes sense in light of
+> how it resolved; §3.6 records what is left of the contingency now that the sideload fallback is
+> gone. `play` remains a *flavor* for the moment — collapsing the flavor dimension so tasks read
+> plain `assembleRelease` is its own follow-up (`TODO.md`).
 
 ### 3.5 Will the Play declarations be approved?
 
@@ -267,10 +278,15 @@ Arguing against:
   with 12 testers before production access. Irrelevant for internal-track-only use, but it stands
   between this and a public listing.
 
-**Mitigation, in order:** ship `direct` to your own devices immediately and prove the product works;
+**Mitigation, as planned:** ship `direct` to your own devices immediately and prove the product works;
 submit the `play` flavor to the internal track early, so the declaration outcome is known before much
 is invested in polish; and if the declaration is refused, `direct` via sideload or F-Droid remains a
 complete, fully-functional app — you lose distribution reach, not the app.
+
+> **Resolved 2026-09-12** (maintainer). The internal-track submission went through — the
+> background-location declaration was accepted — so the refusal this mitigation hedged against did
+> not happen. With that outcome known, `direct` was retired (§3.4): the fallback existed to survive a
+> refusal, and there was none. The residual risk is a *future* policy change, which §3.6 covers.
 
 Given the answer "Play internal track at a bare minimum": be aware that this specifically does not
 avoid either declaration, and the internal track is where the background-location declaration should
@@ -304,8 +320,7 @@ feature to be added later:
    in-process second, precisely so that losing the right to keep a process alive costs latency, not
    the exit itself (§8).
 3. **`PresenceMonitor` is the seam** (§3.4, §6.1). A withdrawn mechanism is an implementation swap
-   below one interface, not an app rewrite — which is also what keeps the two flavors from diverging
-   anywhere else.
+   below one interface, not an app rewrite.
 
 So the plan on losing a mechanism is: drop to the next rung, say so in the ongoing notification
 (§4.3 — a degraded snooze must never look like a tracked one), and ship. The product gets less
@@ -368,8 +383,7 @@ gates are live, and it is what a fork without any Play credentials gets. For tha
 queue is not ordered by push — publishes nothing rather than landing an older `versionCode` at the
 top of the list. **Nothing**, not just no prerelease: it stands its Play upload down too, since Play
 accepts an older bundle whenever the newer run's own upload skipped or failed, and a Play release
-ahead of the newest prerelease is the invariant above running backwards. The `direct` flavor of §3.4 does not ride this channel at all — it is sideloaded today and
-F-Droid is its intended path at scale — since its whole point is a route Play does not gate.
+ahead of the newest prerelease is the invariant above running backwards.
 
 App Distribution is the obvious second channel and was rejected on the sibling repos' evidence
 rather than in the abstract: clothescast, Simmo and Type Launcher all ran it *alongside* the
@@ -395,16 +409,12 @@ Full R8 is a **distribution requirement, not a size preference**. From February 
 requires a minimum of 25% coverage across *optimization, shrinking and obfuscation*, measured as
 DEX code optimization, and an app under the threshold loses store visibility and publishing
 capability. A shrink-only run — `-dontoptimize -dontobfuscate`, which is where this started —
-leaves two of those three dimensions at zero, so it was never an option for the `play` build.
-`direct` runs the same configuration: a second pipeline would be a second set of failures to
-find, and F-Droid does not object to an optimized build.
+leaves two of those three dimensions at zero, so it was never an option for the shipping build.
 
 What that costs, stated plainly because it is a real loss:
 
-- **Crash traces arrive obfuscated.** On `play` they are readable only if the Crashlytics
-  mapping file is uploaded with the build. On `direct` there is no crash reporter at all (§12),
-  so a trace from a sideloaded build — in a logcat, in a user's bug report — cannot be
-  de-obfuscated by anyone. That is the price of the flavor's independence, not a defect to fix.
+- **Crash traces arrive obfuscated.** They are readable only if the Crashlytics mapping file is
+  uploaded with the build, which `deploy` does.
 - **The optimizer and obfuscator can break code the shrinker alone would not**, and it is
   reflection they break: anything resolved by name at runtime. Three stores here persist an enum
   by `name()` and read it back with `valueOf` — a renamed constant would make a snooze record
@@ -543,11 +553,10 @@ means a record left by a dead process is believed a few seconds longer, and the 
 corrects it. Deriving the expiry from the capture's actual deadline would remove the guesswork and
 is an open question rather than a settled decision (`TODO.md`).
 
-**And it is only entered where something is actually pending.** On a build that cannot end a
-snooze by departure at all — `direct` until Phase 7 (§3.4) — the answer is the cap from the
-moment the tile is tapped, so an arm there says `Timer only` immediately rather than spending the
-capture window claiming to check something it will never check. The build's own ceiling is a
-different question from what a captured anchor supports, and the monitor answers both. The backstop alarm armed before capture is what re-arms it. Giving each reader a
+**And it is only entered where something is actually pending.** A snooze that will never end by
+departure — a timer-only end condition, or an anchor that supports nothing better (§6.5) — has its
+answer, the cap, from the moment the tile is tapped, so an arm there says `Timer only` immediately
+rather than spending the capture window claiming to check something it will never check. The backstop alarm armed before capture is what re-arms it. Giving each reader a
 liveness signal to consult was the alternative, and it is the design that produced the bug three
 times: a new reader is one that forgot to ask. This is the same
 unread-versus-missing distinction the required-capability banners make (§4.2) — reporting a
@@ -725,8 +734,7 @@ grant taken before the tile leaves an app that already snoozes from its own butt
 that costs least when someone abandons the flow part way, and it leaves the setup run ending on
 something to do rather than something to allow; and, last, the crash-report and analytics consent (§12) on its
 own — the debug log is not mentioned, since a card whose job is one question about data leaving the
-phone is the wrong place for a sentence about a log that never does (maintainer, 2026-09-05). That
-last card is absent on `direct`, which ships neither SDK, so the flow is four cards there. Each card offers the grant for the thing it just introduced, drawn
+phone is the wrong place for a sentence about a log that never does (maintainer, 2026-09-05). Each card offers the grant for the thing it just introduced, drawn
 as the same tri-state rows `PermissionsScreen` uses (§5.2), and `Next` never waits on one — the
 rows' own fail-open rule. `PermissionsScreen` then follows only when a permission is still missing,
 as the recap, and its once-only routing stays as the backstop for an install that skipped the
@@ -787,8 +795,7 @@ section ranks those the other way round. Each icon carries its label as its acce
 to a screen reader otherwise; the help icon lands with the flow it opens, not before it.
 
 **Both `SettingsScreen` and `MainScreen` carry the update banner** (landed 2026-08-23, extended
-to the home screen 2026-08-30, `play` flavor only —
-§3.4's `direct` flavor is never distributed through Play, so it has nothing to check for): when
+to the home screen 2026-08-30): when
 Play has a newer Snoozemo waiting, a card offers to fetch it, tracks the download, and then offers
 the **restart** that installs it. Always the *flexible* kind — background download, install on a
 restart the user chooses — never the immediate kind, which would take the screen over mid-snooze.
@@ -1209,17 +1216,16 @@ nothing (§7's `MIN_CAP`), on either path.
   invite pointless fiddling.
 - **`−` / `+` adjust in 30-minute steps** without dismissing the sheet. Floor is 30 minutes from now;
   ceiling is the 8-hour backstop (§7). Two taps covers 13:00–15:00, which is most meetings.
-- **Two rows, both live — where there are two.** Tapping a row commits that end condition
-  and dismisses. `until I leave` is drawn only on a build that tracks departure: `direct` is
-  duration-only until §3's Phase 7, and there it is a single row with no helper line, because
-  a row promising an end nothing behind it can deliver is worse than no row.
+- **Two rows, both live.** Tapping a row commits that end condition
+  and dismisses. `until I leave` ends the snooze on departure, and the build tracks departure,
+  so the sheet always offers it.
 - **`OK` is the explicit way out, and it accepts the time as shown** (maintainer,
   2026-09-01). The rows commit on tap, but they read as labels rather than buttons: after
   stepping `−`/`+` to a time there was nothing on screen that said *done*, and the two exits
   that were obvious — the scrim and the back gesture — both discard the time just chosen.
   This does not add a third end condition. It is the time row's own commit under a control
   shaped like one, so the sheet has a terminal action a user can find without having to know
-  that a card is tappable. It is on every build, including the duration-only one, since it
+  that a card is tappable. It is always present, since it
   is the sheet's confirm rather than anything the departure row was carrying.
   A user who meant `until I leave` and pressed `OK` out of habit gets whatever time the row
   is showing, which is at most the backstop the snooze armed with and never beyond it — and,
@@ -1596,14 +1602,14 @@ the tile-first user who never opens the app is exactly who D9 was written for.
 
 | End condition | Signal needed | Verdict |
 |---|---|---|
-| **I leave here** | §6 presence engine | **v1** on `play`, offered whenever the build tracks departure. `direct` is duration-only until Phase 7 (§3), and drops the row rather than promising it |
+| **I leave here** | §6 presence engine | **v1.** The build tracks departure, so the sheet always offers it |
 | **A time, adjustable** | none | **v1.** Seeded at now + 1 h; also the §7 cap |
 | **Whichever comes first** | both | **v1 as designed, reversed 2026-09-11.** Setting a time used to leave departure armed so whichever came first won; a chosen time now *replaces* the other exits (§4.4), so the timer is the only one. `Until I leave` is the way back |
 | **This meeting ends** | `READ_CALENDAR` | **Landed 2026-08-31**, as a notification action rather than a sheet row — see below |
 | **My next alarm** | `AlarmManager.getNextAlarmClock()` | **Explore.** No permission at all, and a natural fit for a bedtime snooze. Offer only when the next alarm is 3–12 h out, so it doesn't propose a 4-minute snooze |
 | **Wi-Fi goes** | `NetworkCallback.onLost` | **Fallback only, if §6.10 measurement forces it.** Instant and free, but it inverts D4 — it *is* the failure mode we designed around |
 | **I start moving** | `TYPE_SIGNIFICANT_MOTION` | **Fallback only, same condition (§6.10).** No permission, already wired for §6.7. But "moved" is not "left" — standing up for coffee would end it |
-| **I get home** | reverse geofence on a saved place | **Deferred.** Needs saved places (§14) plus background location, so `play`-flavor only |
+| **I get home** | reverse geofence on a saved place | **Deferred.** Needs saved places (§14) plus background location |
 | **Sunset / bedtime window** | none | **Rejected.** The OS's own scheduled Modes do this properly |
 | **Screen unlocked N times** | none | **Rejected.** A proxy for attention, not place or time, and wrong in both directions |
 
@@ -1816,15 +1822,10 @@ distribution decision and §3's kind of question. It is **not ruled out and not 
 is what would justify asking. The code is shaped so that swapping the signal source is a different
 `TriggerRegistrar`, not a redesign.
 
-**`play` only, and now for its own reason.** The row needs a foreground
-service, and `direct` declares none — it runs duration-only snoozes until Phase 7, so it has
-nothing to outlive. That used to fall out of the tracking-mode gate by accident; with the gate
-gone it is its own question, answered by a flavor constant rather than inferred.
-
 **Where the row cannot be offered, the log says which reason it is** (maintainer, 2026-09-10).
-Absence is not an explanation: a build that carries no foreground service and a phone with no
-significant-motion sensor look identical from the outside, and so does a version of Snoozemo that
-predates the feature. The screen has nothing useful to draw in that state — there is no row to
+Absence is not an explanation: a phone with no
+significant-motion sensor and a version of Snoozemo that
+predates the feature look identical from the outside. The screen has nothing useful to draw in that state — there is no row to
 disable, and a permanent notice about hardware the user cannot change is noise on the one screen
 they open to act — so the answer goes where an unexplained snooze is already explained. It names no
 device and reads nothing from the sensor (`docs/PRIVACY.md`). Principle 2 applied to a *capability*
@@ -2151,12 +2152,10 @@ named, and omits the line entirely where the component's own metadata names nobo
 carries organization URLs, and a second link per component would bury the license link the dialog
 exists for.
 
-**One attribution list per flavor, not one shared list.** `play` bundles Play's in-app update
-library and the Play Services stack beneath it; `direct` bundles none of it (§3.4). A shared list
-would have the sideload build claiming to ship Play code it does not contain, which is the opposite
-of what an attribution page is for. Each flavor's list names what that flavor's APK actually
-bundles rather than what the dependency graph mentions, and is kept current by the build rather
-than by hand, so a dependency bump cannot quietly leave either one stale.
+**The attribution list names what the APK actually bundles.** The build ships Play's in-app update
+library and the Play Services stack beneath it, and the list names what the APK actually
+bundles rather than what the dependency graph mentions. It is kept current by the build rather
+than by hand, so a dependency bump cannot quietly leave it stale.
 
 **A link that cannot open says so.** On a device with nothing able to handle a web link, the tap
 would otherwise be absorbed and read as the app being broken — principle 2's failure, not a
@@ -2354,7 +2353,7 @@ screen, so the same rules apply to all three:
   to end with a meeting") buys nothing and costs the plain sentence. Prerequisites carried by
   *another row* are visible in that row: whether the notification the meeting's end time arrives on
   can reach the user is what the notifications row says. What does get its own status is a
-  capability the build genuinely lacks — `direct` and departure (§3) — because no other row says so.
+  capability the build genuinely lacks, because no other row says so.
 
 ### 5.3 Rule lifecycle
 
@@ -2997,8 +2996,8 @@ holds the record whose stored clock frame can restate the arm moment, so the see
 **`supportedModes` is the mode's warrant, and it belongs to the monitor** (added while wiring the
 monitor into the service, 2026-08-22). A `TrackingMode` is a claim about what is *watching*, and
 the anchor's fields alone cannot back it: an anchor with an SSID reads as Wi-Fi-trackable, but
-whether anything actually watches that SSID depends on which monitor is running and which of its
-slices exist — the `direct` flavor's stand-in watches nothing at all. So the monitor states the
+whether anything actually watches that SSID depends on which of the monitor's slices exist for it.
+So the monitor states the
 modes it can honestly run for a given anchor, and the controller lowers every mode it ever
 computes — at arm, on restore, and on every update — to the nearest supported one. Without that,
 the first presence report's null degradation would silently promote the mode back to the anchor's
@@ -3023,7 +3022,7 @@ the phone silent with nothing left to end the snooze — principle 1's failure �
 never reported as a recoverable one.
 
 **A `CapabilityLost` ending survives a process death or a reboot in the window before it is
-consumed**, not only handed off in-process (`GeofencePresenceMonitor`, `play` flavor). Reporting the
+consumed**, not only handed off in-process (`GeofencePresenceMonitor`). Reporting the
 event alone is a `Flow` send with nothing behind it — if the process dies between that and
 `SnoozeService`'s collector actually acting on it, the decision is lost, and a restore starts fresh
 believing the snooze is still healthy, which is exactly the failure the grace deadline's own
@@ -3047,7 +3046,7 @@ took back is a false statement about its own state, and the kind that teaches th
 the line that matters when it is true (principle 2).
 
 **The recorded cause tracks the failure happening now, not the one that started the run**
-(revised 2026-08-30; it used to hold whichever flavor crossed the threshold first). The original
+(revised 2026-08-30; it used to hold whichever cause crossed the threshold first). The original
 rule froze it deliberately, reasoning that the two causes lowered tracking identically and read the
 same to the user, so restating a changed one bought a rewritten notification for nothing. That
 stopped being true the moment the card began rendering them as different sentences (§4.3): frozen,
@@ -3071,7 +3070,7 @@ because the next thing that happens may be rejoining the anchor's network, and t
 location entirely (§6.7).
 
 **A restart resumes the degradation it left, rather than starting healthy.** The monitor's own
-levels live in the process, and on the `play` flavor the process is reclaimed between wakes — so a
+levels live in the process, and the process is reclaimed between wakes — so a
 rebuilt watch that began at "nothing is wrong" would send a first update saying exactly that, and
 the card would drop from a degraded line to a plain one moments after being reposted, on no
 evidence at all. Worse than a moment's optimism: the engine infers `NO_LOCATION_FIX` by counting
@@ -3091,7 +3090,7 @@ stale and the fresh path, and not only where a reading is old enough to be obvio
 
 Two smaller consequences follow from the same "what does this process actually know" question. The
 **run of failures continues across the restart** — only the process ended — so a resumed
-degradation resumes with its threshold already crossed, or the reason would keep naming the flavor
+degradation resumes with its threshold already crossed, or the reason would keep naming the cause
 that failed *before* the restart while a wake that manages one probe can never re-cross it.
 
 **Only the engine's own inferences are resumed; a platform-layer cause is not.** The record carries
@@ -3109,17 +3108,17 @@ hide a degradation while departure tracking is still broken. That is the oversta
 boundary is explicit: capability evidence counts only if it post-dates the last unusable
 observation.
 
-Two implementations: `GeofencePresenceMonitor` (`play` flavor, §3 option B) and
-`ForegroundPresenceMonitor` (`direct` flavor, §3 option A). Everything above this line is
-flavor-agnostic — the state machine, the DND handling, the tile, and the §4.4 sheet are all shared,
-and neither flavor is aware of the other.
+One implementation: `GeofencePresenceMonitor` (§3 option B). Everything above this line is
+monitor-agnostic — the state machine, the DND handling, the tile, and the §4.4 sheet are all shared,
+and independent of it. (`ForegroundPresenceMonitor`, option A's foreground-service detector, was
+never built — it was Phase 7, cancelled when `direct` was retired; §3.4.)
 
 **The judgment lives above the interface, not inside a monitor.** A monitor's job is to deliver what
 its sensors said — a geofence fired, Wi-Fi went, here is a fix — and nothing else. Which signals are
 worth escalating for, how hard location should be running (§6.7), when to admit tracking has
 degraded (§8.1), and when an unverifiable state has gone on long enough to end the snooze (§6.6) are
-all decided once, in one place, from those signals. Two reasons, and the second is the load-bearing
-one: the flavors would otherwise drift into subtly different products, and every rule that lives in
+all decided once, in one place, from those signals. The load-bearing reason is testability: every
+rule that lives in
 a monitor can only be tested on a device, where the sequences that break it — a router rebooting, a
 provider emitting junk for ten minutes, an alarm arriving after the reason for it went away — cannot
 be replayed on demand.
@@ -3299,7 +3298,7 @@ The "even if the app holds the necessary permissions" clause is the whole trap: 
 `ACCESS_FINE_LOCATION` is not sufficient, so a permission audit finds nothing wrong.
 
 **Still owed a device**, but for a narrower question than before: that the flag *plus* our
-permissions and location-services state actually yields a real SSID on a handset, in both flavors.
+permissions and location-services state actually yields a real SSID on a handset.
 The platform contract is settled; the end-to-end path is not. A test that accepts `UNKNOWN_SSID` as
 a value would hide exactly this, so Phase 3's assertion rejects the placeholders rather than
 tolerating them.
@@ -3321,8 +3320,9 @@ connected-network signal plus location already covers the cases we care about.
 
 ### 6.5 Location API
 
-Used by the `direct` flavor, which cannot register geofences (§3.1). The `play` flavor uses the
-Geofencing API instead and needs none of this.
+Used for the build's location work off the geofence path — the §6.7 duty cycle, and the degraded
+rung where a snooze cannot rely on a geofence (§6.10). Primary departure detection is the
+Geofencing API (§6.1), which needs none of this.
 
 ```kotlin
 LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 90_000L)
@@ -3571,18 +3571,18 @@ This is where the battery budget is won:
 - **Not associated** → register `Sensor.TYPE_SIGNIFICANT_MOTION` via
   `SensorManager.requestTriggerSensor`. It is a hardware-backed one-shot trigger, requires **no
   permission**, and costs approximately nothing. While it has not fired, the phone has not moved, so
-  poll location slowly, purely as a sanity check — at the resting cadence below. **On `play` the
+  poll location slowly, purely as a sanity check — at the resting cadence below. **The
   firing is not something to count on** — see the second note below.
 - **Significant motion fired** → switch to the 90 s request above until the state resolves, then
   re-arm the trigger.
 
 A phone sitting on a desk for four hours therefore does essentially no location work.
 
-**The resting cadence is per flavor, and on `play` it is the §6.10 backstop's** (maintainer,
+**The resting cadence is the §6.10 backstop's** (maintainer,
 2026-08-30). This section was written for the foreground-service design, where the process stays
-alive and an in-process 10-minute timer is exactly right — which is `direct`'s shape from Phase 7,
-and there the 10 minutes stands. `play` ran no foreground service (§3.4, reversed 2026-09-08 — and still true of a
-duration-only snooze, or one whose service the platform refused): the process is reclaimed
+alive and an in-process 10-minute timer is exactly right. `play` runs no foreground service for a
+duration-only snooze, or one whose service the platform refused (§3.4, reversed 2026-09-08 — a
+watched snooze now holds one): the process is reclaimed
 within about a minute of each wake, so an in-process timer would almost never fire, and the only
 mechanism that would actually deliver a 10-minute cadence is a repeating alarm — roughly **6 wakes
 an hour against the backstop's 2**, each one a service start and a location request, for a snooze
@@ -3622,9 +3622,7 @@ the documented behavior rather than leniency, so a handset check means something
 old conclusion is everything outside that: a `DURATION_ONLY` snooze asks for no service and has no
 escalation to be late, and a snooze whose `startForeground` was **refused** is exactly the old
 position — background, no sensor events, resting on the backstop — which is why the refusal is
-said on the card (§4.6) rather than only in the log. `direct` is unaffected either way: Phase 7's
-foreground service lifts the restriction, and the trigger works wherever the hardware exists. §6.10's three wake-up sources are untouched on both
-flavors — what is at stake here is escalation latency, never whether a departure is detected.
+said on the card (§4.6) rather than only in the log. §6.10's three wake-up sources are untouched — what is at stake here is escalation latency, never whether a departure is detected.
 
 ### 6.8 Foreground service
 
@@ -3707,7 +3705,7 @@ window, and correct behavior when launched over the lock screen (§4.2).
 
 ### 6.10 Geofencing quality, and the fallback ladder
 
-The `play` flavor's departure detection rests on the Play Services Geofencing API, so it is worth
+The build's departure detection rests on the Play Services Geofencing API, so it is worth
 being precise about what that API is and is not good at — this is the difference between the app
 feeling reliable and feeling haunted.
 
@@ -3721,7 +3719,7 @@ Low, and for a structural reason rather than a tuning one:
 
 No GPS wakeups. Registration is handed to a system process that is already computing network
 location for other reasons, so an idle geofence is close to free — well under 1% for a 4-hour snooze,
-and materially cheaper than the `direct` flavor's foreground service. `setNotificationResponsiveness`
+and materially cheaper than a continuously-running foreground service. `setNotificationResponsiveness`
 trades latency for power on top of that; at our 100 m radius the default is already fine and there is
 little left to win. Battery is **not** the reason to worry about this API.
 
@@ -3751,11 +3749,11 @@ and they fail independently:
 1. **Geofence exit** — primary. Also a documented exemption for starting a foreground service from
    the background, so its callback can start a short-lived service to confirm.
 2. **Wi-Fi loss** (`NetworkCallback.onLost`) — free, instant, and completely independent of Play
-   Services. In the `play` flavor we already hold `ACCESS_BACKGROUND_LOCATION`, so this can trigger a
+   Services. We already hold `ACCESS_BACKGROUND_LOCATION`, so this can trigger a
    one-shot `getCurrentLocation()` and run the §6.6 departure test directly, without waiting for the
    geofence to notice. This is the single highest-value addition, because it covers the common case
    (leaving a Wi-Fi place) with no reliance on the flaky path at all.
-   **Built**, as D4's watch in the `play` monitor: a `NetworkCallback` on the Wi-Fi transport
+   **Built**, as D4's watch in the monitor: a `NetworkCallback` on the Wi-Fi transport
    feeds the association and its loss into the engine — association suppresses location work
    entirely (including the backstop's resting probe), loss escalates into the same §6.6
    confirmation as every other source, with the checking burst's one-shots as the fix request.
@@ -3768,7 +3766,7 @@ and they fail independently:
    a *watched* mode at last: an SSID-only anchor gets a real watch, and a fenced anchor that
    loses location degrades to Wi-Fi rather than to the bare timer.
    **The watch is in-process, and that needed a durable half** (landed 2026-08-24, from a field
-   report). A `NetworkCallback` lives in a process; this flavor ran no foreground service (§3.4,
+   report). A `NetworkCallback` lives in a process; the build ran no foreground service (§3.4,
    reversed 2026-09-08 — this paragraph is a large part of what reversed it),
    and Android stops the snooze's ordinary service within about a minute of the app going to the
    background — so the watch closes with it. A fenced anchor loses nothing, because the fence is
@@ -3794,7 +3792,7 @@ and they fail independently:
    absolute one.
 
 Confirmation still runs through the one §6.6 test, so no source can end a snooze on its own evidence.
-This layering is why the `play` flavor's departure latency should land near the `direct` flavor's in
+This layering is why departure latency should stay low in
 the common case, despite the geofence's own numbers.
 
 **The backstop (3) is built**, and its design is deliberately thin: a `WorkManager` periodic wake
@@ -3855,11 +3853,10 @@ every fix whatever the association says, and its unambiguous shortcut ends a sno
 radius that fix could end the snooze outright, with nothing having suggested a departure. D4
 exists to refuse exactly that trade, and a housekeeping probe is the weakest possible reason to
 make an exception to it. The broadcast
-is implicit and so undeliverable to a dead process, which sets the honest limit: on `play`
+is implicit and so undeliverable to a dead process, which sets the honest limit:
 this covers the window where the app is actually running — an arm with location off, or a
-user reaching for the setting on the strength of the notification — and the backstop still
-covers the rest; on `direct`, Phase 7's foreground service makes it cover the whole snooze.
-It costs nothing while a snooze is healthy, because a healthy snooze registers no watch at
+user reaching for the setting on the strength of the notification — and the backstop
+covers the rest. It costs nothing while a snooze is healthy, because a healthy snooze registers no watch at
 all.
 
 #### To-do: explicit fallback end conditions
@@ -4266,7 +4263,7 @@ be declared over by the thing that can actually see it end. This is a demand for
 proof, never a test of which cause happens to be latched: a grant restored during a services
 outage is still restored, by that watch, the moment the outage ends.
 
-**A while-in-use grant is not an edge case here.** With no foreground service on this flavor
+**A while-in-use grant is not an edge case here.** With no foreground service
 (§3), every read Snoozemo makes runs from the background, so an install that granted location
 but not *all the time* has no working presence signal at all — its snoozes always run to the
 timer. That is a state the user chose and can undo, so the app says so where they will see
@@ -4398,7 +4395,7 @@ it is.
 Rough budget for a 4-hour snooze on a modern Pixel. These are estimates from the mechanisms involved,
 not measurements — `TODO.md`'s hardware-verification list says to measure them.
 
-**`play` flavor (Geofencing API)** — negligible in every case, well under 1%. A registered geofence
+**Geofencing API** — negligible in every case, well under 1%. A registered geofence
 is monitored by a system process using **network location only**, never GPS (§6.10), so an idle
 geofence rides on location work the device is already doing. Our additions are a Wi-Fi network
 callback (event-driven, free) and a 15–30 minute `WorkManager` backstop (a handful of wakeups over a
@@ -4408,23 +4405,11 @@ process, its snooze also carries the §6.10 recheck alarm at 15 minutes — 16 e
 is the price of the alternative being a snooze that never ends (principle 1), and it is paid only by
 the degraded anchor: a snooze with a usable fix arms no such alarm. There is no foreground service
 and no process of ours running between events — the
-ongoing notification this flavor does post (§3.4) costs nothing, since a posted notification holds
+ongoing notification it does post (§3.4) costs nothing, since a posted notification holds
 no process up and wakes nothing.
 
-**`direct` flavor (foreground service)** — higher, and dominated entirely by location fix frequency,
-which §6.7's duty cycle drives toward zero in the common case:
-
-| Scenario | Estimate |
-|---|---|
-| On anchor Wi-Fi the whole time | <0.5% — network callback only, no location, no sensor polling |
-| No Wi-Fi, phone stationary | ~1% — significant-motion trigger plus a 10-minute sanity fix |
-| No Wi-Fi, intermittent movement | ~2–3% — 90 s balanced-power fixes during active periods |
-
-The FGS notification itself costs nothing.
-
-So battery is not a reason to prefer `direct`, and not a reason to fear `play`. The `play` flavor is
-the cheaper of the two by a clear margin — its problem is reliability (§6.10), not power, and the
-three-source layering that fixes the reliability is itself nearly free.
+So battery is not a reason to fear the geofencing approach: its problem is reliability (§6.10),
+not power, and the three-source layering that fixes the reliability is itself nearly free.
 
 ---
 
@@ -4440,8 +4425,7 @@ Nothing OEM-specific required.
 A real target, sequenced second (goal 5). Validated at M8 rather than M1 — not descoped, just not
 allowed to gate the Pixel release. Deferring is safe because everything below is verification or
 settings guidance rather than architecture: nothing here, if it fails, sends the design back to the
-drawing board. And the `direct` flavor is independently the stronger build on One UI, so there is a
-good answer available even in the bad cases.
+drawing board.
 
 One thing this does buy: keep the OEM-specific work — battery-optimization guidance, tile-rendering
 fallbacks — behind a small seam from the start, so M8 is additive rather than surgery.
@@ -4450,8 +4434,7 @@ Three areas need real-device verification, not assumption:
 
 1. **Sleeping apps / Deep sleeping apps.** One UI's Battery → Background usage limits will put
    infrequently used apps to sleep, which breaks background work. A foreground service is much more
-   resistant to this than a geofence registration would be — which is why `direct` is the better build
-   on Samsung even though `play` is the shipping one — but it is not
+   resistant to this than a geofence registration would be, but it is not
    immune. Onboarding should include a Samsung-detected step explaining how to add Snoozemo to
    *Never sleeping apps*.
 
@@ -4514,8 +4497,7 @@ interaction.
 :dnd          the device's quiet state — all NotificationManager/AutomaticZenRule
               contact, and the ringer ceiling (§5.9) driven with it
 :presence     PresenceMonitor implementations
-              ├── geofence/    GeofencePresenceMonitor                    (`play` flavor)
-              └── foreground/  ForegroundPresenceMonitor + SnoozeService  (`direct` flavor)
+              └── geofence/    GeofencePresenceMonitor
 ```
 
 **Contracts live in `:core` with their consumer; implementations live in the Android
@@ -4557,9 +4539,8 @@ do is leave the core reachable only through the UI or an Android component.
 
 Kotlin · Compose + Material 3 · coroutines/Flow · Hilt · DataStore (settings, active-snooze record)
 · Room (saved places and snooze history, once §14 lands — not needed for v1's single implicit anchor)
-· Play Services Location (`play-services-location`, used for fused location even in the default
-flavor; the geofencing surface is only touched by the `play` flavor, and the `direct` flavor
-degrades to `LocationManager` if Play Services is absent, §6.5).
+· Play Services Location (`play-services-location`, for fused location and the geofencing surface,
+§6.5).
 
 **Every window is drawn edge to edge, and that is a description before it is a choice.** Android 15
 made it the behavior for anything targeting SDK 35 and up, and Android 16 removed the opt-out, so
@@ -4638,22 +4619,19 @@ doesn't mention shows up as a row with no rationale behind it.
   configure". When it lands, the Play Data Safety declaration, `docs/PRIVACY.md`, and the
   `AndroidManifest.xml` comment above the (then-present) `INTERNET` permission all need to
   change together, not just the code.
-- **That is now what happened: Crashlytics is in, on `play` only** (2026-08-25). The bullet
+- **That is now what happened: Crashlytics is in** (2026-08-25). The bullet
   above is the decision; this is its resolution, and the two bullets are the pair to read
-  together. Firebase Crashlytics reports crashes from the `play` flavor, which therefore
+  together. Firebase Crashlytics reports crashes from the build, which therefore
   declares `INTERNET`. `docs/crashlytics.md` carries the operational detail (cost — $0/month,
   no metered tier; setup; how to verify it on a device).
 
   Four things about the shape of it are decisions rather than implementation:
 
-  - **`play` only, and that is not a convenience.** `direct` exists to be the build with no
-    restricted permission and no Play Services dependency (§3.4), so it gains neither the
-    reporter nor `INTERNET` — "this build cannot open a network connection" stays literally
-    true of one of the two flavors, auditable from its manifest, and an F-Droid build could
-    not carry a proprietary reporter anyway. `DeclaredPermissionsTest` pins both directions,
-    and a release build refuses to package a merged manifest that breaks them: `play` must
-    carry `INTERNET` and `ACCESS_BACKGROUND_LOCATION` and nothing Play would review (§3.3);
-    `direct` must carry neither.
+  - **The reporter ships in the build.** Firebase Crashlytics and the `INTERNET` it needs
+    ship in the single `play` build (§3.4). `DeclaredPermissionsTest` pins what the build
+    declares, and a release build refuses to package a merged manifest that breaks it: the
+    build must carry `INTERNET` and `ACCESS_BACKGROUND_LOCATION` and nothing Play would
+    review (§3.3).
   - **Analytics joins it, and the two share one consent** (maintainer, 2026-08-31; all four
     sibling apps are going the same way). Firebase Analytics ships on `play` alongside
     Crashlytics, collecting only what the SDK collects automatically — app opens, session
@@ -4672,7 +4650,7 @@ doesn't mention shows up as a row with no rationale behind it.
     a composable inside it, so that event names the activity on every install and reports
     nothing about which part of the app was used. Making it mean something would take
     logging screen events deliberately, which is adding collection — a decision to take on
-    its merits, not a gap to close so a sentence comes true. `direct` gains neither, for the reason the next bullet gives.
+    its merits, not a gap to close so a sentence comes true.
     One switch governs both, because the user is asked one question: no build offers them
     separately, and no answer turns on only one of them. **That is not a promise that the
     two are always live together** (Codex, PR #166). A failed opt-*in* deliberately leaves
@@ -4730,9 +4708,8 @@ doesn't mention shows up as a row with no rationale behind it.
     the answer stays "not used" and Analytics reports against the per-install app-instance
     ID — specific to this app, unjoinable with activity elsewhere, reset on clear-data. The
     cost is the ads-adjacent surface (audience export, inferred demographics), which
-    Snoozemo has no use for. `DeclaredPermissionsTest` still asserts `AD_ID` absent on both
-    flavors, and now also asserts every Firebase collection switch is declared and off on
-    `play` and absent on `direct`.
+    Snoozemo has no use for. `DeclaredPermissionsTest` still asserts `AD_ID` absent, and now
+    also asserts every Firebase collection switch is declared and off on `play`.
   - **The floor is unchanged, but the reason it holds has changed, and that is worth stating
     plainly.** A crash report is a stack trace, a device model, a version — and, since
     Analytics joined the build, a **breadcrumb trail**: Crashlytics picks up Analytics' events
@@ -4950,13 +4927,13 @@ The force-stop and Samsung rows are the ones most likely to find something. Run 
 - **Saved places.** Name an anchor ("Cinema", "Work"), give it its own policy and duration cap.
   Turns the tile long-press into a picker. The `Anchor` type is already shaped for this.
 - **Auto-arm on arrival.** The obvious sequel, and the one that genuinely needs background location
-  and the Play declaration — already paid for in the `play` flavor, so the *permission* is free
-  there. **The battery is not** (2026-09-03): auto-arm would be the first thing watching geofences
+  and the Play declaration — already paid for by the build, so the *permission* is free.
+  **The battery is not** (2026-09-03): auto-arm would be the first thing watching geofences
   while nothing is snoozed, a standing cost §9's budget has never measured, so it is gated on a
   hardware measurement rather than assumed cheap. `TODO.md` carries that gate.
 - **`ZenDeviceEffects`** — grayscale, dim wallpaper, night mode while snoozed (§5.5).
 - **"Until I get home"** and other saved-place reverse geofences (§4.4), which follow from saved
-  places plus background location, so `play`-flavor only.
+  places plus background location.
 - **Chaining back-to-back meetings** (§4.3), if using the app shows people actually want it. The
   offer deliberately ends at one event: a card that walked itself forward through a packed
   afternoon would keep the phone quiet for a stretch nobody asked for.

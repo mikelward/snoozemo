@@ -62,11 +62,10 @@ screen already has a reason attached.
   is — so there is no way through that misses a missing permission, none that shows
   a recap with nothing to recap, and no way to get stuck, which is the same fail-open
   rule the permissions rows follow (§4.2: "a setup flow that cannot be left without
-  finishing it is a trap, not onboarding"). "Missing" means a permission *this
-  flavor offers* and the recap would show an action for: on `direct`, where the
-  location row is suppressed because nothing tracks departure (§3), an ungranted
-  location permission counts for nothing, or every `direct` user would be routed to a
-  recap they cannot satisfy.
+  finishing it is a trap, not onboarding"). "Missing" means a permission the
+  build offers and the recap would show an action for: a row suppressed because
+  nothing uses it counts for nothing, or a user would be routed to a recap they
+  cannot satisfy.
 - **A dismissible hint points at the (?) icon once the flow is left**
   (maintainer, 2026-09-05): `Tap (?) to see the tutorial again`, with a
   `Dismiss`. The replay lives behind an icon, which is discoverable only if you
@@ -127,14 +126,7 @@ It turns itself back on.`, and the second sentence went (maintainer,
 so promising it here spent the first card's two lines saying what the next one
 exists for — and a first screen that front-loads is the one people skip.
 
-On the `direct` flavor, until Phase 7 lands, the first line is just `Silence your
-phone.`: that build is duration-only (§3), so a first card promising departure there
-would set up exactly the silence-until-the-cap the app exists to prevent (Codex,
-PR #193, twice). The second line does the promising, and the cap is what makes it
-true. Card 2 drops departure from its list the same way, keeping the title, which
-is true on both builds.
-
-The 8-hour cap is deliberately not stated on this card on either flavor
+The 8-hour cap is deliberately not stated on this card
 (maintainer, 2026-09-05). It still fires, and `Ends automatically` covers it —
 but a backstop the user never has to think about does not earn words in
 onboarding, and naming it invited the reading that eight hours is the point
@@ -230,16 +222,6 @@ the only place the countdown, the reason, and the way to extend or end all live
 (§4.2, "nothing the user needs to know may live only on the tile"). The card does
 not say what happens when notifications are denied; the permissions recap does.
 
-On the `direct` flavor, until Phase 7 lands, departure is not true: the build is
-duration-only (§3). The render's body reads `Timer only` in place of `Ends when
-you leave` — the string that build actually posts (`ongoing_timer_only`, §4.3),
-with the countdown still in the chronometer beside the title, since a render that
-invents copy teaches a screen nobody will see (Codex, PR #198). The first body line
-drops to `Never more than 8 hours.`, and the location row is absent, as it is on
-that flavor's `PermissionsScreen`; the second line and the calendar row are
-unchanged, since `READ_CALENDAR` is declared for both flavors. The card still
-reads.
-
 ### 3 · Your Do Not Disturb rule
 
 > **One rule, yours**
@@ -331,8 +313,7 @@ neither moves. What this card decides is whether the flow *asks*:
   appears; passed with `Next`, it still does — an unanswered question is not a "no",
   and the main screen is where §12 says the question is put for an install that
   never opens Settings. Nothing is collected until the answer is yes, on this card
-  as on that one. `direct` ships neither SDK (§12), so on `direct` the question is
-  absent and the card is the debug-log sentence alone.
+  as on that one.
 - **The debug log is not mentioned at all** (maintainer, 2026-09-05: "we don't want
   to overwhelm"). This reverses the sketch's earlier reasoning, which was that the
   user should have heard of the log *before* a snooze misbehaves, since the moment a
@@ -342,9 +323,6 @@ neither moves. What this card decides is whether the flow *asks*:
   never leaves it is the one most likely to blur the first. The log stays on by
   default (§4.6) with its switch and its share action in Settings, which is where a
   user goes when something has actually gone wrong.
-- **So `direct` has no fifth card.** It ships neither SDK (§12), so the question is
-  absent — and with the debug-log sentence gone there is nothing left on the card.
-  The flow is four cards there, and the dots count four.
 
 **Answering leaves the flow** (maintainer, 2026-09-05). Either button records the
 answer and exits — it is the last card, so answering it is finishing, and making
@@ -417,8 +395,7 @@ flow.
 - The permissions screen at the end appears only when something is still missing.
 - The crash-report and analytics consent is asked in the flow, as the last card,
   and it is the whole card: the debug log is not mentioned (maintainer,
-  2026-09-05). On `direct`, which ships no SDK, the card is absent entirely and the
-  flow is four cards.
+  2026-09-05).
 - **The affirmative answer is the trailing one, and the pair sits at opposite ends
   of the row** (maintainer, 2026-09-05): `No thanks` leading and low-emphasis,
   `Yes please` trailing and filled, with the width between them rather than an 8dp

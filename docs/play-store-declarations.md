@@ -6,14 +6,12 @@ answer to give and the reason behind it. The mechanics of *getting a build up th
 [`play-store-internal-track.md`](play-store-internal-track.md); this file is only the
 declarations.
 
-Two rules govern everything below. **These answers must stay true of the `play`
-flavor's shipped manifest**, which is the only build that reaches Play (`SPEC.md`
-§3.4). `DeclaredPermissionsTest` covers four of them — `INTERNET` on `play` but never on
-`direct` (Data safety), no `AD_ID` on either (Advertising ID), exactly
+Two rules govern everything below. **These answers must stay true of the shipped
+`play` manifest** (`SPEC.md` §3.4). `DeclaredPermissionsTest` covers four of them —
+`INTERNET` is present (Data safety), `AD_ID` is absent (Advertising ID), exactly
 `FOREGROUND_SERVICE_LOCATION` and exactly one service declaring
-`foregroundServiceType="location"` on `play` and neither on `direct` (foreground
-service types), and the background grant on `play` but never on
-`direct`. Everything else here is a
+`foregroundServiceType="location"` (foreground service types), and the background
+grant is present. Everything else here is a
 statement about the product, not something a test can hold.
 
 **The foreground-service answers below changed on 2026-09-08** (PR #230). The `play`
@@ -29,9 +27,9 @@ Neither exists today — there is no `src/release` or `src/playRelease` source s
 no release-only dependency, and the two merged manifests carry identical permissions
 apart from the applicationId suffix on the auto-generated
 `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`. What makes that true by construction
-rather than by circumstance is the release build itself: every `play` and `direct`
+rather than by circumstance is the release build itself: the `play`
 release refuses to package a merged manifest that breaks the four lines above (the
-`verify*ReleaseManifest` tasks in `app/build.gradle.kts`, which read the merged
+`verifyPlayReleaseManifest` task in `app/build.gradle.kts`, which reads the merged
 manifest the artifact ships with, SDK-qualified and `maxSdkVersion`-capped
 declarations included), and CI proves the refusal against fixture manifests on every
 pull request. So the declarations below can be filed from the manifest the release
@@ -54,13 +52,11 @@ Three things gate the rest, in this order:
    permissions it names are all declared now — location and the Wi-Fi read in the main
    manifest, background location in `play`'s — so the manifest half is done. What is
    still ahead of the build is *behavior*: it describes v1 as specified, including the
-   departure detection that ends a snooze when you leave. That is built and wired on
-   `play` now, though it has never run on a handset — so on that flavor the policy is
-   ahead of what anyone has *seen* work rather than ahead of what ships. On `direct` it
-   is genuinely ahead of the build: `DurationOnlyPresenceMonitor` is a stand-in until
-   Phase 7's foreground monitor lands, so every `direct` snooze is a timer today.
-   Checking that what the policy says Snoozemo keeps and does matches what each shipped
-   flavor actually keeps and does is the part that has to be true on the day it is hosted.
+   departure detection that ends a snooze when you leave. That is built and wired now,
+   though it has never run on a handset — so the policy is ahead of what anyone has
+   *seen* work rather than ahead of what ships.
+   Checking that what the policy says Snoozemo keeps and does matches what the shipped
+   build actually keeps and does is the part that has to be true on the day it is hosted.
    The **Calendar** section added on 2026-08-31 is in the same position as the rest: it
    describes what the code does, and the code is built but has not run on a handset.
 3. **Film the demonstration video** (`TODO.md` Phase 3, steps 2–7). Nothing else
@@ -93,7 +89,7 @@ Answers, and why each one is what it is.
 |---|---|---|
 | **Privacy policy** | `https://mikelward.github.io/snoozemo/PRIVACY.html` | Required for any app requesting a sensitive permission. Must resolve before you submit. |
 | **App access** | All functionality available without special access | No account, no login, no gated area. Nothing for a reviewer to be given credentials for. |
-| **Ads** | No ads | No ad SDK. `INTERNET` is declared on `play`, and what uses it is crash reporting and Firebase Analytics, both behind one user consent (`SPEC.md` §12). Analytics' advertising-ID collection is switched off and the `AD_ID` permission removed, so the **Advertising ID** answer below stays "not used". |
+| **Ads** | No ads | No ad SDK. `INTERNET` is declared, and what uses it is crash reporting and Firebase Analytics, both behind one user consent (`SPEC.md` §12). Analytics' advertising-ID collection is switched off and the `AD_ID` permission removed, so the **Advertising ID** answer below stays "not used". |
 | **Content rating** (IARC) | Utility; no user-generated content, violence, sexuality, gambling, or controlled substances | Expect Everyone. |
 | **Target audience and content** | **13 and over**; not directed at children | Maintainer's answer (2026-08-24), from what has cleared review on their other listings. A Do Not Disturb utility has no content or feature aimed at kids, and leaving the under-13 boxes clear is how Play expresses "not directed at children" — which keeps Snoozemo out of the Families program without declaring an adults-only audience it does not have. That matters because `docs/PRIVACY.md` says outright that the app works the same for a user of any age; 13+ agrees with that, where 18+ would not. Note the sibling Simmo repo records 18+ for its own listing, on a rationale specific to it (future travel-eSIM commerce links). |
 | **News app** | No | |
@@ -127,9 +123,8 @@ only while a snooze is watching.
 
 What survives from the old question: the bare `FOREGROUND_SERVICE` and `WAKE_LOCK`
 still arrive from WorkManager rather than from Snoozemo's manifests, and
-`DeclaredPermissionsTest` asserts the bare permission is present in **both** flavors
-precisely because it is not a flavor signal. `WAKE_LOCK` is still described here and
-enforced nowhere.
+`DeclaredPermissionsTest` asserts the bare permission is present. `WAKE_LOCK` is still
+described here and enforced nowhere.
 
 **Still a human's job before upload:** the justification text, the video, and
 confirming the Console renders the section as this guide expects. `verifyPlayReleaseManifest`
@@ -137,10 +132,9 @@ guarantees what the release *ships*; it cannot fill in a form.
 
 ### Data safety, in detail
 
-**This answer changed on 2026-08-25**, when Crashlytics landed on the `play` flavor
-(`SPEC.md` §12). It used to be a flat "no data collected, no data shared", which the
-absence of `INTERNET` made trivially verifiable from the manifest. That is still true
-of `direct`, but `direct` never reaches Play — so the form now has to be filled in.
+**This answer changed on 2026-08-25**, when Crashlytics landed (`SPEC.md` §12). It
+used to be a flat "no data collected, no data shared", which the absence of `INTERNET`
+made trivially verifiable from the manifest — so the form now has to be filled in.
 
 Answer **"Does your app collect or share any of the required user data types?" →
 Yes**, then, under **App activity / App info and performance**:
@@ -233,7 +227,7 @@ different answers:
 
 - **Advertising ID** (App content) is answered **No** for Snoozemo today. That question
   is about the Google Advertising ID and the `AD_ID` permission, and no `AD_ID` appears
-  in either flavor's merged manifest — which `DeclaredPermissionsTest` checks, so it is a
+  in the merged manifest — which `DeclaredPermissionsTest` checks, so it is a
   fact about the build rather than a judgment.
 - **Device or other IDs** (Data safety) is **Yes**, per the row above, covering **two**
   identifiers rather than one: the Crashlytics installation identifier and Analytics'
@@ -283,7 +277,7 @@ be done before the next `play` upload, not alongside it.
 ## The background location permissions declaration
 
 Play Console → **App content → Sensitive app permissions / Permissions declaration
-form**. Triggered by `ACCESS_BACKGROUND_LOCATION`, which the `play` flavor declares
+form**. Triggered by `ACCESS_BACKGROUND_LOCATION`, which the build declares
 because the Geofencing API cannot deliver an exit without it while the app holds no
 foreground service (`SPEC.md` §3.2, §3.4).
 
@@ -368,9 +362,8 @@ Not declarations, but they gate the same path and are easy to discover late:
 
 ## If the declaration is refused
 
-`SPEC.md` §3.5 rates approval as probable but not assured, and the largest single
-project risk. The mitigation is already built: the `direct` flavor holds no
-restricted permission, needs no Play Services, and is a complete app. A refusal costs
-distribution reach, not the product. Do not respond to a refusal by re-declaring the
-foreground service — §3.3 walks through why that review is the one to expect to fail,
-and an inaccurate declaration is not on the table.
+The background-location declaration was accepted (2026-09-12, `SPEC.md` §3.5); the
+`direct` sideload/F-Droid build that hedged a refusal is retired (`SPEC.md` §3.4). Do
+not respond to any future refusal by re-declaring the foreground service — §3.3 walks
+through why that review is the one to expect to fail, and an inaccurate declaration is
+not on the table.
