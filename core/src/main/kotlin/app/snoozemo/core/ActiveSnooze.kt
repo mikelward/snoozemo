@@ -267,6 +267,36 @@ data class ActiveSnooze(
      * off, so an old record is one that still ends on leaving.
      */
     val endsOnDeparture: Boolean = true,
+
+    /**
+     * Whether the user asked for a chosen time and nothing else — the
+     * `Until (time)` choice, off unless they made it (SPEC.md §4.4).
+     *
+     * **Intent, kept apart from what the exits actually are.** Choosing a time
+     * takes the exits off ([endsOnDeparture], [endsOnMotion]), but an exit the
+     * platform will not disarm stays armed — and a record then showing a chosen
+     * cap beside an armed exit cannot, on its own, say whether the user asked
+     * for that combination (`Until (time)` then `Until I move`) or asked for a
+     * timer and the removal failed. This flag is what tells the two apart, so
+     * [isPartialTimer] is a property of the record rather than a piece of view
+     * state every surface has to preserve across a rotation, a process death
+     * and a reboot (Codex, PR #267; the `commitPartial` flag this replaces
+     * needed a fresh preservation rule on each of five review rounds).
+     *
+     * Set when a time is chosen and cleared the moment the user asks for an
+     * exit back (`Until I leave`, `Until I move`), because either is a request
+     * for something other than a timer alone.
+     *
+     * On the record rather than beside it, for the reason [endsOnDeparture] is:
+     * the sheet, the screen, the tile and the ongoing card all read the choice
+     * from the one record, and a restore after process death brings it back
+     * intact rather than defaulting to a value that would misreport the snooze.
+     *
+     * Defaults false — a record written before this field existed carries no
+     * timer-only request, and neither does any snooze the user did not narrow
+     * to a timer.
+     */
+    val timerOnlyRequested: Boolean = false,
 ) {
     /**
      * What this snooze actually ends on, for anything that renders or reasons
@@ -303,6 +333,21 @@ data class ActiveSnooze(
      */
     val effectiveDegradation: DegradationCause?
         get() = if (endsOnDeparture) degradation else null
+
+    /**
+     * Whether the user asked for a timer only ([timerOnlyRequested]) but an
+     * exit is still armed — the durable "partial success" state (SPEC.md §4.4).
+     *
+     * The pair rather than either half, and derived rather than stored: a
+     * chosen cap beside an armed exit is a combination the rows also offer
+     * deliberately, so the armed exit alone does not say a removal failed —
+     * [timerOnlyRequested] is what does. Read here by every surface that says
+     * *you asked for a time and this can still end sooner*, it survives a
+     * rotation, a process death and a reboot because the record does, which is
+     * what retires the view-state flag it replaces.
+     */
+    val isPartialTimer: Boolean
+        get() = timerOnlyRequested && (endsOnDeparture || endsOnMotion)
 
     /**
      * How long is left before the cap fires, floored at zero. Never negative: an
