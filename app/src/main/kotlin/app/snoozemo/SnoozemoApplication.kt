@@ -127,7 +127,7 @@ class SnoozemoApplication : Application(), androidx.work.Configuration.Provider 
         // the line above, so the cold tap never waits on the preferences read
         // — and it is what makes the opt-out real: the play manifest starts
         // Crashlytics with collection off, so an install where the user has
-        // opted out never begins collecting. A no-op on `direct`, which has no
+        // opted out never begins collecting. A no-op when the build has no
         // reporter to gate.
         CrashReporting.install(this)
         // A presence observation arriving into a process the system restarted

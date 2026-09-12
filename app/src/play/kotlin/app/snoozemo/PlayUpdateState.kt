@@ -5,7 +5,7 @@ import com.google.android.play.core.install.model.InstallStatus
 /**
  * What [app.snoozemo.ui.SettingsScreen]'s update banner shows. Pure state — no
  * Play objects — so the mapping below is testable without a device. `play`
- * flavor only; `direct`'s own copy of this file never leaves [NotAvailable].
+ * flavor only.
  */
 internal sealed interface PlayUpdateState {
     /** Whether the banner should show at all. */

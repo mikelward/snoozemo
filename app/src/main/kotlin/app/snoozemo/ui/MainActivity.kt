@@ -473,8 +473,7 @@ class MainActivity : ComponentActivity() {
     /**
      * Asks Play about a waiting update for `SettingsScreen`'s banner. Owned by
      * the activity because starting the update flow needs one; recreated
-     * with it, so [onDestroy] drops its install listener. `direct`'s own
-     * copy of [PlayUpdateChecker] is a no-op — see its own comment.
+     * with it, so [onDestroy] drops its install listener.
      */
     private lateinit var playUpdateChecker: PlayUpdateChecker
     private lateinit var playUpdateStore: PlayUpdateStore
@@ -1003,8 +1002,8 @@ class MainActivity : ComponentActivity() {
 
     /**
      * Whether crash reporting is on (SPEC.md §12), or **null when this build
-     * has no reporter** — `direct` always, and a `play` build made without a
-     * Firebase config. Null is also the value before the store has been read,
+     * has no reporter** — a build made without a Firebase config. Null is also
+     * the value before the store has been read,
      * and both mean the same thing to the screen: draw no row. The
      * availability check is what separates them, and it runs before the first
      * read below rather than after, so a build with no reporter never briefly
@@ -2528,9 +2527,9 @@ class MainActivity : ComponentActivity() {
                 backgroundLocationBannerDismissed =
                     locationPromptStore.isBackgroundBannerDismissed()
                 // Gated on the reporter existing as well as the question
-                // being open: `direct` has neither, and a build with no
-                // `google-services.json` has nothing to switch on either, so
-                // asking would be a question with no effect behind it.
+                // being open: a build with no `google-services.json` has
+                // nothing to switch on, so asking would be a question with no
+                // effect behind it.
                 //
                 // Held off while a tap's write is still on the worker, exactly
                 // as the two reads below are: `answerTelemetry` retires the
@@ -2792,11 +2791,11 @@ class MainActivity : ComponentActivity() {
         // with nothing new in it (`granted = false, rationale = false`) is
         // already a safe no-op in the store, so there is nothing to gate here.
         locationPromptStore.recordForeground(granted = foregroundGranted, rationale = foregroundRationale)
-        // The background history is meaningless on a flavor that never
-        // declares the permission — checkSelfPermission and
+        // The background history is only worth recording when the build
+        // declares the permission — otherwise checkSelfPermission and
         // shouldShowRequestPermissionRationale both read as "never granted,
-        // never denied" forever on `direct`, and recording that would just be
-        // a write with nothing behind it.
+        // never denied" forever, and the write would have nothing behind it.
+        // `locationTrackingNeedsBackgroundPermission` is the guard.
         if (locationTrackingNeedsBackgroundPermission) {
             locationPromptStore.recordBackground(granted = backgroundGranted, rationale = backgroundRationale)
         }
@@ -2816,9 +2815,9 @@ class MainActivity : ComponentActivity() {
         locationReadThisStart = true
         // The banner's own reading, taken here so it moves with every other
         // permission read rather than needing its own refresh site. Gated on
-        // the flavor for the same reason the history above is: `direct`
-        // declares no such permission, so `checkSelfPermission` reads denied
-        // forever and the banner would be permanent and unfixable.
+        // `locationTrackingNeedsBackgroundPermission` for the same reason the
+        // history above is: without the declared permission `checkSelfPermission`
+        // reads denied forever and the banner would be permanent and unfixable.
         backgroundLocationMissing =
             locationTrackingNeedsBackgroundPermission && !backgroundGranted
         if (current == LocationPermission.GRANTED) clearFailure(SetupRowId.LOCATION)
@@ -2850,8 +2849,8 @@ class MainActivity : ComponentActivity() {
         //
         // Only while a snooze is running — read from the store, not
         // `activeSnooze`, for the reason [refreshCalendar] gives — and only
-        // on a flavor whose monitor reads location at all: `direct` watches
-        // no grant, so the start would be a service woken for nothing.
+        // where the monitor reads location at all: a duration-only snooze
+        // watches no grant, so the start would wake the service for nothing.
         //
         // **The record read runs off this thread.** This reading is also what
         // a location grant resumes a waiting idle tap through

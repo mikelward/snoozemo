@@ -36,9 +36,10 @@ import org.robolectric.annotation.GraphicsMode
  * The welcome flow's five cards (`SPEC.md` §4.2, wording in `TUTORIAL.md`).
  *
  * Each card is one idea and one picture, so each gets its own capture — the
- * states are the point rather than the pixels. The two that differ by flavor
- * are captured both ways: cards 1 and 2 promise departure, and on a build that
- * cannot deliver it they must promise something else instead.
+ * states are the point rather than the pixels. The two that differ by whether
+ * the build tracks departure are captured both ways: cards 1 and 2 promise
+ * departure, and on a build that cannot deliver it they must promise something
+ * else instead.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], qualifiers = "w411dp-h914dp-420dpi")
@@ -111,9 +112,9 @@ class WelcomeScreenScreenshotTest {
             Flow(WelcomeCard.WHAT, tracksDeparture = false)
         }
 
-        // The promise the `direct` build can actually keep. Promising departure
-        // there sets up exactly the silence-until-the-cap this app exists to
-        // prevent (SPEC.md §3).
+        // The promise a build that cannot track departure can actually keep.
+        // Promising departure there sets up exactly the silence-until-the-cap
+        // this app exists to prevent (SPEC.md §3).
         composeRule.onNodeWithText("Silence your phone.").assertExists()
         composeRule.onNodeWithText("Silence your phone until you leave.").assertDoesNotExist()
     }
@@ -171,7 +172,7 @@ class WelcomeScreenScreenshotTest {
         // captured image, which is what the snapshot is for.
         //
         // No location row, though: a grant that buys the user nothing must not
-        // be invited, exactly as on that flavor's permissions screen.
+        // be invited, exactly as on such a build's permissions screen.
         composeRule.onNodeWithText("Location").assertDoesNotExist()
     }
 

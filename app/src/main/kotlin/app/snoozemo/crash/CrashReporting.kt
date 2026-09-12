@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit
  *
  * All the decidable logic lives here, in the flavor-agnostic half: the store,
  * the threading, and how a refused write is surfaced. [CrashReporter] — the
- * one piece that differs between flavors — is just "is there a reporter, and
+ * one piece the build supplies — is just "is there a reporter, and
  * turn it on or off".
  *
  * **Everything touching the store runs on one FIFO daemon worker**, for the
@@ -92,8 +92,8 @@ internal object CrashReporting {
         { context -> CrashReporter.discardPending(context) }
 
     /**
-     * Whether this build has a reporter to offer at all — false on `direct`
-     * always, and on a `play` build made without a `google-services.json`
+     * Whether this build has a reporter to offer at all — false on a build made
+     * without a `google-services.json`
      * (`docs/crashlytics.md`). Settings draws no row when this is false: a
      * switch over a reporter that does not exist would tell the user they had
      * turned something off that was never on.

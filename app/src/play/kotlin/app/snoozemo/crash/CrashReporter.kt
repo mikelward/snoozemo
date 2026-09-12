@@ -9,9 +9,7 @@ import com.google.firebase.crashlytics.FirebaseCrashlytics
 
 /**
  * The `play` flavor's crash reporter: Crashlytics, behind the user's opt-out
- * (`SPEC.md` §12). `direct`'s own copy of this file is a no-op — that flavor
- * carries no Play Services dependency and no `INTERNET` permission at all
- * (`SPEC.md` §3.4), which is the flavor's reason to exist.
+ * (`SPEC.md` §12).
  *
  * Nothing here is on the arm path. Firebase initializes from its own
  * `ContentProvider` during process creation, ahead of `Application.onCreate`,

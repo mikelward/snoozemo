@@ -188,10 +188,10 @@ class SnoozeServiceArmCaptureTest {
 
     @Test
     fun `a build that can never track posts the timer card from the start`() {
-        // The `direct` flavor's whole life until Phase 7. Driven through the
-        // service so the flavor's answer really reaches the card, rather than
-        // being asserted on the controller alone — the omission that let the
-        // first version of this fix ship a no-op (Codex, PR #221).
+        // A build that can never track, driven through the service so the
+        // build's answer really reaches the card, rather than being asserted on
+        // the controller alone — the omission that let the first version of
+        // this fix ship a no-op (Codex, PR #221).
         TestSnoozeService.presence.canTrackDeparture = false
 
         startService(SnoozeService.ACTION_ARM)

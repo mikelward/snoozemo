@@ -9,8 +9,8 @@ import org.junit.Test
  * [playUpdateDismissalKey] are what turns Play's raw answer into the
  * banner's state (`app.snoozemo.ui.SettingsScreen`). `play`-flavor test
  * source set (`app/src/testPlay`) since this exercises the real
- * `InstallStatus` constants, which `direct`'s own copy of this file never
- * imports.
+ * `InstallStatus` constants, which only the `play` variant's classpath
+ * carries.
  */
 class PlayUpdateStateTest {
 

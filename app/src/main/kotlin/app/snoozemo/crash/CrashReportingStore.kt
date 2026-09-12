@@ -11,8 +11,8 @@ import app.snoozemo.storage.SerializedPreferences
  * **Defaults to off** (maintainer, 2026-08-28), reversing §12's original
  * on-by-default decision: reporting leaves the device, so it waits for the
  * user's explicit agreement. Nothing here decides whether a reporter exists to
- * be turned on; that is the flavor's answer (`CrashReporter`), and `direct`
- * has none.
+ * be turned on; that is `CrashReporter`'s answer, and a build with no Firebase
+ * config has none.
  *
  * `SharedPreferences`, like the other one-key stores in this app — read while
  * deciding what to draw, so it must not cost a coroutine or a disk wait — and

@@ -5,8 +5,8 @@ import kotlinx.coroutines.flow.Flow
 /**
  * Watches whether the user is still at [Anchor] (SPEC.md §6.1).
  *
- * The two flavors differ only below this interface, so this is the seam the
- * distribution decision of SPEC.md §3 is confined to.
+ * The presence implementation sits below this interface, so this is the seam
+ * the distribution decision of SPEC.md §3 is confined to.
  *
  * The *contract* lives in `:core` with its consumer, and the implementations
  * live in `:presence`. Putting it the other way around would point `:core` at
@@ -73,8 +73,8 @@ interface PresenceMonitor {
      *
      * The monitor answers rather than [TrackingMode.from], because the anchor
      * alone cannot: `from` says what the captured *fields* allow, and only
-     * the monitor knows which of them anything is actually watching. The
-     * `direct` flavor's stand-in watches nothing, so a full anchor is still
+     * the monitor knows which of them anything is actually watching. A
+     * duration-only snooze watches nothing, so a full anchor is still
      * a timer there; the geofence monitor has no Wi-Fi watch yet, so an
      * SSID-only anchor is too. A mode is a claim about what is watching
      * (SPEC.md §6.1, §8.1), and this is where the claim gets its warrant.
@@ -108,11 +108,11 @@ interface PresenceMonitor {
      * capture window. This is the build's own ceiling, and the arm path needs
      * it to know whether anything is actually pending while it waits.
      *
-     * The `direct` flavor answers false until Phase 7's monitor lands
-     * (SPEC.md §3.4): it watches nothing, so a snooze there is a timer from
-     * the moment it is armed and there is nothing to wait to find out. Saying
-     * "checking where you are" on a build that will never check is principle
-     * 2's failure — the app doing the wrong thing quietly (Codex, PR #221).
+     * A build that watches nothing answers false (SPEC.md §3.4): a snooze
+     * there is a timer from the moment it is armed and there is nothing to
+     * wait to find out. Saying "checking where you are" on a build that will
+     * never check is principle 2's failure — the app doing the wrong thing
+     * quietly (Codex, PR #221).
      */
     val canTrackDeparture: Boolean
 }
@@ -326,8 +326,7 @@ enum class DegradationCause {
     /**
      * The anchor was captured but nothing is running to watch it, so the
      * caller armed below what the anchor supports — today every arm, until
-     * the monitor wiring consumes the anchor; durably, the `direct` flavor
-     * until Phase 7's foreground monitor. Distinct from [NO_LOCATION_FIX]
+     * the monitor wiring consumes the anchor. Distinct from [NO_LOCATION_FIX]
      * because the debug log records the cause, and "no fix" over a fix just
      * persisted is the kind of false reason §4.6's log exists to rule out
      * (flagged by Codex on PR #71).

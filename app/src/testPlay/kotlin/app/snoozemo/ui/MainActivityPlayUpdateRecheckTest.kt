@@ -11,10 +11,8 @@ import org.robolectric.RobolectricTestRunner
 /**
  * `play`-flavor test source set: exercises [MainActivity.onPlayUpdateInstallStatus]'s
  * dependence on the real `InstallStatus.FAILED`/`CANCELED` → [UpdateProgress.Idle]
- * mapping, which `direct`'s own [app.snoozemo.progressForInstallStatus] never
- * makes (it always echoes its fallback) — the race this covers can't happen
- * on that flavor, so it belongs here rather than in the shared
- * `MainActivityPlayUpdateTest`.
+ * mapping, which needs the Play Core classpath the `play` variant carries, so it
+ * belongs here rather than in the shared `MainActivityPlayUpdateTest`.
  */
 @RunWith(RobolectricTestRunner::class)
 class MainActivityPlayUpdateRecheckTest {

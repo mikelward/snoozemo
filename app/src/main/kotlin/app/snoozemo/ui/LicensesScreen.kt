@@ -44,9 +44,9 @@ import com.mikepenz.aboutlibraries.ui.compose.android.rememberLibraries
  * component bundled in this build, and the license each ships under.
  *
  * The list is read from the committed `res/raw/aboutlibraries.json` —
- * regenerated with `./gradlew :app:exportBundledLicenses`, which writes one per
- * flavor, since `play` bundles Play's update library and `direct` does not
- * (`SPEC.md` §3.4). Committed rather than generated because the AboutLibraries
+ * regenerated with `./gradlew :app:exportBundledLicenses`, which filters the
+ * list to what the `play` APK actually bundles (`SPEC.md` §3.4). Committed
+ * rather than generated because the AboutLibraries
  * plugin can't wire the resource in under AGP 9; see app/build.gradle.kts.
  */
 @Composable

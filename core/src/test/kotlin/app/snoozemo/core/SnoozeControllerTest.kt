@@ -149,12 +149,11 @@ class SnoozeControllerTest {
 
     @Test
     fun `a build that can never track says timer from the start`() {
-        // `direct` until Phase 7 (SPEC.md §3.4): its monitor watches nothing,
-        // so the answer is already the cap and there is nothing to wait to
-        // find out. Saying "checking where you are" for the capture window on
-        // every arm of that flavor is a claim it can never make good (Codex,
-        // PR #221). The absence of a decision is only honest while a decision
-        // is coming.
+        // A build whose monitor watches nothing (SPEC.md §3.4): the answer is
+        // already the cap and there is nothing to wait to find out. Saying
+        // "checking where you are" for the capture window on every such arm is
+        // a claim it can never make good (Codex, PR #221). The absence of a
+        // decision is only honest while a decision is coming.
         controller.beginArming(
             ActiveSnooze.capExpiryFor(now),
             readClock(),

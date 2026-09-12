@@ -22,7 +22,7 @@ import app.snoozemo.core.SnoozeDebugLog
  * Context-registered, and it has to be: `MODE_CHANGED_ACTION` is an implicit
  * broadcast and is not one of the exemptions a manifest receiver may still
  * take on API 26+, so there is no durable form of this to register. See
- * [LocationModeWatch] for what that costs on each flavor.
+ * [LocationModeWatch] for what that costs.
  *
  * Callbacks arrive on the main thread, the same confinement every other
  * source feeding the monitor's `deliver` uses.

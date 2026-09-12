@@ -222,9 +222,9 @@ enum class TrackingMode {
      * whether an anchor ever lands.
      *
      * False for [DURATION_ONLY], where the service is deliberately an ordinary
-     * started one. That is also what keeps the row off `direct`, which runs
+     * started one. That is also what keeps the row off a build that runs
      * nothing but duration-only snoozes and declares no foreground-service
-     * permission at all — a flavor gate that falls out of the mode rather than
+     * permission at all — a build gate that falls out of the mode rather than
      * needing one of its own.
      */
     val keepsProcessResident: Boolean

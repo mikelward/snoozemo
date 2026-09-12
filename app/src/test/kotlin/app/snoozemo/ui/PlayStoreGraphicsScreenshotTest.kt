@@ -166,8 +166,7 @@ class PlayStoreGraphicsScreenshotTest {
      * Recording from the release variant instead would just move the blind spot
      * to a `src/debug` override, so this refuses the divergence rather than
      * picking a side: a build-type source set that redefines the icon fails
-     * here, naming itself. The `direct` flavor is deliberately not checked — it
-     * never reaches Play, so its icon is free to differ.
+     * here, naming itself.
      *
      * "Redefines" has to include what the icon references, not just files named
      * after it: the background is `@color/ic_launcher_background`, so a

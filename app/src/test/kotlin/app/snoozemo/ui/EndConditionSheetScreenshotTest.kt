@@ -291,7 +291,7 @@ class EndConditionSheetScreenshotTest {
 
     @Test
     fun `a build that cannot track departure offers no departure row`() {
-        // `direct` has no presence monitor at all, so "until I leave" would be a
+        // A build with no presence monitor at all makes "until I leave" a
         // promise nothing behind it can keep — selecting it would dismiss and
         // leave the duration cap running while the sheet claimed otherwise
         // (Codex, PR #118). The footer goes with it: it exists only to say the

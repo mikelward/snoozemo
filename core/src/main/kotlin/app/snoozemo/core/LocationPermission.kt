@@ -58,12 +58,11 @@ enum class LocationPermission {
          *   history-plus-rationale pair [NotificationPermission.of] takes, kept
          *   once per permission because the two are requested — and can be
          *   blocked — independently of each other.
-         * @param backgroundRequired whether this flavor's tracking needs
-         *   `ACCESS_BACKGROUND_LOCATION` at all. `direct` declares no such
-         *   permission (`SPEC.md` §3.4) — without this, a flavor that will
-         *   never hold the permission, and whose requests the platform
-         *   silently denies with no rationale ever offered, reads as
-         *   permanently `ASKABLE` (Codex, PR #79).
+         * @param backgroundRequired whether this build's tracking needs
+         *   `ACCESS_BACKGROUND_LOCATION` at all (`SPEC.md` §3.4). Without
+         *   this, a build that will never hold the permission, and whose
+         *   requests the platform silently denies with no rationale ever
+         *   offered, reads as permanently `ASKABLE` (Codex, PR #79).
          *
          * Foreground is read first: the platform will not grant background
          * without it, so a missing foreground permission is the actual next

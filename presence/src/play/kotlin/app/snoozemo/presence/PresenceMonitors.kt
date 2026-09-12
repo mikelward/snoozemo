@@ -7,8 +7,8 @@ import app.snoozemo.presence.geofence.GeofencePresenceMonitor
 import app.snoozemo.presence.geofence.GeofenceSignalBridge
 
 /**
- * The flavor seam's constructor (SPEC.md §3.4): each flavor source set
- * defines this same function, and callers above the seam never know which
+ * The flavor seam's constructor (SPEC.md §3.4): the flavor source set
+ * defines this function, and callers above the seam never know which
  * monitor they got.
  */
 fun defaultPresenceMonitor(context: Context): PresenceMonitor =
@@ -21,8 +21,8 @@ fun defaultPresenceMonitor(context: Context): PresenceMonitor =
  * end-condition sheet (§4.4) has to decide whether to offer "until I leave" at
  * the instant the tile is tapped, and a fresh record always says `DURATION_ONLY`
  * — the real mode arrives later, when anchor capture completes. So the record
- * cannot answer this, and the flavor can: `direct` has no presence monitor at
- * all, so departure is not something it will ever report.
+ * cannot answer this, and the build can: a build with no presence monitor at
+ * all would never report departure.
  *
  * A `play` build can still degrade to duration-only for an anchor it can't use
  * (§8.4); that is reported where it becomes known, on the ongoing notification.

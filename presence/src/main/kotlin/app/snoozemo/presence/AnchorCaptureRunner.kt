@@ -24,7 +24,7 @@ import java.time.Instant
  * location request and one Wi-Fi read, bounded by the 10 s ceiling, feeding
  * the pure [AnchorCapture] that decides what counts.
  *
- * Shared by both flavors: a one-shot fix needs no Play Services — the
+ * In the shared source set: a one-shot fix needs no Play Services — the
  * platform's fused provider serves it on every device this app supports
  * (minSdk 34) — so the flavor seam stays where the *ongoing* monitoring
  * differs (SPEC.md §3.4), not here.

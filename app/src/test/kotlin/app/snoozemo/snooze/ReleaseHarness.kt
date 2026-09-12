@@ -164,7 +164,7 @@ internal class FakePresenceMonitor : PresenceMonitor {
      */
     var canActOnAnchors: Boolean = true
 
-    /** The geofence monitor's rule, so the fixtures read like the real flavor. */
+    /** The geofence monitor's rule, so the fixtures read like the real build. */
     override fun supportedModes(anchor: Anchor): Set<TrackingMode> = buildSet {
         if (canActOnAnchors) {
             if (anchor.hasUsableFix) add(TrackingMode.FULL)
@@ -174,9 +174,9 @@ internal class FakePresenceMonitor : PresenceMonitor {
     }
 
     /**
-     * Settable, so a test can be the `direct` flavor without a second fake.
-     * True by default, matching the geofence monitor these fixtures stand in
-     * for.
+     * Settable, so a test can be a build that never tracks departure without a
+     * second fake. True by default, matching the geofence monitor these
+     * fixtures stand in for.
      */
     override var canTrackDeparture: Boolean = true
 }
@@ -357,10 +357,10 @@ internal class TestSnoozeService : SnoozeService() {
          */
         var refuseRecordUpdateWhen: ((ActiveSnooze) -> Boolean)? = null
 
-        /** Fence-repair pokes the service sent through the flavor seam. */
+        /** Fence-repair pokes the service sent through the presence seam. */
         var repairPokes: Int = 0
 
-        /** Grant-recheck pokes the service sent through the flavor seam. */
+        /** Grant-recheck pokes the service sent through the presence seam. */
         var grantPokes: Int = 0
 
         /** Makes the rule-status receiver's registration throw. */
