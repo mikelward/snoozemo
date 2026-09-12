@@ -209,6 +209,15 @@ jobs:
         # nothing but the checkout.
         run: python3 scripts/publish_github_release_test.py
 
+      - name: Test the release-notes deduplication
+        # Same reason as the step above: the "Build release notes" step is
+        # main-only, so a regression in it first surfaces as a wrong Play
+        # "What's new" card. Extracts the whole subject-collection block
+        # from this file and runs it against a throwaway git repository,
+        # rather than a retyped copy — testing the helper in isolation
+        # would stay green if the loop stopped calling it.
+        run: python3 scripts/release_notes_dedup_test.py
+
       - name: Check the core module stays free of Android
         # :core is a plain Kotlin JVM module on purpose (SPEC.md §11) — the state
         # machine must stay testable with no Android SDK and no Robolectric.
@@ -1486,6 +1495,26 @@ jobs:
           # learn a 51st commit existed and the published notes would read
           # as complete when they aren't (Codex, PR #97).
           cap_truncated=false
+          # Counts commits that QUALIFY, which is what the cap below actually
+          # bounds. Before dedup that was the same number as the subjects
+          # collected, so the cap could read the array; a range of repeated
+          # subjects would now leave the array at one entry and let a
+          # pathologically long range walk every commit in it.
+          qualifying=0
+          add_subject() {
+            local s="$1" i
+            qualifying=$((qualifying + 1))
+            # Indexed rather than "${subjects[@]}": the count is always
+            # safe to read under `set -u`, an empty array included.
+            for (( i = 0; i < ${#subjects[@]}; i++ )); do
+              if [ "${subjects[$i]}" = "$s" ]; then
+                echo "Subject already collected, not repeating it: $s"
+                return 0
+              fi
+            done
+            subjects+=("$s")
+          }
+
           while IFS= read -r sha; do
             [ -z "$sha" ] && continue
             s=$(git log -1 --format=%s "$sha")
@@ -1527,12 +1556,18 @@ jobs:
             # oldest-first ordering so the head of the list is never
             # dropped; in practice the 500-char Play cap truncates far
             # sooner.
-            if [ "${#subjects[@]}" -ge 50 ]; then
+            # Reading `qualifying` rather than the array: with dedup the two
+            # differ, and what this cap bounds is the walk. A 51st qualifying
+            # commit whose subject was already collected would have collapsed
+            # anyway, so the flag now means "the list may be incomplete"
+            # rather than "is incomplete" — the safe direction, since not
+            # marking risks the false-complete failure PR #97 fixed.
+            if [ "$qualifying" -ge 50 ]; then
               echo "More than 50 qualifying commits in range; marking the notes truncated."
               cap_truncated=true
               break
             fi
-            subjects+=("$s")
+            add_subject "$s"
           done <<< "$shas"
 
           if [ "${#subjects[@]}" -eq 0 ]; then

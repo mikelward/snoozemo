@@ -233,7 +233,8 @@ it in the same commit.
   commits anyway, so the intent is explicit and the subject never reads like a shippable
   bullet.
 - **Surviving subjects ship as a `• `-bulleted list, oldest-first** — always bulleted, even
-  when only one commit qualifies, so the Play card always renders the same shape.
+  when only one commit qualifies, so the Play card always renders the same shape, and a
+  subject repeated within one release's range appears once, at its first position.
   Bodies are always dropped: nothing below the subject line reaches a user.
 - **Play caps "What's new" at 500 characters per language.** CI measures the full formatted
   output — the `• ` bullets, the newline separators, and the `…` truncation marker all
