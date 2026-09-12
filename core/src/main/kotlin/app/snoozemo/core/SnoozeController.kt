@@ -598,6 +598,59 @@ class SnoozeController(
     }
 
     /**
+     * Records whether the running snooze was narrowed to a timer only — the
+     * user's `Until (time)` intent ([ActiveSnooze.timerOnlyRequested]), cleared
+     * when they ask for an exit back (SPEC.md §4.4). Returns the updated snooze,
+     * or null when there is nothing running or the flag already reads [value].
+     *
+     * **A pure intent flag: it changes nothing the machinery does.** It decides
+     * only whether a chosen cap beside an armed exit reads as a deliberate
+     * combination or a removal that failed ([ActiveSnooze.isPartialTimer]).
+     * Emits a transition all the same, because the surfaces that derive that
+     * line — the ongoing card among them — have to be rebuilt from the record
+     * when it moves, or one would go on saying *this can still end sooner* over
+     * a snooze whose exit the user has since restored on purpose (principle 2).
+     */
+    fun setTimerOnlyRequested(value: Boolean): ActiveSnooze? {
+        val snooze = active ?: return null
+        if (snooze.timerOnlyRequested == value) return null
+        val updated = snooze.copy(timerOnlyRequested = value)
+        active = updated
+        listener.onStateChanged(state, updated, null)
+        return updated
+    }
+
+    /**
+     * Applies [target] — the running snooze with more than one field changed at
+     * once, an exit and the [ActiveSnooze.timerOnlyRequested] intent together —
+     * as a single transition. Returns it, or null when there is nothing running,
+     * [target] describes a different snooze, or it changes nothing.
+     *
+     * **Why not just call the per-field setters in sequence.** Each of them
+     * re-derives from `active` and emits its own transition, and the listener
+     * persists on that transition — so two in a row put the first field's new
+     * value on disk under the second field's *old* value for the instant
+     * between them. Restoring `Until I leave` on a timer-only snooze is exactly
+     * that pair (departure on, intent off), and a process death in the gap
+     * brought the snooze back a false partial timer (Codex, PR #272). One
+     * transition writes the whole [target] at once, so there is no gap to die
+     * in. The caller does the checked record write first, as with the exits;
+     * this only moves memory and the surfaces derived from it to match.
+     *
+     * Identity-guarded like [reconciledTo]: [ActiveSnooze.startedAt] is fixed
+     * for a snooze's whole life, so a [target] carrying a different one is for
+     * some other snooze and is dropped rather than replacing the live one.
+     */
+    fun applyChange(target: ActiveSnooze): ActiveSnooze? {
+        val snooze = active ?: return null
+        if (target.startedAt != snooze.startedAt) return null
+        if (target == snooze) return null
+        active = target
+        listener.onStateChanged(state, target, null)
+        return target
+    }
+
+    /**
      * Takes [restated] as the running snooze — the same snooze with its clock
      * frames rewritten onto the clock the user has just set (SPEC.md §7).
      * Returns it, or null when there is nothing running or it describes a

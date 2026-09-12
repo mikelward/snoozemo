@@ -177,6 +177,14 @@ open class ActiveSnoozeStore(
             // departure the user was relying on, which is principle 1's
             // failure rather than a missing field.
             endsOnDeparture = prefs.getBoolean(KEY_ENDS_ON_DEPARTURE, true),
+            // Restored rather than defaulted, so the partial-timer state the
+            // sheet and the ongoing card derive from it survives a process
+            // death and a reboot (ActiveSnooze.isPartialTimer). Defaults false:
+            // a record written before this key existed made no timer-only
+            // request, which is the honest reading — the ambiguous combination
+            // is a *chosen* cap beside an armed exit, and nothing here chose a
+            // cap for an old record.
+            timerOnlyRequested = prefs.getBoolean(KEY_TIMER_ONLY_REQUESTED, false),
         )
     }
 
@@ -500,6 +508,7 @@ open class ActiveSnoozeStore(
         .putString(KEY_RULE_ID, snooze.ruleId)
         .putBoolean(KEY_ENDS_ON_MOTION, snooze.endsOnMotion)
         .putBoolean(KEY_ENDS_ON_DEPARTURE, snooze.endsOnDeparture)
+        .putBoolean(KEY_TIMER_ONLY_REQUESTED, snooze.timerOnlyRequested)
         .putString(KEY_PLACE, snooze.placeName)
         .putString(KEY_SSID, snooze.anchor.ssid)
         // Recorded alongside the SSID and acted on by nothing (SPEC.md §6.2);
@@ -715,6 +724,7 @@ open class ActiveSnoozeStore(
          */
         const val KEY_ENDS_ON_MOTION = "ends_on_motion"
         const val KEY_ENDS_ON_DEPARTURE = "ends_on_departure"
+        const val KEY_TIMER_ONLY_REQUESTED = "timer_only_requested"
         const val KEY_CAP_EXPIRES_AT = "cap_expires_at"
         const val KEY_BOOT_REFERENCE = "boot_reference"
         const val KEY_CAP_CEILING_AT = "cap_ceiling_at"
