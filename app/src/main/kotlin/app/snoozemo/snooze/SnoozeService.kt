@@ -2,6 +2,7 @@ package app.snoozemo.snooze
 
 import android.app.AlarmManager
 import android.app.NotificationManager
+import android.media.AudioManager
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -821,6 +822,35 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     private var ruleStatusReceiverRegistered: Boolean = false
 
     /**
+     * The user changing the ringer while a snooze holds it (SPEC.md §5.9).
+     *
+     * The give-back can no longer read the live mode to tell "the user moved it"
+     * from "we set it": it runs while our own Do Not Disturb rule is active, and
+     * an active rule makes `getRingerMode` report quieter than the ceiling we
+     * set (device report, 2026-09-12). So the change is observed *as it happens*
+     * instead, and only the one direction our own writes and the coupling can
+     * never produce — louder than the ceiling — is recorded on the loan
+     * (`AudioRingerController.noteRingerModeChanged`). Registered on the same
+     * process lifetime as the two receivers above; it adds no wake-up of its
+     * own and only fires when the ringer actually changes.
+     *
+     * Handed to a daemon thread because the note takes the ringer lock, which
+     * the start-up reconcile can hold across binder calls, and this is delivered
+     * on the main thread.
+     */
+    private val ringerReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            // The broadcast is only a trigger to re-check; the mode it carries
+            // is deliberately ignored, because the check reads the *live* mode
+            // against the *current* loan — see `noteRingerModeChanged` for why
+            // acting on the carried mode races a later snooze's loan.
+            noteRingerRaiseInBackground(applicationContext)
+        }
+    }
+
+    private var ringerReceiverRegistered: Boolean = false
+
+    /**
      * Acts on a status change for a zen rule — ours or anyone's.
      *
      * Contained for the same reason [reconcilePolicyAccess] is: this runs on a
@@ -1094,6 +1124,21 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             )
         }.onFailure {
             Log.e(TAG, "Registering the rule-status receiver failed; DND turned off will go unnoticed.", it)
+        }.isSuccess
+
+        // Losing this one degrades the mildest way of the three: the give-back
+        // then defaults to handing the ringer back (BorrowedRinger.userMoved),
+        // which is the safe direction — a phone put back to how the user had it
+        // before the snooze, rather than one left quiet. So it is logged and the
+        // snooze goes on.
+        ringerReceiverRegistered = runCatching {
+            registerReceiver(
+                ringerReceiver,
+                IntentFilter(AudioManager.RINGER_MODE_CHANGED_ACTION),
+                RECEIVER_NOT_EXPORTED,
+            )
+        }.onFailure {
+            Log.e(TAG, "Registering the ringer receiver failed; a mid-snooze raise defaults to being handed back.", it)
         }.isSuccess
 
         // Restoring is deliberately NOT here. onCreate cannot see which action
@@ -3983,6 +4028,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             ruleStatusReceiverRegistered = false
             runCatching { unregisterReceiver(ruleStatusReceiver) }.onFailure {
                 Log.w(TAG, "Unregistering the rule-status receiver failed.", it)
+            }
+        }
+        if (ringerReceiverRegistered) {
+            ringerReceiverRegistered = false
+            runCatching { unregisterReceiver(ringerReceiver) }.onFailure {
+                Log.w(TAG, "Unregistering the ringer receiver failed.", it)
             }
         }
         // Last, and the reason it is here at all (Codex, PR #231): the card

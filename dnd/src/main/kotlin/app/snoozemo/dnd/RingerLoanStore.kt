@@ -6,6 +6,7 @@ import app.snoozemo.core.BorrowedRinger
 import app.snoozemo.core.RingerMode
 import app.snoozemo.core.SnoozeIdentity
 import app.snoozemo.core.SnoozeRinger
+import kotlin.random.Random
 
 /**
  * Remembers the ringer mode Snoozemo has taken over, and what it owes back
@@ -36,6 +37,16 @@ interface RingerLoanStore {
      * False if the write did not reach disk.
      */
     fun markApplied(): Boolean
+
+    /**
+     * Records whether the ringer currently sits above the ceiling the snooze
+     * set (see [BorrowedRinger.userMoved]) — set on a raise, cleared when the
+     * user brings it back down, so a raise taken back does not disown the loan.
+     * The observation is scoped to the recording process, so a later process
+     * treats it as not-moved (SPEC.md §5.9). False if it did not reach disk,
+     * which is safe in both directions and only worth logging.
+     */
+    fun setUserMoved(moved: Boolean): Boolean
 
     /** Forgets the loan, returning false if the removal did not reach disk. */
     fun clear(): Boolean
@@ -95,7 +106,17 @@ interface RingerLoanStore {
  * small values, read at start-up and on the arm path, where a coroutine or a cold
  * disk read has no business.
  */
-class PrefsRingerLoanStore(context: Context) : RingerLoanStore {
+class PrefsRingerLoanStore(
+    context: Context,
+    /**
+     * A tag identifying this process, defaulting to one generated once per
+     * process ([PROCESS_TOKEN]). A user-raise observation is stored against it
+     * and trusted only by the process that made it (see [setUserMoved] and
+     * SPEC.md §5.9); a test passes a different token to stand in for a later
+     * process.
+     */
+    private val processToken: Long = PROCESS_TOKEN,
+) : RingerLoanStore {
 
     private val prefs = context.applicationContext
         .getSharedPreferences(FILE_NAME, Context.MODE_PRIVATE)
@@ -128,8 +149,32 @@ class PrefsRingerLoanStore(context: Context) : RingerLoanStore {
             // True for a record written before the marker existed, so an older
             // loan behaves exactly as it did rather than being re-applied.
             applied = prefs.getBoolean(KEY_APPLIED, true),
+            // Trusted only when THIS process recorded it (observedByThisProcess):
+            // a raise a since-dead process saw, or a clear that never reached
+            // disk before that process died, carries a tag that is no longer
+            // ours and reads as not-moved — handed back, the safe direction
+            // (BorrowedRinger.userMoved). A record from before the tag, or a
+            // live snooze whose receiver has seen no raise, has no tag and reads
+            // the same way.
+            userMoved = observedByThisProcess(),
         )
     }
+
+    /**
+     * Whether the stored user-raise observation was made by **this** process.
+     *
+     * [setUserMoved] tags a raise with [processToken], and a later process gets
+     * a fresh token, so a tag left on disk by a process that has since died no
+     * longer matches and the loan is handed back. That is what makes the
+     * observation process-scoped (SPEC.md §5.9): it deletes the class of failure
+     * a durable `userMoved` flag has — a failed `setUserMoved(false)` latching
+     * the flag true past a process death, so a restored give-back disowns a loan
+     * the user no longer holds raised and leaves the phone quiet (principle 1) —
+     * rather than patching the one write. Within a live process the tag matches,
+     * so a raise observed and a raise taken back are both honored as before.
+     */
+    private fun observedByThisProcess(): Boolean =
+        prefs.contains(KEY_USER_MOVED_BY) && prefs.getLong(KEY_USER_MOVED_BY, 0L) == processToken
 
     /**
      * Pulls the file into memory off the main thread, exactly as
@@ -170,6 +215,11 @@ class PrefsRingerLoanStore(context: Context) : RingerLoanStore {
         .putString(KEY_RESTORE_TO, borrowed.restoreTo.name)
         .putString(KEY_SET_TO, borrowed.setTo?.name)
         .putBoolean(KEY_APPLIED, borrowed.applied)
+        // A fresh borrow has seen no user change yet, so it carries no observing
+        // process's tag; removed rather than written so a raise tagged under an
+        // earlier snooze cannot survive into this one and disown a loan the user
+        // never touched. (The only caller records with userMoved false.)
+        .remove(KEY_USER_MOVED_BY)
         // A new loan starts its retry sequence over. Left behind, a spent tally
         // from an earlier snooze would deny this one its retries entirely.
         .remove(KEY_FAILURES)
@@ -184,6 +234,7 @@ class PrefsRingerLoanStore(context: Context) : RingerLoanStore {
         .remove(KEY_RESTORE_TO)
         .remove(KEY_SET_TO)
         .remove(KEY_APPLIED)
+        .remove(KEY_USER_MOVED_BY)
         .remove(KEY_FAILURES)
         .commit()
 
@@ -224,6 +275,19 @@ class PrefsRingerLoanStore(context: Context) : RingerLoanStore {
     /** `commit` like the record itself: the marker is only useful if it survives. */
     override fun markApplied(): Boolean = prefs.edit().putBoolean(KEY_APPLIED, true).commit()
 
+    /**
+     * Tags a raise with this process's [processToken], or clears the tag when
+     * the ringer returns to the ceiling. `commit` so a give-back this same
+     * process runs sees it — but a failed commit is now safe in both directions:
+     * `SharedPreferences` updates its in-memory map either way, so this process
+     * still reads it correctly, and a later process re-derives from the tag and
+     * hands back on a mismatch (observedByThisProcess). So the returned false is
+     * for logging, not a wrong give-back to guard against.
+     */
+    override fun setUserMoved(moved: Boolean): Boolean = prefs.edit()
+        .apply { if (moved) putLong(KEY_USER_MOVED_BY, processToken) else remove(KEY_USER_MOVED_BY) }
+        .commit()
+
     override fun handBackFailures(): Int = prefs.getInt(KEY_FAILURES, 0)
 
     override fun recordHandBackFailures(failures: Int): Boolean = prefs.edit()
@@ -240,7 +304,25 @@ class PrefsRingerLoanStore(context: Context) : RingerLoanStore {
         const val KEY_CHOICE = "active_choice"
         const val KEY_CHOICE_OWNER = "active_choice_owner"
         const val KEY_APPLIED = "applied"
+
+        /**
+         * The tag of the process that observed the ringer above the ceiling, not
+         * a bare boolean, so the observation can be trusted only by the process
+         * that made it (observedByThisProcess). Absent means not moved.
+         */
+        const val KEY_USER_MOVED_BY = "user_moved_by"
         const val KEY_FAILURES = "hand_back_failures"
         const val TAG = "RingerLoan"
+
+        /**
+         * A tag for this process, generated once. It is what makes a user-raise
+         * observation process-scoped: written with the raise, compared on read,
+         * and never matched by a later process — so a tag a since-dead process
+         * left on disk is ignored and the loan is handed back (SPEC.md §5.9). A
+         * plain value, not persisted, so no write lands on the arm path; the
+         * 1-in-2⁶⁴ chance two runs draw the same tag would at worst trust one
+         * stale observation, which is the case the give-back already tolerates.
+         */
+        private val PROCESS_TOKEN: Long = Random.nextLong()
     }
 }

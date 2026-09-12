@@ -2846,13 +2846,30 @@ literal form. Six rules keep that from happening, and each one prefers the audib
    that no snooze is running, it clears the ceiling on **every** path out — loan or no loan, handed
    back or not — because nothing calls the release path's forget for a snooze that ended without
    one, and a record left there is read by the next arm as its own.
-4. **A ringer the user moved mid-snooze is theirs.** The loan records what Snoozemo set as well as
-   what it found, so a live mode that no longer matches means the user has taken over: the record is
-   dropped and the mode left alone — and *stays* alone: the hand-back reports the disown, so a
-   release the platform then refuses does not re-apply the ceiling over it, which would find no
-   loan, borrow again, and undo the very change this recognized. Where the live mode *cannot be read*, the ringer is handed back
-   anyway — the user's own change cannot be ruled out, but a phone left quiet after a snooze it was
-   told had ended is the worse of the two.
+4. **A ringer the user raised above the ceiling is theirs, observed as it happens.** The signal is
+   whether the user *raised* the ringer above the ceiling while the snooze held it — recorded on the
+   loan by a `RINGER_MODE_CHANGED` receiver, not inferred at give-back time. The give-back runs while
+   Snoozemo's own rule is still active, and an active rule makes `getRingerMode` report *quieter* than
+   the ceiling that was set; a comparison taken then mistook the platform's own coupling for the user
+   and disowned a loan it should have handed back, leaving the phone quieter than the user left it
+   (device report, 2026-09-12). So only the one direction that neither a ceiling write nor the
+   coupling can produce is claimed — **louder** than the ceiling, which only the user can reach.
+   The receiver reads the **live** mode against the **current** loan, not the mode the broadcast
+   carried: a change handed to a background worker is acted on whenever it runs, so the carried mode
+   is a fact about a past instant, and judging it against now's loan would let a hand-back's delayed
+   `NORMAL` mark the *next* snooze and leave that one quiet. The live read asks "is the ringer above
+   this loan's ceiling right now", which the next snooze's own quieter ceiling answers no. The flag
+   is the **last observed** state, not a one-way latch: a raise the user takes back before the snooze
+   ends clears it again, so the give-back hands the ringer back rather than disowning a loan the user
+   no longer holds raised. An observation is trusted only within the run that made it: a raise a later
+   process cannot confirm it saw — a restart, a cold reconcile after a death — is handed back like any
+   other unconfirmed one, the safe direction, at the cost of undoing a raise the user did keep. When the
+   loan carries a raise, the record is dropped and the mode left alone; and it *stays* alone, because
+   the hand-back reports the disown, so a release the platform then refuses does not re-apply the
+   ceiling over it. Every other case — no raise seen, a raise the platform hid behind the active rule
+   or that a dead process could not observe, a user *lowering* the ringer — hands it back, which is
+   the safe direction: a phone put back to how the user had it before the snooze is a gesture to undo,
+   where one left quiet after a snooze it was told had ended is the worse of the two.
 5. **A refused hand-back is retried, not finalized.** The release path retries the write a bounded
    few times — a borrow that succeeded proves the device accepts the call, so a refusal there is
    almost certainly transient. Where all of them fail it asks for a **durable successor**: an

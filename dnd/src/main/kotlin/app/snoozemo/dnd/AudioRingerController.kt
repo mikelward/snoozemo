@@ -75,6 +75,56 @@ class AudioRingerController(
 
     override fun giveBack(): RingerOutcome = RINGER.withLock { giveBackLocked() }
 
+    /**
+     * Re-checks, when the ringer changes, whether it now sits **above the
+     * ceiling** the current loan set — the one state neither our own writes nor
+     * the zen coupling can produce ([RingerHandover.observedUserRaise]), so the
+     * one that means the user raised it, and the one the release path can trust
+     * to leave the ringer as they set it rather than reading a live mode our own
+     * active rule has perturbed.
+     *
+     * **It reads the live mode, not the mode the broadcast carried, and that is
+     * the whole safety of it** (Codex, PR #271). A `RINGER_MODE_CHANGED` handed
+     * to a background worker is acted on whenever that worker runs, not when the
+     * event was delivered — so the mode the broadcast named is a fact about a
+     * past instant, and comparing it to *now's* loan is how a hand-back's
+     * delayed `NORMAL` ends up marking the *next* snooze, whose release then
+     * disowns it and leaves the phone at the quieter ceiling. Reading the live
+     * mode under the lock closes that: it asks "is the ringer above **this**
+     * loan's ceiling right now", which the next snooze's own quieter ceiling
+     * answers no. A raise the platform hides while the rule is active — the live
+     * read comes back at or below the ceiling — is not claimed, and is handed
+     * back at the end, the safe direction; there is no race-free way to see past
+     * that, since the give-back cannot trust that read either.
+     *
+     * Under the lock like every other decision over the loan, and idempotent: a
+     * loan already flagged, one with no applied borrow, or a mode at or below
+     * the ceiling is left exactly as it was.
+     */
+    fun noteRingerModeChanged() = RINGER.withLock {
+        val borrowed = (readLoan() ?: return@withLock).borrowed ?: return@withLock
+        // Whether the ringer is above this loan's ceiling **right now**, not a
+        // one-way latch: a raise the user takes back before the snooze ends must
+        // clear, or the give-back would disown a loan the user no longer holds
+        // raised and leave the phone at the ceiling — the very bug this fixes,
+        // in miniature (Codex, PR #271). Re-evaluated on every change and
+        // written only when it flips, so an idle snooze pays no repeated commit.
+        val raised = RingerHandover.observedUserRaise(borrowed, currentMode())
+        if (raised == borrowed.userMoved) return@withLock
+        if (!loans.setUserMoved(raised)) {
+            // Safe either way now the observation is process-scoped: this process
+            // still reads the change from the in-memory map, and a later process
+            // re-derives from the (absent or mismatched) tag and hands back.
+            SnoozeDebugLog.warning("ringer: a mid-snooze change did not reach disk; it holds for this process and a later one hands the ringer back")
+            return@withLock
+        }
+        if (raised) {
+            SnoozeDebugLog.event("ringer: the user raised it above the ceiling during the snooze; it will be left as they set it")
+        } else {
+            SnoozeDebugLog.event("ringer: the user brought it back to the ceiling; it will be handed back at the end after all")
+        }
+    }
+
     override fun forgetCeiling() = RINGER.withLock { rememberChoice(null) }
 
     /**
@@ -357,7 +407,7 @@ class AudioRingerController(
         // was ever taken".
         val borrowed = loan.borrowed ?: return RingerOutcome.Untouched
 
-        return when (val step = RingerHandover.giveBack(borrowed, currentMode())) {
+        return when (val step = RingerHandover.giveBack(borrowed)) {
             is RingerStep.GiveBack -> release(step.mode, armWanted)
             RingerStep.Disown -> {
                 // Their ringer now, so the record goes and the mode stays. A
