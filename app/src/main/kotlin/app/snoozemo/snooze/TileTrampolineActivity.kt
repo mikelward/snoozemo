@@ -121,12 +121,45 @@ class TileTrampolineActivity : ComponentActivity() {
         chooseMotionEnd = { requestId, forSnooze ->
             SnoozeService.setMotionEnd(this, true, requestId, forSnooze)
         },
-        watchOutcome = EndChoiceOutcome::watch,
+        watchOutcome = { requestId, onOutcome ->
+            EndChoiceOutcome.watch(requestId) { result ->
+                onOutcome(result)
+                // A settled commit may have moved the record — a partial timer
+                // keeps an exit armed — so reload it, since the partial line
+                // reads [ActiveSnooze.isPartialTimer] off the record rather
+                // than a saved flag. On an outcome, so long after the start.
+                offeredRecord = ActiveSnoozeStore(this).load()
+            }
+        },
         onDismiss = ::finish,
     )
 
     /** Whether [setContent] has already run, so a re-seed doesn't re-set it. */
     private var sheetRendered = false
+
+    /**
+     * The record the sheet is offered over, reloaded whenever a commit settles.
+     *
+     * The "can still end sooner" line is derived from this record's
+     * [ActiveSnooze.isPartialTimer] rather than a saved flag, so a chosen time
+     * that left an exit armed shows the line and turns the departure row into
+     * the way back — the same way it does over a running snooze on the app
+     * screen (Codex, PR #267). Reloaded off the arm path, on an outcome — and,
+     * across a restore, only from a record still naming the offered snooze (see
+     * [restore]).
+     */
+    @VisibleForTesting
+    internal var offeredRecord by mutableStateOf<ActiveSnooze?>(null)
+
+    /**
+     * Whether [restore] is still reloading [offeredRecord] off the first frame.
+     *
+     * True only in the window between a restored sheet drawing and its record
+     * landing (see [restore]). While it holds, the departure row is inert rather
+     * than dismissing — the record is what says whether that row is the way back
+     * from a partial timer or a plain dismissal, and it is not known yet.
+     */
+    private var offerRecordLoading by mutableStateOf(false)
 
     /**
      * Whether the tap being handled got the service started at all.
@@ -280,7 +313,6 @@ class TileTrampolineActivity : ComponentActivity() {
         outState.putLong(STATE_REQUEST_ID, sheet.committingRequestId)
         sheet.offerFor?.let { outState.putLong(STATE_OFFERED_FOR, it.toEpochMilli()) }
         outState.putBoolean(STATE_COMMIT_FAILED, sheet.commitFailed)
-        outState.putBoolean(STATE_COMMIT_PARTIAL, sheet.commitPartial)
         sheet.endCondition?.let {
             outState.putLong(STATE_ENDS_AT, it.endsAt.toEpochMilli())
             outState.putLong(STATE_FLOOR, it.floor.toEpochMilli())
@@ -388,14 +420,13 @@ class TileTrampolineActivity : ComponentActivity() {
         // next, and without it this activity would sit blank and transparent
         // for as long as the user left it there.
         if (!state.getBoolean(STATE_SHEET_SHOWN)) {
-            // Nothing was drawn, so there is no sheet to put back — but the
-            // saved offer still belongs to the controller, since a decision
-            // owed above can render it without reseeding.
+            // Nothing was drawn, so there is no sheet to put back — and no
+            // partial line to derive, so the record is not read here at all: it
+            // would be disk in front of a frame that never draws.
             sheet.restore(
                 savedCondition,
                 wasCommitting = false,
                 failed = state.getBoolean(STATE_COMMIT_FAILED),
-                partial = state.getBoolean(STATE_COMMIT_PARTIAL),
                 // This whole path runs only under `marker().created` — see
                 // `onCreate`. A process restore re-dispatches the tap instead
                 // of restoring, so a commit reached here is always live.
@@ -410,11 +441,36 @@ class TileTrampolineActivity : ComponentActivity() {
             condition = savedCondition,
             wasCommitting = state.getBoolean(STATE_COMMITTING),
             failed = state.getBoolean(STATE_COMMIT_FAILED),
-            partial = state.getBoolean(STATE_COMMIT_PARTIAL),
             configurationChange = true,
             requestId = state.getLong(STATE_REQUEST_ID),
             offeredFor = savedOfferedFor(state),
         )
+        // The saved sheet may be a partial timer; the line that says so is
+        // derived from the record. Read it back **after** the first frame, not
+        // synchronously in `onCreate`: a rotation during the arm's warm-up would
+        // otherwise put a cold `ActiveSnoozeStore.load()` (and the
+        // `DeviceStamp` / PackageManager behind it) in front of the sheet — the
+        // flash of blank §6.9 forbids (Codex, PR #272). Until it lands the sheet
+        // is inert: no partial line, and the departure row holds rather than
+        // dismissing a restore the user asked for. `decorView.post` is where
+        // `postDecision` already puts work that must wait for the first frame.
+        //
+        // Only a record for the snooze this sheet was offering counts: the read
+        // races the rest of the world, so by the time it lands the offered
+        // snooze may have ended and a different one armed. Deriving the partial
+        // line — or driving the departure row's commit — from *that* record
+        // would answer for a snooze the sheet never named (Codex, PR #272). A
+        // non-matching (or absent) record leaves `offeredRecord` null, so the
+        // sheet reads as the ordinary arm-time one it is: no partial line, and
+        // the departure row dismisses (departure is already this sheet's
+        // default) rather than committing against the wrong snooze.
+        val offer = savedOfferedFor(state)
+        offerRecordLoading = true
+        window.decorView.post {
+            val loaded = ActiveSnoozeStore(this).load()
+            offeredRecord = loaded?.takeIf { it.startedAt == offer }
+            offerRecordLoading = false
+        }
     }
 
     /**
@@ -646,6 +702,7 @@ class TileTrampolineActivity : ComponentActivity() {
         // hour the user is not being shown (Codex, PR #118). Reading it here is
         // an in-memory lookup, and this runs after the service is already away.
         sheet.seed(record, now)
+        offeredRecord = record
         renderSheet()
     }
 
@@ -712,12 +769,19 @@ class TileTrampolineActivity : ComponentActivity() {
                             // partial choice turns this sheet into that one,
                             // since the cap has moved under it (Codex, PR #267).
                             onChooseDeparture = {
-                                if (sheet.commitPartial) sheet.commitDeparture() else finish()
+                                when {
+                                    // The record has not landed after a restore,
+                                    // so hold rather than dismiss a departure
+                                    // restore the user asked for.
+                                    offerRecordLoading -> Unit
+                                    offeredRecord?.isPartialTimer == true -> sheet.commitDeparture()
+                                    else -> finish()
+                                }
                             },
                             onStepDown = sheet::stepDown,
                             onStepUp = sheet::stepUp,
                             failed = sheet.commitFailed,
-                            partial = sheet.commitPartial,
+                            partial = offeredRecord?.isPartialTimer == true,
                             committing = sheet.committing,
                             tracksDeparture = PRESENCE_TRACKS_DEPARTURE,
                             modifier = Modifier.navigationBarsPadding(),
@@ -744,7 +808,6 @@ class TileTrampolineActivity : ComponentActivity() {
         const val STATE_REQUEST_ID = "requestId"
         const val STATE_OFFERED_FOR = "offeredFor"
         const val STATE_COMMIT_FAILED = "commit_failed"
-        const val STATE_COMMIT_PARTIAL = "commit_partial"
 
         // The sheet's own three instants. On-device only and never logged: when
         // a user intends to stop being disturbed is theirs (`AGENTS.md`,

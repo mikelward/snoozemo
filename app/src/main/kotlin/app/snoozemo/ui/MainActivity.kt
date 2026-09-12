@@ -145,7 +145,6 @@ private const val KEY_SHEET_COMMITTING = "sheetCommitting"
 private const val KEY_SHEET_REQUEST_ID = "sheetRequestId"
 private const val KEY_SHEET_OFFERED_FOR = "sheetOfferedFor"
 private const val KEY_SHEET_FAILED = "sheetFailed"
-private const val KEY_SHEET_PARTIAL = "sheetPartial"
 private const val KEY_SHEET_ENDS_AT = "sheetEndsAt"
 private const val KEY_SHEET_FLOOR = "sheetFloor"
 private const val KEY_SHEET_CEILING = "sheetCeiling"
@@ -157,7 +156,6 @@ private const val KEY_ROWS_COMMITTING = "rowsCommitting"
 private const val KEY_ROWS_REQUEST_ID = "rowsRequestId"
 private const val KEY_ROWS_OFFERED_FOR = "rowsOfferedFor"
 private const val KEY_ROWS_FAILED = "rowsFailed"
-private const val KEY_ROWS_PARTIAL = "rowsPartial"
 private const val KEY_ROWS_STEPPED = "rowsStepped"
 private const val KEY_ROWS_ENDS_AT = "rowsEndsAt"
 private const val KEY_ROWS_FLOOR = "rowsFloor"
@@ -173,6 +171,24 @@ private const val TICK_INTERVAL_MS = 60_000L
  * constructs one in production.
  */
 internal enum class Screen { WELCOME, MAIN, PERMISSIONS, SETTINGS, LICENSES }
+
+/**
+ * What the sheet's `Until I leave` row does, decided from the running record
+ * rather than a saved flag (SPEC.md §4.4):
+ *
+ * - **[RESTORE]** over a snooze the user narrowed to its timer with an exit
+ *   still armed ([ActiveSnooze.isPartialTimer]) — the row is the way back and
+ *   does the real restore.
+ * - **[DISMISS]** otherwise — the snooze already runs to its ceiling, so the
+ *   row is "the snooze as it stands" and the sheet just closes.
+ * - **[HOLD]** while the record read has not landed. After a recreation the
+ *   sheet is restored synchronously but `refreshSnoozing` loads the record on a
+ *   worker; dismissing in that window would throw away a departure restore the
+ *   user asked for, and the synchronous read that would close the window is
+ *   disk in front of the first frame (Codex, PR #272). So the row is inert
+ *   until the record is known — a beat, not a wait.
+ */
+internal enum class DepartureRowAction { RESTORE, DISMISS, HOLD }
 
 /**
  * Hosts the four screens the app is split into (`TODO.md` Phase 4): [MainScreen],
@@ -358,7 +374,27 @@ class MainActivity : ComponentActivity() {
         chooseMotionEnd = { requestId, forSnooze ->
             SnoozeService.setMotionEnd(this, true, requestId, forSnooze)
         },
-        watchOutcome = EndChoiceOutcome::watch,
+        // Hold the departure row inert until the commit's record has landed,
+        // then let a full refresh land it — rather than reading the one field
+        // the row needs synchronously and leaving the rest of the screen
+        // stale. The partial line and the departure row read the running
+        // record, so an `Until I leave` tapped right after a partial choice
+        // must see the post-choice record or it dismisses instead of
+        // restoring departure; but a targeted read of just that record left a
+        // snooze that *ended* on the commit showing "Snoozing" with a null
+        // record, because it never touched `snoozing` (Codex, PR #272). So the
+        // outcome marks the record stale ([awaitingOutcomeRecord]) and kicks
+        // the full [refreshSnoozing], which reads `snoozing`, `activeSnooze`
+        // and the rest together; [departureRowAction] holds the row until it
+        // lands. The sheet's `onDismiss` is empty, so this refresh supersedes
+        // nothing (unlike the rows, whose arm already refreshes).
+        watchOutcome = { requestId, onOutcome ->
+            EndChoiceOutcome.watch(requestId) { result ->
+                onOutcome(result)
+                awaitingOutcomeRecord = true
+                refreshSnoozing()
+            }
+        },
         // Nothing to finish: clearing the offer is what closes this sheet,
         // unlike the trampoline where the activity *is* the sheet.
         onDismiss = {},
@@ -423,6 +459,12 @@ class MainActivity : ComponentActivity() {
             if (forSnooze == null) SnoozeService.armUntilMotion(this, requestId, idleOfferArmCount)
             else SnoozeService.setMotionEnd(this, true, requestId, forSnooze)
         },
+        // No outcome-driven refresh here, unlike the sheet: these rows can
+        // *arm* a snooze (`offersToStart`), and that arm's `onDismiss` already
+        // starts the full `refreshSnoozing` that flips `snoozing` true. Kicking
+        // a second refresh from the outcome would bump the refresh generation
+        // and race the arm's own, for no gain (Codex, PR #272). The full
+        // refresh below is what these rows read from.
         watchOutcome = EndChoiceOutcome::watch,
         onDismiss = { refreshSnoozing() },
         offersToStart = true,
@@ -1589,7 +1631,6 @@ class MainActivity : ComponentActivity() {
                             now = Instant.ofEpochMilli(now.wallMillis),
                             committing = rows.committing,
                             failed = rows.commitFailed,
-                            partial = rows.commitPartial,
                             format = formatTime,
                         )?.let { choice ->
                             // An offer to start's two location rows are
@@ -1845,14 +1886,24 @@ class MainActivity : ComponentActivity() {
                             formattedTime = formatSheetTime(this@MainActivity, condition.endsAt),
                             committing = sheet.committing,
                             failed = sheet.commitFailed,
-                            partial = sheet.commitPartial,
+                            partial = activeSnooze?.isPartialTimer == true,
                             onChooseTime = { sheet.commit(condition.endsAt) },
                             onDismiss = sheet::dismiss,
                             // A partial choice has already moved the cap, so
                             // this row is no longer "the snooze as it stands" —
                             // it is the way back, and has to do the restore.
+                            // Decided from the record rather than a saved flag,
+                            // and inert until the record is known — see
+                            // [departureRowAction].
                             onChooseDeparture = {
-                                if (sheet.commitPartial) sheet.commitDeparture() else sheet.dismiss()
+                                when (departureRowAction()) {
+                                    DepartureRowAction.RESTORE -> sheet.commitDeparture()
+                                    DepartureRowAction.DISMISS -> sheet.dismiss()
+                                    // The record read has not landed yet, so
+                                    // the row holds rather than dismissing a
+                                    // departure restore the user asked for.
+                                    DepartureRowAction.HOLD -> Unit
+                                }
                             },
                             onStepDown = sheet::stepDown,
                             onStepUp = sheet::stepUp,
@@ -1938,7 +1989,6 @@ class MainActivity : ComponentActivity() {
         outState.putLong(KEY_SHEET_REQUEST_ID, sheet.committingRequestId)
         sheet.offerFor?.let { outState.putLong(KEY_SHEET_OFFERED_FOR, it.toEpochMilli()) }
         outState.putBoolean(KEY_SHEET_FAILED, sheet.commitFailed)
-        outState.putBoolean(KEY_SHEET_PARTIAL, sheet.commitPartial)
         sheet.endCondition?.let {
             outState.putLong(KEY_SHEET_ENDS_AT, it.endsAt.toEpochMilli())
             outState.putLong(KEY_SHEET_FLOOR, it.floor.toEpochMilli())
@@ -1953,7 +2003,6 @@ class MainActivity : ComponentActivity() {
         outState.putLong(KEY_ROWS_REQUEST_ID, rows.committingRequestId)
         rows.offerFor?.let { outState.putLong(KEY_ROWS_OFFERED_FOR, it.toEpochMilli()) }
         outState.putBoolean(KEY_ROWS_FAILED, rows.commitFailed)
-        outState.putBoolean(KEY_ROWS_PARTIAL, rows.commitPartial)
         // The offer's time is the user's once they have stepped it, and the
         // first tick after a rotation would otherwise reseed over it.
         outState.putBoolean(KEY_ROWS_STEPPED, rows.steppedByUser)
@@ -1980,7 +2029,6 @@ class MainActivity : ComponentActivity() {
             condition = saved,
             wasCommitting = state.getBoolean(KEY_SHEET_COMMITTING),
             failed = state.getBoolean(KEY_SHEET_FAILED),
-            partial = state.getBoolean(KEY_SHEET_PARTIAL),
             configurationChange = configurationChange,
             requestId = state.getLong(KEY_SHEET_REQUEST_ID),
             offeredFor = if (state.containsKey(KEY_SHEET_OFFERED_FOR)) {
@@ -2012,7 +2060,6 @@ class MainActivity : ComponentActivity() {
             },
             wasCommitting = state.getBoolean(KEY_ROWS_COMMITTING),
             failed = state.getBoolean(KEY_ROWS_FAILED),
-            partial = state.getBoolean(KEY_ROWS_PARTIAL),
             stepped = state.getBoolean(KEY_ROWS_STEPPED),
             configurationChange = configurationChange,
             requestId = state.getLong(KEY_ROWS_REQUEST_ID),
@@ -2342,6 +2389,23 @@ class MainActivity : ComponentActivity() {
     /** [refreshSnoozing] for a test — the tick's re-read, without the tick. */
     internal fun refreshSnoozingForTest() = refreshSnoozing()
 
+    /**
+     * What the sheet's `Until I leave` row should do right now — see
+     * [DepartureRowAction]. Read at the tap from the running record, held inert
+     * ([DepartureRowAction.HOLD]) until that record is both loaded
+     * ([recordLoaded]) and current for the last commit ([awaitingOutcomeRecord]):
+     * in the window after a recreation before `refreshSnoozing` has first
+     * answered, and in the window after a commit outcome before its refresh has
+     * landed. Reading a stale record there dismisses a snooze that a partial
+     * choice just left restorable (Codex, PR #272).
+     */
+    @VisibleForTesting
+    internal fun departureRowAction(): DepartureRowAction = when {
+        awaitingOutcomeRecord || !recordLoaded -> DepartureRowAction.HOLD
+        activeSnooze?.isPartialTimer == true -> DepartureRowAction.RESTORE
+        else -> DepartureRowAction.DISMISS
+    }
+
     private fun refreshSnoozing() {
         // The same generation guard the access refresh has, for the same
         // reason: `observe` fires one of these per record change, they finish
@@ -2400,6 +2464,9 @@ class MainActivity : ComponentActivity() {
                 // from `activeSnooze` itself, which reads null both before
                 // this lands and when nothing is running.
                 recordLoaded = true
+                // A commit outcome's refresh has landed, so the departure row
+                // is reading the post-commit record now and can act again.
+                awaitingOutcomeRecord = false
                 reconcileSheet(loaded, sheetAt)
                 refreshRows(loaded)
                 // Reconciling policy access reads whether a snooze is running,
@@ -3824,6 +3891,21 @@ class MainActivity : ComponentActivity() {
      * apart here rather than conflated (Codex, PR #252).
      */
     private var recordLoaded = false
+
+    /**
+     * Whether a commit outcome's [refreshSnoozing] is still in flight, so the
+     * record on screen predates the commit that just settled.
+     *
+     * Set when a sheet outcome fires and its refresh is kicked; cleared when
+     * that refresh lands. [departureRowAction] holds the departure row inert
+     * while it is set, so a tap in the gap can't read the pre-commit record
+     * and dismiss a snooze a partial choice just left restorable (Codex, PR
+     * #272). A view-state flag, not persisted: a recreation reloads the record
+     * from scratch, and [recordLoaded] covers that window. Read and written on
+     * the main thread only, like [recordLoaded], so a plain field suffices.
+     */
+    @VisibleForTesting
+    internal var awaitingOutcomeRecord = false
 
     /**
      * A tap waiting on a location grant, and the snooze it was made on — or,
