@@ -860,13 +860,24 @@ not the loudest thing on it. Idle says `Not snoozing`;
 running prefers the whole thing as one sentence, `Snoozing until you leave`, and falls back to
 the title over its condition — `Snoozing` above `Ends when you leave` — only where that sentence
 will not fit. The fallback is a **deliberate** split rather than a wrap, so the width is measured
-before the text is composed; a wrap would break it wherever the words happened to land. Only the
-full tracking mode has a one-sentence form, since `Snoozing, Wi-Fi only` does not compose, so a
-degraded snooze always takes the two-row shape and states its mode — and its reason — on the
-second row. **A snooze started with `Until I move` gets its own sentence**, `Snoozing until you
+before the text is composed; a wrap would break it wherever the words happened to land. The
+one-sentence form is taken by every state whose whole statement fits on the line — full tracking,
+and the motion and plain-timer snoozes below; a degraded snooze always takes the two-row shape and
+states its mode — and its reason — on the second row, since `Snoozing, Wi-Fi only` and `Timer only —
+no location` do not compose. **A snooze started with `Until I move` gets its own sentence**, `Snoozing until you
 move` (maintainer, 2026-09-11 — tapping `Until I move` changed nothing this screen said). It
 names the exit that was tapped and only that one: significant motion is the stricter trigger,
 so it already covers leaving, and enumerating both spends a line to say what one says.
+
+**A plain timer-only snooze names its end time**, `Snoozing until 4:30 PM` (maintainer,
+2026-09-12) — the fold the notification does (§4.3), applied here for the same reason: `Snoozing`
+over `Timer only` said nothing the cap's own time does not say better. Only the *plain* case, with
+no degraded reason to carry and no movement exit: a timer-only snooze that is also degraded keeps
+`Timer only — <reason>` on the second row, since the reason cannot fold into the headline. Where
+the sentence will not fit — a narrow screen, a large accessibility font — the split names the same
+time, `Snoozing` over `Until 4:30 PM`, the way the motion and full fallbacks name their exit, so the
+end time survives the narrow layout rather than reverting to `Timer only`. The time is the cap,
+formatted through the same phone helper as the sheet and the notification.
 
 **The sentence is offered only where it is the whole statement.** It *replaces* the condition
 line rather than sitting above it, so anything the condition carries and the sentence does not
@@ -1081,6 +1092,15 @@ snooze was armed — still reading `8h 0m left` seven hours later, which is wors
 because it looks current. `setUsesChronometer` against the absolute cap ticks by itself and cannot
 go stale. It also means the body says only what *kind* of snooze this is — `Ends when you leave`,
 `Wi-Fi only`, `Wi-Fi lost — ending soon`, `Timer only` — which is the part that actually needs words.
+
+**A plain timer-only snooze folds those two lines into one** (maintainer, 2026-09-12). When the body
+would say exactly `Timer only` — duration tracking with no degraded reason, no ringer shortfall, no
+unprotected watch, and no `, or when you move` exit — `Snoozing` over `Timer only` said nothing the
+cap's own end time does not say better. So that card drops the body and names the end time in the
+title instead: `Snoozing until 4:30 PM`. The moment there is anything the title cannot carry — a
+degraded reason, a ringer or watch caveat, a movement exit — the title returns to `Snoozing` and the
+mode line reappears below it, exactly as before. The time is the cap, formatted by the phone through
+the same helper as the `Until 17:00` action, so the surfaces never render one instant two ways.
 
 **A degraded card names the reason, not just the mode** (maintainer, 2026-08-30). The mode alone
 cannot carry it: `NO_LOCATION_FIX` and `FIXES_TOO_VAGUE` collapse to the same mode and mean

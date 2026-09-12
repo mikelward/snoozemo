@@ -693,10 +693,29 @@ class SnoozeNotifications(private val context: Context) {
             // claimed to be the only one.
             withProtection
         }
+        // A plain timer-only snooze folds its two lines into one headline naming
+        // when it ends: "Snoozing" over "Timer only" says nothing the end time
+        // doesn't say better (maintainer, 2026-09-12). Only where the body is
+        // *exactly* `Timer only` — a snooze with a degraded reason, a ringer
+        // shortfall, an unprotected watch or a movement exit has something the
+        // headline can't carry, so it keeps the "Snoozing" title and its
+        // condition line. The end time is the cap, formatted like the sheet's.
+        val plainTimerOnly = snooze.effectiveMode == TrackingMode.DURATION_ONLY &&
+            !snooze.endsOnMotion &&
+            withMotion == body
         val notification = android.app.Notification.Builder(context, CHANNEL_ACTIVE)
             .setSmallIcon(TileR.drawable.ic_tile_snooze)
-            .setContentTitle(context.getString(R.string.ongoing_title))
-            .setContentText(withMotion)
+            .setContentTitle(
+                if (plainTimerOnly) {
+                    context.getString(
+                        R.string.snoozing_until_time,
+                        formatSheetTime(context, snooze.capExpiresAt),
+                    )
+                } else {
+                    context.getString(R.string.ongoing_title)
+                },
+            )
+            .setContentText(if (plainTimerOnly) null else withMotion)
             // The top row, beside the app name and the countdown below
             // (maintainer, 2026-09-08). Null leaves the row as it was, which is
             // the honest rendering of "no reading yet" — an empty string would

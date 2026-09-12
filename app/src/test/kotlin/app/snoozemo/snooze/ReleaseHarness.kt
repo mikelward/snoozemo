@@ -522,6 +522,17 @@ internal fun ongoingBody(): String? =
         }
         ?.let { shadowOf(it).contentText?.toString() }
 
+/**
+ * The ongoing card's headline, or null if there is none — located by the card's
+ * stable id rather than by title, since a plain timer-only snooze folds its two
+ * lines into a `Snoozing until …` headline (maintainer, 2026-09-12) and no
+ * longer carries the constant `Snoozing` title.
+ */
+internal fun ongoingTitle(): String? =
+    shadowOf(appContext.getSystemService(NotificationManager::class.java))
+        .getNotification(SnoozeNotifications.ID_ONGOING)
+        ?.let { shadowOf(it).contentTitle?.toString() }
+
 /** The scheduled alarms, newest last, as the intents their senders carry. */
 internal fun scheduledAlarmIntents(): List<Intent> =
     shadowOf(appContext.getSystemService(android.app.AlarmManager::class.java))

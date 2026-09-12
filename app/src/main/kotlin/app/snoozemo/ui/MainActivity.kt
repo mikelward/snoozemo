@@ -1672,6 +1672,12 @@ class MainActivity : ComponentActivity() {
                             // and the flag, so this cannot be half-remembered.
                             trackingMode = activeSnooze?.effectiveMode,
                             remaining = activeSnooze?.remaining(now),
+                            // The cap end, formatted through this screen's own
+                            // remembered formatter, for the plain timer-only
+                            // headline ("Snoozing until 4:30 PM"). Formatted here
+                            // so the status composable does no Settings lookup in
+                            // composition (Codex, PR #276).
+                            endsAtLabel = activeSnooze?.capExpiresAt?.let { formatTime(it) },
                             // Narrowed with the mode above, not beside it: a
                             // cause explains tracking that is still trying, and
                             // a snooze the user gave a time reported its old

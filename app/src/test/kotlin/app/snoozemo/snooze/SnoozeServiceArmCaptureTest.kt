@@ -14,6 +14,7 @@ import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
 import app.snoozemo.ui.MainActivity
+import app.snoozemo.ui.formatSheetTime
 import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -93,21 +94,38 @@ class SnoozeServiceArmCaptureTest {
         shadowOf(Looper.getMainLooper()).idle()
     }
 
+    /**
+     * The ongoing card, by its id: a plain timer-only card folds its two lines
+     * into a `Snoozing until …` headline (maintainer, 2026-09-12), so the
+     * constant title no longer identifies it.
+     */
+    private fun ongoingCard(): android.app.Notification? =
+        shadowOf(appContext.getSystemService(NotificationManager::class.java))
+            .getNotification(SnoozeNotifications.ID_ONGOING)
+
     /** The top row of the ongoing card currently in the shade. */
     private fun ongoingSubText(): String? =
-        shadowOf(appContext.getSystemService(NotificationManager::class.java))
-            .allNotifications
-            .last { shadowOf(it).contentTitle?.toString() == stringOf(R.string.ongoing_title) }
-            .extras
-            .getCharSequence(android.app.Notification.EXTRA_SUB_TEXT)
+        ongoingCard()?.extras
+            ?.getCharSequence(android.app.Notification.EXTRA_SUB_TEXT)
             ?.toString()
 
     /** The body line of the ongoing card currently in the shade. */
     private fun ongoingBody(): String? =
-        shadowOf(appContext.getSystemService(NotificationManager::class.java))
-            .allNotifications
-            .last { shadowOf(it).contentTitle?.toString() == stringOf(R.string.ongoing_title) }
-            .let { shadowOf(it).contentText?.toString() }
+        ongoingCard()?.let { shadowOf(it).contentText?.toString() }
+
+    /** The headline of the ongoing card currently in the shade. */
+    private fun ongoingTitle(): String? =
+        ongoingCard()?.let { shadowOf(it).contentTitle?.toString() }
+
+    /**
+     * The folded headline a plain timer-only card carries, `Snoozing until …`,
+     * read against the stored cap so it matches whatever the arm path set.
+     */
+    private fun foldedTitle(): String =
+        appContext.getString(
+            R.string.snoozing_until_time,
+            formatSheetTime(appContext, ActiveSnoozeStore(appContext).load()!!.capExpiresAt),
+        )
 
     private fun sameInstance(service: TestSnoozeService, action: String, startId: Int) {
         service.onStartCommand(
@@ -181,9 +199,13 @@ class SnoozeServiceArmCaptureTest {
             Anchor(lat = null, lon = null, fixAccuracyM = null, capturedAt = now),
         )
 
-        // "Timer only" is still the right answer when it is true. This is the
-        // assertion that stops the fix from being "never say timer only".
-        assertEquals(stringOf(R.string.ongoing_timer_only), ongoingBody())
+        // A timer is still the right answer when it is true — this is the
+        // assertion that stops the fix from being "never say timer". A plain
+        // timer-only card folds its two lines into the `Snoozing until …`
+        // headline (maintainer, 2026-09-12), so the timer now reads there, and
+        // the condition line is dropped rather than left saying "Timer only".
+        assertEquals(foldedTitle(), ongoingTitle())
+        assertNull(ongoingBody())
     }
 
     @Test
@@ -196,7 +218,9 @@ class SnoozeServiceArmCaptureTest {
 
         startService(SnoozeService.ACTION_ARM)
 
-        assertEquals(stringOf(R.string.ongoing_timer_only), ongoingBody())
+        // Plain timer-only from the start, so the card is the folded headline.
+        assertEquals(foldedTitle(), ongoingTitle())
+        assertNull(ongoingBody())
         assertEquals(TrackingMode.DURATION_ONLY, storedMode())
     }
 

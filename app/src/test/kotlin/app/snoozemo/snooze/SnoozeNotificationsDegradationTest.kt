@@ -7,8 +7,11 @@ import app.snoozemo.core.SnoozeRinger
 import app.snoozemo.dnd.PrefsRingerLoanStore
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.TrackingMode
+import app.snoozemo.ui.formatSheetTime
+import java.time.Duration
 import java.time.Instant
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -119,13 +122,18 @@ class SnoozeNotificationsDegradationTest {
         )
     }
 
-    /** What the ongoing card most recently said. */
-    private fun postedOngoing(
+    /**
+     * The ongoing card as it stands, located by its id rather than its title:
+     * a plain timer-only card folds its two lines into a `Snoozing until …`
+     * headline (maintainer, 2026-09-12), so the constant title is no longer the
+     * card's identity.
+     */
+    private fun ongoingCard(
         mode: TrackingMode,
         cause: DegradationCause?,
         endsOnDeparture: Boolean = true,
         endsOnMotion: Boolean = false,
-    ): String {
+    ): android.app.Notification {
         SnoozeNotifications(appContext).showOngoing(
             snoozeFixture(now).copy(
                 mode = mode,
@@ -135,10 +143,28 @@ class SnoozeNotificationsDegradationTest {
             ),
         )
         val manager = appContext.getSystemService(android.app.NotificationManager::class.java)
-        val posted = shadowOf(manager).allNotifications
-            .last { shadowOf(it).contentTitle?.toString() == stringOf(R.string.ongoing_title) }
-        return shadowOf(posted).contentText.toString()
+        return requireNotNull(shadowOf(manager).getNotification(SnoozeNotifications.ID_ONGOING))
     }
+
+    /** The condition line the ongoing card most recently carried. */
+    private fun postedOngoing(
+        mode: TrackingMode,
+        cause: DegradationCause?,
+        endsOnDeparture: Boolean = true,
+        endsOnMotion: Boolean = false,
+    ): String? =
+        shadowOf(ongoingCard(mode, cause, endsOnDeparture, endsOnMotion)).contentText?.toString()
+
+    /**
+     * The folded headline a plain timer-only card carries: `Snoozing until …`,
+     * with the cap time formatted exactly as the card formats it, so this stays
+     * about which line the fact lands on rather than the wording of the clock.
+     */
+    private fun foldedTitle(): String =
+        appContext.getString(
+            R.string.snoozing_until_time,
+            formatSheetTime(appContext, now.plus(Duration.ofHours(7))),
+        )
 
     private fun expected(modeString: Int, causeString: Int) =
         appContext.getString(
@@ -149,27 +175,34 @@ class SnoozeNotificationsDegradationTest {
 
     /**
      * Principle 2's distinction, at the surface that has to carry it: a card
-     * reading `Timer only` because the user chose a time is a different thing
-     * from one reading it because location died, and the second half of the
-     * card is the only place that difference can show.
+     * that is a timer because the user chose one is a different thing from one
+     * that is a timer because location died. A chosen timer suppresses its
+     * cause and folds into the `Snoozing until …` headline; a snooze still
+     * trying to track keeps the cause on its `Timer only — …` line and cannot
+     * fold. The folding here is the evidence the cause was dropped.
      *
-     * Both directions, because the failure this guards is one-sided. Narrowing
-     * the mode without narrowing the cause rendered the user's own choice as
-     * `Timer only — weak signal`, blaming the machinery for it; narrowing too
-     * far would drop a real cause from a snooze that is still trying to track
-     * and is exactly what the cause exists to explain. So the same record is
-     * asserted with the exit on and off (Codex, PR #267).
+     * The failure this guards is one-sided: narrowing the mode without
+     * narrowing the cause rendered the user's own choice as `Timer only — weak
+     * signal`, blaming the machinery for it — so the counterpart, a snooze
+     * still watching for a departure that keeps naming its cause, is asserted
+     * separately below (Codex, PR #267).
      */
     @Test
-    fun `a chosen timer is not reported as a tracking failure`() {
-        assertEquals(
-            stringOf(R.string.ongoing_timer_only),
-            postedOngoing(
-                TrackingMode.WIFI_ONLY,
-                DegradationCause.FIXES_TOO_VAGUE,
-                endsOnDeparture = false,
-            ),
+    fun `a chosen timer folds into the headline and drops its stale cause`() {
+        // `endsOnDeparture = false` makes this a chosen-time snooze:
+        // effectiveMode is DURATION_ONLY and effectiveDegradation is null, so the
+        // FIXES_TOO_VAGUE the record still carries is suppressed — the card would
+        // read `Timer only — weak signal`, blaming the machinery for the user's
+        // own choice, if it were not (Codex, PR #267). With nothing to caveat,
+        // the two lines fold into one headline naming the end time (maintainer,
+        // 2026-09-12), which is the same evidence that the cause was dropped.
+        val card = ongoingCard(
+            TrackingMode.WIFI_ONLY,
+            DegradationCause.FIXES_TOO_VAGUE,
+            endsOnDeparture = false,
         )
+        assertEquals(foldedTitle(), shadowOf(card).contentTitle.toString())
+        assertNull(shadowOf(card).contentText)
     }
 
     @Test
@@ -287,21 +320,29 @@ class SnoozeNotificationsDegradationTest {
         )
     }
 
-    /** The app's own wiring, which `Timer only` already describes. */
+    /**
+     * The app's own wiring carries no reason line of its own, so a
+     * NOTHING_WATCHING snooze is a plain timer-only card and folds into the
+     * `Snoozing until …` headline like any other (maintainer, 2026-09-12).
+     */
     @Test
-    fun `the nothing-watching cause deliberately renders no reason`() {
-        assertEquals(
-            stringOf(R.string.ongoing_timer_only),
-            postedOngoing(TrackingMode.DURATION_ONLY, DegradationCause.NOTHING_WATCHING),
-        )
+    fun `the nothing-watching cause folds into the headline`() {
+        val card = ongoingCard(TrackingMode.DURATION_ONLY, DegradationCause.NOTHING_WATCHING)
+        assertEquals(foldedTitle(), shadowOf(card).contentTitle.toString())
+        assertNull(shadowOf(card).contentText)
     }
 
+    /**
+     * The plain case the fold exists for: duration tracking, no cause, no
+     * movement exit. `Snoozing` over `Timer only` said nothing the end time
+     * doesn't say better, so the two become one headline (maintainer,
+     * 2026-09-12). The `contentText` is dropped, not left empty.
+     */
     @Test
-    fun `no cause at all renders the mode alone`() {
-        assertEquals(
-            stringOf(R.string.ongoing_timer_only),
-            postedOngoing(TrackingMode.DURATION_ONLY, null),
-        )
+    fun `a plain timer-only snooze folds its two lines into one headline`() {
+        val card = ongoingCard(TrackingMode.DURATION_ONLY, null)
+        assertEquals(foldedTitle(), shadowOf(card).contentTitle.toString())
+        assertNull(shadowOf(card).contentText)
     }
 
     /**
@@ -335,7 +376,11 @@ class SnoozeNotificationsDegradationTest {
     /** Guards the join itself: the reason is appended, not substituted. */
     @Test
     fun `the degraded line keeps the mode as well as the reason`() {
-        val line = postedOngoing(TrackingMode.DURATION_ONLY, DegradationCause.LOCATION_SERVICES_OFF)
+        // A cause is present, so this card does not fold — it keeps its
+        // condition line, and `postedOngoing` returns it rather than null.
+        val line = requireNotNull(
+            postedOngoing(TrackingMode.DURATION_ONLY, DegradationCause.LOCATION_SERVICES_OFF),
+        )
 
         assertTrue(line.contains(stringOf(R.string.ongoing_timer_only)))
         assertTrue(line.contains(stringOf(R.string.ongoing_cause_services_off)))

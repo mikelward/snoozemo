@@ -1586,6 +1586,99 @@ class MainScreenScreenshotTest {
     }
 
     /**
+     * The same fallback for a plain timer-only snooze: where the folded
+     * `Snoozing until …` will not fit, the split must still name the end time
+     * — `Until 4:30 PM` — rather than reverting to `Timer only`, which is
+     * exactly the line this change removed (Codex, PR #276).
+     *
+     * No snapshot, for the reason the sibling above gives.
+     */
+    @Test
+    @Config(qualifiers = "w200dp-h914dp-420dpi")
+    fun `the narrow fallback still names the timer end time`() {
+        val context = RuntimeEnvironment.getApplication()
+        val time = formatSheetTime(context, Instant.parse("2026-01-01T17:00:00Z"))
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.DURATION_ONLY,
+                remaining = Duration.ofHours(8),
+                endsAtLabel = time,
+                degradation = null,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        // Too narrow for the folded sentence, so it splits into the title over
+        // its condition — and the condition carries the end time, not the old
+        // `Timer only`.
+        composeRule.onNodeWithText(context.getString(R.string.main_until_time, time)).assertExists()
+        composeRule.onNodeWithText("Timer only").assertDoesNotExist()
+        composeRule.onNodeWithText(
+            context.getString(R.string.snoozing_until_time, time),
+        ).assertDoesNotExist()
+    }
+
+    /**
+     * A motion snooze whose effective mode is `DURATION_ONLY` — a chosen timer
+     * then `Until I move`, or departure degraded past tracking — is not a plain
+     * timer: it has a movement exit. Even with an end-time label supplied, its
+     * narrow fallback must name that exit, not `Until …`, or the one thing the
+     * snooze reports disappears where the screen most needs to be legible
+     * (Codex, PR #276).
+     */
+    @Test
+    @Config(qualifiers = "w200dp-h914dp-420dpi")
+    fun `the narrow fallback keeps a motion snooze's exit over its timer`() {
+        val context = RuntimeEnvironment.getApplication()
+        val time = formatSheetTime(context, Instant.parse("2026-01-01T17:00:00Z"))
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.DURATION_ONLY,
+                remaining = Duration.ofHours(8),
+                endsAtLabel = time,
+                endsOnMotion = true,
+                degradation = null,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        // Split too narrow to fold — the condition names the movement exit, not
+        // the timer a plain-timer snooze would show.
+        composeRule.onNodeWithText("Ends when you move").assertExists()
+        composeRule.onNodeWithText(context.getString(R.string.main_until_time, time)).assertDoesNotExist()
+    }
+
+    /**
      * The one mode the motion sentence does not take over, because it is a
      * deadline rather than a description (Codex, PR #263).
      *
@@ -1665,7 +1758,15 @@ class MainScreenScreenshotTest {
     }
 
     @Test
-    fun `a duration-only snooze says so`() {
+    fun `a plain timer-only snooze folds its headline to the end time`() {
+        // The two lines a plain timer-only snooze used to show — `Snoozing` over
+        // `Timer only` — fold into one headline naming when it ends (maintainer,
+        // 2026-09-12), the same fold the ongoing notification does. The countdown
+        // detail stays beneath it.
+        val context = RuntimeEnvironment.getApplication()
+        // Formatted exactly as the screen formats it, so this stays about which
+        // line the fact lands on rather than the clock's wording.
+        val time = formatSheetTime(context, Instant.parse("2026-01-01T17:00:00Z"))
         capture("main-screen-snoozing-timer-only.png") {
             MainScreen(
                 access = PolicyAccess.GRANTED,
@@ -1674,6 +1775,7 @@ class MainScreenScreenshotTest {
                 snoozing = true,
                 trackingMode = TrackingMode.DURATION_ONLY,
                 remaining = Duration.ofHours(8),
+                endsAtLabel = time,
                 degradation = null,
                 lastOutcome = null,
                 crashPending = false,
@@ -1690,7 +1792,12 @@ class MainScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("Timer only").assertExists()
+        val headline = context.getString(R.string.snoozing_until_time, time)
+        composeRule.onNodeWithText(headline).assertExists()
+        // The old two-line form is gone: no bare `Timer only` condition, and the
+        // headline is the folded sentence, not the constant `Snoozing`.
+        composeRule.onNodeWithText("Timer only").assertDoesNotExist()
+        composeRule.onNodeWithText("Snoozing").assertDoesNotExist()
         composeRule.onNodeWithText("8h 0m left").assertExists()
     }
 
@@ -1878,15 +1985,19 @@ class MainScreenScreenshotTest {
     }
 
     /**
-     * A cause that earns no line leaves the mode exactly as it was.
+     * A cause that earns no line leaves the mode exactly as it was — which,
+     * with an end time in hand, is the folded headline.
      *
      * `NOTHING_WATCHING` is the app's own wiring rather than anything the user
-     * did or can act on, so `Timer only` already says everything true about it
-     * — appending a clause here would spend the user's attention on a fact
-     * they cannot use.
+     * did or can act on, so it adds no reason line — and with nothing to caveat
+     * the card folds into `Snoozing until …` (maintainer, 2026-09-12). The
+     * folding is the evidence: a cause that *did* earn a line (test above) keeps
+     * the `Timer only — …` condition and cannot fold.
      */
     @Test
-    fun `a cause with no line of its own leaves the mode alone`() {
+    fun `a cause with no line of its own folds like a plain timer`() {
+        val context = RuntimeEnvironment.getApplication()
+        val time = formatSheetTime(context, Instant.parse("2026-01-01T17:00:00Z"))
         capture {
             MainScreen(
                 access = PolicyAccess.GRANTED,
@@ -1895,6 +2006,7 @@ class MainScreenScreenshotTest {
                 snoozing = true,
                 trackingMode = TrackingMode.DURATION_ONLY,
                 remaining = Duration.ofHours(8),
+                endsAtLabel = time,
                 degradation = DegradationCause.NOTHING_WATCHING,
                 lastOutcome = null,
                 crashPending = false,
@@ -1911,7 +2023,10 @@ class MainScreenScreenshotTest {
             )
         }
 
-        composeRule.onNodeWithText("Timer only").assertExists()
+        composeRule.onNodeWithText(
+            context.getString(R.string.snoozing_until_time, time),
+        ).assertExists()
+        composeRule.onNodeWithText("Timer only").assertDoesNotExist()
     }
 
     /**
