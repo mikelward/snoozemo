@@ -66,10 +66,10 @@ interface PresenceMonitor {
     fun stop()
 
     /**
-     * The [TrackingMode]s this monitor can honestly run for [anchor] — the
-     * set the controller confines every mode claim to, at arm and on every
-     * update. [TrackingMode.DURATION_ONLY] is always an honest answer and is
-     * treated as present whether or not it is listed.
+     * The [TrackingMode]s this monitor can honestly run for [anchor] **as of
+     * now** — the set the controller confines every mode claim to.
+     * [TrackingMode.DURATION_ONLY] is always an honest answer and is treated
+     * as present whether or not it is listed.
      *
      * The monitor answers rather than [TrackingMode.from], because the anchor
      * alone cannot: `from` says what the captured *fields* allow, and only
@@ -78,6 +78,16 @@ interface PresenceMonitor {
      * a timer there; the geofence monitor has no Wi-Fi watch yet, so an
      * SSID-only anchor is too. A mode is a claim about what is watching
      * (SPEC.md §6.1, §8.1), and this is where the claim gets its warrant.
+     *
+     * **The answer moves, so a cached copy goes stale** (maintainer,
+     * 2026-09-12). It was a pure function of the anchor once; it now also
+     * asks whether this app may still act on what the anchor holds — the
+     * location grants and the phone's location setting — because neither loss
+     * reaches a monitor that is not running, and a timer-only snooze stops
+     * its watch for hours. A caller that keeps the answer across that window
+     * is holding a snapshot, not a capability: ask again at the moment the
+     * claim is acted on. `SnoozeController.supportedModes` is exactly such a
+     * snapshot, refreshed only at arm and restore.
      *
      * A *set*, not a single ceiling, because degradation moves through modes
      * the ceiling cannot vouch for (flagged by Codex on PR #73): a fenced

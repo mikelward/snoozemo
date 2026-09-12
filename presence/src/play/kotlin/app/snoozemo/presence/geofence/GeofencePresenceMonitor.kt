@@ -1797,10 +1797,46 @@ class GeofencePresenceMonitor(
      * SSID-only anchor is a real watch at last, not a labeled timer.
      */
     override fun supportedModes(anchor: Anchor): Set<TrackingMode> = buildSet {
-        if (anchor.hasUsableFix) add(TrackingMode.FULL)
-        if (anchor.ssid != null) add(TrackingMode.WIFI_ONLY)
+        // **Read live, not taken from the anchor alone** (maintainer,
+        // 2026-09-12). The anchor says what was captured; these say whether
+        // this app may still act on it. A timer-only snooze stops its watch
+        // for hours, and `ActiveSnooze.mode` is only ever recomputed from a
+        // presence *update* — so with nothing running, a revocation in that
+        // window leaves the record claiming a capability that is gone, and
+        // `Until I leave` lengthens the cap back to the ceiling on the
+        // strength of it. Neither loss announces itself to a stopped monitor:
+        // Android broadcasts no permission change at all, and `MODE_CHANGED`
+        // reaches only a registered receiver, which is exactly what a stopped
+        // watch does not have.
+        //
+        // Costs two `checkSelfPermission` lookups against the package
+        // manager's cache and one `isLocationEnabled` binder read. Off the
+        // tap-to-rule-on path — `onAnchorCaptured` runs after the rule is
+        // already on, and the capture it follows has just paid the same read.
+        val servicesOn = locationServicesOn()
+        if (anchor.hasUsableFix && servicesOn && hasGeofencingGrants()) add(TrackingMode.FULL)
+        // Fine location, not the geofencing pair: the Wi-Fi watch needs
+        // `FLAG_INCLUDE_LOCATION_INFO` to see an SSID at all, and the platform
+        // redacts it without that grant — a redacted read is what this class
+        // already treats as direct evidence that location access is gone.
+        if (anchor.ssid != null && servicesOn && hasFineLocation()) add(TrackingMode.WIFI_ONLY)
         add(TrackingMode.DURATION_ONLY)
     }
+
+    /**
+     * Whether the phone's location setting is on at all, contained.
+     *
+     * A read that refuses answers **false**, which is the fail-safe direction
+     * for every caller of [supportedModes]: it withholds a claim rather than
+     * granting one, so the worst an unreadable subsystem costs is a snooze
+     * that ends on its timer instead of on a departure — never one held quiet
+     * on a capability nobody could confirm (principle 1).
+     */
+    private fun locationServicesOn(): Boolean =
+        runCatching {
+            appContext.getSystemService(android.location.LocationManager::class.java)
+                ?.isLocationEnabled == true
+        }.getOrDefault(false)
 
     /**
      * Yes — which anchor capture delivers decides *how well*, and that is

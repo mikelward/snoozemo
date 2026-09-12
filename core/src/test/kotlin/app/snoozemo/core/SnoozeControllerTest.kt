@@ -506,6 +506,47 @@ class SnoozeControllerTest {
     }
 
     @Test
+    fun `a timer-only snooze keeps the mode it would go back to`() {
+        // Nothing is watching, so there is no running claim to keep honest —
+        // and the clamp is destructive here: `supportedModes` reads the
+        // phone's location setting, so a restore during a minute-long outage
+        // would persist DURATION_ONLY over a good anchor, and no presence
+        // update would ever arrive to raise it again. `Until I leave` would
+        // be gone for the rest of the snooze (Codex, PR #267).
+        val running = ActiveSnooze(
+            anchor = anchor,
+            startedAt = start,
+            capExpiresAt = start.plus(Duration.ofHours(8)),
+            mode = TrackingMode.FULL,
+            endsOnDeparture = false,
+        )
+
+        controller.restore(running, supported = setOf(TrackingMode.DURATION_ONLY))
+
+        assertEquals(TrackingMode.FULL, controller.active?.mode)
+        // And the snooze still ends on its timer alone: the latent mode is
+        // what the row would restore, never what this snooze watches for.
+        assertEquals(TrackingMode.DURATION_ONLY, controller.active?.effectiveMode)
+    }
+
+    @Test
+    fun `a snooze still watching for a departure is clamped as before`() {
+        // The other direction, on the same restore: this one *is* running a
+        // watch, so its claim has to match what the machinery offers.
+        val running = ActiveSnooze(
+            anchor = anchor,
+            startedAt = start,
+            capExpiresAt = start.plus(Duration.ofHours(8)),
+            mode = TrackingMode.FULL,
+            endsOnDeparture = true,
+        )
+
+        controller.restore(running, supported = setOf(TrackingMode.DURATION_ONLY))
+
+        assertEquals(TrackingMode.DURATION_ONLY, controller.active?.mode)
+    }
+
+    @Test
     fun `the anchor's fields cap the mode whatever the machinery offers`() {
         // The other direction of the same honesty: machinery offering FULL
         // cannot lend an anchor coordinates it never captured, and with the

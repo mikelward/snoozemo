@@ -5278,36 +5278,30 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
       belonged to a claim nothing could keep true by hand, which is what the entry above
       answers.
 
-- [ ] **What keeps tracking capability current while a timer-only snooze's watch is
-      stopped?** Raised by Codex as a P1 on PR #267 and left for the maintainer, because the
-      fix it needs is an interface change rather than a patch. **The hazard is real and this
-      PR introduced it**: a snooze narrowed to its timer stops its presence watch, and
-      `ActiveSnooze.mode` is only ever recomputed from a presence *update*, so with the watch
-      stopped the recorded capability freezes. Revoke location permission (or turn location
-      services off) during that window and nothing corrects it — the comment on
-      `ACTION_LOCATION_GRANTED` says why: **Android broadcasts no permission change**, so the
-      app only learns of a revocation when the monitor next tries something, and a stopped
-      monitor never tries. `Until I leave` is then still offered, still passes the
-      `!running.mode.tracksDeparture` guard PR #234 added, enables the exit **and lengthens
-      the cap back to `capCeilingAt`** — and when the restarted watch discovers the
-      capability is gone the snooze degrades to duration-only holding that longer cap with
-      nothing watching. Bounded by the backstop the snooze armed with (§7 still fires), but
-      it is quiet longer than the user had, granted on a premise that was stale.
-      **Why there is no cheap fix:** `PresenceMonitor.supportedModes(anchor)` is computed
-      from the anchor's own fields (`hasUsableFix`, `ssid`) and consults no permission, so
-      re-asking it at restore time returns the same stale answer. A live check needs either a
-      new capability question on `PresenceMonitor` — implemented in the geofence monitor,
-      the duration-only monitor and the test fake — or permission logic duplicated into
-      `SnoozeService`, which is policy that lives in the presence module and would drift.
-      **The alternatives**, for whoever decides: (a) add `canTrackDepartureNow(anchor)` to
-      `PresenceMonitor` and gate the restore on it — most correct, widest blast radius;
-      (b) keep the record's mode current while the watch is stopped, e.g. have the §6.10
-      backstop wake re-derive it — no interface change, but it makes the backstop responsible
-      for capability, which it is not today; (c) have the restore not lengthen the cap until
-      the restarted watch reports healthy, leaving the shortened cap in place meanwhile —
-      safest for principle 1 and the most behavior it changes, since the restore's whole
-      point is putting the cap back. Not guessed on autopilot: each one moves a boundary
-      somebody chose deliberately.
+- [x] **Tracking capability is read live, not taken from the record** (maintainer,
+      2026-09-12, answering the P1 Codex raised on PR #267). The hazard: a snooze narrowed
+      to its timer stops its presence watch, and `ActiveSnooze.mode` is only ever recomputed
+      from a presence *update*, so the recorded capability froze. Revoke location, or turn
+      the setting off, during that window and nothing corrected it — Android broadcasts no
+      permission change at all, and `MODE_CHANGED` reaches only a registered receiver, which
+      a stopped watch has not got. `Until I leave` then passed the mode guard, armed the exit
+      **and lengthened the cap back to `capCeilingAt`**: hours of extra silence granted on a
+      premise that had already expired, bounded only by the backstop the snooze armed with.
+      **The fix the maintainer chose**, over a sibling `canTrackDepartureNow` and over making
+      the §6.10 backstop responsible for capability: `PresenceMonitor.supportedModes` reads
+      the location grants and the location setting live — one question with one answer rather
+      than two that can disagree — and `applyChosenEnd` asks it again at the moment the
+      restore is acted on. **Both halves were needed**: `SnoozeController` caches the answer
+      ("handed in at arm and restore"), so widening the read alone would still have consulted
+      an arm-time snapshot. And **both guards are kept**, because they answer different
+      questions: the record's mode says what this snooze's watch degraded to, including
+      failures no anchor can re-derive, while the monitor says whether the app may act at all.
+      The interface's contract moved with it — `supportedModes` is documented as an
+      *as-of-now* answer that callers must not cache across a stopped watch, and the
+      controller's copy is documented as the snapshot it is. Cost: two `checkSelfPermission`
+      lookups against the package-manager cache and one `isLocationEnabled` binder read, off
+      the tap-to-rule-on path. A refused read answers *false*, so an unreadable subsystem
+      withholds a claim rather than granting one.
 
 - [ ] **Should `effectiveMode` exist, or should render sites take `(mode, endsOnDeparture)`
       explicitly?** Raised by the three findings on PR #267 and left for the maintainer rather
