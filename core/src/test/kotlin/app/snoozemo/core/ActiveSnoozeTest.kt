@@ -645,4 +645,55 @@ class ActiveSnoozeTest {
 
         assertEquals(snooze, snooze.reconciledOnto(undisturbed))
     }
+
+    @Test
+    fun `a fresh snooze requested no timer only, so nothing is partial`() {
+        // Default: the user has not narrowed anything to a timer, and departure
+        // still ends it — an armed exit that was never traded away is not a
+        // failed removal.
+        val snooze = snooze()
+        assertFalse(snooze.timerOnlyRequested)
+        assertFalse(snooze.isPartialTimer)
+    }
+
+    @Test
+    fun `a timer only request with both exits off is not partial`() {
+        // The clean apply: the user asked for a time and both exits came off.
+        val snooze = snooze().copy(
+            timerOnlyRequested = true,
+            endsOnDeparture = false,
+            endsOnMotion = false,
+        )
+        assertFalse(snooze.isPartialTimer)
+    }
+
+    @Test
+    fun `a timer only request with departure still armed is partial`() {
+        // The removal the platform refused: the user asked for a timer, the cap
+        // took, but the departure exit would not come off.
+        val snooze = snooze().copy(timerOnlyRequested = true, endsOnDeparture = true)
+        assertTrue(snooze.isPartialTimer)
+    }
+
+    @Test
+    fun `a timer only request with movement still armed is partial`() {
+        val snooze = snooze().copy(
+            timerOnlyRequested = true,
+            endsOnDeparture = false,
+            endsOnMotion = true,
+        )
+        assertTrue(snooze.isPartialTimer)
+    }
+
+    @Test
+    fun `an exit the user asked for is not a partial timer`() {
+        // Choosing `Until I move` clears the request, so a deliberately-added
+        // exit is not read back as a failed removal.
+        val snooze = snooze().copy(
+            timerOnlyRequested = false,
+            endsOnDeparture = false,
+            endsOnMotion = true,
+        )
+        assertFalse(snooze.isPartialTimer)
+    }
 }
