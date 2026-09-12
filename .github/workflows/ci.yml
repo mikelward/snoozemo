@@ -1442,7 +1442,7 @@ jobs:
           # documents --reverse as reversing the commits already chosen),
           # so a pre-walk cap would keep the newest N and silently drop
           # the oldest — the exact commits the oldest-first notes must
-          # preserve. The cap lives on qualifying subjects inside the
+          # preserve. The cap lives on distinct subjects inside the
           # filter loop below instead; the per-commit diff-tree cost on a
           # pathologically long range (release outage) is the accepted
           # trade.
@@ -1487,23 +1487,37 @@ jobs:
           fi
 
           subjects=()
-          # Set only once a genuinely qualifying 51st+ commit is actually
-          # found (below) — never merely on reaching the cap — independent
-          # of whether the 500-char budget loop further down ever finds a
-          # reason of its own to truncate: if the first 50 subjects happen
-          # to fit under the char cap, that loop would otherwise never
-          # learn a 51st commit existed and the published notes would read
-          # as complete when they aren't (Codex, PR #97).
+          # Set only once a subject is actually dropped — never merely on
+          # reaching the cap — and independent of whether the 500-char
+          # budget loop further down finds a reason of its own to truncate:
+          # if the first 50 subjects happen to fit under the char cap, that
+          # loop would otherwise never learn a 51st subject existed and the
+          # published notes would read as complete when they aren't
+          # (Codex, PR #97).
           cap_truncated=false
-          # Counts commits that QUALIFY, which is what the cap below actually
-          # bounds. Before dedup that was the same number as the subjects
-          # collected, so the cap could read the array; a range of repeated
-          # subjects would now leave the array at one entry and let a
-          # pathologically long range walk every commit in it.
-          qualifying=0
+          # ONE bound, on the card: at most 50 DISTINCT subjects. Counting
+          # commits instead lets 50 repeats eat the budget and silently drop
+          # the distinct subject behind them, with the card holding one
+          # bullet and nowhere near the 500-char cap.
+          #
+          # There is deliberately no separate bound on the walk. Repeats no
+          # longer grow the array, so the budget stops bounding the loop —
+          # but the range is bounded by the release cadence, each commit
+          # costs one `git diff-tree`, and such a bound has to answer two
+          # questions this one does not: what marks the notes truncated, and
+          # what a capped scan that collected nothing means. Getting the
+          # second wrong sets RELEASE_NOTES_SKIP, which never advances the
+          # base, so every later push rescans the same prefix and can never
+          # publish again.
+          MAX_SUBJECTS=50
+          # Returns non-zero only when the budget is spent AND this subject
+          # would have taken a slot — so the caller stops, and the flag
+          # means something really was cut. Checking the budget before that
+          # point is the PR #97 failure in a new place: it claims omission
+          # over a tail of duplicates and housekeeping that would have added
+          # nothing.
           add_subject() {
             local s="$1" i
-            qualifying=$((qualifying + 1))
             # Indexed rather than "${subjects[@]}": the count is always
             # safe to read under `set -u`, an empty array included.
             for (( i = 0; i < ${#subjects[@]}; i++ )); do
@@ -1512,6 +1526,11 @@ jobs:
                 return 0
               fi
             done
+            if [ "${#subjects[@]}" -ge "$MAX_SUBJECTS" ]; then
+              echo "Reached $MAX_SUBJECTS distinct subjects; marking the notes truncated."
+              cap_truncated=true
+              return 1
+            fi
             subjects+=("$s")
           }
 
@@ -1544,30 +1563,7 @@ jobs:
             if [ "$relevant" = "false" ]; then
               continue
             fi
-            # Reached only for a commit that has already cleared every
-            # prefix and path filter above — so a cap hit here means a
-            # real qualifying commit is being discarded, not merely that
-            # 50 slots filled with housekeeping still ahead in the range
-            # (Codex, PR #97, second pass: the first version's check ran
-            # before qualification, so a 51st sha that happened to be
-            # `ci:`-prefixed or housekeeping-only still set this flag and
-            # produced a false "…" even though nothing was actually cut).
-            # Safety net for unusually long ranges, applied AFTER
-            # oldest-first ordering so the head of the list is never
-            # dropped; in practice the 500-char Play cap truncates far
-            # sooner.
-            # Reading `qualifying` rather than the array: with dedup the two
-            # differ, and what this cap bounds is the walk. A 51st qualifying
-            # commit whose subject was already collected would have collapsed
-            # anyway, so the flag now means "the list may be incomplete"
-            # rather than "is incomplete" — the safe direction, since not
-            # marking risks the false-complete failure PR #97 fixed.
-            if [ "$qualifying" -ge 50 ]; then
-              echo "More than 50 qualifying commits in range; marking the notes truncated."
-              cap_truncated=true
-              break
-            fi
-            add_subject "$s"
+            add_subject "$s" || break
           done <<< "$shas"
 
           if [ "${#subjects[@]}" -eq 0 ]; then

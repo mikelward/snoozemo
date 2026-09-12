@@ -239,9 +239,9 @@ it in the same commit.
 - **Play caps "What's new" at 500 characters per language.** CI measures the full formatted
   output — the `• ` bullets, the newline separators, and the `…` truncation marker all
   count — then drops whole trailing subjects (oldest-first preserved at the head) until it
-  fits and appends `…`; a 50-subject cap backstops unusually long ranges. So don't line up
-  a long stack of small commits when one of them tells the user-facing story on its own —
-  squash the supporting work into it.
+  fits and appends `…`; a 50-**distinct**-subject cap backstops unusually long ranges, and
+  a repeat costs no slot. So don't line up a long stack of small commits when one of them
+  tells the user-facing story on its own — squash the supporting work into it.
 - **The range base is the last `main` run that actually published**, not the previous push.
   If a `main` run goes red before distributing, or skips publishing because its secrets are
   missing, those commits stay queued and ship with the next real release instead of being
