@@ -145,6 +145,14 @@ class SnoozeController(
      * capability; and a degradation *fallback* claims `WIFI_ONLY` whether or
      * not anything watches Wi-Fi — a set, not a ceiling, is what can answer
      * that last one (flagged by Codex on PR #73).
+     *
+     * **A snapshot, not a live capability.** [PresenceMonitor.supportedModes]
+     * now reads the location grants and the phone's location setting, so its
+     * answer moves — and this copy is refreshed only at arm and restore. That
+     * is right for what it does here, which is keeping the *running*
+     * machinery's claims honest between updates; it is wrong for anything
+     * deciding whether a capability is available right now, which has to ask
+     * the monitor again (see `SnoozeService.applyChosenEnd`).
      */
     private var supportedModes: Set<TrackingMode> = setOf(TrackingMode.DURATION_ONLY)
 
@@ -807,8 +815,25 @@ class SnoozeController(
         } else {
             snooze.mode
         }
-        // The record's own claim is lowered too, as below.
-        val restored = snooze.copy(mode = honest(settled))
+        // **Lowered only where something is actually watching.** [honest]
+        // keeps a *running* claim from overstating what the machinery does,
+        // and a snooze the user narrowed to its timer runs nothing: its watch
+        // came down with the choice, so its mode is latent capability — what
+        // `Until I leave` would go back to — rather than a claim about
+        // anything in flight. Lowering that is not honesty, it is loss:
+        // [PresenceMonitor.supportedModes] now reads the phone's location
+        // setting, so a restore during an outage that lasts a minute would
+        // persist `DURATION_ONLY` over a perfectly good anchor, and nothing
+        // would ever raise it again — the mode is only recomputed from a
+        // presence update, and this snooze has no watch to deliver one. The
+        // row would be gone for the rest of the snooze (Codex, PR #267).
+        //
+        // Nothing is overstated by keeping it: the restore itself asks the
+        // monitor live before it puts the exit back (`SnoozeService`), so a
+        // capability that really is gone refuses there rather than here.
+        val restored = snooze.copy(
+            mode = if (snooze.endsOnDeparture) honest(settled) else settled,
+        )
         active = restored
 
         // The clock first, before the rule. A record whose cap passed while the

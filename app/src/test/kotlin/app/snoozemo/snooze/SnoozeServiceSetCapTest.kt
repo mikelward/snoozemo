@@ -3,6 +3,7 @@ package app.snoozemo.snooze
 import android.content.Intent
 import app.snoozemo.R
 import app.snoozemo.core.ActiveSnooze
+import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenOutcome
 import java.time.Duration
@@ -153,6 +154,68 @@ class SnoozeServiceSetCapTest {
         val after = ActiveSnoozeStore(appContext).load()
         assertEquals("already at its ceiling, so nothing moves", record.capExpiresAt, after?.capExpiresAt)
         assertEquals(EndChoiceResult.APPLIED, reported)
+    }
+
+    @Test
+    fun `a departure restore is declined once nothing can track a departure now`() {
+        // The hazard the live read exists for. A timer-only snooze stops its
+        // watch, and `mode` is only ever recomputed from a presence update —
+        // so the record goes on claiming the capability it had when the watch
+        // came down. Revoking location in that window announces itself to
+        // nobody: Android broadcasts no permission change, and `MODE_CHANGED`
+        // reaches only a registered receiver. The frozen mode used to pass the
+        // guard and the restore then pushed the cap back out to the ceiling.
+        val record = snoozeFixture(now).copy(
+            capExpiresAt = now.plus(Duration.ofHours(1)),
+            endsOnDeparture = false,
+        )
+        assertTrue(
+            "precondition: the record still claims it can track a departure",
+            record.mode.tracksDeparture,
+        )
+        // Restored while the grants are there, so the controller's mode is
+        // honest and departure-tracking — then revoked underneath it, which is
+        // the window a stopped watch cannot notice.
+        val service = startService(SnoozeService.ACTION_RESTORE, record)
+        SnoozeDebugLog.resetForTest()
+        TestSnoozeService.presence.canActOnAnchors = false
+
+        service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
+            putExtra(SnoozeService.EXTRA_RESTORE_END, true)
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+
+        assertEquals(
+            "the shortened cap stands rather than going back to the ceiling",
+            record.capExpiresAt,
+            ActiveSnoozeStore(appContext).load()?.capExpiresAt,
+        )
+        assertEquals("and the tap is not left looking accepted", EndChoiceResult.REFUSED, reported)
+        // **Which guard fired matters.** The record's own mode check would
+        // decline this too if the controller had been lowered, and then this
+        // test would pass while proving nothing about the live read.
+        assertTrue(
+            "the live capability check is what declined it",
+            SnoozeDebugLog.snapshot().any { it.contains("nothing can track a departure now") },
+        )
+    }
+
+    @Test
+    fun `a departure restore still works while the grants are there`() {
+        // The other direction, and the one that matters most: the live read
+        // must not decline a restore that is perfectly fine, which would make
+        // `Until I leave` a one-way door again.
+        val record = snoozeFixture(now).copy(
+            capExpiresAt = now.plus(Duration.ofHours(1)),
+            endsOnDeparture = false,
+        )
+
+        restoreEnd(record)
+
+        assertEquals("the restore applied", EndChoiceResult.APPLIED, reported)
+        val after = ActiveSnoozeStore(appContext).load()
+        assertEquals("the exit is back", true, after?.endsOnDeparture)
+        assertEquals("and the cap is back at the ceiling", record.capCeilingAt, after?.capExpiresAt)
     }
 
     @Test

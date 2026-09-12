@@ -1394,6 +1394,19 @@ Three differences from the sheet, and all three are behavior rather than layout:
   `startedAt`, so the identity check passes and the screen's own reading is by definition a moment
   behind. Restoring anyway would put an eight-hour cap on a snooze with nothing watching for the
   departure the row named.
+
+  **Two checks, because the record cannot answer the second** (maintainer, 2026-09-12). The
+  record's own mode says what *this snooze's* watch degraded to, including failures nothing can
+  re-derive from an anchor — a refused geofence registration, a fix that went bad. What it cannot
+  say is whether the app may still act at all, because a mode is only ever recomputed from a
+  presence update and a snooze narrowed to its timer has stopped its watch: revoke location in
+  that window, or turn the setting off, and the record goes on claiming a capability that is
+  gone. Neither loss announces itself to a stopped monitor — Android broadcasts no permission
+  change, and the location-mode broadcast reaches only a registered receiver. So
+  `PresenceMonitor.supportedModes` reads the grants and the location setting live and is asked
+  again at the moment the restore is acted on. It is an **as-of-now** answer, and the controller's
+  copy of it is a snapshot refreshed at arm and restore — right for keeping a running watch's
+  claims honest, wrong for deciding whether a capability is available, which has to ask again.
 - **Meeting ends are rows here, not just a notification action.** §4.3's card offers the next
   meeting end; the screen offers the next two, on the same rules — later than the floor, earlier
   than the **backstop**, times only and never a title. The backstop rather than the cap for the

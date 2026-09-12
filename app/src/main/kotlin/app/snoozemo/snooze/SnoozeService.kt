@@ -2647,8 +2647,31 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // silent by a control that said otherwise, which is principle 1's
         // failure (Codex, PR #234). The service is the only place holding the
         // live record, so this is where the question gets answered.
+        //
         if (restoring && !running.mode.tracksDeparture) {
             SnoozeDebugLog.event("end-condition: declining a departure restore; this snooze tracks no departure")
+            return EndChoiceResult.REFUSED
+        }
+        // **And the monitor is asked too, because the record cannot answer
+        // this half** (maintainer, 2026-09-12). `running.mode` is only ever
+        // recomputed from a presence *update*, and a snooze narrowed to its
+        // timer has stopped its watch — so across that window the record's
+        // mode is frozen at whatever was true when the watch came down.
+        // Revoke location, or turn the setting off, and nothing corrects it:
+        // no permission change is broadcast at all, and `MODE_CHANGED` reaches
+        // only a registered receiver, which a stopped watch does not have. The
+        // frozen answer passed the guard above, armed the exit, **and
+        // lengthened the cap back to `capCeilingAt`** — hours of extra silence
+        // granted on a premise that had already expired.
+        //
+        // **Both, not either.** They answer different questions and neither
+        // subsumes the other: the record says what *this snooze's* watch
+        // degraded to, including failures the monitor cannot re-derive from an
+        // anchor — a refused geofence registration, a fix that went bad — while
+        // `supportedModes` says whether this app may still act on the anchor at
+        // all, which is the half that goes stale while nothing is running.
+        if (restoring && presenceMonitor.supportedModes(running.anchor).none { it.tracksDeparture }) {
+            SnoozeDebugLog.event("end-condition: declining a departure restore; nothing can track a departure now")
             return EndChoiceResult.REFUSED
         }
 

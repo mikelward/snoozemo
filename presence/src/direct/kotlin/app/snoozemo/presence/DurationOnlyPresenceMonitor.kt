@@ -31,7 +31,13 @@ class DurationOnlyPresenceMonitor : PresenceMonitor {
 
     override fun stop() = Unit
 
-    /** Watching nothing supports nothing: every snooze is honestly a timer. */
+    /**
+     * Watching nothing supports nothing: every snooze is honestly a timer.
+     *
+     * Constant, and the one implementation the live reads of the interface's
+     * contract do not apply to — there is no grant this could lose, because it
+     * asks for nothing in the first place.
+     */
     override fun supportedModes(anchor: Anchor): Set<TrackingMode> =
         setOf(TrackingMode.DURATION_ONLY)
 

@@ -152,10 +152,24 @@ internal class FakePresenceMonitor : PresenceMonitor {
         stops++
     }
 
+    /**
+     * Whether this monitor may still act on what an anchor holds — the
+     * location grants and the phone's location setting, which the real
+     * geofence monitor reads live inside [supportedModes].
+     *
+     * Settable, so a test can revoke them mid-snooze without a second fake.
+     * That is the case the live read exists for: nothing announces either
+     * loss to a monitor that is not running, so a stopped watch's recorded
+     * mode goes stale and only asking again finds out.
+     */
+    var canActOnAnchors: Boolean = true
+
     /** The geofence monitor's rule, so the fixtures read like the real flavor. */
     override fun supportedModes(anchor: Anchor): Set<TrackingMode> = buildSet {
-        if (anchor.hasUsableFix) add(TrackingMode.FULL)
-        if (anchor.ssid != null) add(TrackingMode.WIFI_ONLY)
+        if (canActOnAnchors) {
+            if (anchor.hasUsableFix) add(TrackingMode.FULL)
+            if (anchor.ssid != null) add(TrackingMode.WIFI_ONLY)
+        }
         add(TrackingMode.DURATION_ONLY)
     }
 
