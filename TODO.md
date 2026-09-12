@@ -5237,7 +5237,14 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
       is still armed). Under the record flag that case disappears; patched as view state
       it is a sixth preservation rule. **Approved, and scheduled as its own pull
       request** (maintainer, 2026-09-12: "Sounds good but as a separate PR I think"). Not
-      built in #267, so the deferred finding above travels with it.
+      built in #267, so the deferred findings travel with it — **three by the end**: the
+      retry that clears the flag before its own outcome (round 27), `reconcile`'s
+      stale-offer reseed of a running snooze (round 29), and a stepper moving the offer
+      while the line still describes the applied time (round 30). The last is the one that
+      shows why a patch was the wrong answer: clearing on a step deletes a warning about a
+      still-armed exit, and naming the applied time in the line means carrying that instant
+      as a second saved field. The record already holds both the applied cap and the armed
+      exits.
 
 - [x] **The exit-warning card is gone; the ongoing notification carries it**
       (maintainer, 2026-09-12, choosing (b)+(c) from the three options this entry
