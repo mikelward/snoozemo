@@ -5296,7 +5296,7 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
       ceiling a backward clock change can lower. `EndChoiceController.steppedByUser` is
       what separates "the user's time" from "the clock's".
 
-- [ ] **Should "the user asked for timer-only" live on the record?** Five consecutive
+- [x] **Should "the user asked for timer-only" live on the record?** Five consecutive
       Codex rounds on PR #267 have been about where the partial-success report lives and
       how long it survives — nine findings on the separate shade card, then the reseed
       after an idle-row start, then the rotation, and now a retry that clears it before
@@ -5325,6 +5325,20 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
       still-armed exit, and naming the applied time in the line means carrying that instant
       as a second saved field. The record already holds both the applied cap and the armed
       exits.
+      **Done.** `ActiveSnooze` gained `timerOnlyRequested` and the derived `isPartialTimer =
+      timerOnlyRequested && (endsOnDeparture || endsOnMotion)`; `SnoozeController` gained
+      `setTimerOnlyRequested`, and the flag is set at the three sheet-choice choke points
+      (`makeTimerOnly` sets it, `makeTimerOnly` restoring and `applyMotionEndChoice` clear
+      it). The sheet, the idle rows and the tile now derive the "can still end sooner" line
+      from the record via `endChoiceUiState`, so `commitPartial` and its three saved keys
+      (`KEY_SHEET_PARTIAL`, `KEY_ROWS_PARTIAL`, `STATE_COMMIT_PARTIAL`) are gone. **The
+      three deferred #267 findings are dissolved rather than patched**: the retry that
+      cleared the flag before its outcome (round 27), `reconcile`'s stale-offer reseed
+      (round 29), and a stepper moving the offer while the line named the applied time
+      (round 30) were all about keeping one flag consistent across a transition — with the
+      line derived from the record there is no flag to keep consistent. **Still autopilot
+      copy for the maintainer to check on a device**: the partial line's wording is
+      unchanged from #267 and still untranslated.
 
 - [x] **The exit-warning card is gone; the ongoing notification carries it**
       (maintainer, 2026-09-12, choosing (b)+(c) from the three options this entry
