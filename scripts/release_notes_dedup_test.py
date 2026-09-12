@@ -32,8 +32,8 @@ def extract_collection_block() -> str:
     """Return the workflow's subject-collection block, dedented.
 
     Spans `subjects=()` through the loop's `done`, so the helper, the
-    qualifying counter, the prefix filter, the housekeeping-path filter and
-    the call site are all the shipped text. Fails loudly when the block cannot
+    subject budget, the prefix filter, the housekeeping-path filter and the call
+    site are all the shipped text. Fails loudly when the block cannot
     be found: a test that silently exercises nothing is worse than no test,
     and restructuring this step is exactly the change that should fail here
     rather than quietly pass.
@@ -78,7 +78,7 @@ def make_commit(repo: Path, subject: str, filename: str, nonce: int) -> str:
 
 
 def collect(block: str, commits: list) -> tuple:
-    """Run the block over `commits` and return (subjects, qualifying, truncated).
+    """Run the block over `commits` and return (subjects, truncated).
 
     `commits` is a list of (subject, filename). A setup commit is made first
     and excluded from the range: the production step runs `git diff-tree`
@@ -102,8 +102,7 @@ def collect(block: str, commits: list) -> tuple:
             "set -euo pipefail\n"
             f"shas=$(printf '%s\\n' {' '.join(shas)})\n"
             + block
-            + '\nprintf "Q:%s\\n" "$qualifying"\n'
-            + 'printf "T:%s\\n" "$cap_truncated"\n'
+            + '\nprintf "T:%s\\n" "$cap_truncated"\n'
             + 'for s in ${subjects[@]+"${subjects[@]}"}; do printf "S:%s\\n" "$s"; done\n'
         )
         result = subprocess.run(
@@ -117,9 +116,8 @@ def collect(block: str, commits: list) -> tuple:
             raise AssertionError(f"block exited {result.returncode}: {result.stderr}")
         lines = result.stdout.splitlines()
         subjects = [l[2:] for l in lines if l.startswith("S:")]
-        qualifying = int(next(l[2:] for l in lines if l.startswith("Q:")))
         truncated = next(l[2:] for l in lines if l.startswith("T:")) == "true"
-        return subjects, qualifying, truncated
+        return subjects, truncated
 
 
 def main() -> int:
@@ -134,7 +132,7 @@ def main() -> int:
 
     # The behavior this exists for: two dependency batches in one release
     # window write the same subject, and the card must carry it once.
-    subjects, qualifying, truncated = collect(
+    subjects, truncated = collect(
         block,
         [
             ("Update dependencies", "gradle/libs.versions.toml"),
@@ -142,12 +140,12 @@ def main() -> int:
         ],
     )
     check("a repeated subject is collected once", subjects, ["Update dependencies"])
-    check("both commits still counted as qualifying", qualifying, 2)
+    check("a short range is not marked truncated", truncated, False)
 
     # The FIRST occurrence survives, keeping its position. The list is
-    # oldest-first and both caps drop from the tail, so a repeat must never
+    # oldest-first and the cap drops from the tail, so a repeat must never
     # displace the head.
-    subjects, _, _ = collect(
+    subjects, _ = collect(
         block,
         [
             ("First", "app/a.kt"),
@@ -159,7 +157,7 @@ def main() -> int:
 
     # Dropping the date from the batch subject is what makes repeats likely,
     # so a dated and an undated subject must stay distinct.
-    subjects, _, _ = collect(
+    subjects, _ = collect(
         block,
         [
             ("Update dependencies", "gradle/libs.versions.toml"),
@@ -174,7 +172,7 @@ def main() -> int:
 
     # Subjects are compared as text: a glob must not match a different
     # subject, and quotes must not be re-split.
-    subjects, _, _ = collect(
+    subjects, _ = collect(
         block,
         [
             ("Fix * and ? in names", "app/a.kt"),
@@ -190,9 +188,8 @@ def main() -> int:
         ["Fix * and ? in names", "Fix anything", 'He said "hi"'],
     )
 
-    # The filters still run, and filtered commits never reach the counter —
-    # so the cap continues to bound qualifying commits, not walked ones.
-    subjects, qualifying, truncated = collect(
+    # The filters still run.
+    subjects, _ = collect(
         block,
         [
             ("ci: regenerate snapshots", "app/a.kt"),
@@ -201,9 +198,8 @@ def main() -> int:
         ],
     )
     check("prefixed commits are filtered out", subjects, ["Real change"])
-    check("filtered commits are not counted as qualifying", qualifying, 1)
 
-    subjects, _, _ = collect(
+    subjects, _ = collect(
         block,
         [
             ("Housekeeping only", "SPEC.md"),
@@ -212,36 +208,62 @@ def main() -> int:
     )
     check("housekeeping-path commits are filtered out", subjects, ["Real change"])
 
-    # The cap bounds the WALK, and after dedup the array no longer measures
-    # it: 60 commits sharing one subject leave the array at one entry, so a
-    # cap reading the array would walk every one of them. Reading the counter
-    # instead, the loop stops at 50 — which is what `qualifying` reports back.
-    subjects, qualifying, truncated = collect(
+    # The subject budget counts DISTINCT subjects, so repeats must not eat
+    # the slots a later distinct subject needs. Counting commits instead
+    # drops "Add call history" here and prints one bullet, with no ellipsis
+    # and nowhere near the 500-char cap — a release-worthy change silently
+    # gone (Codex, PR #338).
+    subjects, _ = collect(
         block,
-        [(f"Subject {i // 30}", "app/a.kt") for i in range(60)],
+        [("Update dependencies", "gradle/libs.versions.toml")] * 50
+        + [("Add call history", "app/a.kt")],
     )
-    check("the cap stops the walk at 50 qualifying commits", qualifying, 50)
-    check("dedup still applies under the cap", subjects, ["Subject 0", "Subject 1"])
-    # The flag is what appends "…" to the card, so a cap hit must set it —
-    # under-marking is the false-complete failure PR #97 fixed.
-    check("a cap hit marks the notes truncated", truncated, True)
+    check(
+        "repeats do not consume the subject budget",
+        subjects,
+        ["Update dependencies", "Add call history"],
+    )
 
-    # And a range that never reaches the cap must leave the flag alone,
-    # whatever dedup did to the list — a false "…" claims a bullet was cut
-    # when none was.
-    subjects, _, truncated = collect(
-        block,
-        [
-            ("Update dependencies", "gradle/libs.versions.toml"),
-            ("Update dependencies", "gradle/libs.versions.toml"),
-        ],
+    # The budget still bites on genuinely distinct subjects, keeps the
+    # oldest — the list is oldest-first and the cap drops from the tail —
+    # and says so, since the formatter only appends the "…" marker when
+    # something told it the list was cut.
+    subjects, truncated = collect(
+        block, [(f"Subject {i}", "app/a.kt") for i in range(60)]
     )
-    check("a collapsed repeat does not mark the notes truncated", truncated, False)
+    check("the budget stops at 50 distinct subjects", len(subjects), 50)
+    check("the budget keeps the oldest", subjects[0], "Subject 0")
+    check("a budget hit marks the notes truncated", truncated, True)
+
+    # A long range of repeats is exactly what dedup is for, and must NOT be
+    # cut: the budget counts distinct subjects, so it never fires here. This
+    # is also the case a separate walk bound would have cut silently.
+    subjects, truncated = collect(
+        block, [("Update dependencies", "gradle/libs.versions.toml")] * 200
+    )
+    check("a long repeated range collects one subject", subjects, ["Update dependencies"])
+    check("and is not marked truncated", truncated, False)
+
+    # A full budget followed by nothing that would have taken a slot is a
+    # COMPLETE list, so it must not claim otherwise: an ellipsis there says
+    # content was dropped when the tail was duplicates and housekeeping.
+    subjects, truncated = collect(
+        block,
+        [(f"Subject {i}", "app/a.kt") for i in range(50)]
+        + [("Subject 0", "app/b.kt"), ("ci: regenerate snapshots", "app/c.kt")],
+    )
+    check("a full budget plus a duplicate tail collects 50", len(subjects), 50)
+    check("and is not marked truncated", truncated, False)
+
+    check(
+        "the shipped subject budget is 50",
+        bool(re.search(r"^\s*MAX_SUBJECTS=50$", block, re.M)),
+        True,
+    )
 
     # An empty result is reachable and must not trip `set -u` on the array.
-    subjects, qualifying, truncated = collect(block, [("ci: nothing to ship", "app/a.kt")])
+    subjects, _ = collect(block, [("ci: nothing to ship", "app/a.kt")])
     check("an all-filtered range yields no subjects", subjects, [])
-    check("an all-filtered range counts none qualifying", qualifying, 0)
 
     for failure in failures:
         print(f"FAIL: {failure}", file=sys.stderr)
