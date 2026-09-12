@@ -597,7 +597,12 @@ internal data class EndChoiceUiState(
     val meetings: List<MeetingChoice> = emptyList(),
     val committing: Boolean = false,
     val failed: Boolean = false,
-    /** [EndChoiceController.commitPartial], for the line beside the rows. */
+    /**
+     * Whether the running snooze is a timer the user narrowed while an exit
+     * stayed armed ([ActiveSnooze.isPartialTimer]) — draws the line beside the
+     * rows. Derived from the record, not carried as view state, so it survives
+     * a rotation, a process death and a reboot.
+     */
     val partial: Boolean = false,
     /**
      * Whether this snooze can end on a departure at all. False on a
@@ -686,7 +691,6 @@ internal fun endChoiceUiState(
     now: Instant,
     committing: Boolean,
     failed: Boolean,
-    partial: Boolean = false,
     format: (Instant) -> String,
     /**
      * Whether this build can track a departure at all — the flavor constant,
@@ -713,7 +717,10 @@ internal fun endChoiceUiState(
                 .map { MeetingChoice(at = it, label = format(it)) },
             committing = committing,
             failed = failed,
-            partial = partial,
+            // An offer to start has no snooze yet, so nothing is partial: the
+            // line appears only once the arm's record is read back and the
+            // offer has become that snooze's own (offerFor set, below).
+            partial = false,
             // `Until I leave` too (maintainer, 2026-09-11): every row the
             // running screen has is a way to start, and this one starts the
             // plain arm the pinned `Snooze` makes. Withheld only where this
@@ -736,7 +743,12 @@ internal fun endChoiceUiState(
             .map { MeetingChoice(at = it, label = format(it)) },
         committing = committing,
         failed = failed,
-        partial = partial,
+        // Derived from the offer's own record, not carried as view state: the
+        // user asked for a timer and an exit stayed armed. Read here it survives
+        // a rotation, a process death and a reboot because the record does, and
+        // it shows on the sheet even where notifications are denied and the
+        // ongoing card cannot (ActiveSnooze.isPartialTimer).
+        partial = offerRecord?.isPartialTimer == true,
         // The same predicate the service honors the tap with, so the row is
         // never offered where the restore would be declined — and never
         // withheld where it would be taken.
