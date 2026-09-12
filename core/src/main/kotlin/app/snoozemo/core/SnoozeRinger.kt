@@ -143,6 +143,37 @@ data class BorrowedRinger(
      * today's behavior rather than being re-applied on sight.
      */
     val applied: Boolean = true,
+
+    /**
+     * Whether, **as last observed**, the user has the ringer above the ceiling
+     * the snooze set — observed as it happens, not inferred at give-back time,
+     * and cleared again if they bring it back down (so a raise taken back does
+     * not disown the loan).
+     *
+     * The give-back used to answer "did the user move it?" by reading the live
+     * ringer and comparing it to [setTo]. That read is taken while Snoozemo's
+     * own Do Not Disturb rule is still active, and an active rule perturbs what
+     * `getRingerMode` reports (it comes back quieter than the ceiling we set),
+     * so the comparison mistook the platform's own coupling for a deliberate
+     * change and disowned a loan it should have handed back — leaving the phone
+     * quieter than the user left it (device report, 2026-09-12).
+     *
+     * So the signal is recorded live instead, by a `RINGER_MODE_CHANGED`
+     * receiver, and only in the one direction that our own writes and the zen
+     * coupling can never produce: **louder** than the ceiling. A ceiling write
+     * only ever sets the ringer *to* the ceiling, and Do Not Disturb only ever
+     * makes it quieter, so a mode above the ceiling can only be the user
+     * raising it — a deliberate "let it through" that must survive the snooze.
+     * A user *lowering* it is indistinguishable from the coupling and is handed
+     * back instead, which is the safe direction: restoring over a quieter
+     * choice is a gesture to undo, while leaving a phone silent after a snooze
+     * it was told had ended is principle 1's failure.
+     *
+     * Defaults false — a record from before the field, or one the receiver
+     * never had a live process to observe, reads as "not moved" and is handed
+     * back, the safe direction above.
+     */
+    val userMoved: Boolean = false,
 )
 
 /** What to do about the ringer, and what the borrow record becomes. */
@@ -505,23 +536,49 @@ object RingerHandover {
     }
 
     /**
-     * What releasing should do, given the outstanding [borrowed] loan and the
-     * live [current] mode.
+     * What releasing should do, given the outstanding [borrowed] loan.
      *
-     * An unreadable [current] hands the ringer back rather than holding it. It
-     * means the user's own change cannot be ruled out — but the two mistakes are
-     * not priced alike: putting the ringer back over a deliberate change is an
-     * annoyance the user can undo in one gesture, and *not* putting it back
-     * leaves a phone silent after a snooze it was told had ended, which is
-     * principle 1's failure.
+     * **The live mode is deliberately not read here** (device report,
+     * 2026-09-12). This runs before Snoozemo's own Do Not Disturb rule is turned
+     * off, and an active rule makes `getRingerMode` report a mode quieter than
+     * the ceiling we set — so a comparison against [BorrowedRinger.setTo] taken
+     * now mistakes the platform's coupling for the user and disowns a loan it
+     * should hand back, leaving the phone quieter than the user left it. The
+     * user's own change is observed live instead and carried on the loan as
+     * [BorrowedRinger.userMoved]; here we only read it.
+     *
+     * The default is to hand the ringer back, which is the safe direction: a
+     * user change we missed means a phone put back to how they had it before
+     * the snooze — a gesture to undo — where the opposite mistake leaves a phone
+     * silent after a snooze it was told had ended, which is principle 1's
+     * failure.
      */
-    fun giveBack(borrowed: BorrowedRinger?, current: RingerMode?): RingerStep {
+    /**
+     * Whether [observed] is a ringer mode only the user could have produced
+     * while the snooze held [borrowed] — one **louder than the ceiling** we set.
+     *
+     * The receiver that watches for a mid-snooze change cannot trust the mode it
+     * reads to be the user's: a ceiling write sets the ringer *to* the ceiling,
+     * and an active Do Not Disturb rule only ever makes it quieter, so both a
+     * quieter reading and one at the ceiling are consistent with Snoozemo's own
+     * doing. Only a mode *above* the ceiling is a change neither could have
+     * caused — the user deliberately letting it through — so that is the one
+     * this claims. A user lowering it is left unclaimed and handed back, which
+     * is [giveBack]'s safe default.
+     *
+     * False unless the loan's own ceiling was actually applied: with nothing of
+     * ours holding the ringer down, a louder mode overrode nothing.
+     */
+    fun observedUserRaise(borrowed: BorrowedRinger?, observed: RingerMode?): Boolean {
+        val setTo = borrowed?.setTo ?: return false
+        if (!borrowed.applied) return false
+        if (observed == null) return false
+        return observed.isLouderThan(setTo)
+    }
+
+    fun giveBack(borrowed: BorrowedRinger?): RingerStep {
         if (borrowed == null) return RingerStep.Nothing
-        if (current == null) return RingerStep.GiveBack(borrowed.restoreTo)
-        // Unverifiable for a different reason — the record cannot say what was
-        // set — and answered the same way, per `BorrowedRinger.setTo`.
-        val setTo = borrowed.setTo ?: return RingerStep.GiveBack(borrowed.restoreTo)
-        if (current != setTo) return RingerStep.Disown
+        if (borrowed.userMoved) return RingerStep.Disown
         return RingerStep.GiveBack(borrowed.restoreTo)
     }
 }

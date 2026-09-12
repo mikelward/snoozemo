@@ -1,6 +1,8 @@
 package app.snoozemo.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -97,7 +99,7 @@ class RingerHandoverTest {
 
         assertEquals(
             RingerStep.GiveBack(RingerMode.NORMAL),
-            RingerHandover.giveBack(outstanding, current = RingerMode.VIBRATE),
+            RingerHandover.giveBack(outstanding),
         )
     }
 
@@ -105,33 +107,41 @@ class RingerHandoverTest {
     fun `nothing borrowed means nothing to hand back`() {
         assertEquals(
             RingerStep.Nothing,
-            RingerHandover.giveBack(borrowed = null, current = RingerMode.NORMAL),
+            RingerHandover.giveBack(borrowed = null),
         )
     }
 
     @Test
-    fun `a ringer the user moved mid-snooze is theirs now`() {
-        val outstanding = BorrowedRinger(restoreTo = RingerMode.NORMAL, setTo = RingerMode.VIBRATE)
-
-        // They silenced it themselves while snoozed. Putting it back to NORMAL
-        // would override a deliberate choice, so the loan is dropped instead.
-        assertEquals(
-            RingerStep.Disown,
-            RingerHandover.giveBack(outstanding, current = RingerMode.SILENT),
+    fun `a ringer the user raised above the ceiling is theirs now`() {
+        // Observed live while the snooze held it (BorrowedRinger.userMoved) —
+        // not inferred from a mode read taken while our own rule is still on,
+        // which reports quieter than the ceiling and mistook the coupling for a
+        // deliberate change. Putting it back would override a deliberate "let it
+        // through", so the loan is dropped instead.
+        val moved = BorrowedRinger(
+            restoreTo = RingerMode.NORMAL,
+            setTo = RingerMode.VIBRATE,
+            userMoved = true,
         )
+
+        assertEquals(RingerStep.Disown, RingerHandover.giveBack(moved))
     }
 
     @Test
-    fun `an unreadable mode still hands the ringer back`() {
-        val outstanding = BorrowedRinger(restoreTo = RingerMode.NORMAL, setTo = RingerMode.VIBRATE)
+    fun `a ringer left where the snooze set it is handed back`() {
+        // No observed user change, so the default is to hand it back — even
+        // though a live read taken now would come back SILENT under the active
+        // rule, which is exactly the coupling the old comparison mistook for
+        // the user (device report, 2026-09-12).
+        val outstanding = BorrowedRinger(
+            restoreTo = RingerMode.NORMAL,
+            setTo = RingerMode.VIBRATE,
+            userMoved = false,
+        )
 
-        // The user's own change cannot be ruled out — and the two mistakes are
-        // not priced alike. A phone left quiet after a snooze it was told had
-        // ended is principle 1's failure; one put back to ringing is a gesture
-        // to undo.
         assertEquals(
             RingerStep.GiveBack(RingerMode.NORMAL),
-            RingerHandover.giveBack(outstanding, current = null),
+            RingerHandover.giveBack(outstanding),
         )
     }
 
@@ -141,7 +151,48 @@ class RingerHandoverTest {
 
         assertEquals(
             RingerStep.GiveBack(RingerMode.NORMAL),
-            RingerHandover.giveBack(unverifiable, current = RingerMode.VIBRATE),
+            RingerHandover.giveBack(unverifiable),
+        )
+    }
+
+    // -- observing a mid-snooze user change ---------------------------------
+
+    @Test
+    fun `a mode louder than the ceiling is the user, and only that`() {
+        val outstanding = BorrowedRinger(restoreTo = RingerMode.NORMAL, setTo = RingerMode.VIBRATE)
+
+        // NORMAL is louder than the VIBRATE ceiling — a raise our own writes and
+        // Do Not Disturb can never produce, so it is the user's.
+        assertTrue(RingerHandover.observedUserRaise(outstanding, RingerMode.NORMAL))
+        // At the ceiling, or below it: consistent with our ceiling or the zen
+        // coupling, so not claimed.
+        assertFalse(RingerHandover.observedUserRaise(outstanding, RingerMode.VIBRATE))
+        assertFalse(RingerHandover.observedUserRaise(outstanding, RingerMode.SILENT))
+    }
+
+    @Test
+    fun `nothing is a user raise without an applied ceiling to raise past`() {
+        // Nothing borrowed, an unapplied borrow, an unverifiable set, or an
+        // unreadable mode: with nothing of ours holding the ringer, a louder
+        // mode overrode nothing.
+        assertFalse(RingerHandover.observedUserRaise(null, RingerMode.NORMAL))
+        assertFalse(
+            RingerHandover.observedUserRaise(
+                BorrowedRinger(restoreTo = RingerMode.NORMAL, setTo = RingerMode.VIBRATE, applied = false),
+                RingerMode.NORMAL,
+            ),
+        )
+        assertFalse(
+            RingerHandover.observedUserRaise(
+                BorrowedRinger(restoreTo = RingerMode.NORMAL, setTo = null),
+                RingerMode.NORMAL,
+            ),
+        )
+        assertFalse(
+            RingerHandover.observedUserRaise(
+                BorrowedRinger(restoreTo = RingerMode.NORMAL, setTo = RingerMode.VIBRATE),
+                observed = null,
+            ),
         )
     }
 

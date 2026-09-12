@@ -82,6 +82,29 @@ internal fun reconcileRingerInBackground(
 }
 
 /**
+ * Re-checks the ringer against the current loan off the caller's thread, so a
+ * `RINGER_MODE_CHANGED` receiver hands off and returns.
+ *
+ * The check takes the ringer lock (`AudioRingerController.noteRingerModeChanged`),
+ * which the start-up reconcile can hold across binder calls, so it must not run
+ * on the main thread a registered receiver is delivered on. It reads the live
+ * mode rather than the mode the broadcast carried precisely because it runs
+ * later than the event — see `noteRingerModeChanged` for why that closes the
+ * delayed-broadcast race. Best-effort: a process that dies before the daemon
+ * finishes simply never records the raise, which the release path reads as "not
+ * moved" and hands back — the safe direction (`BorrowedRinger.userMoved`).
+ *
+ * @return the worker, so a test can join it; production ignores it.
+ */
+internal fun noteRingerRaiseInBackground(context: Context): Thread {
+    val app = context.applicationContext
+    return Thread {
+        runCatching { AudioRingerController.default(app).noteRingerModeChanged() }
+            .onFailure { SnoozeDebugLog.failure(it, "ringer: noting a mid-snooze change failed") }
+    }.apply { isDaemon = true }.also { it.start() }
+}
+
+/**
  * How long startup reconciliation lets the arm window pass before it reaches
  * for the ringer.
  *
