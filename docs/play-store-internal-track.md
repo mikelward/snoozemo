@@ -35,7 +35,7 @@ durable, discoverable build.
 Developer Publishing API this action calls enforces it as a hard
 precondition** (maintainer, 2026-08-23, from direct experience elsewhere): a
 release containing a declared restricted permission (here,
-`ACCESS_BACKGROUND_LOCATION`, `play`-flavor only) is rejected by the API
+`ACCESS_BACKGROUND_LOCATION`) is rejected by the API
 itself if the Permissions Declaration Form isn't on file, independent of
 whatever a manual Console upload lets through. So adding
 `PLAY_SERVICE_ACCOUNT_JSON` before that form is filed doesn't just risk
@@ -48,10 +48,8 @@ downside (a permanently red `deploy` job on every push).
 ## What gets built
 
 `./gradlew :app:bundlePlayRelease` produces
-`app/build/outputs/bundle/playRelease/app-play-release.aab`. Only the `play`
-flavor ever reaches Play — `direct` is the sideload/F-Droid fallback
-(`SPEC.md` §3.4) and has no Play listing. Play App Signing re-signs the AAB
-with its own managed app-signing key on upload, so the upload key generated
+`app/build/outputs/bundle/playRelease/app-play-release.aab`. Play App Signing re-signs
+the AAB with its own managed app-signing key on upload, so the upload key generated
 below only authenticates to Play — it doesn't sign what testers run.
 
 ## When the build and upload run

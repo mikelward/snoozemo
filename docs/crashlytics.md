@@ -1,9 +1,7 @@
 # Crash reporting
 
-Snoozemo's `play` builds report crashes through **Firebase Crashlytics**, behind a
-switch in Settings that is **off until the user turns it on** (`SPEC.md` §12). The `direct` flavor has
-no reporter at all: it carries no Play Services dependency and declares no `INTERNET`
-permission, so that build cannot send anything anywhere (`SPEC.md` §3.4).
+Snoozemo reports crashes through **Firebase Crashlytics**, behind a
+switch in Settings that is **off until the user turns it on** (`SPEC.md` §12).
 
 This page is the setup, and the reasoning that is too operational for `SPEC.md`.
 
@@ -70,7 +68,7 @@ policy and the compliance guidance it is supposed to agree with (Codex, PR #113)
 The on-device debug log (`SPEC.md` §4.6) is a separate thing and is not part of a report:
 it still leaves the phone only when the user shares it by hand.
 
-**Firebase Analytics is here now** (maintainer, 2026-08-31), on `play` beside Crashlytics
+**Firebase Analytics is here now** (maintainer, 2026-08-31), beside Crashlytics
 and behind the same single consent. It collects only what the SDK collects automatically:
 Snoozemo logs no events of its own and sets no custom user properties, so there is no call
 site that could attach a coordinate, an SSID or a place name.
