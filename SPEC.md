@@ -1295,10 +1295,19 @@ nothing (§7's `MIN_CAP`), on either path.
   independent, and abandoning the second because the first failed left a snooze ending on an exit
   nothing had mentioned.
 
-  Only the *fact of a failed removal* is held in the sheet's own state and saved with it: a
-  chosen time over a snooze that also ends on movement is a combination the rows offer
-  deliberately, so a record carrying a chosen cap and an armed exit is the same record either
-  way, and nothing about it says which happened.
+  **Whether the snooze was narrowed to its timer is on the record, not held in the sheet's
+  state** (maintainer, 2026-09-12). It used to be a sheet flag saved with the sheet, on the
+  reasoning that a chosen time over a snooze that also ends on movement is a combination the
+  rows offer deliberately — so a record carrying a chosen cap and an armed exit looked the
+  same whether the removal failed or the combination was asked for, and only the sheet knew
+  which. `ActiveSnooze.timerOnlyRequested` now records the intent — *a fixed time and nothing
+  else* — set when a time is chosen and cleared when an exit is put back, so `isPartialTimer =
+  timerOnlyRequested && (endsOnDeparture || endsOnMotion)` tells the two apart from the record
+  alone. Partial then survives a rotation, a process death and a reboot because the record
+  does, and shows on the sheet even where notifications are denied and the ongoing card
+  cannot; the sheet's `commitPartial` flag and its saved keys are deleted with it. The signal
+  to move it was the rate rather than any one finding — five consecutive review rounds, each
+  adding a *preserve this flag across that transition too* rule to a piece of view state.
 
   **The durable half of that report is the ongoing notification, and it needs no machinery to
   keep it true.** That card is rebuilt from the record every time it is posted, and it already
