@@ -5201,18 +5201,20 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
-- [ ] **The idle rows' steppers should adjust, not arm** (maintainer, 2026-09-12: "the
-      user has to tap the until button to apply any minus or plus"). Already true over a
-      *running* snooze — `stepEndFromScreen`'s first branch moves the drawn offer and
-      nothing else, and the sheet's steppers do the same, so `Until (time)` is what
-      applies it. Not true on the offer to start, where `+` and `−` call
-      `rows.commit(stepped.endsAt)` and arm a snooze on the spot; `EndChoiceUiState`'s
-      own doc records that as deliberate ("its steppers arm rather than step, so there is
-      no chosen position to preserve"). Making the two consistent means the idle offer
-      keeps a stepped position the way a running one does, and the time row becomes the
-      only thing that arms — which also settles what `refreshStart` is rebuilding every
-      tick, since there would then be a user-chosen position it must not move under them.
-      Deferred deliberately: worth doing, not worth holding PR #267 for.
+- [x] **The idle rows' steppers adjust rather than arm** (maintainer, 2026-09-12: "I
+      agree they should be consistent and for now that means requiring tapping the until
+      time button after"). It was already the behavior over a *running* snooze —
+      `stepEndFromScreen`'s refinement branch moved the drawn offer and the time row
+      applied it — while the offer to start armed on the step, which
+      `EndChoiceUiState`'s own doc had recorded as deliberate ("its steppers arm rather
+      than step"). One control meaning two different things on two screens was the
+      surprise, and a stepper that commits is one whose tap cannot be taken back. What
+      the change pulled in: an offer to start is rebuilt on every minute tick, which was
+      free while there was no chosen position to lose — so `refreshStart` now keeps a
+      stepped time and refreshes only its bounds, reseeding when the clock has carried it
+      inside `MIN_CAP` (where the service would decline it anyway) and clamping it under a
+      ceiling a backward clock change can lower. `EndChoiceController.steppedByUser` is
+      what separates "the user's time" from "the clock's".
 
 - [ ] **Should "the user asked for timer-only" live on the record?** Five consecutive
       Codex rounds on PR #267 have been about where the partial-success report lives and
@@ -5233,8 +5235,9 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
       Codex raised (`EndChoiceController.dispatch` clears `commitPartial` before the
       retry's outcome, so a refused retry shows `Couldn't set the end time` while an exit
       is still armed). Under the record flag that case disappears; patched as view state
-      it is a sixth preservation rule. Maintainer's call — a design change, not one to
-      make solo.
+      it is a sixth preservation rule. **Approved, and scheduled as its own pull
+      request** (maintainer, 2026-09-12: "Sounds good but as a separate PR I think"). Not
+      built in #267, so the deferred finding above travels with it.
 
 - [x] **The exit-warning card is gone; the ongoing notification carries it**
       (maintainer, 2026-09-12, choosing (b)+(c) from the three options this entry

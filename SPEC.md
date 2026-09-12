@@ -1508,9 +1508,13 @@ thing when nothing was running — arm — and the choice of how it ends only af
 or in these rows. That is "arm, then refine", and the refine step existed only because arming had to
 come first. So the idle screen shows the rows too, and **a tap on one arms immediately with that
 end**: `Until 2:30 PM` starts a snooze that caps there, a meeting row starts one that caps at the
-meeting's end, `Until I move` starts one that also ends on movement. `−` and `+` arm as well, at the
-stepped time, rather than moving a row the user would then have to tap — on the idle screen every
-tap starts. Three things follow:
+meeting's end, `Until I move` starts one that also ends on movement. **`−` and `+` are the
+exception, and always were the odd one out**: they arm nothing, they move the time row, and the
+time row is what starts the snooze (maintainer, 2026-09-12). They armed at the stepped time until
+then — "on the idle screen every tap starts", taken literally — which made one control mean two
+different things on the two screens, since over a running snooze the same buttons had always moved
+a row the user then tapped. A stepper that commits is also one whose tap cannot be taken back: `−`
+started a snooze. Three things follow:
 
 - **The offer comes from the clock, the default cap and the calendar**, since there is no record to
   compute it from: the time row is seeded an hour out and rounded as the sheet's is, its ceiling is
@@ -1520,8 +1524,14 @@ tap starts. Three things follow:
   clock is the only thing that stales it, and it is rebuilt whole on every minute tick rather than
   patched once its time falls inside the floor: a ceiling left where it was seeded falls a minute
   behind the service's each minute, and lands ahead of it across a backward clock change, either
-  way letting a row show a time the arm would then bring in silently. Nothing in it is the user's
-  to keep, since its steppers arm rather than step. The calendar's candidates are re-read once the
+  way letting a row show a time the arm would then bring in silently. **Except a time the user has
+  stepped to**: the bounds are still rebuilt every tick, and the time with them until it is moved,
+  but once moved it is kept — reseeded only when the clock carries it inside the floor, where the
+  service would decline it anyway. `−` and `+` mean the same thing on both screens now (maintainer,
+  2026-09-12): they move the row, and the time row is what applies it. They armed on the step here
+  until then, collapsing "arm, then refine" into one tap — reversed because one control meaning two
+  different things on two screens is the surprise, and because a stepper that commits is a stepper
+  whose tap cannot be taken back. The calendar's candidates are re-read once the
   window has moved by the floor, which keeps the far edge within half an hour of true and bounds
   the cross-process query to twice an hour on a screen left idle. And they are read only while the
   idle rows can show — the rows exist only under Do Not Disturb access (§8.2), so with access

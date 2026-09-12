@@ -194,6 +194,94 @@ class EndChoiceControllerTest {
     }
 
     @Test
+    fun `a stepped offer to start survives the minute tick`() {
+        // The idle rows' steppers move the row now rather than arming, so
+        // there is a chosen position to lose — and this offer is rebuilt on
+        // every tick. Rebuilding it whole would walk the user's time back
+        // once a minute (maintainer, 2026-09-12).
+        val seams = Seams(now)
+        val controller = offerToStart(seams)
+        controller.stepUp()
+        val chosen = controller.endCondition!!.endsAt
+
+        seams.now = now.plus(Duration.ofMinutes(1))
+        controller.refreshStart(seams.now)
+
+        assertEquals("the user's time is kept", chosen, controller.endCondition!!.endsAt)
+        assertEquals(
+            "and the bounds still follow the clock",
+            seams.now.plus(ActiveSnooze.DEFAULT_CAP),
+            controller.endCondition!!.ceiling,
+        )
+        assertEquals(seams.now.plus(ActiveSnooze.MIN_CAP), controller.endCondition!!.floor)
+    }
+
+    @Test
+    fun `a stepped offer to start survives a rotation`() {
+        // The flag is what tells the tick whose time this is, so a rotation
+        // that restored the condition without it read the user's choice as
+        // the clock's and reseeded over it on the next minute (Codex,
+        // PR #267).
+        val seams = Seams(now)
+        val first = offerToStart(seams)
+        first.stepUp()
+        val chosen = first.endCondition!!.endsAt
+
+        val replacement = controller(seams, offersToStart = true)
+        replacement.restore(
+            condition = first.endCondition,
+            wasCommitting = false,
+            failed = false,
+            stepped = first.steppedByUser,
+            configurationChange = true,
+            requestId = 0L,
+            offeredFor = null,
+        )
+        seams.now = now.plus(Duration.ofMinutes(1))
+        replacement.refreshStart(seams.now)
+
+        assertEquals("the stepped time came back and was kept", chosen, replacement.endCondition!!.endsAt)
+    }
+
+    @Test
+    fun `an untouched offer to start still follows the clock`() {
+        // The other direction, and the one the rebuild exists for: an offer
+        // nobody has moved is the clock's, so it must go on tracking it.
+        val seams = Seams(now)
+        val controller = offerToStart(seams)
+        val opened = controller.endCondition!!.endsAt
+
+        seams.now = now.plus(Duration.ofHours(1))
+        controller.refreshStart(seams.now)
+
+        assertNotEquals(opened, controller.endCondition!!.endsAt)
+        assertEquals(
+            seams.now.plus(ActiveSnooze.DEFAULT_CAP),
+            controller.endCondition!!.ceiling,
+        )
+    }
+
+    @Test
+    fun `a stepped offer the clock has overtaken is reseeded rather than kept`() {
+        // A kept time is only worth keeping while the service would still take
+        // it. Once the clock carries it inside `MIN_CAP` the arm would decline
+        // it, so holding on would leave a dead offer on the screen.
+        val seams = Seams(now)
+        val controller = offerToStart(seams)
+        controller.stepDown()
+        val chosen = controller.endCondition!!.endsAt
+
+        seams.now = chosen.minus(ActiveSnooze.MIN_CAP).plus(Duration.ofMinutes(1))
+        controller.refreshStart(seams.now)
+
+        assertNotEquals("the stale choice is not kept", chosen, controller.endCondition!!.endsAt)
+        assertTrue(
+            "and what replaced it is offerable",
+            !controller.endCondition!!.endsAt.isBefore(seams.now.plus(ActiveSnooze.MIN_CAP)),
+        )
+    }
+
+    @Test
     fun `a rebuild leaves a refinement, and a commit in flight, alone`() {
         val seams = Seams(now)
         val refining = seeded(seams)

@@ -189,6 +189,19 @@ internal class EndChoiceController(
         private set
 
     /**
+     * Whether the standing offer's time is the user's rather than the clock's.
+     *
+     * Only an offer to start needs this. A running snooze's offer is anchored
+     * to a record and is left alone by [reconcile] unless it goes stale, but
+     * an offer to *start* is rebuilt on every minute tick ([refreshStart]) —
+     * which was free while its steppers armed on the spot and there was
+     * nothing to preserve. Now that they step, a rebuild would throw the
+     * user's chosen time away once a minute (maintainer, 2026-09-12).
+     */
+    var steppedByUser by mutableStateOf(false)
+        private set
+
+    /**
      * The request the outstanding commit is waiting on, or 0 when none is.
      *
      * Saved and restored with the sheet, because the answer belongs to the
@@ -231,35 +244,57 @@ internal class EndChoiceController(
         endCondition = EndCondition.seededAt(now, EndCondition.ceilingFor(record, now), zone())
         commitFailed = false
         commitPartial = carried
+        // A fresh offer is the clock's again until the user moves it.
+        steppedByUser = false
     }
 
     /**
      * Rebuilds an offer to start against the clock as it is now, keeping a
-     * refusal showing.
+     * refusal showing and a time the user chose.
      *
-     * Everything about such an offer is clock-derived — the seeded time, the
-     * floor, the ceiling — and nothing about it is the user's: its steppers
-     * arm rather than step, so there is no chosen position to preserve, and
-     * rebuilding it on every tick costs nothing and keeps its ceiling equal
-     * to the cap the service would actually set, forward through ordinary
-     * time and back across a wall-clock change alike (Codex, PR #256). The
-     * one thing worth keeping is a refusal the user has not yet acted on.
-     * A no-op when nothing is offered, on a host that does not offer to
-     * start, or while a commit is out.
+     * An untouched offer is clock-derived through and through — the seeded
+     * time, the floor, the ceiling — so rebuilding it on every tick costs
+     * nothing and keeps its ceiling equal to the cap the service would
+     * actually set, forward through ordinary time and back across a wall-clock
+     * change alike (Codex, PR #256).
+     *
+     * **A stepped one is not.** The idle rows' steppers used to arm on the
+     * spot, so there was never a chosen position to preserve; they step now
+     * (maintainer, 2026-09-12), and rebuilding whole would move the user's
+     * time back under them once a minute. So the bounds are refreshed and the
+     * time is kept — except when the clock has carried it inside the floor,
+     * where a kept time is one the service would decline and reseeding is what
+     * leaves a working offer. The ceiling clamp is the same reason in the other
+     * direction: a backward clock change can put a stepped time above the cap
+     * the arm would set.
+     *
+     * A no-op when nothing is offered, on a host that does not offer to start,
+     * or while a commit is out.
      */
     fun refreshStart(now: Instant = clock()) {
         if (!startsASnooze || committing) return
         val failed = commitFailed
-        seed(null, now)
-        commitFailed = failed
+        val standing = endCondition
+        val floor = now.plus(ActiveSnooze.MIN_CAP)
+        if (standing == null || !steppedByUser || standing.endsAt.isBefore(floor)) {
+            seed(null, now)
+            commitFailed = failed
+            return
+        }
+        val ceiling = EndCondition.ceilingFor(null, now)
+        endCondition = standing.copy(
+            endsAt = standing.endsAt.coerceAtMost(ceiling),
+            floor = floor,
+            ceiling = ceiling,
+        )
     }
 
     fun stepUp() {
-        endCondition = endCondition?.stepUp()
+        endCondition = endCondition?.stepUp()?.also { steppedByUser = true }
     }
 
     fun stepDown() {
-        endCondition = endCondition?.stepDown()
+        endCondition = endCondition?.stepDown()?.also { steppedByUser = true }
     }
 
     /**
@@ -427,6 +462,7 @@ internal class EndChoiceController(
         offerFor = null
         commitFailed = false
         commitPartial = false
+        steppedByUser = false
         onDismiss()
     }
 
@@ -507,6 +543,13 @@ internal class EndChoiceController(
         wasCommitting: Boolean,
         failed: Boolean,
         partial: Boolean = false,
+        /**
+         * Whether the restored [condition]'s time is the user's rather than
+         * the clock's — [steppedByUser], saved with the rest of the offer.
+         * Without it the first [refreshStart] after a rotation reads the
+         * restored time as untouched and reseeds over it (Codex, PR #267).
+         */
+        stepped: Boolean = false,
         configurationChange: Boolean,
         requestId: Long,
         offeredFor: Instant?,
@@ -517,6 +560,7 @@ internal class EndChoiceController(
         // The two are separate flags rather than one, so a restored line
         // cannot say "couldn't set the end time" over a time that was set.
         commitPartial = partial
+        steppedByUser = stepped
         if (!wasCommitting) return
         // Named, so the answer this resumes is the one this sheet asked for.
         // Unnamed it would take whatever the channel happened to be holding,

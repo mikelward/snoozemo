@@ -622,9 +622,9 @@ internal data class EndChoiceUiState(
     val departureUsesArea: Boolean = true,
     /**
      * Whether a tap on these rows starts a snooze rather than refining one —
-     * the idle screen's offer (SPEC.md §4.4). The rows are drawn the same;
-     * what changes is where a tap goes, and that `−`/`+` arm at the stepped
-     * time rather than stepping the row.
+     * the idle screen's offer (SPEC.md §4.4). The rows are drawn the same and
+     * so are the steppers, which move the time row on both screens and arm
+     * nothing; what changes is only where a tap on a *row* goes.
      */
     val startsASnooze: Boolean = false,
     /**
@@ -634,8 +634,9 @@ internal data class EndChoiceUiState(
      * reading exists those two rows are drawn inert rather than letting a
      * tap fall through to the lookup — a frame or so after a start, before
      * the post-first-frame refresh lands. The time row, the meeting rows and
-     * the steppers arm without any reading and are never held (Codex, PR
-     * #257). Always true for a refinement, which arms nothing.
+     * the steppers need no reading and are never held (Codex, PR #257) —
+     * the steppers because they arm nothing at all now, only moving the time
+     * the row then commits. Always true for a refinement, which arms nothing.
      */
     val locationArmable: Boolean = true,
     /**

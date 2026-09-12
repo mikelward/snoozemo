@@ -158,6 +158,7 @@ private const val KEY_ROWS_REQUEST_ID = "rowsRequestId"
 private const val KEY_ROWS_OFFERED_FOR = "rowsOfferedFor"
 private const val KEY_ROWS_FAILED = "rowsFailed"
 private const val KEY_ROWS_PARTIAL = "rowsPartial"
+private const val KEY_ROWS_STEPPED = "rowsStepped"
 private const val KEY_ROWS_ENDS_AT = "rowsEndsAt"
 private const val KEY_ROWS_FLOOR = "rowsFloor"
 private const val KEY_ROWS_CEILING = "rowsCeiling"
@@ -542,10 +543,11 @@ class MainActivity : ComponentActivity() {
         // floor: that left the ceiling where it was seeded, a minute further
         // behind the service's each minute and, across a backward clock
         // change, ahead of it — so a time the row showed could be brought in
-        // silently on the arm (Codex, PR #256). Nothing here is the user's to
-        // keep — the steppers arm rather than step — so the rebuild costs
-        // nothing. The running rows keep their own rule, since a record read
-        // reconciles those.
+        // silently on the arm (Codex, PR #256). The bounds are always the
+        // clock's and always rebuilt; a time the user has stepped to is the
+        // one thing kept across the tick, and `refreshStart` is what keeps it
+        // (maintainer, 2026-09-12). The running rows keep their own rule,
+        // since a record read reconciles those.
         //
         // The calendar's candidates are the other clock-derived half. They
         // are read against the window as it stood, and the window moves; a
@@ -1952,6 +1954,9 @@ class MainActivity : ComponentActivity() {
         rows.offerFor?.let { outState.putLong(KEY_ROWS_OFFERED_FOR, it.toEpochMilli()) }
         outState.putBoolean(KEY_ROWS_FAILED, rows.commitFailed)
         outState.putBoolean(KEY_ROWS_PARTIAL, rows.commitPartial)
+        // The offer's time is the user's once they have stepped it, and the
+        // first tick after a rotation would otherwise reseed over it.
+        outState.putBoolean(KEY_ROWS_STEPPED, rows.steppedByUser)
         rows.endCondition?.let {
             outState.putLong(KEY_ROWS_ENDS_AT, it.endsAt.toEpochMilli())
             outState.putLong(KEY_ROWS_FLOOR, it.floor.toEpochMilli())
@@ -2008,6 +2013,7 @@ class MainActivity : ComponentActivity() {
             wasCommitting = state.getBoolean(KEY_ROWS_COMMITTING),
             failed = state.getBoolean(KEY_ROWS_FAILED),
             partial = state.getBoolean(KEY_ROWS_PARTIAL),
+            stepped = state.getBoolean(KEY_ROWS_STEPPED),
             configurationChange = configurationChange,
             requestId = state.getLong(KEY_ROWS_REQUEST_ID),
             offeredFor = if (state.containsKey(KEY_ROWS_OFFERED_FOR)) {
@@ -3658,23 +3664,25 @@ class MainActivity : ComponentActivity() {
      * `releaseDirectly` returns whether the rule is confirmed off.
      */
     /**
-     * The rows' `−` / `+`, which do different things on the two screens.
+     * The rows' `−` / `+`, and they mean the same thing on both screens:
+     * move the time, and leave applying it to the time row.
      *
-     * Over a running snooze they step the time row, and the row commits. On
-     * the idle screen every tap starts a snooze (maintainer, 2026-09-10) — so
-     * a stepper arms at the stepped time rather than moving a row the user
-     * would then have to tap: "arm, then refine" collapsed into one tap is
-     * the whole point of offering the rows there. Nothing to arm when the
-     * step has nowhere to go; the stepper is disabled there anyway.
+     * **The idle rows used to arm on the step** (maintainer, 2026-09-10),
+     * collapsing "arm, then refine" into one tap. Reversed (maintainer,
+     * 2026-09-12: "I agree they should be consistent and for now that means
+     * requiring tapping the until time button after"), because one control
+     * meaning two different things on two screens is the surprise — on a
+     * running snooze the same buttons had always moved a row the user then
+     * tapped, and a stepper that commits is a stepper you cannot take back a
+     * tap of. The cost is one extra tap to start at a chosen time; what it
+     * buys is that `−` on the idle screen no longer starts a snooze.
+     *
+     * What this makes newly possible is a *kept* position, which
+     * [EndChoiceController.refreshStart] is what protects from the minute
+     * tick.
      */
     internal fun stepEndFromScreen(drawn: EndChoiceUiState, up: Boolean) = onDrawnOffer(drawn) {
-        if (!drawn.startsASnooze) {
-            if (up) rows.stepUp() else rows.stepDown()
-            return@onDrawnOffer
-        }
-        val stepped = if (up) drawn.condition.stepUp() else drawn.condition.stepDown()
-        if (stepped.endsAt == drawn.condition.endsAt) return@onDrawnOffer
-        rows.commit(stepped.endsAt)
+        if (up) rows.stepUp() else rows.stepDown()
     }
 
     /** The rows' time row: commits the time as drawn, for [onDrawnOffer]'s reason. */

@@ -191,10 +191,12 @@ class MainActivityEndRowsTest {
     }
 
     @Test
-    fun `a stepper on the idle screen starts a snooze at the stepped time`() {
-        // Every tap on the idle screen starts (maintainer, 2026-09-10): `−`
-        // and `+` arm at the stepped time rather than moving a row the user
-        // would then have to tap.
+    fun `a stepper on the idle screen moves the row rather than arming`() {
+        // Reversed from "every tap on the idle screen starts" (maintainer,
+        // 2026-09-10, then 2026-09-12): the same buttons had always moved a
+        // row over a *running* snooze, and one control meaning two different
+        // things on two screens is the surprise. A stepper that commits is
+        // also a stepper whose tap cannot be taken back.
         ActiveSnoozeStore(context).clear()
         val activity = screen()
         settle()
@@ -208,11 +210,37 @@ class MainActivityEndRowsTest {
         activity.stepEndFromScreen(drawn, up = true)
         settle()
 
+        assertEquals("the row moved", drawn.condition.stepUp().endsAt, activity.rows.endCondition!!.endsAt)
+        assertNull("and nothing was armed", sentArm())
+        assertTrue("so there is still an offer to start", activity.rows.startsASnooze)
+    }
+
+    @Test
+    fun `the time row arms at the time the steppers left it on`() {
+        // The other half of the same decision: stepping no longer arms, so the
+        // time row has to be what applies what stepping left behind — else the
+        // idle screen would have no way to start at a chosen time at all.
+        ActiveSnoozeStore(context).clear()
+        val activity = screen()
+        settle()
+        forgetServiceStarts()
+        val opened = activity.rows.endCondition!!
+
+        activity.stepEndFromScreen(
+            EndChoiceUiState(condition = opened, formattedTime = "", startsASnooze = true),
+            up = true,
+        )
+        settle()
+        val stepped = activity.rows.endCondition!!
+        activity.chooseEndTimeFromScreen(
+            EndChoiceUiState(condition = stepped, formattedTime = "", startsASnooze = true),
+        )
+        settle()
+
         assertEquals(
-            drawn.condition.stepUp().endsAt.toEpochMilli(),
+            opened.stepUp().endsAt.toEpochMilli(),
             sentArm()?.getLongExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, 0L),
         )
-        assertEquals("the row itself did not move", drawn.condition.endsAt, activity.rows.endCondition!!.endsAt)
     }
 
     @Test
