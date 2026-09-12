@@ -308,6 +308,56 @@ class TileTrampolineSheetTest {
     }
 
     @Test
+    fun `a rotation keeps the record when it still names the offered snooze`() {
+        // The ordinary rotation: the offered snooze is unchanged on disk, so its
+        // record is what the restored sheet reads its partial line from. The
+        // deferred read runs from `decorView.post`, which needs a traversal to
+        // drain — hence `visible()`.
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
+        val controller = tapTileController()
+        val offered = requireNotNull(controller.get().sheet.offerFor)
+
+        controller.recreate().visible()
+        shadowOf(getMainLooper()).idle()
+
+        assertEquals(
+            "the offered snooze's own record drives the restored sheet",
+            offered,
+            controller.get().offeredRecord?.startedAt,
+        )
+    }
+
+    @Test
+    fun `a rotation ignores a record that no longer names the offered snooze`() {
+        // The deferred record read races the world: by the time it lands after a
+        // rotation, the snooze the sheet was offering for may have ended and a
+        // different one armed. Deriving the partial line — or driving the
+        // departure row's commit — from that record answers for a snooze the
+        // sheet never named, so it is discarded (Codex, PR #272).
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
+        val controller = tapTileController()
+        val offered = requireNotNull(controller.get().sheet.offerFor)
+
+        // The offered snooze ends and a different one arms while the sheet is up.
+        ActiveSnoozeStore(appContext).clear()
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now, startedAgo = Duration.ofMinutes(30)))
+
+        controller.recreate().visible()
+        shadowOf(getMainLooper()).idle()
+
+        val onDisk = requireNotNull(ActiveSnoozeStore(appContext).load())
+        assertNotEquals(
+            "the fixture set up a genuinely different snooze",
+            offered,
+            onDisk.startedAt,
+        )
+        assertNull(
+            "a record for a different snooze is not the offer's",
+            controller.get().offeredRecord,
+        )
+    }
+
+    @Test
     fun `the sheet cannot offer a time later than the snooze's own backstop`() {
         // The tile arms from its own snapshot, and a stale one sends a second
         // `ACTION_ARM` that the service answers by keeping the snooze already

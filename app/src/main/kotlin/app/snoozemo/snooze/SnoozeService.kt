@@ -2416,16 +2416,14 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // phone cannot hold the sensor, so a refused tap deleted a warning
         // that was still true and put nothing in its place. `APPLIED` is the
         // one outcome with nothing left to say about this snooze.
-        return applyMotionEnd(snooze, wanted).also {
-            if (it == EndChoiceResult.APPLIED) {
-                notifications.cancelFailure()
-                // Adding a movement exit is a request for something other than a
-                // timer alone, so it clears the timer-only intent — a
-                // deliberately-added exit must not read back as a partial timer
-                // (ActiveSnooze.isPartialTimer). Only when the exit was added:
-                // taking one off leaves the intent as it was.
-                if (wanted) controller.setTimerOnlyRequested(false)
-            }
+        // Adding a movement exit is a request for something other than a timer
+        // alone, so it clears the timer-only intent — a deliberately-added exit
+        // must not read back as a partial timer (ActiveSnooze.isPartialTimer).
+        // Folded into the exit's own checked write ([applyMotionEnd]) rather than
+        // a best-effort transition after it, so the clear cannot outlive the exit
+        // across a process death (Codex, PR #272); only when the exit is added.
+        return applyMotionEnd(snooze, wanted, clearTimerOnly = wanted).also {
+            if (it == EndChoiceResult.APPLIED) notifications.cancelFailure()
         }
     }
 
@@ -2435,7 +2433,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * an arm that carried the choice ([armAsAsked]), so a phone that cannot
      * hold the sensor is rolled back — and reported — the same way on both.
      */
-    private fun applyMotionEnd(snooze: ActiveSnooze, wanted: Boolean): EndChoiceResult {
+    private fun applyMotionEnd(
+        snooze: ActiveSnooze,
+        wanted: Boolean,
+        clearTimerOnly: Boolean = false,
+    ): EndChoiceResult {
         if (snooze.endsOnMotion != wanted) {
             // **The record first, and only then the controller** — [extend]'s
             // ordering, for [extend]'s reason. The record is what the restore
@@ -2484,6 +2486,26 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // has the detail; the row is where the tap was.
         val armed = controller.active?.endsOnMotion == true && motionEnd?.listening == true
         val result = if (!wanted || armed) EndChoiceResult.APPLIED else EndChoiceResult.REFUSED
+
+        // Adding a movement exit clears the timer-only intent — but only once the
+        // exit is actually armed, and unlike the exit it cannot fold into the
+        // write above: whether the registration held is not known until the
+        // reconcile has run. A rollback that cleared the intent anyway would hide
+        // the "can still end sooner" line on a refused tap while a departure exit
+        // was still armed (Codex, PR #272). So it is its own checked write, on
+        // `APPLIED` only, and durable rather than the best-effort transition — a
+        // failed persist here can at worst leave an extra warning over a snooze
+        // that already ends when you move, never a silence (D7).
+        if (clearTimerOnly && result == EndChoiceResult.APPLIED) {
+            val running = controller.active
+            if (running != null && running.timerOnlyRequested) {
+                if (updateRecordOrUndo(running.copy(timerOnlyRequested = false), running)) {
+                    controller.setTimerOnlyRequested(false)
+                } else {
+                    SnoozeDebugLog.warning("until-i-move: could not clear the timer-only intent; the exit is armed")
+                }
+            }
+        }
         return result
     }
 
@@ -2506,14 +2528,30 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * the persist, which the caller treats as fatal because an unpersisted
      * choice is one the next wake undoes.
      */
-    private fun applyDepartureEnd(snooze: ActiveSnooze, wanted: Boolean): Boolean {
-        if (snooze.endsOnDeparture == wanted) return true
-        if (!updateRecordOrUndo(snooze.copy(endsOnDeparture = wanted), snooze)) {
+    private fun applyDepartureEnd(
+        snooze: ActiveSnooze,
+        wanted: Boolean,
+        clearTimerOnly: Boolean = false,
+    ): Boolean {
+        // Restoring departure clears the timer-only intent in the **same**
+        // checked write as the exit, so a process death cannot land between the
+        // exit going on and the intent coming off and bring the snooze back a
+        // false partial timer (Codex, PR #272). Set only by the restore caller;
+        // every other leaves the intent as it was, so this is a no-op field.
+        val target = snooze.copy(
+            endsOnDeparture = wanted,
+            timerOnlyRequested = if (clearTimerOnly) false else snooze.timerOnlyRequested,
+        )
+        if (target == snooze) return true
+        if (!updateRecordOrUndo(target, snooze)) {
             Log.w(TAG, "Recording the departure-exit choice failed; the stored choice stands.")
             SnoozeDebugLog.warning("departure exit not persisted; the stored choice stands")
             return false
         }
-        controller.setEndsOnDeparture(wanted)
+        // Both fields move in one transition when the intent moves with the exit
+        // ([SnoozeController.applyChange]) so nothing re-persists the exit under
+        // the old intent between them; otherwise it is the plain exit transition.
+        if (clearTimerOnly) controller.applyChange(target) else controller.setEndsOnDeparture(wanted)
         // The watch follows the record, and only now. Stopping is the narrow
         // teardown — the snooze keeps running on its cap, so [SnoozeBackstop]
         // stays with it (see [stopDepartureWatch]).
@@ -2757,7 +2795,15 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // PR #267). The removal is always the half whose failure can make a
         // snooze outlast something, so it is always the half that goes last.
         val restored = if (restoring && !running.endsOnDeparture) {
-            if (!applyDepartureEnd(running, wanted = true)) return EndChoiceResult.REFUSED
+            // Putting departure back and clearing the timer-only intent are one
+            // checked write ([applyDepartureEnd]'s `clearTimerOnly`), so a
+            // process death cannot land between the exit going on and the intent
+            // coming off — the window that brought a snooze back a false partial
+            // timer when the two were separate commits (Codex, PR #272). The
+            // user restored an exit, so this is no longer a timer-only request.
+            if (!applyDepartureEnd(running, wanted = true, clearTimerOnly = running.timerOnlyRequested)) {
+                return EndChoiceResult.REFUSED
+            }
             controller.active ?: run {
                 SnoozeDebugLog.event("end-condition: the snooze ended while its departure exit came back")
                 return EndChoiceResult.GONE
@@ -2766,26 +2812,17 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             running
         }
 
-        // The user restored an exit, so this snooze is no longer a timer-only
-        // request — cleared the moment departure is on, not only at the
-        // terminal makeTimerOnly below. Any of the movement removal, the alarm,
-        // or the record write past this point can return REFUSED first, and
-        // would otherwise leave timerOnlyRequested set over a snooze the user
-        // has explicitly given an exit back — the "can still end sooner" line
-        // reporting a request that no longer stands, persisted across restarts
-        // (Codex, PR #272). Re-read after, so the movement removal and the cap
-        // write copy from a snapshot carrying the cleared flag rather than
-        // writing the old one back. Only the intent — a movement exit that will
-        // not come off is still named by the ongoing card from the record.
-        //
-        // A **checked** write, like the exit writes above and below, not the
-        // controller transition alone: `setTimerOnlyRequested`'s own persist
-        // rides `onStateChanged`, which is best-effort, so a clear that reached
-        // only memory would restore as a partial timer after process death —
-        // the very false line this removes. So a refused clear is a refusal,
-        // the snooze standing with departure back on (Codex, PR #272).
+        // Departure was already armed — a partial timer whose exit is leaving —
+        // so there was no exit write above to fold the clear into, and the fold
+        // has already left `restored.timerOnlyRequested` false whenever it did
+        // fire. Clear it on its own checked write, atomic by itself with no
+        // second commit to race, rather than the best-effort
+        // `setTimerOnlyRequested` transition whose failed persist would restore a
+        // false "can still end sooner" line after process death (Codex, PR #272).
+        // A refused clear is a refusal, the snooze standing with departure on.
         val exitBase = if (restoring && restored.timerOnlyRequested) {
-            if (!updateRecordOrUndo(restored.copy(timerOnlyRequested = false), restored)) {
+            val cleared = restored.copy(timerOnlyRequested = false)
+            if (!updateRecordOrUndo(cleared, restored)) {
                 SnoozeDebugLog.warning("end-condition: could not clear the timer-only intent on a departure restore")
                 return EndChoiceResult.REFUSED
             }
@@ -2978,13 +3015,15 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     private fun makeTimerOnly(snooze: ActiveSnooze, restoring: Boolean): EndChoiceResult {
         if (restoring) {
             // `Until I leave` just put an exit back, so this snooze is no longer
-            // a timer-only request. Clearing the intent is what stops its
-            // restored departure from reading back as a removal that failed
-            // (ActiveSnooze.isPartialTimer) — the durable half the `commitPartial`
-            // view-state flag used to carry. Best-effort: a stale `true` would
-            // only add a "can still end sooner" line to a snooze that already
-            // ends on leaving, and silences nothing.
-            controller.setTimerOnlyRequested(false)
+            // a timer-only request — but [applyChosenEnd] has already cleared the
+            // intent by now, in the same checked write that restored the exit (or
+            // its own checked write where the exit was already armed), so there
+            // is nothing left to clear here. Clearing again through the
+            // best-effort transition is what this used to do, and a failed
+            // persist there could restore a false "can still end sooner" line
+            // after process death (Codex, PR #272); the atomic clear upstream is
+            // the one that reaches disk.
+            //
             // The restore applied, so whatever the shade was saying about this
             // snooze is now the previous attempt's and stale.
             notifications.cancelFailure()

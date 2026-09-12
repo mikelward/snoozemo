@@ -571,6 +571,69 @@ class SnoozeServiceSetCapTest {
     }
 
     @Test
+    fun `a departure restore never writes departure on with the intent still set`() {
+        // The exit and the intent clear ride one checked write, so no
+        // intermediate record carrying both `endsOnDeparture` and
+        // `timerOnlyRequested` ever reaches disk — the interruption window a
+        // process death could restore a false partial timer from when the two
+        // were separate commits (Codex, PR #272). Refusing exactly that shape
+        // proves they never land apart: the old two-write path would have its
+        // first write (departure on, intent still set) refused here and restore
+        // nothing, so departure coming back at all is the atomic write landing.
+        val record = snoozeFixture(now).copy(
+            capExpiresAt = now.plus(Duration.ofHours(1)),
+            endsOnDeparture = false,
+            timerOnlyRequested = true,
+        )
+        val service = startService(SnoozeService.ACTION_RESTORE, record)
+
+        TestSnoozeService.refuseRecordUpdateWhen = { it.endsOnDeparture && it.timerOnlyRequested }
+        service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
+            putExtra(SnoozeService.EXTRA_RESTORE_END, true)
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+
+        val after = ActiveSnoozeStore(appContext).load()
+        assertEquals("departure was restored", true, after?.endsOnDeparture)
+        assertEquals(
+            "and the intent cleared, in that same write rather than a second one",
+            false,
+            after?.timerOnlyRequested,
+        )
+    }
+
+    @Test
+    fun `a refused movement exit on a partial timer keeps the timer-only intent`() {
+        // Adding `Until I move` to a partial timer whose departure exit is still
+        // armed, when the sensor cannot register: the tap is refused and the exit
+        // does not take, so the timer-only intent must stand — clearing it would
+        // hide the "can still end sooner" line on a snooze that is still exactly a
+        // partial timer (Codex, PR #272). The clear rides `APPLIED`, which a
+        // refused registration never reaches.
+        TestSnoozeService.motionRegistrar.available = false
+        val record = snoozeFixture(now).copy(
+            endsOnDeparture = true,
+            endsOnMotion = false,
+            timerOnlyRequested = true,
+        )
+        val service = startService(SnoozeService.ACTION_RESTORE, record)
+
+        service.send(SnoozeService.ACTION_SET_MOTION_END, startId = 2) {
+            putExtra(SnoozeService.EXTRA_ENDS_ON_MOTION, true)
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+
+        assertEquals("the sensor could not register, so the tap is refused", EndChoiceResult.REFUSED, reported)
+        val after = ActiveSnoozeStore(appContext).load()
+        assertEquals("the timer-only intent stands after a refused motion add", true, after?.timerOnlyRequested)
+        assertEquals(
+            "so the snooze is still a partial timer on its departure exit",
+            true,
+            after?.isPartialTimer,
+        )
+    }
+
+    @Test
     fun `the departure choice is written under the name the tile reads`() {
         val record = snoozeFixture(now)
 

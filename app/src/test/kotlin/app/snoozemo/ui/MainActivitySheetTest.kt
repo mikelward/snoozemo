@@ -215,4 +215,69 @@ class MainActivitySheetTest {
 
         assertNotNull(activity.sheet.endCondition)
     }
+
+    @Test
+    fun `the departure row holds while the record is still loading`() {
+        // After a recreation the sheet is restored synchronously but the record
+        // read runs on a worker (`refreshSnoozing`). Dismissing in that window
+        // would throw away a departure restore the user asked for, and the
+        // synchronous read that would close the window is disk in front of the
+        // first frame (Codex, PR #272). The worker never completes here, so
+        // `recordLoaded` stays false and the row is inert rather than
+        // dismissing.
+        val activity = Robolectric.buildActivity(MainActivity::class.java).also {
+            it.get().runOffMainThread = {}
+        }.setup().get()
+
+        assertEquals(DepartureRowAction.HOLD, activity.departureRowAction())
+    }
+
+    @Test
+    fun `a commit outcome holds the departure row until its refresh lands`() {
+        // After a live time choice makes the snooze a partial timer, the record
+        // on disk flips but the screen has yet to re-read it — so a quick
+        // `Until I leave` reading the stale pre-choice record dismissed instead
+        // of restoring (Codex, PR #272). The outcome marks the record stale and
+        // kicks a full `refreshSnoozing`; the row holds until that lands, then
+        // reads the post-choice record. (Routed through the full refresh, not a
+        // targeted read of just this record, so a commit that *ends* the snooze
+        // clears `snoozing` too rather than showing "Snoozing" with no record.)
+        val running = snoozeWithCapIn(ActiveSnooze.DEFAULT_CAP).copy(endsOnDeparture = true)
+        ActiveSnoozeStore(context).arm(running)
+        val activity = screen()
+        assertEquals(
+            "before the choice this ends on leaving, not a partial timer",
+            DepartureRowAction.DISMISS,
+            activity.departureRowAction(),
+        )
+
+        // The commit lands on disk: a chosen time with the departure exit still
+        // armed. The outcome marks the on-screen record stale.
+        ActiveSnoozeStore(context).arm(running.copy(timerOnlyRequested = true))
+        activity.awaitingOutcomeRecord = true
+        assertEquals(
+            "inert until the refresh replaces the pre-choice record",
+            DepartureRowAction.HOLD,
+            activity.departureRowAction(),
+        )
+
+        // The refresh lands (inline in `screen()`): the row reads the
+        // post-choice record and offers the way back to leaving.
+        activity.refreshSnoozingForTest()
+        assertEquals(DepartureRowAction.RESTORE, activity.departureRowAction())
+    }
+
+    @Test
+    fun `the departure row restores a partial timer and dismisses otherwise`() {
+        // Once the record is loaded the row is decided from it: the way back for
+        // a snooze the user narrowed to its timer, a plain dismissal for one
+        // still running to its ceiling.
+        val activity = screen()
+        // `screen()` runs `refreshSnoozing` inline, so `recordLoaded` is true.
+        activity.activeSnooze = snoozeWithCapIn(ActiveSnooze.DEFAULT_CAP).copy(timerOnlyRequested = true)
+        assertEquals(DepartureRowAction.RESTORE, activity.departureRowAction())
+
+        activity.activeSnooze = snoozeWithCapIn(ActiveSnooze.DEFAULT_CAP)
+        assertEquals(DepartureRowAction.DISMISS, activity.departureRowAction())
+    }
 }

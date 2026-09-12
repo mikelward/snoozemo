@@ -38,6 +38,7 @@ class EndChoiceUiStateTest {
         capIn: Duration = ActiveSnooze.DEFAULT_CAP,
         mode: TrackingMode = TrackingMode.FULL,
         endsOnMotion: Boolean = false,
+        timerOnlyRequested: Boolean = false,
         anchor: Anchor = Anchor(capturedAt = startedAt, ssid = "ExampleWifi"),
         // What decides whether the rows are offered at all: a chosen time moves
         // the cap either way, so the §7 backstop is the edge of what is
@@ -50,6 +51,7 @@ class EndChoiceUiStateTest {
         capExpiresAt = startedAt.plus(capIn),
         mode = mode,
         endsOnMotion = endsOnMotion,
+        timerOnlyRequested = timerOnlyRequested,
         capCeilingAt = startedAt.plus(ceilingIn),
     )
 
@@ -448,5 +450,22 @@ class EndChoiceUiStateTest {
         )
 
         assertNull(state)
+    }
+
+    @Test
+    fun `a timer left with an exit armed draws the line`() {
+        // The partial line reads the record's own `isPartialTimer` rather than
+        // a saved flag, so it is right the moment the host reads the record
+        // back — a rotation, a process death and a reboot included, since the
+        // record survives all three.
+        assertTrue(state(snooze(timerOnlyRequested = true))!!.partial)
+    }
+
+    @Test
+    fun `a snooze the user never narrowed draws no line`() {
+        // The other direction: nothing partial about a snooze still running to
+        // its ceiling, and a line saying otherwise is principle 2's failure in
+        // reverse — reporting a narrowing that never happened.
+        assertFalse(state(snooze())!!.partial)
     }
 }
