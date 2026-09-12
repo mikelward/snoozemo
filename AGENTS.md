@@ -174,11 +174,13 @@ it in the same commit.
   is a default, not a ceiling. Another tool's prefix (`codex/…` when you are Claude),
   anyone else's branch, and one under your prefix from another session are not yours:
   check before touching them. `main` is never force-pushed or rewritten.
-- In environments with remote Git support, always start work from the latest `origin/main`:
-  `git fetch origin main` and rebase the working branch onto it before the first commit,
-  even when the branch already exists. Resolve conflicts rather than abandoning the rebase,
-  and never push commits on an out-of-date base when a fast-forward rebase onto
-  `origin/main` was possible.
+- **Sync before you start** — skipping it bases the task on a stale tree. In environments
+  with remote Git support, always start work from the latest `origin/main`: `git fetch
+  origin main` and rebase the working branch onto it before the first commit, even when the
+  branch already exists. Resolve conflicts rather than abandoning the rebase, and never
+  push commits on an out-of-date base when a fast-forward rebase onto `origin/main` was
+  possible. Where the sandbox blocks the fetch, say the tree may be behind rather than
+  pretending you synced.
 - **Use `git worktree` when it's available.** Give each branch its own worktree instead of
   switching branches in place, so work in progress on one branch isn't disturbed by work on
   another.
