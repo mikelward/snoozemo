@@ -82,8 +82,9 @@
     <string name="setup_location_allowed">Snoozes can end when you leave</string>
     <string name="setup_location_missing">Snoozes can\'t end when you leave</string>
     <!--
-      The `direct` build has no presence monitor at all (SPEC.md §3.4,
-      `PRESENCE_TRACKS_DEPARTURE`), so neither line above is true there: one
+      A build that does not track departure (SPEC.md §3.4,
+      `PRESENCE_TRACKS_DEPARTURE`) has no presence monitor at all, so neither line
+      above is true for it: one
       would promise a capability the build lacks, and the other would blame a
       permission that is not what is missing. Shown in both states, because the
       grant is not what stands between the user and this — and the row drops its
@@ -733,7 +734,7 @@
     <string name="welcome_what_title" tools:ignore="MissingTranslation">Snoozemo</string>
     <!-- TODO: translate -->
     <string name="welcome_what_body" tools:ignore="MissingTranslation">Silence your phone until you leave.</string>
-    <!-- The `direct` flavor is duration-only until Phase 7, so promising
+    <!-- A build that cannot track departure is duration-only, so promising
          departure there would set up the silence-until-the-cap this app exists
          to prevent. -->
     <!-- TODO: translate -->
@@ -745,9 +746,9 @@
          trigger — it only seeds an action the user still has to press. -->
     <!-- TODO: translate -->
     <!--
-      The title is flavor-neutral on purpose: `direct` cannot track departure,
-      so a title naming departure would be a promise that build can never keep
-      (SPEC.md §3), but "automatically" is true of both — the body is where the
+      The title is build-neutral on purpose: a build that cannot track departure
+      would find a title naming departure a promise it can never keep
+      (SPEC.md §3), but "automatically" is true either way — the body is where the
       endings differ.
     -->
     <string name="welcome_ends_title" tools:ignore="MissingTranslation">Ends automatically</string>
@@ -755,7 +756,7 @@
     <string name="welcome_ends_body" tools:ignore="MissingTranslation">When you leave, when your meeting ends, or at the time you choose.</string>
     <!--
       No departure on this build, so that ending drops out of the list. The
-      duration cap is deliberately not named on either flavor (maintainer,
+      duration cap is deliberately not named (maintainer,
       2026-09-05): it still fires, and the title still covers it, but onboarding
       is not where a backstop the user never has to think about earns its words.
     -->

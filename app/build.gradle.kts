@@ -14,51 +14,6 @@ val firebaseConfigured: Boolean = firebaseConfigFile.exists()
 if (firebaseConfigured) {
     apply(plugin = libs.plugins.google.services.get().pluginId)
     apply(plugin = libs.plugins.firebase.crashlytics.get().pluginId)
-
-    // ...but only for `play`. `direct` is the sideload/F-Droid build and
-    // carries no Play Services dependency at all (SPEC.md §3.4) — that is the
-    // flavor's reason to exist, and an F-Droid build cannot contain a
-    // proprietary reporter. Both plugins are project-wide once applied, so the
-    // flavor split is enforced here by disabling the `direct` variants' tasks.
-    //
-    // Disabling stops them regenerating, but Gradle does not delete a disabled
-    // task's earlier output: a checkout that ever built these variants with
-    // the plugins enabled still holds the project's google_app_id under
-    // build/generated/res/, and the resource merge would happily package it
-    // into the `direct` APK — Firebase would then initialize in the one build
-    // that must never reach the network. So purge that directory ahead of the
-    // merge rather than only skipping the regeneration. (Two paths: AGP names
-    // the directory after the task; older versions used google-services/.)
-    val purgeDirectFirebaseResources = tasks.register<Delete>("purgeDirectGoogleServicesResources") {
-        description = "Deletes Firebase resources generated for the direct flavor, which ships without them."
-        delete(
-            layout.buildDirectory.dir("generated/res/processDirectDebugGoogleServices"),
-            layout.buildDirectory.dir("generated/res/processDirectReleaseGoogleServices"),
-            layout.buildDirectory.dir("generated/res/google-services/directDebug"),
-            layout.buildDirectory.dir("generated/res/google-services/directRelease"),
-        )
-    }
-    afterEvaluate {
-        tasks.matching {
-            // Every google-services / Crashlytics task either plugin registers
-            // for a `direct*` variant, matched by name rather than listed: the
-            // Crashlytics plugin's task set depends on whether R8 runs, so an
-            // explicit list would have silently stopped covering a variant the
-            // day minification was turned on (it since has, below) — and it already
-            // registers more than the mapping-file upload the obvious list
-            // would have named (injectCrashlyticsVersionControlInfo, which
-            // writes version-control metadata into the artifact).
-            (it.name.startsWith("process") && it.name.endsWith("GoogleServices")) ||
-                it.name.startsWith("injectCrashlytics") ||
-                it.name.startsWith("uploadCrashlytics")
-        }.configureEach {
-            if (name.contains("Direct")) {
-                enabled = false
-            }
-        }
-        tasks.matching { it.name.startsWith("mergeDirect") && it.name.endsWith("Resources") }
-            .configureEach { dependsOn(purgeDirectFirebaseResources) }
-    }
 }
 
 // The fallback keeps a checkout with no git (a source zip, a fork's odd CI)
@@ -214,14 +169,12 @@ tasks.configureEach {
 // AAB's `package<Variant>Bundle`, and both lifecycle names, so `assembleRelease`
 // on a pull request and `bundlePlayRelease` on `main` are covered alike.
 //
-// What it refuses is what the tests assert, per flavor. `play` may carry no
-// ad identifier, no typed foreground-service permission and no
-// `foregroundServiceType` (SPEC.md §3.3 — the type is what Play reviews), and
-// must carry the background-location grant Geofencing needs and the `INTERNET`
-// Crashlytics needs (SPEC.md §12). `direct` may carry none of `INTERNET`,
-// background location or the ad identifier (SPEC.md §3.4); its foreground
-// service arrives at Phase 7 and is not gated. The INTERNET refusal the
-// original entry listed for `play` predates Crashlytics landing there.
+// What it refuses is what the tests assert. The `play` build may carry no
+// ad identifier, no typed foreground-service permission beyond the one it needs
+// and no unexpected `foregroundServiceType` (SPEC.md §3.3 — the type is what
+// Play reviews), and must carry the background-location grant Geofencing needs
+// and the `INTERNET` Crashlytics needs (SPEC.md §12). The INTERNET refusal the
+// original entry listed predates Crashlytics landing.
 abstract class CheckReleaseManifest : DefaultTask() {
     @get:InputFile
     abstract val manifest: RegularFileProperty
@@ -243,7 +196,12 @@ abstract class CheckReleaseManifest : DefaultTask() {
     @get:Input
     abstract val permissionPrefixExemptions: ListProperty<String>
 
-    /** True where any `foregroundServiceType` is fine, as `direct`'s is. */
+    /**
+     * True where any `foregroundServiceType` is fine. False for the `play`
+     * build, which declares exactly the one typed service named below; kept as a
+     * knob on the generic task rather than inlined, since the flavor-concept
+     * removal (TODO.md) is what finally simplifies this guard.
+     */
     @get:Input
     abstract val allowForegroundServiceType: Property<Boolean>
 
@@ -356,9 +314,8 @@ class ReleaseManifestRules(
     val requiredForegroundServiceTypes: Map<String, String>,
 )
 
-// `play`: nothing Play would review beyond the three grants its declarations
-// rest on (SPEC.md §3.3, §12). `direct`: no network, no background location,
-// no ad identifier (SPEC.md §3.4); its foreground-service type is by design.
+// The `play` build: nothing Play would review beyond the three grants its
+// declarations rest on (SPEC.md §3.3, §12).
 //
 // **The foreground-service half was reversed on 2026-09-08** (maintainer). It
 // read "no typed permission, no declared type at all", because the type is the
@@ -393,15 +350,6 @@ val playManifestRules = ReleaseManifestRules(
     allowForegroundServiceType = false,
     requiredForegroundServiceTypes = mapOf("app.snoozemo.snooze.SnoozeService" to "location"),
 )
-val directManifestRules = ReleaseManifestRules(
-    forbidden = listOf(internetPermission, backgroundLocation, adIdPermission),
-    forbiddenPrefixes = emptyList(),
-    prefixExemptions = emptyList(),
-    required = emptyList(),
-    allowForegroundServiceType = true,
-    requiredForegroundServiceTypes = emptyMap(),
-)
-
 fun CheckReleaseManifest.applyRules(rules: ReleaseManifestRules) {
     forbiddenPermissions.set(rules.forbidden)
     forbiddenPermissionPrefixes.set(rules.forbiddenPrefixes)
@@ -411,15 +359,14 @@ fun CheckReleaseManifest.applyRules(rules: ReleaseManifestRules) {
     requiredForegroundServiceTypes.set(rules.requiredForegroundServiceTypes)
 }
 
-fun manifestRulesFor(flavorName: String?) = if (flavorName == "play") playManifestRules else directManifestRules
-
 androidComponents {
     onVariants(selector().withBuildType("release")) { variant ->
         val variantName = variant.name.replaceFirstChar { it.uppercase() }
         val check = tasks.register<CheckReleaseManifest>("verify${variantName}Manifest") {
             description = "Fails a $variantName build whose merged manifest carries what the Play declarations refuse."
             manifest.set(variant.artifacts.get(com.android.build.api.artifact.SingleArtifact.MERGED_MANIFEST))
-            applyRules(manifestRulesFor(variant.flavorName))
+            // `play` is the only flavor now, so every release variant takes its rules.
+            applyRules(playManifestRules)
         }
         tasks.configureEach {
             if (name == "package$variantName" || name == "package${variantName}Bundle" ||
@@ -433,15 +380,13 @@ androidComponents {
 
 // The negative half CI proves (`Verify the release manifest guard` in
 // ci.yml), the way the version guard is proved against a faked shallow clone:
-// the same task class under each flavor's own rules, pointed at a fixture
-// manifest that carries everything those rules refuse. A guard nothing has
-// ever seen fail is a guard nobody can tell from a no-op.
-for (flavor in listOf("play", "direct")) {
-    tasks.register<CheckReleaseManifest>("verify${flavor.replaceFirstChar { it.uppercase() }}ReleaseManifestProof") {
-        description = "Runs the $flavor release manifest rules against a fixture that must fail them."
-        manifest.set(layout.projectDirectory.file("src/test/fixtures/release-manifest-refused-$flavor.xml"))
-        applyRules(manifestRulesFor(flavor))
-    }
+// the same task class under the `play` rules, pointed at a fixture manifest that
+// carries everything those rules refuse. A guard nothing has ever seen fail is a
+// guard nobody can tell from a no-op.
+tasks.register<CheckReleaseManifest>("verifyPlayReleaseManifestProof") {
+    description = "Runs the play release manifest rules against a fixture that must fail them."
+    manifest.set(layout.projectDirectory.file("src/test/fixtures/release-manifest-refused-play.xml"))
+    applyRules(playManifestRules)
 }
 
 android {
@@ -502,22 +447,19 @@ android {
         }
     }
 
-    // The distribution split of SPEC.md §3.4, and the only place the two
-    // channels' constraints diverge. `play` is the shipping build for any Play
-    // track and carries ACCESS_BACKGROUND_LOCATION and the Geofencing API;
-    // `direct` is the sideload/F-Droid build with a foreground service, no
-    // restricted permissions, and no Play Services dependency. The flavors
-    // select which PresenceMonitor is bound; everything above that interface is
-    // shared (Phase 3 and Phase 7 add the implementations).
+    // The shipping build (SPEC.md §3.4): `play` carries ACCESS_BACKGROUND_LOCATION
+    // and the Geofencing API and is the only distribution channel. It is still a
+    // product flavor rather than the bare default variant — collapsing the flavor
+    // dimension away so tasks read plain `assembleRelease` is tracked as its own
+    // follow-up (TODO.md), because it means moving `src/play` into `src/main` and
+    // merging manifests across `:app` and `:presence`. The `direct` sideload/F-Droid
+    // flavor it used to sit beside was retired once `play` was Play-approved
+    // (2026-09-12); SPEC.md §3 records why.
     flavorDimensions += "distribution"
     productFlavors {
         create("play") {
             dimension = "distribution"
             isDefault = true
-        }
-        create("direct") {
-            dimension = "distribution"
-            versionNameSuffix = "-direct"
         }
     }
 
@@ -528,8 +470,6 @@ android {
             applicationIdSuffix = ".debug"
             // `app.snoozemo.debug` is unknown to Play — an update check would
             // always come back empty, so skip it (and the Play IPC) entirely.
-            // Only meaningful on the `play` flavor; the `direct` flavor's own
-            // update checker never reads this field (SPEC.md's flavor split).
             buildConfigField("boolean", "PLAY_UPDATE_CHECKS_ENABLED", "false")
             // No R8 here, deliberately. AGP disables optimization and
             // obfuscation for any debuggable build ("All code optimizations
@@ -615,7 +555,7 @@ kotlin {
 }
 
 // ----------------------------------------------------------------------------
-// Open-source attribution -> committed res/raw/aboutlibraries.json, per flavor
+// Open-source attribution -> committed res/raw/aboutlibraries.json
 // ----------------------------------------------------------------------------
 // AboutLibraries' Android auto-integration needs the legacy AppExtension that
 // AGP 9 removed, so the plugin can't generate res/raw for us at build time.
@@ -623,21 +563,17 @@ kotlin {
 // `./gradlew :app:exportBundledLicenses`; CI reruns it and fails on drift. The
 // Licenses page reads the committed R.raw.aboutlibraries at runtime.
 //
-// One export per flavor, not one shared file: `play` bundles Play's in-app
-// update library (and the Play Services stack under it) and `direct` bundles
-// none of it (SPEC.md §3.4). A shared list would have the sideload build
-// claiming to ship Play code it doesn't contain, which is the opposite of what
-// an attribution page is for. So the plugin collects the union of both release
-// variants into a build-directory scratch file, and the task below writes one
-// filtered resource per flavor from it.
+// The committed export names exactly what the `play` APK bundles — Play's in-app
+// update library and the Play Services stack under it. The plugin collects the
+// release variant into a build-directory scratch file, and the task below writes
+// the filtered resource from it.
 aboutLibraries {
     collect {
-        // Both release variants: their runtime classpaths differ, and the
-        // scratch export has to be a superset of each. Scoping to release also
+        // The `play` release variant's runtime classpath. Scoping to release
         // keeps test/debug-only artifacts (JUnit, Robolectric, Roborazzi,
         // Compose tooling) out; includePlatform = false drops BOM/platform
         // POMs that ship no runtime artifact.
-        filterVariants.addAll("playRelease", "directRelease")
+        filterVariants.addAll("playRelease")
         includePlatform = false
     }
     export {
@@ -652,22 +588,20 @@ aboutLibraries {
 }
 
 // The plugin walks the dependency *graph*, so the scratch export lists nodes
-// that resolve to no bundled artifact even before the flavor split: KMP
-// metadata coordinates (e.g. androidx.compose.ui:ui, which selects
-// ...:ui-android) and the org.jetbrains.compose redirect modules that alias to
-// the androidx artifacts on Android. Both would render as duplicate rows.
-// Intersecting against a flavor's own release runtime classpath drops them and
-// settles the flavor question in the same pass -- what's left is exactly what
-// that flavor's APK bundles.
+// that resolve to no bundled artifact: KMP metadata coordinates (e.g.
+// androidx.compose.ui:ui, which selects ...:ui-android) and the
+// org.jetbrains.compose redirect modules that alias to the androidx artifacts on
+// Android. Both would render as duplicate rows. Intersecting against the `play`
+// release runtime classpath drops them -- what's left is exactly what the APK
+// bundles.
 @Suppress("UNCHECKED_CAST")
 tasks.register("exportBundledLicenses") {
-    description = "Exports open-source attributions, one per flavor, filtered to that APK's bundled artifacts."
+    description = "Exports open-source attributions filtered to the play APK's bundled artifacts."
     group = "build"
     dependsOn("exportLibraryDefinitions")
     val scratchFile = layout.buildDirectory.file("aboutlibraries/all-variants.json")
     val runtimeClasspaths = mapOf(
         "play" to configurations.named("playReleaseRuntimeClasspath"),
-        "direct" to configurations.named("directReleaseRuntimeClasspath"),
     )
     val outputFiles = runtimeClasspaths.keys.associateWith { file("src/$it/res/raw/aboutlibraries.json") }
     doLast {
@@ -724,15 +658,15 @@ dependencies {
     // The §6.10 periodic backstop: a deferrable, batched wake per half hour
     // while armed — the cheap kind of periodic (SPEC.md §9).
     implementation(libs.androidx.work.runtime)
-    // The `play` flavor's update banner (Play's in-app update flow) — scoped
-    // to this flavor alone, same as `presence`'s geofencing dependency, since
-    // `direct` carries no Play Services dependency at all (SPEC.md §3.4).
+    // The update banner (Play's in-app update flow). Still `playImplementation`
+    // rather than plain `implementation` because `play` remains a flavor until
+    // the flavor concept is removed (TODO.md) — and `play` is now the only
+    // flavor, so it reaches every variant.
     "playImplementation"(libs.play.app.update)
-    // Crash reporting, `play` only — `direct` carries no Play Services
-    // dependency (SPEC.md §3.4), and its own CrashReporter is a no-op. Present
-    // in every `play` build so the wiring compiles, but inert unless the build
-    // had a google-services.json: with no FirebaseApp initialized the gate
-    // reports unavailable and nothing is ever collected.
+    // Crash reporting (SPEC.md §12). Present in every build so the wiring
+    // compiles, but inert unless the build had a google-services.json: with no
+    // FirebaseApp initialized the gate reports unavailable and nothing is ever
+    // collected. `playImplementation` for the same reason as the line above.
     "playImplementation"(platform(libs.firebase.bom))
     "playImplementation"(libs.firebase.analytics)
     "playImplementation"(libs.firebase.crashlytics)
@@ -750,8 +684,8 @@ dependencies {
     testImplementation(libs.robolectric)
     testImplementation(libs.roborazzi)
     // Debug-only, and safe only because unit tests exist for the debug build
-    // type alone here — `./gradlew :app:tasks` lists `testDirectDebugUnitTest`
-    // and `testPlayDebugUnitTest` and nothing else. This dependency is what
+    // type alone here — `./gradlew :app:tasks` lists `testPlayDebugUnitTest`
+    // and nothing else. This dependency is what
     // declares the activity `createAndroidComposeRule` launches, so setting
     // `testBuildType` to anything else, or turning release unit tests back on,
     // needs this moved to `testImplementation` first or the screenshot tests

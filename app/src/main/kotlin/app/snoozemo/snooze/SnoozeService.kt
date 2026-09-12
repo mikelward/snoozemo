@@ -76,8 +76,7 @@ private const val TAG = "SnoozeService"
  *
  * Not a foreground service in the `play` flavor: SPEC.md §3 puts departure
  * detection on the Geofencing API precisely so there is no long-running service
- * to justify. The `direct` flavor's foreground service arrives in Phase 7 behind
- * `PresenceMonitor`.
+ * to justify.
  */
 open class SnoozeService : Service(), SnoozeController.Listener {
 
@@ -3667,8 +3666,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * process to survive to hear it, and a duration-only one does not — its
      * only exit is the cap alarm, which is durable on its own and outlives any
      * process. So the modes that watch take a foreground service and the one
-     * that does not takes none, which also means `direct` reaches this only
-     * when Phase 7 gives it something to watch.
+     * that does not takes none.
      *
      * [TrackingMode.SETTLING] and [TrackingMode.WIFI_GRACE] count as watching,
      * which the maintainer's "FULL or Wi-Fi" did not spell out. Settling is the

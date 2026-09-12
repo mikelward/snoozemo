@@ -401,8 +401,7 @@ class MainActivityEndRowsTest {
 
         assertNotNull("the arm went out with the record read still held back", sentArm())
         // The poke, and so its read, exists only on a build whose monitor
-        // reads location; `direct` schedules nothing here, and the arm
-        // going out first is what this pins on both.
+        // reads location; the arm going out first is what this pins either way.
         if (app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE) {
             assertTrue("the setup this rests on: there was a read to hold back", heldBack.isNotEmpty())
         }
@@ -1231,8 +1230,8 @@ class MainActivityEndRowsTest {
         // everything.
         // All three, not just fine. `LocationPermission.GRANTED` means both
         // halves are held, and the background half is required on `play` —
-        // granting fine alone would read as `ASKABLE` there and pass only on
-        // `direct`, which is a test that agrees with itself on one flavor.
+        // granting fine alone would read as `ASKABLE`, so the gate would never
+        // open and the test would agree with itself for the wrong reason.
         shadowApp().grantPermissions(
             android.Manifest.permission.ACCESS_FINE_LOCATION,
             android.Manifest.permission.ACCESS_COARSE_LOCATION,
@@ -1439,9 +1438,9 @@ class MainActivityEndRowsTest {
         activity.onForegroundLocationResult(fineGranted = true)
         settle()
 
-        // Flavor-aware rather than hard-coded: `direct` needs no background
-        // half, so there the tap is already done by here, and pinning either
-        // answer would be a test that agrees with itself on one flavor.
+        // Helper-driven rather than hard-coded: a build that needs no
+        // background half is already done by here, so pinning that answer
+        // outright would let the test agree with itself for the wrong reason.
         if (locationTrackingNeedsBackgroundPermission) {
             assertTrue("the rationale is up", activity.showBackgroundLocationRationale)
             assertFalse("and the tap is waiting, not failed", sentDeparture())
@@ -1470,7 +1469,7 @@ class MainActivityEndRowsTest {
         controller.get().onForegroundLocationResult(fineGranted = true)
         settle()
         assertEquals(
-            "the rationale is up exactly where the flavor needs the background half",
+            "the rationale is up exactly where the build needs the background half",
             locationTrackingNeedsBackgroundPermission,
             controller.get().showBackgroundLocationRationale,
         )

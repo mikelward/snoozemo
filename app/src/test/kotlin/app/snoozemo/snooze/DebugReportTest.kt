@@ -49,8 +49,8 @@ class DebugReportTest {
 
     @Test
     fun `an unrequired background-location grant is labeled not required, not denied`() {
-        // The direct flavor never declares ACCESS_BACKGROUND_LOCATION and
-        // never needs it (SPEC.md §3.4) — a plain "denied" there reads as a
+        // A build that never declares ACCESS_BACKGROUND_LOCATION and never
+        // needs it (SPEC.md §3.4) — a plain "denied" there reads as a
         // capability problem that doesn't exist in that build (Codex, PR #89).
         val notRequired = payload(locationBackgroundGranted = false, locationBackgroundRequired = false)
         assertTrue(notRequired.contains("Location (background): not required for this build"))

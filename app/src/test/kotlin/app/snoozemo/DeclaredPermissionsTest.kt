@@ -13,35 +13,16 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /**
- * Pins the permission split of SPEC.md §3.4 — the one place the two flavors'
- * constraints genuinely diverge. This suite runs once per flavor variant, so
- * the same assertions guard both directions: `play` must carry the background
- * grant the Geofencing API needs, and `direct` must never gain a restricted
- * permission, because shipping without one is that flavor's reason to exist.
- *
- * INTERNET is now part of that split rather than absent everywhere: `play`
- * declares it for crash reporting and Firebase Analytics, both behind one
- * consent (SPEC.md §12), and `direct` must not, so
- * "this build cannot open a network connection" stays literally true of the
- * sideload flavor. Asserting both directions is what stops a dependency
- * quietly merging the permission into `direct` — the way that guarantee would
- * break without anyone deciding it.
+ * Pins the permission set of SPEC.md §3.4. The `play` build must carry the
+ * background grant the Geofencing API needs, and it declares INTERNET for
+ * crash reporting and Firebase Analytics, both behind one consent
+ * (SPEC.md §12). Asserting what the build holds — and what it must never gain,
+ * such as the advertising ID — is what stops a dependency quietly merging in a
+ * permission the policy does not describe, the way that guarantee would break
+ * without anyone deciding it.
  */
 @RunWith(RobolectricTestRunner::class)
 class DeclaredPermissionsTest {
-
-    /**
-     * The flavor, read from the versionName suffix the build script sets,
-     * because BuildConfig generation carries no flavor field in this project.
-     * If the suffix convention changes, the assertions that use this fail
-     * loudly rather than silently guarding the wrong flavor.
-     */
-    private val isDirectFlavor: Boolean by lazy {
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        context.packageManager
-            .getPackageInfo(context.packageName, 0).versionName.orEmpty()
-            .endsWith("-direct")
-    }
 
     private val declared: List<String> by lazy {
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -52,7 +33,7 @@ class DeclaredPermissionsTest {
             .toList()
     }
 
-    /** The merged manifest's application-level metadata, per flavor. */
+    /** The merged manifest's application-level metadata. */
     private val metaData: Map<String, String> by lazy {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val bundle = context.packageManager
@@ -78,17 +59,6 @@ class DeclaredPermissionsTest {
             "firebase_analytics_collection_enabled",
         )
 
-        if (isDirectFlavor) {
-            // `direct` has no Firebase at all, so it must not carry the
-            // switches either — their presence would mean an SDK had been
-            // merged into the flavor whose reason to exist is not having one.
-            assertTrue(
-                "direct ships no Firebase, so it declares none of its switches",
-                metaData.keys.none { it in switches },
-            )
-            return
-        }
-
         assertEquals(
             "every Firebase collection switch must be declared and default off",
             switches.associateWith { "false" },
@@ -101,7 +71,7 @@ class DeclaredPermissionsTest {
     }
 
     @Test
-    fun `both flavors hold the shared location family`() {
+    fun `the build holds the shared location family`() {
         assertTrue(Manifest.permission.ACCESS_FINE_LOCATION in declared)
         // Beside FINE because Android 12+ lets the user downgrade the grant;
         // a request for FINE alone would be refused, not downgraded.
@@ -113,11 +83,9 @@ class DeclaredPermissionsTest {
     }
 
     @Test
-    fun `both flavors hold the calendar read, and it is not restricted`() {
-        // In the main manifest rather than `play`'s, unlike background
-        // location: this is a plain runtime permission with no Play
-        // declaration behind it and no network implication, so it does not
-        // cross the line `direct` exists to hold (SPEC.md §3.4, §4.3).
+    fun `the build holds the calendar read, and it is not restricted`() {
+        // A plain runtime permission with no Play declaration behind it and no
+        // network implication, unlike background location (SPEC.md §3.4, §4.3).
         assertTrue(Manifest.permission.READ_CALENDAR in declared)
         // And it stays a *read*. Nothing in this app writes to a calendar, so
         // a WRITE grant appearing here would be a dependency pulling in a
@@ -129,53 +97,34 @@ class DeclaredPermissionsTest {
     }
 
     @Test
-    fun `only the play flavor carries the restricted background grant`() {
+    fun `the build carries the restricted background grant`() {
         val restricted = Manifest.permission.ACCESS_BACKGROUND_LOCATION in declared
-        if (isDirectFlavor) {
-            assertFalse("direct ships with no restricted permission (SPEC.md §3.4)", restricted)
-        } else {
-            assertTrue("play is the Geofencing build and needs the grant", restricted)
-        }
+        assertTrue("play is the Geofencing build and needs the grant", restricted)
     }
 
     @Test
-    fun `only the play flavor holds the typed foreground grant`() {
-        // The **typed** one is the flavor signal, and the bare one is not:
-        // WorkManager merges `FOREGROUND_SERVICE` into both flavors whatever
-        // the app asks for, so asserting its absence in `direct` fails against
-        // a dependency rather than against a decision. Asserted here so the
-        // next reader does not re-derive that — `direct` genuinely holds the
-        // bare permission and genuinely starts no foreground service, because
-        // the typed grant is what `startForeground` actually requires.
+    fun `the build holds the typed foreground grant`() {
+        // The **typed** one is what the app declares, and the bare one is not:
+        // WorkManager merges `FOREGROUND_SERVICE` in whatever the app asks for,
+        // so its presence is a dependency's doing rather than a decision.
+        // Asserted here so the next reader does not re-derive that — the typed
+        // grant is what `startForeground` actually requires.
         assertTrue(
-            "WorkManager merges the bare permission into both flavors",
+            "WorkManager merges the bare permission in",
             Manifest.permission.FOREGROUND_SERVICE in declared,
         )
 
         val typed = Manifest.permission.FOREGROUND_SERVICE_LOCATION in declared
-        if (isDirectFlavor) {
-            // Duration-only until Phase 7: no watch to keep alive, so no
-            // service to outlive one, so nothing to declare.
-            assertFalse("direct starts no watch, so it claims no typed service", typed)
-        } else {
-            assertTrue("play keeps the presence watch's process alive", typed)
-        }
+        assertTrue("play keeps the presence watch's process alive", typed)
     }
 
     @Test
-    fun `only the play flavor can reach the network`() {
+    fun `the build can reach the network`() {
         val network = Manifest.permission.INTERNET in declared
-        if (isDirectFlavor) {
-            assertFalse(
-                "direct must not be able to open a network connection (SPEC.md §3.4, §12)",
-                network,
-            )
-        } else {
-            assertTrue(
-                "play declares INTERNET for crash reporting and analytics (SPEC.md §12)",
-                network,
-            )
-        }
+        assertTrue(
+            "play declares INTERNET for crash reporting and analytics (SPEC.md §12)",
+            network,
+        )
     }
 
     @Test
@@ -204,7 +153,7 @@ class DeclaredPermissionsTest {
     }
 
     @Test
-    fun `the play flavor declares the location type and no other`() {
+    fun `the build declares the location type and no other`() {
         // **This assertion was reversed** (maintainer, 2026-09-08). It used to
         // require that *no* service declared a type at all, on the reasoning
         // that the location type's approved use cases are the ones SPEC.md §3.3
@@ -227,12 +176,9 @@ class DeclaredPermissionsTest {
         //
         // Deliberately not asserted here: the bare `FOREGROUND_SERVICE`, which
         // WorkManager merges in regardless. The typed one is what Play reviews,
-        // and the flavor split for both is pinned above.
-        //
-        // Scoped to play: direct is option A (SPEC.md §3.4) and holds neither.
+        // and both are pinned above.
         val context = ApplicationProvider.getApplicationContext<Context>()
         val packageManager = context.packageManager
-        if (isDirectFlavor) return
 
         val typed = declared.filter {
             it.startsWith("android.permission.FOREGROUND_SERVICE_")

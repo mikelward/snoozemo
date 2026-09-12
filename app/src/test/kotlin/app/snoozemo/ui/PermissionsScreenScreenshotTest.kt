@@ -235,11 +235,11 @@ class PermissionsScreenScreenshotTest {
 
     @Test
     fun `a build without departure tracking promises nothing and offers nothing`() {
-        // The `direct` flavor has no presence monitor (SPEC.md §3.4), but it
-        // still declares ACCESS_FINE_LOCATION from the shared manifest, so the
-        // row renders. Naming the capability there would promise something the
-        // build cannot do and invite a grant that buys nothing (Codex, PR
-        // #171) — the copy change this test guards is what introduced that.
+        // A build with no presence monitor (SPEC.md §3.4) still declares
+        // ACCESS_FINE_LOCATION from the shared manifest, so the row renders.
+        // Naming the capability there would promise something the build cannot
+        // do and invite a grant that buys nothing (Codex, PR #171) — the copy
+        // change this test guards is what introduced that.
         capture("permissions-screen-no-departure-askable.png") {
             PermissionsScreen(
                 access = PolicyAccess.GRANTED,

@@ -3,12 +3,9 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-      No INTERNET permission here, and none in `direct` (SPEC.md §12): that
-      flavor cannot open a network connection at all, which is what makes its
-      "nothing leaves the device" claim auditable from the manifest.
-
-      The `play` flavor does declare it, as of the change that added crash
-      reporting, and its own manifest says why. That was the product decision
+      No INTERNET permission here: the `play` flavor declares it in its own
+      manifest instead (SPEC.md §12), as of the change that added crash
+      reporting, and that manifest says why. That was the product decision
       §12 anticipated rather than an implementation detail slipping in: the
       Play Data Safety answer moved with it, and the floor did not. Location
       data and the user's own configuration still stay off any channel that
@@ -17,14 +14,13 @@
     -->
 
     <!--
-      The location family both flavors share (SPEC.md §3.4; declared with the
+      The location family declared here (SPEC.md §3.4; declared with the
       maintainer's approval, 2026-08-22): the departure test needs a fine fix —
       §6.6's accuracy gate cannot pass on coarse — and COARSE is declared
       beside it because Android 12+ lets the user downgrade the grant, so a
       request for FINE alone would be refused outright instead of downgraded.
-      ACCESS_BACKGROUND_LOCATION is the `play` flavor's alone (its manifest);
-      the `direct` flavor holds no restricted permission (§3.4), pinned by
-      DeclaredPermissionsTest.
+      ACCESS_BACKGROUND_LOCATION is declared in the `play` manifest, not here
+      (§3.4), pinned by DeclaredPermissionsTest.
     -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
@@ -71,8 +67,7 @@
 
       In the main manifest rather than `play`'s, unlike the background location
       grant: this is a plain runtime permission with no Play declaration behind
-      it, so both flavors can offer the feature. It also carries no network
-      implication, which is what `direct` exists to avoid.
+      it. It also carries no network implication.
 
       Landed ahead of the Play declarations with the maintainer's decision
       (2026-08-31), overriding `TODO.md`'s note that it should wait for them.

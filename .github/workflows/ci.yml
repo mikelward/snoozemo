@@ -271,20 +271,12 @@ jobs:
         # cache per job, so deploy restores its own entry from the PREVIOUS run
         # and never sees what this job just built.
         #
-        # What main gives up is the `direct` flavor's release build:
-        # bundlePlayRelease covers `play` only, so lintVitalDirectRelease and
-        # optimizeDirectReleaseResources stop running there (verified by
-        # --dry-run, not assumed). Accepted rather than worked around, to keep
-        # this the same shape as the sibling repos: the pull request for the
-        # same commit builds both flavors, and `direct` is the sideload
-        # fallback rather than the shipping artifact.
-        #
         # The condition is `deploy`'s `if:` verbatim -- note this repo's deploy
         # has no workflow_dispatch arm, unlike the siblings. If that changes,
         # change this with it, or the release check silently stops running
         # somewhere.
         #
-        # No assembleDebug. It built both debug flavors as a compile check, but
+        # No assembleDebug. It built the debug variant as a compile check, but
         # this repo has no src/debug and only compose-ui-tooling and
         # compose-ui-test-manifest as debugImplementation, so it compiled
         # nothing the unit tests do not already compile, and nothing
@@ -308,24 +300,19 @@ jobs:
         # or silently stop working depending on that scope, skipping nothing and
         # quietly keeping the duplicate R8 build this change exists to remove.
         # Fork status comes from the `github` context and holds either way.
-        #
-        # Note deploy only bundles the `play` flavor, so on main `direct`'s
-        # release build is given up either way -- see the note above.
         if: |
           !(github.ref == 'refs/heads/main' && github.event_name == 'push' &&
             github.event.repository.fork != true)
         run: ./gradlew assembleRelease
 
       - name: Check licenses exports are up to date
-        # The open-source attribution lists are committed to res/raw, one per
-        # flavor (AGP 9 can't auto-generate them into the app -- see
-        # app/build.gradle.kts). Regenerate and fail on drift so a dependency
-        # bump can't ship a stale or inaccurate Licenses page while CI stays
-        # green -- including the case where a new dependency lands in only one
-        # flavor.
+        # The open-source attribution list is committed to res/raw (AGP 9 can't
+        # auto-generate it into the app -- see app/build.gradle.kts). Regenerate
+        # and fail on drift so a dependency bump can't ship a stale or inaccurate
+        # Licenses page while CI stays green.
         run: |
           ./gradlew :app:exportBundledLicenses --rerun
-          git diff --exit-code app/src/play/res/raw/aboutlibraries.json app/src/direct/res/raw/aboutlibraries.json
+          git diff --exit-code app/src/play/res/raw/aboutlibraries.json
 
       - name: Run unit tests
         run: ./gradlew test
@@ -408,7 +395,7 @@ jobs:
         # `.git/shallow`, and the trap puts the tree right even when the
         # expected failure isn't the one that happens.
         run: |
-          ./gradlew -q :app:prePlayReleaseBuild :app:preDirectReleaseBuild --dry-run | tee /tmp/release-task-graph.txt
+          ./gradlew -q :app:prePlayReleaseBuild --dry-run | tee /tmp/release-task-graph.txt
           grep -q ':app:checkReleaseVersionDerivation' /tmp/release-task-graph.txt
           ./gradlew :app:checkReleaseVersionDerivation
           trap 'rm -f .git/shallow' EXIT
@@ -421,36 +408,31 @@ jobs:
           echo "$out" | grep -q "Refusing to build a release"
 
       - name: Verify the release manifest guard
-        # Same shape as the version guard above, for `verify*ReleaseManifest`
+        # Same shape as the version guard above, for `verifyPlayReleaseManifest`
         # (app/build.gradle.kts): the task is still in every release entry
         # point's graph (an AGP rename of a package or bundle anchor would
         # unwire it without failing anything), it passes on the real merged
-        # manifests,
-        # and each flavor's proof task refuses the fixture manifest that
-        # carries everything that flavor's rules refuse — naming every one of
-        # them, so a single rule that stops firing is caught even while the
-        # others still fail the task (Codex, PR #189). The proofs share the
-        # variants' rule sets, so a weakened rule fails its proof rather than
-        # leaving a copy green. The play fixture declares the ad identifier
-        # through `uses-permission-sdk-23` and the direct one through the
-        # `-sdk-m` alias, so each SDK-qualified form the guard reads has its
-        # own proof; the play fixture caps `INTERNET` with maxSdkVersion,
-        # which must read as a refused required grant, not a declared one;
-        # the direct fixture's typed service must NOT be reported, since that
-        # flavor keeps its foreground-service type.
+        # manifest, and the proof task refuses the fixture manifest that carries
+        # everything the play rules refuse — naming every one of them, so a
+        # single rule that stops firing is caught even while the others still
+        # fail the task (Codex, PR #189). The proof shares the variant's rule
+        # set, so a weakened rule fails its proof rather than leaving a copy
+        # green. The fixture declares the ad identifier through
+        # `uses-permission-sdk-23`, so the SDK-qualified form the guard reads has
+        # its own proof; it caps `INTERNET` with maxSdkVersion, which must read
+        # as a refused required grant, not a declared one.
         run: |
           # One dry run per release entry point, not one for all of them: a
           # combined graph would still show a verifier that one entry point
           # had lost, through another that kept it (Codex, PR #189).
-          for entry in assemblePlayRelease bundlePlayRelease assembleDirectRelease bundleDirectRelease; do
-            case "$entry" in *Play*) verifier=verifyPlayReleaseManifest ;; *) verifier=verifyDirectReleaseManifest ;; esac
+          for entry in assemblePlayRelease bundlePlayRelease; do
             ./gradlew -q ":app:$entry" --dry-run | tee /tmp/release-manifest-graph.txt
-            if ! grep -q ":app:$verifier" /tmp/release-manifest-graph.txt; then
-              echo "::error::$entry no longer depends on $verifier."
+            if ! grep -q ":app:verifyPlayReleaseManifest" /tmp/release-manifest-graph.txt; then
+              echo "::error::$entry no longer depends on verifyPlayReleaseManifest."
               exit 1
             fi
           done
-          ./gradlew :app:verifyPlayReleaseManifest :app:verifyDirectReleaseManifest
+          ./gradlew :app:verifyPlayReleaseManifest
           prove() {
             flavor=$1; shift
             if out=$(./gradlew ":app:verify${flavor}ReleaseManifestProof" 2>&1); then
@@ -492,15 +474,6 @@ jobs:
           if echo "$play" | grep -qE 'service [^ ]+ declares foregroundServiceType="location"'; then
             echo "$play"
             echo "::error::The play release manifest guard reports the location type it must allow."
-            exit 1
-          fi
-          direct=$(prove Direct \
-            "declares android.permission.INTERNET" \
-            "declares android.permission.ACCESS_BACKGROUND_LOCATION" \
-            "declares com.google.android.gms.permission.AD_ID")
-          if echo "$direct" | grep -q "foregroundServiceType"; then
-            echo "$direct"
-            echo "::error::The direct release manifest guard reports a foreground-service type it must allow."
             exit 1
           fi
 
@@ -582,10 +555,10 @@ jobs:
         run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.SettingsScreenScreenshotTest" -Proborazzi.test.record=true
 
       - name: Run licenses screen screenshot tests
-        # Records the `play` flavor's attribution list, from that flavor's own
-        # committed res/raw/aboutlibraries.json — so the baseline moves
-        # whenever what the Play build bundles does. `direct`'s list is a
-        # strict subset and is covered by the export drift check in `build`.
+        # Records the attribution list from the committed
+        # res/raw/aboutlibraries.json — so the baseline moves whenever what the
+        # Play build bundles does. Drift in the list itself is caught by the
+        # export check in `build`.
         run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.LicensesScreenScreenshotTest" -Proborazzi.test.record=true
 
       - name: Run end-condition sheet screenshot tests
@@ -1120,9 +1093,9 @@ jobs:
         # it fails first if any of the other three is empty. Without them Play
         # would reject the AAB anyway.
         #
-        # The `play` flavor only: it is the only flavor any Play track ships
-        # (SPEC.md §3.4) — `direct` is the sideload/F-Droid fallback and has
-        # no Play listing to upload to.
+        # `bundlePlayRelease` names the flavor explicitly. `play` is the only
+        # flavor (SPEC.md §3.4), so this is the whole release; the name stays
+        # until the flavor concept is removed (TODO.md).
         id: bundle
         if: env.RELEASE_KEYSTORE_FILE != ''
         env:

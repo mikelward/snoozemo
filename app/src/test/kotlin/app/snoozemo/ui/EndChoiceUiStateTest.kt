@@ -290,11 +290,10 @@ class EndChoiceUiStateTest {
     }
 
     /**
-     * The `When I move` row is a `play`-only capability, because only that
-     * flavor declares a foreground service — and this file runs on both, so
-     * every assertion here is against the flavor's own answer rather than a
-     * hard-coded one. On `direct` the row is correctly offered nowhere, and
-     * these read as "still nowhere".
+     * The `When I move` row depends on the build declaring a foreground
+     * service, so every assertion here is against the build's own answer
+     * ([buildHoldsForegroundService]) rather than a hard-coded one — a build
+     * that declared none would correctly offer the row nowhere.
      */
     private fun offered(hasSensor: Boolean = true): Boolean =
         offersMotionEnd(deviceHasMotionSensor = { hasSensor })
@@ -324,9 +323,9 @@ class EndChoiceUiStateTest {
         // outside (maintainer, 2026-09-10). Asserted against the same function
         // the screen acts on, so the reason and the behavior cannot drift.
         //
-        // Flavor-aware rather than hard-coded: `direct` never gets past the
-        // first clause, so pinning either answer would be a test that agrees
-        // with itself on one flavor.
+        // Helper-driven rather than hard-coded: a build that holds no
+        // foreground service never gets past the first clause, so pinning that
+        // answer outright would let the test agree with itself.
         if (buildHoldsForegroundService) {
             assertNull("nothing is wrong when both hold", motionEndUnavailability { true })
             assertEquals(
@@ -346,7 +345,7 @@ class EndChoiceUiStateTest {
 
     @Test
     fun `a build with no foreground service asks the platform nothing`() {
-        // `direct` cannot hold one, so the answer could not change the outcome.
+        // With no foreground service the answer could not change the outcome.
         var asked = 0
 
         val offered = offersMotionEnd(deviceHasMotionSensor = { asked++; true })

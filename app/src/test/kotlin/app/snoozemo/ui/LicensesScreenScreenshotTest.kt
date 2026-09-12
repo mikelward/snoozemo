@@ -31,8 +31,8 @@ import org.robolectric.annotation.GraphicsMode
  * `res/raw/aboutlibraries.json` so the snapshot is deterministic — production
  * loads the same JSON asynchronously through `rememberLibraries`. CI records
  * under `testPlayDebugUnitTest`, so the recorded baseline is the `play`
- * flavor's list; `direct`'s is a strict subset (no Play libraries), and the
- * assertions below name only components both flavors bundle.
+ * build's library list, and the assertions below name the components it
+ * bundles.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], qualifiers = "w411dp-h914dp-420dpi")

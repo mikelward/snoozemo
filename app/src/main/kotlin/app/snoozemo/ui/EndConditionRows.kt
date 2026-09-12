@@ -818,9 +818,9 @@ internal fun departureSignals(anchor: Anchor?, mode: TrackingMode?): DepartureSi
  *   nothing rather than a row the service would roll straight back.
  *   **A lambda, and asked last**, because answering it was once a
  *   `SensorManager` lookup made during composition on every first frame,
- *   `direct` included, where the answer cannot matter (Codex, PR #252). The
- *   host warms the answer at startup now, but the order still keeps the
- *   flavor that can never offer the row from asking.
+ *   including where the build could never offer the row anyway (Codex, PR #252). The
+ *   host warms the answer at startup now, but the order still keeps a build
+ *   with no foreground service from asking.
  */
 internal fun offersMotionEnd(
     deviceHasMotionSensor: () -> Boolean,
@@ -840,14 +840,13 @@ internal fun offersMotionEnd(
  * The log's caller is `DebugLogging`, which says it with the run context. It
  * lives here, beside the row it governs and beside the flavor constant it
  * reads, rather than moving down to the layer that logs it: both callers are
- * in this module, and `buildHoldsForegroundService` is already a `ui` file
- * per flavor.
+ * in this module, and `buildHoldsForegroundService` is already a
+ * flavor-scoped `ui` file.
  *
  * A build with no foreground service cannot keep the process alive to hear a
- * one-shot sensor, so the promotion is refused and the exit never fires;
- * `direct` was excluded by accident until the tracking-mode gate came off, and
- * is excluded on purpose now. The sensor question is asked second and through
- * a lambda, so the flavor that can never offer the row never asks it.
+ * one-shot sensor, so the promotion is refused and the exit never fires. The
+ * sensor question is asked second and through a lambda, so a build that can
+ * never offer the row never asks it.
  *
  * The strings are fixed and name no device, so they are safe for a log the
  * user shares (AGENTS.md, *Privacy*).

@@ -63,7 +63,7 @@ class WelcomeExitTest {
 
     @Test
     fun `location counts for nothing on a build that cannot track departure`() {
-        // That flavor's permissions screen offers no action on the row, so
+        // Such a build's permissions screen offers no action on the row, so
         // routing to a recap over it would send the user to a screen with
         // nothing they can do — and invite a grant that buys them nothing.
         assertFalse(
@@ -125,7 +125,7 @@ class WelcomeExitTest {
             WelcomeCard.TILE,
             rememberedWelcomeCard(WelcomeCard.TILE.name, without),
         )
-        // Codex, PR #220: `direct`, and `play` with no crash reporter, drop the
+        // Codex, PR #220: a build with no crash reporter configured drops the
         // telemetry card — a breadcrumb naming it used to come back as a card
         // the flow does not contain, where `Next` did nothing and the dots read
         // card 1 while a fifth card was on screen.

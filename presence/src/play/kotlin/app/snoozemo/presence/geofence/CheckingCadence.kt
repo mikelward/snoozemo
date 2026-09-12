@@ -5,8 +5,8 @@ import app.snoozemo.core.Departure
 /**
  * How the checking burst paces its one-shot fixes (SPEC.md §6.6, §6.10).
  *
- * The `play` flavor has no foreground service, so it cannot hold the `direct`
- * flavor's continuous 90-second request (§6.5) — background apps get location
+ * The `play` flavor has no foreground service, so it cannot hold a continuous
+ * 90-second request — background apps get location
  * a handful of times an hour. What it can do is take a **one-shot fix per
  * step of the confirmation**: the §6.6 test needs two qualifying fixes at
  * least [Departure.CONFIRMATION_GAP] apart, so while the engine is checking,

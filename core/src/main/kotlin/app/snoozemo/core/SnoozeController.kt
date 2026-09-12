@@ -286,10 +286,10 @@ class SnoozeController(
             // the whole ~10 s the fix took (maintainer, 2026-09-07).
             //
             // Unless nothing is pending. Where the build cannot end a snooze by
-            // departure at all — `direct` until Phase 7 — the answer is already
+            // departure at all, the answer is already
             // the cap, and there is nothing to wait to find out: saying
             // "checking where you are" for the capture window on every arm of
-            // that flavor would be a claim it can never make good (Codex,
+            // such a build would be a claim it can never make good (Codex,
             // PR #221). The absence of a decision is only honest while a
             // decision is actually coming.
             mode = if (canTrackDeparture) TrackingMode.SETTLING else TrackingMode.DURATION_ONLY,

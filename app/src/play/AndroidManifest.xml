@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The play flavor's half of SPEC.md §3.4's split. It stays out of the main
-  manifest so the direct flavor ships with no restricted permission and no
-  network access at all, which is that flavor's reason to exist;
+  The play flavor's half of SPEC.md §3.4's split: the restricted permissions
+  and network access kept out of the main manifest and declared here instead.
   DeclaredPermissionsTest pins the split in both directions.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -53,18 +52,17 @@
       service is what survives to hear it — and this is the type that describes
       what the process is doing while it waits.
 
-      `play`-only, like the background grant above and for the same reason:
-      `direct` runs duration-only snoozes until Phase 7, so it starts no watch,
-      needs no service to outlive one, and keeps holding nothing it does not
-      use. The gate in the service is the tracking mode rather than the flavor,
-      so `direct` reaches it only when Phase 7 gives it something to watch.
+      `play`-only, like the background grant above and for the same reason. The
+      gate in the service is the tracking mode, not the build: a duration-only
+      snooze starts no watch and needs no service to outlive one, so it takes
+      none.
     -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
     <!--
-      Repeated from the main manifest, where the location family is declared for
-      both flavors and where it stays. It is a no-op at merge — the same
+      Repeated from the main manifest, where the location family is declared
+      and where it stays. It is a no-op at merge — the same
       permission twice is one permission — and it is here so the check that ties
       a `location` service to its prerequisites can see them together:
       `ForegroundServicePermission` reads the manifest the `<service>` is
@@ -79,16 +77,12 @@
       (SPEC.md §12). Both sit behind one consent the user has to give first,
       so the permission is held by a build that sends nothing until asked.
 
-      It was absent from both flavors until Crashlytics landed, and the day it
+      It was absent until Crashlytics landed, and the day it
       landed the Play Data Safety answer moved off "no data collected, no data
       shared" onto crash logs, diagnostics and the installation identifier
       Crashlytics records; Analytics later added app interactions and its own
       app-instance identifier — docs/play-store-declarations.md carries the
       answers and docs/PRIVACY.md the user-facing statement.
-
-      Still absent from `direct`: that flavor holds no Play Services
-      dependency, so it has no reporter to feed, and "this build cannot open a
-      network connection" stays literally true there.
 
       The floor of SPEC.md §12 is unchanged by this permission — no
       coordinates, no SSID or BSSID, no user-typed place name goes anywhere,
@@ -102,8 +96,9 @@
     <application>
         <!--
           The type is declared here rather than beside the service in the main
-          manifest, so `direct` ships a plain started service: a manifest type
-          it can never use would be a claim the build does not make.
+          manifest, so a build without these foreground-service permissions
+          ships a plain started service: a manifest type it can never use would
+          be a claim the build does not make.
         -->
         <service
             android:name="app.snoozemo.snooze.SnoozeService"

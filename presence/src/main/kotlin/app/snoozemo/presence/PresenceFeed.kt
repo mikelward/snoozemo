@@ -12,11 +12,11 @@ import app.snoozemo.core.PresenceUpdate
  * carry the state, and shape the result into the [PresenceUpdate] the
  * controller consumes.
  *
- * Deliberately tiny and deliberately in the shared source set — the geofence
- * monitor and Phase 7's foreground monitor differ in which sensors they
- * register, never in what a signal means, and a second copy of this loop is
- * where the two flavors would start to drift. Pure over an injected clock
- * seed, so a JVM test can drive it without Android.
+ * Deliberately tiny and deliberately in the shared source set — a presence
+ * monitor differs in which sensors it registers, never in what a signal means,
+ * so this loop is shared rather than copied per monitor, where the copies would
+ * start to drift. Pure over an injected clock seed, so a JVM test can drive it
+ * without Android.
  *
  * Not thread-safe on its own: a monitor calls [accept] from one confined
  * context (the flow's callback scope), which is also what keeps the engine's

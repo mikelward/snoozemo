@@ -25,8 +25,7 @@ private const val TAG = "PlayUpdateChecker"
  * Every call here is asynchronous and lives on [app.snoozemo.ui.SettingsScreen]'s
  * banner, nowhere near the tile-tap arm path: `SnoozeController` reads only its
  * own in-memory state, and nothing in this class touches it. `play` flavor
- * only — `direct`'s own copy of this file is a no-op, since that flavor
- * carries no Play Services dependency at all (`SPEC.md` §3.4).
+ * only.
  */
 internal class PlayUpdateChecker @VisibleForTesting constructor(
     app: Application,

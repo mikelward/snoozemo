@@ -39,9 +39,9 @@ import app.snoozemo.core.ZenRuleState
  * Which card of the welcome flow is showing (`SPEC.md` §4.2, wording and
  * reasoning in `TUTORIAL.md`).
  *
- * An enum rather than an index so the flavor filtering below has something to
+ * An enum rather than an index so the filtering below has something to
  * name: [TELEMETRY] is absent on a build that ships no crash-reporting SDK, and
- * a bare `4` would then mean a different card depending on the flavor.
+ * a bare index would be fragile if the card set ever changed.
  */
 enum class WelcomeCard {
     /** What the app is. */
@@ -104,9 +104,9 @@ object WelcomeCardMemory {
 /**
  * The cards this build actually shows, in order.
  *
- * [TELEMETRY][WelcomeCard.TELEMETRY] is dropped where nothing collects — the
- * `direct` flavor ships neither SDK (§12), and with the debug-log sentence gone
- * (maintainer, 2026-09-05) there is nothing else on that card, so it would be a
+ * [TELEMETRY][WelcomeCard.TELEMETRY] is dropped where nothing collects — a
+ * build with no Firebase config ships neither SDK (§12), and with the debug-log
+ * sentence gone (maintainer, 2026-09-05) there is nothing else on that card, so it would be a
  * blank screen and a sixth dot. The list is what the dots count, so dropping it
  * here is what keeps them honest.
  */
@@ -138,7 +138,7 @@ fun welcomeCards(collectsTelemetry: Boolean): List<WelcomeCard> =
  * (Codex, PR #220).
  *
  * Resolved against **the cards this build shows**, not against every enum
- * entry: a `direct` build, or a `play` one with no crash reporter, drops the
+ * entry: a build with no crash reporter drops the
  * telemetry card, and a breadcrumb naming it came back as a card the flow does
  * not contain — `cards.indexOf` returned -1, so `Next` did nothing and the dots
  * read card 1 while a fifth card was on screen. A name this build cannot place
@@ -515,7 +515,7 @@ private fun EndsCard(
         ),
     )
     // The location row is absent on a build that cannot track departure, as it
-    // is on that flavor's PermissionsScreen: a grant that buys the user nothing
+    // is on the PermissionsScreen: a grant that buys the user nothing
     // must not be invited.
     if (tracksDeparture) {
         PermissionRows.Location(
@@ -689,8 +689,8 @@ private fun NotificationRender(tracksDeparture: Boolean) {
                     )
                 }
                 // The countdown lives in the chronometer beside the title on
-                // the real notification, on both flavors — so it is here on
-                // both, even where the body reads `Timer only`.
+                // the real notification — so it is here too, even where the
+                // body reads `Timer only`.
                 Text(
                     text = SAMPLE_REMAINING,
                     style = MaterialTheme.typography.titleSmall,

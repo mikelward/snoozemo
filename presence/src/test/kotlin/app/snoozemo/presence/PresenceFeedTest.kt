@@ -14,7 +14,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The stateful step both flavors' monitors share. The engine's own rules have
+ * The stateful step the monitor's feed adds. The engine's own rules have
  * their trace tests in `:core`; these pin what the *feed* adds — the state is
  * carried between signals, the seed guards against cached readings, and the
  * update carries the level beside the event.

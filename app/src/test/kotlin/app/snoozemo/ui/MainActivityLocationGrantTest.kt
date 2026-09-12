@@ -27,9 +27,10 @@ import org.robolectric.Shadows.shadowOf
  * permission reading is the one place that sees the grant land, and it asks
  * the service to re-check.
  *
- * Runs under both flavor variants, so the expectation is written in terms of
- * [PRESENCE_TRACKS_DEPARTURE]: `play` asks, `direct` — which reads no
- * location — never starts the service for it.
+ * The expectation is written in terms of [PRESENCE_TRACKS_DEPARTURE] rather
+ * than a hard-coded value: the build tracks departure and so asks the service
+ * to re-check, where a build that read no location would never start the
+ * service for it.
  */
 @RunWith(RobolectricTestRunner::class)
 class MainActivityLocationGrantTest {
@@ -66,9 +67,8 @@ class MainActivityLocationGrantTest {
     /**
      * Every `SnoozeService` action this screen has asked for since the last
      * drain. A list rather than the next one: the same reads start the
-     * service for other reasons — the calendar row's first reading reposts,
-     * and `direct` ends a record whose mode it cannot honor — and this test
-     * is about whether the grant's own action is among them.
+     * service for other reasons — the calendar row's first reading reposts —
+     * and this test is about whether the grant's own action is among them.
      */
     private fun startedServiceActions(): List<String?> = buildList {
         while (true) {
@@ -83,7 +83,7 @@ class MainActivityLocationGrantTest {
             assertTrue(message, actions.contains(SnoozeService.ACTION_LOCATION_GRANTED))
         } else {
             assertFalse(
-                "direct reads no location, so a grant is nothing to re-ask",
+                "a build that reads no location has nothing to re-ask on a grant",
                 actions.contains(SnoozeService.ACTION_LOCATION_GRANTED),
             )
         }

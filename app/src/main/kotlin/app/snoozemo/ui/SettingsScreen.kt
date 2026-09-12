@@ -41,7 +41,7 @@ internal fun SettingsScreen(
     debugLogSaveFailed: Boolean,
     /**
      * Whether crash reporting is on, or **null when this build has no reporter
-     * to offer** — `direct` always, and a `play` build made without a Firebase
+     * to offer** — a build made without a Firebase
      * config (`docs/crashlytics.md`). Null draws no row at all rather than a
      * disabled one: a switch over a reporter that does not exist would tell
      * the user they had turned something off that was never on. It is also
@@ -88,9 +88,8 @@ internal fun SettingsScreen(
      * either row speaking for the other (Codex, PR #217).
      */
     pinchFontSizeSaveFailed: Boolean = false,
-    // `PlayUpdateState.NotAvailable` on `direct` (no flavor branch needed
-    // here — that flavor's checker never reports anything else) and while
-    // `MainActivity` hasn't finished its own first resume check yet.
+    // `PlayUpdateState.NotAvailable` while `MainActivity` hasn't finished
+    // its own first resume check yet.
     playUpdate: PlayUpdateState = PlayUpdateState.NotAvailable,
     // Whether the last Restart tap failed to hand off to Play. Only ever
     // meaningful alongside a `Downloaded` [playUpdate] — see that field's

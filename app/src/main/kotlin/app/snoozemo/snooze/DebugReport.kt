@@ -781,11 +781,10 @@ private fun grantLabel(granted: Boolean?): String = when (granted) {
 private fun boolLabel(value: Boolean?): String = value?.toString() ?: "unknown"
 
 /**
- * The `direct` flavor never declares `ACCESS_BACKGROUND_LOCATION`
- * (`AndroidManifest.xml`, `SPEC.md` §3.4) and its foreground-service
- * tracking never needs the grant, so [grantLabel] alone would always read
- * "denied" there — a false capability problem for anyone diagnosing a
- * direct build, since nothing in that flavor ever requests or expects it
+ * A build whose tracking never needs `ACCESS_BACKGROUND_LOCATION` — and so
+ * never declares it (`AndroidManifest.xml`, `SPEC.md` §3.4) — would always read
+ * "denied" through [grantLabel] alone: a false capability problem for anyone
+ * diagnosing it, since nothing in such a build ever requests or expects the grant
  * (Codex, PR #89). Says "not required" instead whenever
  * [required] is false, from the flavor-specific
  * `locationTrackingNeedsBackgroundPermission` — a compile-time constant,

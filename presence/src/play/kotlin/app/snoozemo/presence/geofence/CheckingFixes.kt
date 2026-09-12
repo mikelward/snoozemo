@@ -50,8 +50,7 @@ internal fun interface FixRequester {
  * than trusted on its own.
  *
  * One-shots, not a request loop, deliberately: with no foreground service, a
- * background 90-second request would be throttled to nothing (that loop is
- * the `direct` flavor's, behind Phase 7's foreground service, §6.5), while a
+ * background 90-second request would be throttled to nothing, while a
  * one-shot per confirmation step fits inside the background budget and is
  * all the two-fix rule needs. [CheckingCadence] owns the pacing and the
  * backoff; [FixRequester] owns the platform call; this class owns the

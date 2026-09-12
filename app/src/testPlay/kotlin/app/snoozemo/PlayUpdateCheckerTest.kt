@@ -24,8 +24,8 @@ import org.robolectric.shadows.ShadowLog
  * The checker's two failure-shaped edges: an install that never starts, and
  * the install listener's lifetime against an activity that goes away mid-check.
  * `play`-flavor test source set, like [PlayUpdateStateTest] — this exercises
- * the real Play Core `AppUpdateManager` interface, which `direct`'s own copy
- * of [PlayUpdateChecker] never implements.
+ * the real Play Core `AppUpdateManager` interface, which only the `play`
+ * variant's classpath carries.
  */
 @RunWith(RobolectricTestRunner::class)
 class PlayUpdateCheckerTest {

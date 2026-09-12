@@ -120,7 +120,7 @@ class DebugLoggingTest {
         DebugLogging.setEnabled(context, true) {}
         DebugLogging.awaitIdleForTest()
 
-        // Whichever way this flavor and this device answer — a line that only
+        // Whichever way this build and this device answer — a line that only
         // appeared on failure would leave the working case just as
         // unexplained. `motionEndUnavailability` is the same function the
         // screen acts on, so the reason and the behavior cannot drift.

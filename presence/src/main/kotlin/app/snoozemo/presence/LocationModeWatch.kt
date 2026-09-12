@@ -60,9 +60,10 @@ internal interface LocationModeRegistrar {
  * backstop remains the mechanism. That is the same shape — and the same
  * honest limit — as [MotionTrigger] on this flavor, and for the same
  * underlying reason: nothing in the platform delivers this to a dead
- * process. On `direct`, Phase 7's foreground service keeps the process
- * resident and this covers the whole snooze, which is why it lives in the
- * shared source set rather than the `play` flavor's.
+ * process. A foreground-service build would have kept the process resident,
+ * so this covered the whole snooze there, which is why it lives in the shared
+ * source set rather than the `play` flavor's; that build was retired
+ * (SPEC.md §3.4).
  *
  * **The broadcast is not sticky, so registering is not enough.** An outage
  * can be *reported* well after location was actually switched back on — a

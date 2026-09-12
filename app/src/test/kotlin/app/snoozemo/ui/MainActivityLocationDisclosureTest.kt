@@ -10,17 +10,16 @@ import org.robolectric.RobolectricTestRunner
 /**
  * The foreground-grant → background-disclosure ordering `SPEC.md` §12
  * requires: a fine grant must open the rationale dialog rather than
- * launching the background request directly, and only on flavors that need
- * background location at all. Runs under both flavor variants
- * (`testPlayDebugUnitTest` / `testDirectDebugUnitTest`), so the assertion is
- * written in terms of [locationTrackingNeedsBackgroundPermission] rather than
- * a hardcoded expectation — `play` sees the dialog open, `direct` never does.
+ * launching the background request directly, and only when the build needs
+ * background location at all. The assertion is written in terms of
+ * [locationTrackingNeedsBackgroundPermission] rather than a hardcoded
+ * expectation — the `play` build needs it and so sees the dialog open.
  */
 @RunWith(RobolectricTestRunner::class)
 class MainActivityLocationDisclosureTest {
 
     @Test
-    fun `a fine grant opens the background rationale only on flavors that need it`() {
+    fun `a fine grant opens the background rationale when the build needs it`() {
         val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
 
         activity.onForegroundLocationResult(fineGranted = true)

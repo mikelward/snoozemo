@@ -112,22 +112,21 @@ internal fun MainScreen(
     sharing: Boolean = false,
     /**
      * What Play last said about a waiting update, dismissal already folded in.
-     * `NotAvailable` on `direct`, where the checker is a no-op.
+     * `NotAvailable` until the update checker reports one.
      */
     playUpdate: PlayUpdateState = PlayUpdateState.NotAvailable,
     /** Whether the last Restart tap on the update banner was refused. */
     playUpdateRestartFailed: Boolean = false,
     /**
-     * Whether background location is missing *and* this flavor's tracking
-     * needs it. False on `direct`, which declares no such permission, and
-     * false while the reading is unknown — unread is not "missing".
+     * Whether background location is missing *and* this build's tracking
+     * needs it. False while the reading is unknown — unread is not "missing".
      */
     backgroundLocationMissing: Boolean = false,
     /** Whether the user has dismissed the background-location banner for good. */
     backgroundLocationBannerDismissed: Boolean = true,
     /**
      * Whether the telemetry question is still unanswered *and* this build has
-     * something to turn on. False on `direct`, which has no reporter, and
+     * something to turn on. False when the build has no reporter, and
      * false until the store has been read — unasked is not "unanswered" as
      * far as this screen is concerned.
      */

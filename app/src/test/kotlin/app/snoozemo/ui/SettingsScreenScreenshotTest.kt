@@ -384,9 +384,9 @@ class SettingsScreenScreenshotTest {
 
     @Test
     fun `a build with no reporter offers no crash reporting row at all`() {
-        // `direct` always, and a `play` build made with no Firebase config
-        // (docs/crashlytics.md). A disabled switch would say the user had
-        // turned something off that was never on; the row is absent instead.
+        // A `play` build made with no Firebase config (docs/crashlytics.md).
+        // A disabled switch would say the user had turned something off that
+        // was never on; the row is absent instead.
         capture {
             SettingsScreen(
                 tileAdded = true,
