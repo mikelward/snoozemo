@@ -98,8 +98,10 @@ class SnoozeServiceForegroundTest {
         assertEquals(TrackingMode.DURATION_ONLY, ActiveSnoozeStore(appContext).load()?.mode)
         assertNull(shadowOf(controller.get()).lastForegroundNotification)
         // And the card is still up: the binding is what changes, not what the
-        // user sees.
-        assertTrue(shadeShows(stringOf(app.snoozemo.R.string.ongoing_title)))
+        // user sees. Located by its stable id, since a plain timer-only card
+        // now folds its title to "Snoozing until <time>" (PR #276) and the
+        // constant title no longer identifies it.
+        assertNotNull(ongoingTitle())
     }
 
     @Test

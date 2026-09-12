@@ -6,6 +6,7 @@ import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenOutcome
+import app.snoozemo.ui.formatSheetTime
 import java.time.Duration
 import java.time.Instant
 import org.junit.Assert.assertEquals
@@ -423,22 +424,24 @@ class SnoozeServiceSetCapTest {
             shadeText().contains(stringOf(R.string.ongoing_settling)),
         )
 
+        val chosenCap = now.plus(Duration.ofHours(1))
         service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
-            putExtra(
-                SnoozeService.EXTRA_CAP_EXPIRES_AT,
-                now.plus(Duration.ofHours(1)).toEpochMilli(),
-            )
+            putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, chosenCap.toEpochMilli())
             putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
         }
 
-        val text = shadeText()
-        assertTrue(
+        // The snooze is now a plain timer, so the card folds its two lines into
+        // the `Snoozing until …` headline naming the chosen time (maintainer,
+        // 2026-09-12) — which is what says what it now ends on, and no longer
+        // `Waiting for location`.
+        assertEquals(
             "the card has to say what the snooze now ends on, not what it did",
-            text.contains(stringOf(R.string.ongoing_timer_only)),
+            appContext.getString(R.string.snoozing_until_time, formatSheetTime(appContext, chosenCap)),
+            ongoingTitle(),
         )
-        assertFalse(
+        assertNull(
             "and must stop waiting on a location it will never use",
-            text.contains(stringOf(R.string.ongoing_settling)),
+            ongoingBody(),
         )
     }
 

@@ -406,6 +406,25 @@
     <string name="channel_ended">Snooze ended</string>
     <string name="channel_urgent">Do Not Disturb stuck</string>
     <string name="ongoing_title">Snoozing</string>
+    <!--
+      The headline for a plain timer-only snooze, on the ongoing notification
+      and the main screen alike (maintainer, 2026-09-12). "Snoozing" over a
+      second line reading "Timer only" says nothing the end time doesn't say
+      better, so the two fold into one headline naming when it ends. Only where
+      there is no exit and no degraded caveat to carry — a snooze with more to
+      report keeps the "Snoozing" headline and its condition line. The time is
+      the cap, already formatted like the sheet's "Until %1$s".
+    -->
+    <!-- TODO: translate -->
+    <string name="snoozing_until_time" tools:ignore="MissingTranslation">Snoozing until %1$s</string>
+    <!--
+      The condition line under the "Snoozing" headline for a plain timer-only
+      snooze, shown where "Snoozing until 4:30 PM" is too wide to fold into one
+      line (a narrow screen, a large accessibility font) — so the end time
+      still shows, rather than reverting to "Timer only" (Codex, PR #276).
+    -->
+    <!-- TODO: translate -->
+    <string name="main_until_time" tools:ignore="MissingTranslation">Until %1$s</string>
     <string name="ongoing_ends_when_you_leave">Ends when you leave</string>
     <!--
       The same line for a snooze started with `Until I move`, used by the main

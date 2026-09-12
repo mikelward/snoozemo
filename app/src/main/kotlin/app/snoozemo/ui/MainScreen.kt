@@ -90,6 +90,14 @@ internal fun MainScreen(
     // a clock reading behind them.
     trackingMode: TrackingMode?,
     remaining: Duration?,
+    // The cap end already formatted to a wall-clock time ("4:30 PM") — the
+    // headline for a plain timer-only snooze names it ("Snoozing until 4:30 PM").
+    // Pre-formatted rather than a raw `Instant` so the status path does no
+    // 12/24-hour Settings lookup in composition (Codex, PR #276): the caller
+    // (MainActivity) formats it once through its own remembered formatter.
+    // Defaulted null: a caller that leaves it out gets the un-folded headline,
+    // so a screenshot scenario not about the fold needs no opinion on it.
+    endsAtLabel: String? = null,
     // Why the mode degraded, where there is a reason worth naming. Null on a
     // healthy snooze by construction, and also null for the causes that earn
     // no line of their own ([degradationReasonRes]).
@@ -360,7 +368,7 @@ internal fun MainScreen(
             // first would only read as filler.
             when {
                 snoozing == true && trackingMode != null && remaining != null ->
-                    SnoozeStatus(trackingMode, remaining, degradation, departure, endsOnMotion)
+                    SnoozeStatus(trackingMode, remaining, degradation, departure, endsOnMotion, endsAtLabel)
                 snoozing == false -> NotSnoozingStatus()
                 // Nothing yet: either the record is still being read, or it read
                 // as running but without the mode and cap the line reports. Same
@@ -641,6 +649,10 @@ private fun SnoozeStatus(
     degradation: DegradationCause?,
     departure: DepartureObservation?,
     endsOnMotion: Boolean,
+    // The cap end already formatted by the caller; see [MainScreen.endsAtLabel].
+    // No formatting happens here, so this composable does no 12/24-hour Settings
+    // lookup on the minute tick (Codex, PR #276).
+    endsAtLabel: String?,
 ) {
     // **Not while the Wi-Fi grace period is running** (Codex, PR #263, and a
     // different argument from the degraded-mode one it follows). `WIFI_ONLY`
@@ -694,8 +706,26 @@ private fun SnoozeStatus(
         TrackingMode.FULL, TrackingMode.WIFI_GRACE,
         TrackingMode.SETTLING -> null
     }
-    val condition = reason?.let { stringResource(R.string.ongoing_degraded_reason, body, it) }
-        ?: body
+    // A plain timer-only snooze — duration tracking, no degraded reason, no
+    // movement exit — names its end time rather than reading "Timer only"
+    // (maintainer, 2026-09-12). Used for the folded one-row form and its split
+    // fallback ("Until 4:30 PM"), so the end time never disappears in the narrow
+    // layout (Codex, PR #276). Gated on `!motionOnly`: a motion snooze whose
+    // effective mode is DURATION_ONLY (chose a timer, then "Until I move," or
+    // degraded past departure) also supplies a label, and without this gate its
+    // narrow fallback would read "Until 4:30 PM" and hide the movement exit the
+    // sentence names — the exit is the one thing that snooze reports (Codex).
+    val plainTimerEndTime: String? =
+        if (!motionOnly && mode == TrackingMode.DURATION_ONLY && reason == null) {
+            endsAtLabel
+        } else {
+            null
+        }
+    val condition = when {
+        plainTimerEndTime != null -> stringResource(R.string.main_until_time, plainTimerEndTime)
+        reason != null -> stringResource(R.string.ongoing_degraded_reason, body, reason)
+        else -> body
+    }
     StatusBlock(
         headline = stringResource(R.string.ongoing_title),
         // **The sentence names the exit the user tapped** (maintainer,
@@ -717,6 +747,12 @@ private fun SnoozeStatus(
             motionOnly -> stringResource(R.string.main_snoozing_until_you_move)
             mode == TrackingMode.FULL ->
                 stringResource(R.string.main_snoozing_until_you_leave)
+            // A plain timer-only snooze folds its "Snoozing" headline and
+            // "Timer only" line into one naming the end time (maintainer,
+            // 2026-09-12); where it will not fit, the `Until 4:30 PM` condition
+            // above carries the same time in the split fallback.
+            plainTimerEndTime != null ->
+                stringResource(R.string.snoozing_until_time, plainTimerEndTime)
             else -> null
         },
         condition = condition,

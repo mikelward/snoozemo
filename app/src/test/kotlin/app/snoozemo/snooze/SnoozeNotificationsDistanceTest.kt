@@ -248,8 +248,10 @@ class SnoozeNotificationsDistanceTest {
             .apply { ongoingForegroundHost = host }
             .showOngoing(snoozeFixture(now).copy(mode = mode))
         val manager = appContext.getSystemService(NotificationManager::class.java)
-        val posted = shadowOf(manager).allNotifications
-            .last { shadowOf(it).contentTitle?.toString() == stringOf(R.string.ongoing_title) }
+        // By id, not by title: a plain timer-only card (which DURATION_ONLY here
+        // is — no cause, no exit) folds its title into `Snoozing until …`
+        // (maintainer, 2026-09-12), so the constant title no longer locates it.
+        val posted = requireNotNull(shadowOf(manager).getNotification(SnoozeNotifications.ID_ONGOING))
         return posted.extras.getCharSequence(android.app.Notification.EXTRA_SUB_TEXT)?.toString()
     }
 
