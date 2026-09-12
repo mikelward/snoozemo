@@ -1930,6 +1930,86 @@ the point is that every other line of the app is worthless if it isn't true.
       is consistent but has not been looked at on a device. The duration cap stays a separate
       decision, below.
 
+- [ ] **Should a named time be allowed past the 8-hour ceiling?** — maintainer, 2026-09-12.
+      **First, the backstop it is not competing with:** `Until I move` and `Until I leave` keep
+      the 8-hour backstop, because each depends on something *happening* — a sensor firing, a fix
+      landing — that can fail to happen at all (principle 1); a chosen time needs nothing behind
+      it, because it already is the deadline the same cap alarm enforces. So the backstop catches
+      the two exits that can fail rather than standing as a fourth end condition, and PR #267
+      built exactly that — a chosen time is timer-only. The ceiling question is a different one:
+      not what happens when a chosen exit never arrives, but whether the ceiling should bound a
+      time the user named explicitly, since it bounds every snooze whatever it chose.
+      **One of the questions *Decide what tapping an end condition means* still owes, not the last
+      of them** — that entry still waits on the `Until I move` row's replacement direction and on
+      what happens to a snooze whose replaced exit was the only one its tracking mode could serve,
+      so answering this does not make it actionable (Codex, PR #268 — an earlier draft called it
+      the one remaining decision, which would have invited the drive loop to guess the rest; the
+      cinema case and the reverse replacement it also named are since answered by PR #267).
+      That coupling is a hard sequencing constraint, not just tidiness: widening a named time
+      while `Until I move` still adds its exit without resetting the cap opens a reachable hole —
+      choose 11pm at 10am, then tap `Until I move`, and if the sensor never fires the snooze stays
+      silent to 11pm rather than to the 8-hour backstop this doc assumes (Codex, PR #268). So this
+      widening must not land before the `Until I move` replacement is settled — or must itself
+      reset the cap, or refuse the combination.
+      Today the ceiling is enforced in depth — at what is *offered* and, underneath, at what is
+      *accepted*. `EndCondition.canStepUp` stops `+` at `capCeilingAt` and `MeetingEnd.offersFor`
+      filters meeting rows against the same value, so at 10am the stepper runs out at 6pm and 11pm
+      is never on screen (Codex, PR #268 — an earlier draft called this a silent clamp, which was
+      wrong *for today's UI*: the offer cannot exceed the ceiling, so nothing is shortened behind
+      the user's back). The service clamps the accepted time to the ceiling regardless —
+      `SnoozeService.chosenCapFor` to `now + DEFAULT_CAP` on an idle-screen arm, `applyChosenEnd`
+      to `snooze.capCeilingAt` on a running snooze (both `coerceAtMost`) — a defensive backstop
+      that never binds today only because the offer never reaches it (Codex, PR #268).
+      So the question is whether to **widen the selectable range**, not whether to warn about a
+      clamp: either the 8 hours stay a hard limit on what a snooze may be set to, or a named time
+      may run past this snooze's `capCeilingAt` — **but no later than `MAX_CAP`, which is not on
+      the table** (Codex, PR #268). That 24-hour maximum is not another ceiling to relax: a
+      deadline further off than `MAX_CAP` is treated by `isExpired` as *already fired*, which is
+      how the app notices a deadline whose frame of reference is gone after the clock is wound
+      back. A named time beyond it would therefore not be refused — it would end the snooze on the
+      spot. Reconsidering that is a separate question nobody has asked.
+      Widening the range is more than the stepper, too: `capCeilingAt` bounds every path that
+      offers a meeting end, and there is more than one. The stepper (`EndCondition.canStepUp`)
+      and the `MeetingEnd` filter only cap what an already-loaded list can show; the list itself
+      comes from `NextMeetings.endsBefore`, asked only as far as the cap it is handed — and it is
+      asked independently in two places, the app screen (`MainActivity`) and the ongoing
+      notification (`SnoozeNotifications.refreshOfferIfUnknown`), which must not end up offering
+      different meetings. So the thing to widen is the cap limit wherever a meeting is offered,
+      not the stepper alone: meetings between the old ceiling and any new maximum are never
+      loaded until each `endsBefore` window widens with it. Stated as the one bound rather than a
+      list of call sites to patch, because that is what it is — two sites turned up in review in
+      turn (Codex, PR #268), which is the sign of a shape to name once, not chase one at a time;
+      whether the implementation should route both reads through a single helper is the
+      maintainer's call. And the offer is only half of it: the two service clamps above
+      accept-and-shorten to the ceiling too, so widening the picker without also lifting
+      `chosenCapFor` and `applyChosenEnd` would hand back an apparently-successful 11pm snooze
+      that ends at 6pm (Codex, PR #268). Beyond the times themselves,
+      `EndCondition.offersAChoice` gates whether the rows appear at all — it drops every
+      end-condition row (time, movement, departure) once `capCeilingAt` is within `MIN_CAP`, so a
+      snooze extended to 11pm would lose its choices around 5:30pm with hours still left — and the
+      duplicate-arm sheet's callers gate the same way (Codex, PR #268). The pattern is clear enough
+      by now to state as scope rather than list: the ceiling runs through the end-condition UI and
+      service wherever `capCeilingAt` or `capExpiryFor` is read, so widening it is a cross-cutting
+      change to be scoped by grepping every such read — the sites named here are illustrative, not
+      a checklist to complete. **But one of those reads is not a UI site and must not be widened
+      at all**: `capCeilingAt` is `startedAt + DEFAULT_CAP` by construction, and
+      `armedAtElapsedRealtimeMs()` recovers the arm moment as `capCeilingAt − DEFAULT_CAP`, so the
+      field encodes *when the snooze armed*, not merely when it may end. Repurpose it to hold a
+      named 11pm end and the derived arm moment jumps forward five hours — the presence monitor is
+      seeded stale and valid departure evidence is rejected (`applyChosenEnd` also restores the
+      departure cap straight to this field) (Codex, PR #268). So the named-time limit has to be
+      its own quantity — a separate field, or the real arm moment persisted alongside a distinct
+      8-hour sensor backstop — never a widened `capCeilingAt`. That is the crux the grep must
+      respect: the UI and service *reads* consult the new bound, while the field that means
+      `startedAt + 8h` stays exactly that. That window is also a privacy promise:
+      `docs/PRIVACY.md`'s "only as far ahead as the snooze can last" is written in terms of the
+      same limit ("the longest it could run... never reads further into your calendar than the
+      snooze could reach"), so widening the ceiling moves what the calendar is asked and its
+      wording moves with the decision.
+      Bear in mind too that `capCeilingAt` was deliberately made fixed for a snooze's life in the
+      stepper change (`33bb5ce`), so loosening it reopens something freshly settled, and §7
+      records the 8-hour default as a backstop above any chosen value.
+
 - [ ] **During Wi-Fi grace the countdown is the cap's, not the deadline's** (maintainer,
       2026-09-11: "why would we say 3h 40m left if there's only minutes of grace left"). A snooze
       in `WIFI_GRACE` reads `Wi-Fi lost — ending soon` over `3h 40m left`, which is the one line
