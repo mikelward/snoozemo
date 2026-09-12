@@ -532,6 +532,45 @@ class SnoozeServiceSetCapTest {
     }
 
     @Test
+    fun `a departure restore clears the timer-only intent even when movement stays armed`() {
+        // The user tapped `Until I leave`, so the snooze is no longer a
+        // timer-only request — even though the movement removal is refused and
+        // the restore returns REFUSED before the terminal clear. Left set,
+        // `isPartialTimer` would keep the "can still end sooner" line on a snooze
+        // the user has explicitly given an exit back, persisted across restarts
+        // (Codex, PR #272). The movement exit it still ends on is the ongoing
+        // card's job (asserted above); this is about the withdrawn intent.
+        val record = snoozeFixture(now).copy(
+            capExpiresAt = now.plus(Duration.ofHours(1)),
+            endsOnDeparture = false,
+            endsOnMotion = true,
+            timerOnlyRequested = true,
+        )
+        val service = startService(SnoozeService.ACTION_RESTORE, record)
+
+        // Departure is added, then the movement removal is refused by name — the
+        // path that returns REFUSED before reaching the terminal makeTimerOnly.
+        TestSnoozeService.refuseRecordUpdateWhen = { !it.endsOnMotion }
+        service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
+            putExtra(SnoozeService.EXTRA_RESTORE_END, true)
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+
+        assertEquals("the restore could not finish", EndChoiceResult.REFUSED, reported)
+        val after = ActiveSnoozeStore(appContext).load()
+        assertEquals(
+            "the timer-only intent is cleared once departure is restored",
+            false,
+            after?.timerOnlyRequested,
+        )
+        assertEquals(
+            "so nothing reports a partial timer any longer",
+            false,
+            after?.isPartialTimer,
+        )
+    }
+
+    @Test
     fun `the departure choice is written under the name the tile reads`() {
         val record = snoozeFixture(now)
 

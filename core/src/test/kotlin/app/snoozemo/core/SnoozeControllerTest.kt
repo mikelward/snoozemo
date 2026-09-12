@@ -688,6 +688,64 @@ class SnoozeControllerTest {
     }
 
     @Test
+    fun `a timer-only request is recorded, and only a change reports`() {
+        armFully()
+        assertFalse("a fresh snooze made no timer-only request", controller.active!!.timerOnlyRequested)
+
+        assertNotNull(controller.setTimerOnlyRequested(true))
+        assertTrue(controller.active!!.timerOnlyRequested)
+        // A pure intent flag, but reported like its siblings: the surfaces that
+        // derive the partial-timer line have to rebuild from the record, so a
+        // no-op reported as a change would repost for nothing.
+        assertNull(controller.setTimerOnlyRequested(true))
+
+        assertNotNull(controller.setTimerOnlyRequested(false))
+        assertFalse(controller.active!!.timerOnlyRequested)
+    }
+
+    @Test
+    fun `applyChange moves an exit and the intent together in one transition`() {
+        armFully()
+        // A partial timer: leaving turned off and a timer-only request made, the
+        // two halves a restore has to undo together.
+        controller.setEndsOnDeparture(false)
+        controller.setTimerOnlyRequested(true)
+        assertFalse(controller.active!!.endsOnDeparture)
+        assertTrue(controller.active!!.timerOnlyRequested)
+        val before = listener.states.size
+
+        // Restoring the exit clears the intent. Two setters would report twice —
+        // and persist the first field's new value under the second's old one in
+        // between; this reaches the combined state in a single transition.
+        val target = controller.active!!.copy(endsOnDeparture = true, timerOnlyRequested = false)
+        assertNotNull(controller.applyChange(target))
+
+        assertTrue(controller.active!!.endsOnDeparture)
+        assertFalse(controller.active!!.timerOnlyRequested)
+        assertEquals("one transition, not two", before + 1, listener.states.size)
+    }
+
+    @Test
+    fun `applyChange drops a target for another snooze or no change`() {
+        armFully()
+        val running = controller.active!!
+        val before = listener.states.size
+
+        // A no-op changes nothing and reports nothing, like the setters.
+        assertNull(controller.applyChange(running))
+        // A target carrying a different startedAt is for some other snooze, so it
+        // cannot replace the live one's state.
+        assertNull(
+            controller.applyChange(
+                running.copy(startedAt = running.startedAt.plusSeconds(1), endsOnDeparture = false),
+            ),
+        )
+
+        assertTrue("the live snooze is untouched", controller.active!!.endsOnDeparture)
+        assertEquals("nothing reported", before, listener.states.size)
+    }
+
+    @Test
     fun `turning leaving off does not touch the tracking mode`() {
         // Intent and capability stay apart (SPEC.md §4.4). `mode` answers what
         // the machinery can watch for and is recomputed from the anchor on
