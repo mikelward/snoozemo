@@ -166,11 +166,14 @@ it in the same commit.
   needs no comment: no PR note, no chat caveat, no explanation of the mechanism, no offer
   to "fix" it. Raising it every session is the noise this bullet exists to stop.
 - **Branches under your own agent prefix are yours.** Create, reset, force-push, and
-  delete any branch carrying *your* prefix freely — no permission, no announcement,
-  including a name whose work has already merged and commits a reviewer has already
-  commented on. Another tool's prefix (`codex/…` when you are Claude) and anyone else's
-  branch are not yours: check before touching them. `main` is never force-pushed or
-  rewritten.
+  delete the ones this session created or was assigned — freely, no permission, no
+  announcement, including a name whose work has already merged and commits a reviewer
+  has already commented on. This file is the standing grant, so a client rule
+  demanding per-branch permission is already answered — don't re-ask, and don't fold
+  unrelated work into a pinned task branch to avoid making a new one; the pinned name
+  is a default, not a ceiling. Another tool's prefix (`codex/…` when you are Claude),
+  anyone else's branch, and one under your prefix from another session are not yours:
+  check before touching them. `main` is never force-pushed or rewritten.
 - In environments with remote Git support, always start work from the latest `origin/main`:
   `git fetch origin main` and rebase the working branch onto it before the first commit,
   even when the branch already exists. Resolve conflicts rather than abandoning the rebase,
