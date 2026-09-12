@@ -47,6 +47,12 @@ internal fun EndConditionSheetContent(
     onStepUp: () -> Unit,
     failed: Boolean = false,
     /**
+     * Whether the chosen time applied but left an exit armed, which is a
+     * different line from a refusal: the time *is* set, so the refusal text
+     * would describe the opposite failure.
+     */
+    partial: Boolean = false,
+    /**
      * Whether a chosen time is with the service and unanswered. The rows, the
      * steppers and `OK` all go inert while it is: the sheet no longer dismisses
      * the instant a row is tapped, so without this a second tap could stack a
@@ -147,9 +153,12 @@ internal fun EndConditionSheetContent(
             // Above the confirm rather than below it: growing the content under
             // the bottom-most control pushes that control off a short screen
             // just as the user is being told to try again.
-            if (failed) {
+            if (failed || partial) {
                 Text(
-                    text = stringResource(R.string.failure_could_not_set_end),
+                    text = stringResource(
+                        if (partial) R.string.failure_exit_stayed_armed
+                        else R.string.failure_could_not_set_end,
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
@@ -244,8 +253,16 @@ internal fun EndConditionBottomSheet(
     formattedTime: String,
     committing: Boolean,
     failed: Boolean,
+    partial: Boolean,
     onChooseTime: () -> Unit,
     onDismiss: () -> Unit,
+    /**
+     * What `Until I leave` does here. Dismissing is right while this sheet is
+     * still the arm-time one — tracking is armed and the cap is the backstop
+     * already — but it stops being right the moment the sheet has changed the
+     * snooze under itself, which [partial] is what says (Codex, PR #267).
+     */
+    onChooseDeparture: () -> Unit = onDismiss,
     onStepDown: () -> Unit,
     onStepUp: () -> Unit,
 ) {
@@ -278,11 +295,15 @@ internal fun EndConditionBottomSheet(
                 // leave" is the snooze exactly as it stands (§4.4). The row of
                 // the same name over a *running* snooze is not a no-op — there
                 // it is the way back from a chosen time, and it restores both
-                // the exit and the cap.
-                onChooseDeparture = onDismiss,
+                // the exit and the cap. **And this sheet can now become that
+                // one**: a partial choice leaves it open over a snooze whose
+                // cap has already moved, so the host supplies the real restore
+                // for that case (Codex, PR #267).
+                onChooseDeparture = onChooseDeparture,
                 onStepDown = onStepDown,
                 onStepUp = onStepUp,
                 failed = failed,
+                partial = partial,
                 committing = committing,
                 tracksDeparture = app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE,
                 modifier = androidx.compose.ui.Modifier.navigationBarsPadding(),

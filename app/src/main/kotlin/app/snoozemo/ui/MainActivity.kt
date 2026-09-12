@@ -145,6 +145,7 @@ private const val KEY_SHEET_COMMITTING = "sheetCommitting"
 private const val KEY_SHEET_REQUEST_ID = "sheetRequestId"
 private const val KEY_SHEET_OFFERED_FOR = "sheetOfferedFor"
 private const val KEY_SHEET_FAILED = "sheetFailed"
+private const val KEY_SHEET_PARTIAL = "sheetPartial"
 private const val KEY_SHEET_ENDS_AT = "sheetEndsAt"
 private const val KEY_SHEET_FLOOR = "sheetFloor"
 private const val KEY_SHEET_CEILING = "sheetCeiling"
@@ -156,6 +157,7 @@ private const val KEY_ROWS_COMMITTING = "rowsCommitting"
 private const val KEY_ROWS_REQUEST_ID = "rowsRequestId"
 private const val KEY_ROWS_OFFERED_FOR = "rowsOfferedFor"
 private const val KEY_ROWS_FAILED = "rowsFailed"
+private const val KEY_ROWS_PARTIAL = "rowsPartial"
 private const val KEY_ROWS_ENDS_AT = "rowsEndsAt"
 private const val KEY_ROWS_FLOOR = "rowsFloor"
 private const val KEY_ROWS_CEILING = "rowsCeiling"
@@ -1585,6 +1587,7 @@ class MainActivity : ComponentActivity() {
                             now = Instant.ofEpochMilli(now.wallMillis),
                             committing = rows.committing,
                             failed = rows.commitFailed,
+                            partial = rows.commitPartial,
                             format = formatTime,
                         )?.let { choice ->
                             // An offer to start's two location rows are
@@ -1840,8 +1843,15 @@ class MainActivity : ComponentActivity() {
                             formattedTime = formatSheetTime(this@MainActivity, condition.endsAt),
                             committing = sheet.committing,
                             failed = sheet.commitFailed,
+                            partial = sheet.commitPartial,
                             onChooseTime = { sheet.commit(condition.endsAt) },
                             onDismiss = sheet::dismiss,
+                            // A partial choice has already moved the cap, so
+                            // this row is no longer "the snooze as it stands" —
+                            // it is the way back, and has to do the restore.
+                            onChooseDeparture = {
+                                if (sheet.commitPartial) sheet.commitDeparture() else sheet.dismiss()
+                            },
                             onStepDown = sheet::stepDown,
                             onStepUp = sheet::stepUp,
                         )
@@ -1926,6 +1936,7 @@ class MainActivity : ComponentActivity() {
         outState.putLong(KEY_SHEET_REQUEST_ID, sheet.committingRequestId)
         sheet.offerFor?.let { outState.putLong(KEY_SHEET_OFFERED_FOR, it.toEpochMilli()) }
         outState.putBoolean(KEY_SHEET_FAILED, sheet.commitFailed)
+        outState.putBoolean(KEY_SHEET_PARTIAL, sheet.commitPartial)
         sheet.endCondition?.let {
             outState.putLong(KEY_SHEET_ENDS_AT, it.endsAt.toEpochMilli())
             outState.putLong(KEY_SHEET_FLOOR, it.floor.toEpochMilli())
@@ -1940,6 +1951,7 @@ class MainActivity : ComponentActivity() {
         outState.putLong(KEY_ROWS_REQUEST_ID, rows.committingRequestId)
         rows.offerFor?.let { outState.putLong(KEY_ROWS_OFFERED_FOR, it.toEpochMilli()) }
         outState.putBoolean(KEY_ROWS_FAILED, rows.commitFailed)
+        outState.putBoolean(KEY_ROWS_PARTIAL, rows.commitPartial)
         rows.endCondition?.let {
             outState.putLong(KEY_ROWS_ENDS_AT, it.endsAt.toEpochMilli())
             outState.putLong(KEY_ROWS_FLOOR, it.floor.toEpochMilli())
@@ -1963,6 +1975,7 @@ class MainActivity : ComponentActivity() {
             condition = saved,
             wasCommitting = state.getBoolean(KEY_SHEET_COMMITTING),
             failed = state.getBoolean(KEY_SHEET_FAILED),
+            partial = state.getBoolean(KEY_SHEET_PARTIAL),
             configurationChange = configurationChange,
             requestId = state.getLong(KEY_SHEET_REQUEST_ID),
             offeredFor = if (state.containsKey(KEY_SHEET_OFFERED_FOR)) {
@@ -1994,6 +2007,7 @@ class MainActivity : ComponentActivity() {
             },
             wasCommitting = state.getBoolean(KEY_ROWS_COMMITTING),
             failed = state.getBoolean(KEY_ROWS_FAILED),
+            partial = state.getBoolean(KEY_ROWS_PARTIAL),
             configurationChange = configurationChange,
             requestId = state.getLong(KEY_ROWS_REQUEST_ID),
             offeredFor = if (state.containsKey(KEY_ROWS_OFFERED_FOR)) {

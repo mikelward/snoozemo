@@ -675,6 +675,14 @@ class SnoozeNotifications(private val context: Context) {
         // would be hiding an ending the user has to be able to predict —
         // principle 2, the same reason a degraded mode says so here.
         //
+        // **This is also the durable report of an exit a chosen time could not
+        // take off** (SPEC.md §4.4). Nothing extra is needed for it: this whole
+        // body is derived from the record on every post, so an exit that stayed
+        // armed is named for exactly as long as the record carries it, and stops
+        // being named the instant it comes off. A separate warning card had to
+        // be retired by hand from every site that changes any of that, and was
+        // removed for it.
+        //
         // Last, after the degradations. Those explain how well the promise
         // above is being kept; this adds a promise of its own, so it reads
         // wrong wedged between a claim and its caveat.
@@ -1331,62 +1339,6 @@ class SnoozeNotifications(private val context: Context) {
      */
     fun showCouldNotSetEnd() = showOneShot(R.string.failure_could_not_set_end)
 
-    /**
-     * A chosen time that *applied*, over an exit that would not come off
-     * (SPEC.md §4.4).
-     *
-     * Not [showCouldNotSetEnd], which says the end time could not be set —
-     * here it was, and saying otherwise describes the opposite failure. What
-     * the user needs is what the snooze will still do, because a surviving
-     * exit ends it *earlier* than the time they just picked and they would
-     * otherwise have no way to know why (principle 2).
-     *
-     * One per exit rather than a shared line: the two leave the user watching
-     * for different things.
-     */
-    fun showMovementExitStayedOn() = showExitWarning(R.string.failure_movement_exit_stayed_on)
-
-    /** [showMovementExitStayedOn]'s sibling, for the departure exit. */
-    fun showDepartureExitStayedOn() = showExitWarning(R.string.failure_departure_exit_stayed_on)
-
-    /**
-     * Both exits, on the one card they would otherwise fight over.
-     *
-     * The three share an id, so posting per failure would leave the second
-     * replacing the first and the user told about one exit while two were
-     * armed.
-     */
-    fun showBothExitsStayedOn() = showExitWarning(R.string.failure_both_exits_stayed_on)
-
-    /**
-     * **Its own id, not the one-shots' shared one** (Codex, PR #267, four
-     * findings on this card's lifetime). The three above describe the *snooze*
-     * — an exit still armed that will end it earlier than the time just
-     * chosen — while every other one-shot describes an *attempt* that failed.
-     * On one id those two kinds kept overwriting and deleting each other: a
-     * refused choice took down a warning that was still true, a genuine
-     * "couldn't set the end time" replaced one, and a snooze ending left one
-     * standing because the teardown that would clear it must not clear
-     * `Couldn't forget this snooze` — which the same teardown posts.
-     *
-     * Split, each card's lifetime belongs to the thing it describes: this one
-     * comes down when no exit is left armed ([cancelExitWarning]) or when the
-     * snooze it is about ends.
-     */
-    private fun showExitWarning(text: Int): Boolean = post(
-        ID_EXITS,
-        android.app.Notification.Builder(context, CHANNEL_ENDED)
-            .setSmallIcon(TileR.drawable.ic_tile_snooze)
-            .setContentTitle(context.getString(text))
-            .setAutoCancel(true)
-            .build(),
-    )
-
-    /** Takes down an exit warning that no longer describes anything. */
-    fun cancelExitWarning() {
-        drop(ID_EXITS)
-    }
-
     /** `+30 min` with nowhere left to go: the 24 h backstop is absolute (§7). */
     fun showAtMaxDuration() = showOneShot(R.string.extend_at_max)
 
@@ -1789,7 +1741,6 @@ class SnoozeNotifications(private val context: Context) {
         const val ID_STUCK = 4
         const val ID_END_FAILURE = 5
         const val ID_RINGER = 6
-        const val ID_EXITS = 7
         const val REQUEST_END = 10
         const val REQUEST_EXTEND = 11
         const val REQUEST_RELEASE_STUCK = 12

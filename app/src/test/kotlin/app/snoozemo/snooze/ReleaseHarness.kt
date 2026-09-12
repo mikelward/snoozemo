@@ -492,6 +492,22 @@ internal fun shadeShows(title: String): Boolean =
         .allNotifications
         .any { shadowOf(it).contentTitle?.toString() == title }
 
+/**
+ * The ongoing card's body — the line that names what ends this snooze.
+ *
+ * The durable report of an exit a chosen time could not take off lives here
+ * now, rather than on a card of its own (SPEC.md §4.4), so this is what the
+ * tests about that assert against. `contentText`, not the title: the title is
+ * the constant `Snoozing`.
+ */
+internal fun ongoingBody(): String? =
+    shadowOf(appContext.getSystemService(NotificationManager::class.java))
+        .allNotifications
+        .lastOrNull {
+            shadowOf(it).contentTitle?.toString() == stringOf(app.snoozemo.R.string.ongoing_title)
+        }
+        ?.let { shadowOf(it).contentText?.toString() }
+
 /** The scheduled alarms, newest last, as the intents their senders carry. */
 internal fun scheduledAlarmIntents(): List<Intent> =
     shadowOf(appContext.getSystemService(android.app.AlarmManager::class.java))

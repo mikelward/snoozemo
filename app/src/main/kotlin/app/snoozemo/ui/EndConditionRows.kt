@@ -91,6 +91,12 @@ internal fun EndConditionRows(
     onStepUp: () -> Unit,
     committing: Boolean = false,
     failed: Boolean = false,
+    /**
+     * Whether the chosen time applied but left an exit armed. A different line
+     * from a refusal: the time *is* set, so [failureText] would describe the
+     * opposite failure (SPEC.md §4.4).
+     */
+    partial: Boolean = false,
     tracksDeparture: Boolean = true,
     /**
      * Whether `Until I move` and `Until I leave` can be tapped right now,
@@ -227,9 +233,9 @@ internal fun EndConditionRows(
         // Above nothing in particular here — unlike the sheet, there is no
         // bottom-most control for a growing message to push off screen — but
         // still beside the rows that produced it, which is where the tap was.
-        if (failed) {
+        if (failed || partial) {
             Text(
-                text = failureText,
+                text = if (partial) stringResource(R.string.failure_exit_stayed_armed) else failureText,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -591,6 +597,8 @@ internal data class EndChoiceUiState(
     val meetings: List<MeetingChoice> = emptyList(),
     val committing: Boolean = false,
     val failed: Boolean = false,
+    /** [EndChoiceController.commitPartial], for the line beside the rows. */
+    val partial: Boolean = false,
     /**
      * Whether this snooze can end on a departure at all. False on a
      * duration-only snooze, where `Until I leave` would name something nothing
@@ -677,6 +685,7 @@ internal fun endChoiceUiState(
     now: Instant,
     committing: Boolean,
     failed: Boolean,
+    partial: Boolean = false,
     format: (Instant) -> String,
     /**
      * Whether this build can track a departure at all — the flavor constant,
@@ -703,6 +712,7 @@ internal fun endChoiceUiState(
                 .map { MeetingChoice(at = it, label = format(it)) },
             committing = committing,
             failed = failed,
+            partial = partial,
             // `Until I leave` too (maintainer, 2026-09-11): every row the
             // running screen has is a way to start, and this one starts the
             // plain arm the pinned `Snooze` makes. Withheld only where this
@@ -725,6 +735,7 @@ internal fun endChoiceUiState(
             .map { MeetingChoice(at = it, label = format(it)) },
         committing = committing,
         failed = failed,
+        partial = partial,
         // The same predicate the service honors the tap with, so the row is
         // never offered where the restore would be declined — and never
         // withheld where it would be taken.

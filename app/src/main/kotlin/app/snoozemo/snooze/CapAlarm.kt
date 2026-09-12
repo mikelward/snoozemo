@@ -740,13 +740,6 @@ internal fun releaseDirectly(
         // them — this release is the retry it promised.
         notifications.cancelStuckRule()
         notifications.cancelEndFailure()
-        // And an exit warning, which describes a snooze that is now over — the
-        // no-service twin of the `RELEASED` transition's own cancel. The
-        // trampoline routes `Unsnooze` here whenever the service refuses to
-        // start, so a path that skipped it would leave `Still ends if you
-        // move` standing over an erased record, or over the next snooze
-        // (Codex, PR #267).
-        notifications.cancelExitWarning()
         PendingFailureStore(context).run { if (ruleMayBeStuck()) clearRuleStuck() }
 
         val erased = store.clear()
@@ -1355,9 +1348,6 @@ internal fun discardForeignRecord(
     }
     notifications.cancelStuckRule()
     notifications.cancelEndFailure()
-    // Same as the release above: the snooze this could describe is being
-    // discarded, so a card about its exits is about nothing.
-    notifications.cancelExitWarning()
     PendingFailureStore(context).run { if (ruleMayBeStuck()) clearRuleStuck() }
 
     CapAlarm.cancelAll(context)

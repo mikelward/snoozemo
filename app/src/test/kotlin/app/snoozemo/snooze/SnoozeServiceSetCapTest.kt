@@ -394,114 +394,12 @@ class SnoozeServiceSetCapTest {
      * that has nothing left to say.
      */
     @Test
-    fun `a stale choice does not clear the running snooze's warning`() {
-        val record = snoozeFixture(now).copy(endsOnMotion = true)
-        val service = startService(SnoozeService.ACTION_RESTORE, record)
-
-        // Leaves both exits armed and posts the combined card.
-        TestSnoozeService.refuseRecordUpdates = true
-        service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
-            putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, record.capExpiresAt.toEpochMilli())
-            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
-        }
-        val warning = stringOf(R.string.failure_both_exits_stayed_on)
-        assertTrue("precondition: the warning is posted", shadeShows(warning))
-
-        // A choice for a snooze that is no longer running — the sheet that
-        // outlived its snooze, which is the case the identity check is for.
-        service.send(SnoozeService.ACTION_SET_CAP, startId = 3) {
-            putExtra(
-                SnoozeService.EXTRA_CAP_EXPIRES_AT,
-                now.plus(Duration.ofHours(1)).toEpochMilli(),
-            )
-            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
-            putExtra(
-                SnoozeService.EXTRA_CHOICE_FOR_SNOOZE,
-                record.startedAt.minus(Duration.ofHours(2)).toEpochMilli(),
-            )
-        }
-
-        assertEquals("the stale choice is gone, not applied", EndChoiceResult.GONE, reported)
-        assertTrue(
-            "and it must not have taken the running snooze's warning with it",
-            shadeShows(warning),
-        )
-    }
-
-    @Test
-    fun `a refused choice leaves a warning that is still true standing`() {
-        // The third round on where this clear belongs, and the one that says
-        // the answer is not a place (Codex, PR #267). Past the identity check
-        // is still ahead of the floor and the exit work, so a sheet whose
-        // displayed time had aged inside `MIN_CAP` deleted a warning about an
-        // exit that was still armed — and, being a sheet choice, posted
-        // nothing in its place. The exit outlives the refusal, so the warning
-        // has to as well.
-        val record = snoozeFixture(now).copy(endsOnMotion = true)
-        val service = startService(SnoozeService.ACTION_RESTORE, record)
-
-        TestSnoozeService.refuseRecordUpdates = true
-        service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
-            putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, record.capExpiresAt.toEpochMilli())
-            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
-        }
-        val warning = stringOf(R.string.failure_both_exits_stayed_on)
-        assertTrue("precondition: the warning is posted", shadeShows(warning))
-
-        // A time that has fallen inside the floor — the sheet left open too
-        // long, which is the case the floor check exists for.
-        service.send(SnoozeService.ACTION_SET_CAP, startId = 3) {
-            putExtra(
-                SnoozeService.EXTRA_CAP_EXPIRES_AT,
-                now.plus(Duration.ofMinutes(5)).toEpochMilli(),
-            )
-            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
-        }
-
-        assertEquals("the floor declines it", EndChoiceResult.REFUSED, reported)
-        assertTrue(
-            "and a refusal that posts nothing must leave the warning standing",
-            shadeShows(warning),
-        )
-    }
-
-    @Test
-    fun `an exit warning comes down with the snooze it is about`() {
-        // The fourth finding on this card's lifetime, and the one the shared
-        // id made unfixable: the warning describes a snooze, so it has to go
-        // when that snooze does — but the teardown that would clear it also
-        // posts `Couldn't forget this snooze` on the very same path, so on one
-        // id a clear there would delete the wrong card (Codex, PR #267). Its
-        // own id is what lets the teardown retire it.
-        val record = snoozeFixture(now).copy(endsOnMotion = true)
-        val service = startService(SnoozeService.ACTION_RESTORE, record)
-
-        TestSnoozeService.refuseRecordUpdates = true
-        service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
-            putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, record.capExpiresAt.toEpochMilli())
-            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
-        }
-        val warning = stringOf(R.string.failure_both_exits_stayed_on)
-        assertTrue("precondition: the warning is posted", shadeShows(warning))
-
-        TestSnoozeService.refuseRecordUpdates = false
-        service.send(SnoozeService.ACTION_END, startId = 3)
-
-        assertNull("precondition: the snooze really ended", ActiveSnoozeStore(appContext).load())
-        assertFalse(
-            "a card about a snooze that no longer exists must not stand",
-            shadeShows(warning),
-        )
-    }
-
-    @Test
-    fun `restoring departure retires the warning a chosen time left`() {
-        // The way back from a chosen time clears the movement exit and puts
-        // departure back, so a card naming either is false the moment it
-        // lands — and with the warning on its own id, the restore's clear of
-        // the *failure* card no longer takes it down as a side effect (Codex,
-        // PR #267). Retired by the exit changing, which is the one event that
-        // makes the card untrue whichever way it went.
+    fun `restoring departure names the exit again on the ongoing card`() {
+        // The way back from a chosen time puts departure back and takes the
+        // movement exit off, and the card that says what ends this snooze is
+        // rebuilt from the record — so it names the new pair with nothing
+        // retired by hand. This is what replaced a warning card whose lifetime
+        // every one of those operations had to remember (SPEC.md §4.4).
         val record = snoozeFixture(now)
             .copy(capExpiresAt = now.plus(Duration.ofHours(1)), endsOnMotion = true)
         val service = startService(SnoozeService.ACTION_RESTORE, record)
@@ -511,8 +409,11 @@ class SnoozeServiceSetCapTest {
             putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, record.capExpiresAt.toEpochMilli())
             putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
         }
-        val warning = stringOf(R.string.failure_both_exits_stayed_on)
-        assertTrue("precondition: the warning is posted", shadeShows(warning))
+        assertEquals(
+            "precondition: both exits stayed armed, so the choice is partial",
+            EndChoiceResult.PARTIAL,
+            reported,
+        )
 
         TestSnoozeService.refuseRecordUpdates = false
         service.send(SnoozeService.ACTION_SET_CAP, startId = 3) {
@@ -521,9 +422,14 @@ class SnoozeServiceSetCapTest {
         }
 
         assertEquals("the restore applied", EndChoiceResult.APPLIED, reported)
+        val body = ongoingBody()
+        assertTrue(
+            "the departure the restore put back is named: $body",
+            body?.startsWith(stringOf(R.string.ongoing_ends_when_you_leave)) == true,
+        )
         assertFalse(
-            "so nothing may still claim the exits it just changed",
-            shadeShows(warning),
+            "and the movement exit it took off is not: $body",
+            body?.contains(movementClause()) == true,
         )
     }
 
@@ -551,56 +457,17 @@ class SnoozeServiceSetCapTest {
         }
 
         assertEquals("the restore could not finish", EndChoiceResult.REFUSED, reported)
+        // Not `PARTIAL`: the cap restore below the exit work never ran, so the
+        // snooze still ends at the shortened time — earlier than asked, which
+        // is the safe direction and a retry away. What it does still end on is
+        // the ongoing card's job, and it says so without being told to.
+        val body = ongoingBody()
         assertTrue(
-            "and the exit it could not clear has to be said",
-            shadeShows(stringOf(R.string.failure_movement_exit_stayed_on)),
+            "the exit it could not clear is still named: $body",
+            body?.contains(movementClause()) == true,
         )
     }
 
-    @Test
-    fun `a restore that changes no exit still retires the warning`() {
-        // The per-exit retires cover a restore that actually moves something;
-        // this one moves nothing. A chosen time whose departure removal alone
-        // failed leaves departure armed and movement off, so `Until I leave`
-        // has no write to make — and the warning about the exit the user has
-        // now deliberately accepted stayed in the shade (Codex, PR #267).
-        // The restore completing is itself the condition.
-        val record = snoozeFixture(now).copy(capExpiresAt = now.plus(Duration.ofHours(1)))
-        val service = startService(SnoozeService.ACTION_RESTORE, record)
-
-        TestSnoozeService.refuseRecordUpdates = true
-        service.send(SnoozeService.ACTION_SET_CAP, startId = 2) {
-            putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, record.capExpiresAt.toEpochMilli())
-            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
-        }
-        val warning = stringOf(R.string.failure_departure_exit_stayed_on)
-        assertTrue("precondition: only the departure exit stayed armed", shadeShows(warning))
-
-        TestSnoozeService.refuseRecordUpdates = false
-        service.send(SnoozeService.ACTION_SET_CAP, startId = 3) {
-            putExtra(SnoozeService.EXTRA_RESTORE_END, true)
-            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
-        }
-
-        assertEquals("the restore applied", EndChoiceResult.APPLIED, reported)
-        assertFalse(
-            "so the warning about the exit it just accepted must go",
-            shadeShows(warning),
-        )
-    }
-
-    /**
-     * The on-disk name, spelled out rather than read off the store's own
-     * constant — because the reader that matters is in another module and
-     * cannot use it. `TileSnapshot.read` names this key as a literal, the way
-     * it names `mode` and `released`, so the two halves of the contract are two
-     * strings that have to match and nothing checks them against each other.
-     *
-     * A mismatch is silent in the worst direction: the tile falls back to the
-     * default, `true`, and goes on showing an unqualified countdown — which is
-     * precisely the bug the flag was added to fix (Codex, PR #267), still
-     * there, with the fix apparently in place.
-     */
     @Test
     fun `the departure choice is written under the name the tile reads`() {
         val record = snoozeFixture(now)
@@ -630,7 +497,7 @@ class SnoozeServiceSetCapTest {
      * is a partial success rather than a plain refusal.
      */
     @Test
-    fun `an exit that will not come off says so in the shade`() {
+    fun `an exit that will not come off answers partial, not applied`() {
         val record = snoozeFixture(now).copy(endsOnMotion = true)
         val service = startService(SnoozeService.ACTION_RESTORE, record)
 
@@ -640,25 +507,41 @@ class SnoozeServiceSetCapTest {
             putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
         }
 
+        // **`PARTIAL`, not `APPLIED`**: the deadline is set, so refusing would
+        // describe the opposite failure — but an exit stayed armed, and a sheet
+        // that dismissed here would look exactly like one dismissing on a clean
+        // apply. The sheet says so once; the ongoing card carries which exit.
         assertEquals(
-            "the time the user picked did apply, so the sheet closes",
-            EndChoiceResult.APPLIED,
+            "the time applied over exits that stayed armed",
+            EndChoiceResult.PARTIAL,
             reported,
-        )
-        // Both writes are refused here, so both exits survive — and the card
-        // has to say so. Naming only the one that failed first left the snooze
-        // ending on a departure the user had just been told nothing about
-        // (Codex, PR #267); the three warnings share one id, so the combined
-        // line is the only way to report two.
-        assertTrue(
-            "both exits stayed armed, so both have to be said",
-            shadeShows(stringOf(R.string.failure_both_exits_stayed_on)),
         )
         assertFalse(
             "and not as a failure to set the time, which did apply",
             shadeShows(stringOf(R.string.failure_could_not_set_end)),
         )
+        // Both writes are refused here, so both exits survive — and the card
+        // rebuilt from the record names both, with nothing posted for it.
+        // Naming only the one that failed first left the snooze ending on a
+        // departure the user had been told nothing about (Codex, PR #267).
+        val body = ongoingBody()
+        assertTrue(
+            "the departure that stayed armed is named: $body",
+            body?.startsWith(stringOf(R.string.ongoing_ends_when_you_leave)) == true,
+        )
+        assertTrue(
+            "and so is the movement exit: $body",
+            body?.contains(movementClause()) == true,
+        )
     }
+
+    /**
+     * What the ongoing card appends when the movement exit is armed, taken from
+     * the resource rather than spelled out — the assertions are about whether
+     * the clause is there, not about its wording.
+     */
+    private fun movementClause(): String =
+        appContext.getString(R.string.ongoing_or_when_you_move, "").trimStart()
 
     private fun chooseEnd(endsAt: Instant, record: ActiveSnooze?) =
         startService(SnoozeService.ACTION_SET_CAP, record) {

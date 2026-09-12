@@ -211,6 +211,18 @@ internal enum class EndChoiceResult {
 
     /** The change did not take, and trying again might work. */
     REFUSED,
+
+    /**
+     * The chosen time is in force, but an exit the choice was meant to take
+     * off stayed armed — so the snooze can still end before it.
+     *
+     * Distinct from [APPLIED] because the snooze does not end the way the user
+     * asked, and from [REFUSED] because the deadline they picked really is set
+     * and a retry is optional rather than required. The sheet says so where the
+     * tap was; the ongoing card carries which exit, since it is rebuilt from
+     * the record and cannot fall out of step with it.
+     */
+    PARTIAL,
 }
 
 internal object EndChoiceOutcome {

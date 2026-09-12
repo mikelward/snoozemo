@@ -285,6 +285,90 @@ class EndChoiceControllerTest {
     }
 
     @Test
+    fun `a partial choice keeps the sheet up and says so`() {
+        // The time took, so dismissing would be indistinguishable from a clean
+        // apply and the user would never learn the snooze can still stop early
+        // (principle 2). It is not a refusal either: the deadline is set, so
+        // the refusal text would describe the opposite failure.
+        val seams = Seams(now)
+        val controller = seeded(seams)
+
+        controller.commit(controller.endCondition!!.endsAt)
+        seams.onOutcome!!(EndChoiceResult.PARTIAL)
+
+        assertFalse("the rows come back for a retry", controller.committing)
+        assertEquals("and the sheet stays up", 0, seams.dismissals)
+        assertTrue(controller.commitPartial)
+        assertFalse("not as a refusal", controller.commitFailed)
+        assertNotNull(controller.endCondition)
+    }
+
+    @Test
+    fun `a start that partially applied keeps saying so on the snooze it made`() {
+        // The idle rows arm a snooze and then narrow it, so a start can answer
+        // `PARTIAL` — and the record it creates is what replaces the offer, so
+        // the host reseeds onto that snooze's own rows. Cleared there, the line
+        // was deleted by the very tap it was reporting, leaving nothing on
+        // screen to say the snooze can still end early (Codex, PR #267).
+        val seams = Seams(now)
+        val controller = offerToStart(seams)
+        controller.commit(controller.endCondition!!.endsAt)
+
+        seams.onOutcome!!(EndChoiceResult.PARTIAL)
+        assertTrue("precondition: the start reported a partial", controller.commitPartial)
+
+        // What the host does the moment it reads the new record back.
+        val armed = snoozeAt(seams.now)
+        controller.seed(armed, seams.now)
+
+        assertTrue("the line comes with it", controller.commitPartial)
+        assertEquals("and it is now that snooze's rows", armed.startedAt, controller.offerFor)
+    }
+
+    @Test
+    fun `a seed for anything else drops a partial rather than carrying it`() {
+        // The carry above is one transition, not a general exemption: an offer
+        // to start rebuilt against the clock has no snooze to be partial about,
+        // and a line saying otherwise would outlive everything it described.
+        val seams = Seams(now)
+        val controller = offerToStart(seams)
+        controller.commit(controller.endCondition!!.endsAt)
+        seams.onOutcome!!(EndChoiceResult.PARTIAL)
+
+        controller.seed(null, seams.now)
+
+        assertFalse(controller.commitPartial)
+    }
+
+    @Test
+    fun `a partial choice comes back from a rotation still partial`() {
+        // It cannot be derived: a chosen time over a snooze that also ends on
+        // movement is a combination the rows offer deliberately, so a record
+        // with a chosen cap and an armed exit looks identical whether the
+        // removal failed or was never asked for. Only the flag knows, so only
+        // the flag can be restored — and with notifications denied this line is
+        // the whole of the report (Codex, PR #267).
+        val seams = Seams(now)
+        val first = seeded(seams)
+        first.commit(first.endCondition!!.endsAt)
+        seams.onOutcome!!(EndChoiceResult.PARTIAL)
+
+        val replacement = controller(seams)
+        replacement.restore(
+            condition = first.endCondition,
+            wasCommitting = false,
+            failed = first.commitFailed,
+            partial = first.commitPartial,
+            configurationChange = true,
+            requestId = 0L,
+            offeredFor = first.offerFor,
+        )
+
+        assertTrue("the line comes back", replacement.commitPartial)
+        assertFalse("and never as a refusal, which would be the opposite failure", replacement.commitFailed)
+    }
+
+    @Test
     fun `choosing a departure restores rather than naming a time`() {
         // The target is the record's own ceiling, which only the service can
         // read: a time computed here would be a guess about a backstop a clock

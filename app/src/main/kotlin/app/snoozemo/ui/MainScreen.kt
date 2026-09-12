@@ -397,6 +397,7 @@ internal fun MainScreen(
                     committing = choice.committing,
                     locationRowsEnabled = choice.locationArmable,
                     failed = choice.failed,
+                    partial = choice.partial,
                     tracksDeparture = choice.tracksDeparture,
                     // What `Until I leave`'s card names: only the signals this
                     // snooze actually has (SPEC.md §4.4).
