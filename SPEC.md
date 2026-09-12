@@ -1286,19 +1286,33 @@ nothing (§7's `MIN_CAP`), on either path.
   exits off under a still-shortened cap: nothing watching at all, produced by the control the user
   reached for to put an exit back.
 
-  **An exit that will not come off is said, not swallowed.** The time the user picked is already
-  in place and a surviving exit only ends the snooze *sooner*, so the choice counts as applied —
-  and the user is told, in the shade, which exits stayed armed. Partial success is reported as
-  success plus a warning rather than as a refusal, because refusing would misdescribe a deadline
-  that is genuinely set. **Both removals are attempted whatever either does**: they are
+  **An exit that will not come off is said, not swallowed** — and what says it is the ongoing
+  card, not a card of its own. The time the user picked is already in place and a surviving exit
+  only ends the snooze *sooner*, so the choice is neither applied nor refused but **partial**:
+  the deadline is set, and something can still stop the snooze before it. Refusing would
+  misdescribe a deadline that is genuinely set; reporting plain success would hide an ending the
+  user cannot predict. **Both removals are attempted whatever either does**: they are
   independent, and abandoning the second because the first failed left a snooze ending on an exit
-  the warning had not mentioned. **And a warning belongs to the snooze it is about**, and outlives
-  every attempt that does not answer it: a choice for a snooze that has already ended, or one
-  refused before it changes anything, leaves the shade alone. An exit that is still armed is
-  still worth warning about, so what takes that card down is the exit coming off, the snooze
-  it describes ending, or a later warning replacing it. It is its own card for that reason:
-  a warning about the *snooze* and a report of a failed *attempt* have different lifetimes,
-  and sharing one meant each kept deleting the other.
+  nothing had mentioned.
+
+  Only the *fact of a failed removal* is held in the sheet's own state and saved with it: a
+  chosen time over a snooze that also ends on movement is a combination the rows offer
+  deliberately, so a record carrying a chosen cap and an armed exit is the same record either
+  way, and nothing about it says which happened.
+
+  **The durable half of that report is the ongoing notification, and it needs no machinery to
+  keep it true.** That card is rebuilt from the record every time it is posted, and it already
+  names every armed exit — so an exit that stayed armed goes on being named for exactly as long
+  as the record carries it, and stops the instant the record does. The sheet says the same thing
+  once, at the tap, because a sheet that dismissed on a partial success is indistinguishable from
+  one that dismissed on a clean one.
+
+  A separate warning card was tried first and removed (maintainer, 2026-09-12). Being a claim
+  about the *snooze* rather than about the attempt, it had to be retired by every operation that
+  removes an exit, ends a snooze, replaces one, or discards a record — nine review findings in a
+  row landed on that set of sites, several of them caused by the previous fix — and where
+  notifications are denied it was never seen at all. Deriving the same statement from the record,
+  on a card that already exists, deletes the class rather than the instances.
 
   **Nothing may still be watching, and that is a stronger claim than "nothing was started".** A
   geofence outlives the process that registered it, so a snooze narrowed to its timer has to have
@@ -3843,10 +3857,16 @@ Idempotent; safe to call twice.
 | **Manual** | Tile tap, notification action, or in-app | Always available, always instant |
 | **Movement** | `TYPE_SIGNIFICANT_MOTION`, opt-in per snooze | §4.4's `When I move`; on trial, off by default |
 
-**Movement is the one genuinely additional exit, and it is opt-in.** It adds to the three above
-rather than replacing any of them — the cap still bounds the snooze and departure tracking is
-untouched — so a snooze that has it on has four ways to end and whichever comes first wins. A
-snooze that has not asked for it behaves exactly as this table read before.
+**Movement is the one genuinely additional exit, and it is opt-in.** It adds to whatever the
+snooze already has rather than replacing any of it — the cap still bounds the snooze, and
+arming movement never turns departure off or on. A snooze that has not asked for it behaves
+exactly as this table read before.
+
+**"All four" is therefore a claim about a snooze whose departure exit is still enabled**, not
+about every motion snooze. A chosen time takes departure off (below), and `Until I move` over
+one of those re-arms movement without putting departure back — so that snooze has two ways to
+end, the timer and the movement, and leaving is not one of them. Whichever of the exits a
+snooze actually has, the first to fire wins.
 
 A time chosen in the §4.4 sheet adds no exit — it *moves the cap* and **takes the others away**.
 Picking 14:00 sets `capExpiresAt` to 14:00, clears the movement exit, and takes departure tracking

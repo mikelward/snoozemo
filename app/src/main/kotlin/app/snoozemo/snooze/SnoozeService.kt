@@ -1790,6 +1790,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // watched — the state it would have had anyway — so it reports through
         // the shade rather than stranding the tap.
         val choseATime = (intent?.getLongExtra(EXTRA_CAP_EXPIRES_AT, 0L) ?: 0L) > 0L
+        // **Carried, not discarded.** An exit that would not come off is a
+        // partial success here exactly as it is over a running snooze, and the
+        // answer is the only thing that says so at the tap now that no card
+        // does. Dropping it reported a clean apply over a snooze that could
+        // still end early.
+        var narrowing = EndChoiceResult.APPLIED
         if (choseATime) {
             controller.active?.let { running ->
                 SnoozeDebugLog.event("arm: until a chosen end, and on the timer alone")
@@ -1798,11 +1804,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 // takes off. A fresh arm has no movement exit to clear, so in
                 // practice this is the departure half — but saying so in code
                 // rather than in a comment is what keeps it true.
-                makeTimerOnly(running, restoring = false)
+                narrowing = makeTimerOnly(running, restoring = false)
             }
         }
 
-        if (intent?.getBooleanExtra(EXTRA_ENDS_ON_MOTION, false) != true) return EndChoiceResult.APPLIED
+        if (intent?.getBooleanExtra(EXTRA_ENDS_ON_MOTION, false) != true) return narrowing
 
         // `Until I move` chosen as the way to start: the same choice the
         // running rows make, applied to the snooze that now exists, through
@@ -1813,13 +1819,13 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // the running snooze's own; a refusal therefore goes to the shade,
         // as a tap with no row behind it does, and the answer is `GONE` —
         // the offer is finished, and not by the choice being applied.
-        val snooze = controller.active ?: return EndChoiceResult.APPLIED
+        val snooze = controller.active ?: return narrowing
         SnoozeDebugLog.event("arm: ends on motion as well, as chosen")
         if (applyMotionEnd(snooze, wanted = true) != EndChoiceResult.APPLIED) {
             notifications.showCouldNotSetEnd()
             return EndChoiceResult.GONE
         }
-        return EndChoiceResult.APPLIED
+        return narrowing
     }
 
     /**
@@ -1997,9 +2003,6 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // that is now legitimately ours.
         pendingFailure.clearRuleStuck()
         notifications.cancelStuckRule()
-        // And an exit warning, which belongs to whatever snooze came before
-        // this one — the same reason the one-shot above comes down here.
-        notifications.cancelExitWarning()
         // A leftover `Couldn't end the snooze — trying again` is stale for the
         // same reason: whatever release it was promising, this arm now owns
         // the rule, and the retry machinery drops stale releases on its own.
@@ -2305,11 +2308,14 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * have left the user told nothing.
      */
     private fun setMotionEnd(intent: Intent?) {
-        // The previous attempt's card comes down as this one starts, not when
-        // it succeeds — see [setCap] — and from inside [applyMotionEndChoice],
-        // past its validation, so a stale intent for a snooze that has already
-        // ended cannot take down the running snooze's card on its way to
-        // `GONE`.
+        // The previous attempt's card comes down on the **outcome**, not as
+        // this one starts — see [setCap], where three rounds put a cancel at a
+        // position in the sequence and each position was wrong in its own way.
+        // It lives inside [applyMotionEndChoice], past that function's
+        // validation and keyed to `APPLIED`: a stale intent for a snooze that
+        // has already ended cannot take down the running snooze's card on its
+        // way to `GONE`, and a `REFUSED` leaves a warning that is still true
+        // standing rather than deleting it with nothing to put in its place.
         val result = applyMotionEndChoice(intent)
         val requestId = intent?.getLongExtra(EXTRA_CHOICE_REQUEST_ID, 0L) ?: 0L
         // No request id means no row behind this — nowhere to show a refusal
@@ -2377,10 +2383,6 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * hold the sensor is rolled back — and reported — the same way on both.
      */
     private fun applyMotionEnd(snooze: ActiveSnooze, wanted: Boolean): EndChoiceResult {
-        // Noted before the write: a second tap on a row that is already set
-        // changes nothing, and must not retire a warning about an exit that is
-        // still armed.
-        val changing = snooze.endsOnMotion != wanted
         if (snooze.endsOnMotion != wanted) {
             // **The record first, and only then the controller** — [extend]'s
             // ordering, for [extend]'s reason. The record is what the restore
@@ -2429,9 +2431,6 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // has the detail; the row is where the tap was.
         val armed = controller.active?.endsOnMotion == true && motionEnd?.listening == true
         val result = if (!wanted || armed) EndChoiceResult.APPLIED else EndChoiceResult.REFUSED
-        // [applyDepartureEnd]'s rule, for this exit: a change that landed makes
-        // any warning about it false, whichever way it went.
-        if (changing && result == EndChoiceResult.APPLIED) notifications.cancelExitWarning()
         return result
     }
 
@@ -2462,16 +2461,6 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             return false
         }
         controller.setEndsOnDeparture(wanted)
-        // **An exit that just changed retires the warning about it.** The card
-        // means "the time you chose did not take this off", and either
-        // direction of this write makes that false: taking departure off is
-        // the removal finally landing, and putting it back is the user
-        // choosing the exit deliberately. The restore path clears the movement
-        // exit through [applyMotionEnd], which retires it there for the same
-        // reason — so `Still ends if you move or leave` could not survive a
-        // successful `Until I leave` (Codex, PR #267). [makeTimerOnly] posts
-        // again afterwards if its own attempt left one armed.
-        notifications.cancelExitWarning()
         // The watch follows the record, and only now. Stopping is the narrow
         // teardown — the snooze keeps running on its cap, so [SnoozeBackstop]
         // stays with it (see [stopDepartureWatch]).
@@ -2706,15 +2695,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 SnoozeDebugLog.warning(
                     "end-condition: could not take the movement exit off for a departure restore",
                 )
-                // **Stated after both halves, like [makeTimerOnly]'s.** A
-                // restore is two independent writes, and the per-exit retire
-                // in [applyDepartureEnd] has already run for the first — so
-                // without this the movement exit survives with nothing saying
-                // so, which is the failure the warning exists to prevent
-                // (Codex, PR #267). The retire is right for a single-exit row
-                // and wrong mid-transaction; the transaction's owner is what
-                // reconciles.
-                notifications.showMovementExitStayedOn()
+                // `REFUSED`, and the cap restore below has not run yet — so
+                // this leaves the snooze ending *earlier* than the user asked,
+                // which is the safe direction and a retry away. What it still
+                // ends on is on the ongoing card, which names every armed exit
+                // from the record itself.
                 return EndChoiceResult.REFUSED
             }
             // The clear is a transition, so the controller is authoritative
@@ -2869,28 +2854,24 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      *
      * A failure here is reported but not fatal: the deadline the user picked is
      * already in place, and an exit that stayed armed only ends the snooze
-     * sooner. So the sheet hears `APPLIED` — the time was applied — and the
-     * shade carries what did not.
+     * sooner. So it answers [EndChoiceResult.PARTIAL] rather than `APPLIED` or
+     * `REFUSED` — the sheet stays up saying the snooze can still end sooner,
+     * where `APPLIED` would dismiss it exactly as a clean apply does and
+     * `REFUSED` would describe the opposite failure. **Which** exit survived is
+     * not carried with it: the ongoing card is rebuilt from the record on every
+     * post and already names every armed exit, so that half is derived and
+     * cannot fall out of step.
      *
-     * **This is also where the shade is cleared**, on the one outcome that has
-     * nothing to say: the choice applied and left no exit armed. Everything
-     * else posts to the same id, so it replaces; a refusal that posts nothing
-     * leaves whatever was there, because a warning about an exit that is still
-     * armed is still true. See [setCap] for what cancelling by position cost.
+     * **The shade's own card is cleared here**, on the choice applying at all:
+     * the previous attempt's `Couldn't set the end time` is stale whether or
+     * not an exit stayed armed, because the time did take. See [setCap] for
+     * what cancelling by position cost.
      */
     private fun makeTimerOnly(snooze: ActiveSnooze, restoring: Boolean): EndChoiceResult {
         if (restoring) {
             // The restore applied, so whatever the shade was saying about this
             // snooze is now the previous attempt's and stale.
             notifications.cancelFailure()
-            // **Including the exit warning, and here rather than only in the
-            // per-exit helpers**: a restore over a snooze whose departure was
-            // never taken off changes neither exit, so neither helper runs and
-            // a `Still ends when you leave` stayed up after the user had
-            // deliberately put that exit back (Codex, PR #267). The restore
-            // reaching this line is the whole choice having succeeded, which
-            // is the condition the card's own rule names.
-            notifications.cancelExitWarning()
             return EndChoiceResult.APPLIED
         }
 
@@ -2930,16 +2911,21 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // sequence above. A refusal that posts nothing leaves the shade alone;
         // every refusal with something to say posts to that id, which replaces.
         notifications.cancelFailure()
-        // The exit warning describes the *snooze* rather than the attempt, so
-        // it is posted or retired by what is actually left armed — on its own
-        // id, which is what lets the two have different lifetimes at all.
-        when {
-            movementStayed && departureStayed -> notifications.showBothExitsStayedOn()
-            movementStayed -> notifications.showMovementExitStayedOn()
-            departureStayed -> notifications.showDepartureExitStayedOn()
-            else -> notifications.cancelExitWarning()
+        // **What stayed armed is answered, not posted** (maintainer,
+        // 2026-09-12). A card of its own had to be retired by every operation
+        // that removes an exit, ends a snooze or replaces one, and nine review
+        // findings in a row landed on getting that set of sites right. It also
+        // could not be seen at all where notifications are denied. So the
+        // durable half now rides the ongoing card, which is rebuilt from the
+        // record on every transition and therefore names exactly the exits the
+        // record still carries — it cannot go stale, and there is nothing to
+        // retire. This answers the *tap*, which is what the sheet says at the
+        // moment the user makes it.
+        return if (movementStayed || departureStayed) {
+            EndChoiceResult.PARTIAL
+        } else {
+            EndChoiceResult.APPLIED
         }
-        return EndChoiceResult.APPLIED
     }
 
     override fun onStateChanged(state: SnoozeState, snooze: ActiveSnooze?, reason: EndReason?) {
@@ -3031,13 +3017,6 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 // off again — harmless, but a promise outliving its cause.
                 notifications.cancelStuckRule()
                 // And an exit warning, for the same reason: it describes a
-                // snooze that no longer exists, and nothing else takes it
-                // down — the ended card is a different id, and a manual
-                // ending posts none at all (Codex, PR #267). Only reachable
-                // because the warning has its own id: on the one-shots'
-                // shared one this cancel would also delete `Couldn't forget
-                // this snooze`, which `forget()` just above can post.
-                notifications.cancelExitWarning()
                 if (pendingFailure.ruleMayBeStuck()) pendingFailure.clearRuleStuck()
                 // So does `Couldn't end the snooze — trying again`: the retry
                 // it promised is the release that just confirmed, and leaving
@@ -3133,9 +3112,6 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 notifications.cancelStuckRule()
             }
             notifications.cancelEndFailure()
-            // Nothing on disk describes a snooze, so an exit warning describes
-            // nothing either. The `CapAlarm` twin of this cleanup does the same.
-            notifications.cancelExitWarning()
             return
         }
 

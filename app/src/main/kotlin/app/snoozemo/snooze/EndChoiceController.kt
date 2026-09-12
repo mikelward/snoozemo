@@ -162,8 +162,30 @@ internal class EndChoiceController(
      * Whether the service refused the time just chosen. Shown in the sheet
      * rather than dismissing, because a dismissal on a refused tap is
      * indistinguishable from one on an accepted tap.
+     *
+     * A *refusal* only — a chosen time that applied over an exit that would
+     * not come off sets [commitPartial] instead, so this stays the flag that
+     * is saved and restored, and a restored line never reports the opposite
+     * failure from the one that happened.
      */
     var commitFailed by mutableStateOf(false)
+        private set
+
+    /**
+     * Whether the time just chosen is in force but left an exit armed, so the
+     * line beside the rows names that rather than a refusal
+     * ([EndChoiceResult.PARTIAL]).
+     *
+     * **Saved and restored beside [commitFailed]**, for the reason that rules
+     * out deriving it: a chosen time over a snooze that also ends on movement
+     * is a combination the rows offer deliberately, so a record showing a
+     * chosen cap and an armed exit is indistinguishable from one where the
+     * removal failed. Nothing but this flag knows which happened. It was
+     * transient at first on the argument that the ongoing card carries the
+     * durable half — true, except where notifications are denied, which is
+     * exactly the case this line exists for (Codex, PR #267).
+     */
+    var commitPartial by mutableStateOf(false)
         private set
 
     /**
@@ -194,9 +216,21 @@ internal class EndChoiceController(
         // `now + DEFAULT_CAP` then lets the offer walk past the running
         // snooze's real cap — which the service honors by doing nothing while
         // reporting it applied (Codex, PR #152).
+        // **One transition carries a partial over: the offer to start becoming
+        // the snooze it just made** (Codex, PR #267). A chosen time on the idle
+        // rows arms a snooze and then narrows it, so it can answer `PARTIAL` —
+        // and the record that lands is what replaces the offer, so the host
+        // reseeds here and the line reporting the tap was deleted by that tap's
+        // own success, with nothing on screen saying the snooze can still end
+        // early. `offerFor == null` with a record in hand names exactly that
+        // step: a partial over a *running* snooze already carries that snooze's
+        // identity, and an offer to start with nothing running has no record to
+        // seed from. Every other seed is a different question and clears it.
+        val carried = commitPartial && offerFor == null && record != null
         offerFor = record?.startedAt
         endCondition = EndCondition.seededAt(now, EndCondition.ceilingFor(record, now), zone())
         commitFailed = false
+        commitPartial = carried
     }
 
     /**
@@ -292,6 +326,7 @@ internal class EndChoiceController(
         if (committing) return
         committing = true
         commitFailed = false
+        commitPartial = false
         // A fresh identity, which is what keeps an *earlier* answer from
         // settling this one — whether the earlier request was this sheet's
         // previous tap or the other host's, since both surfaces share the
@@ -337,6 +372,17 @@ internal class EndChoiceController(
         // thing — this offer is over: a snooze is running now, or one came
         // and went since the offer was drawn — and the host's dismissal
         // re-reads the record that says which, and draws what there is.
+        //
+        // **`PARTIAL` keeps the sheet up and says so.** The time took, so
+        // there is nothing to retry for its own sake and nothing to reseed —
+        // but an exit stayed armed, and dismissing on that is indistinguishable
+        // from dismissing on a clean apply, which is principle 2's failure. A
+        // second tap on the same row retries the removal: the service's
+        // "changes nothing" path still runs it.
+        if (result == EndChoiceResult.PARTIAL) {
+            commitPartial = true
+            return
+        }
         if (result != EndChoiceResult.REFUSED) {
             dismiss()
             return
@@ -380,6 +426,7 @@ internal class EndChoiceController(
         endCondition = null
         offerFor = null
         commitFailed = false
+        commitPartial = false
         onDismiss()
     }
 
@@ -459,6 +506,7 @@ internal class EndChoiceController(
         condition: EndCondition?,
         wasCommitting: Boolean,
         failed: Boolean,
+        partial: Boolean = false,
         configurationChange: Boolean,
         requestId: Long,
         offeredFor: Instant?,
@@ -466,6 +514,9 @@ internal class EndChoiceController(
         endCondition = condition
         offerFor = offeredFor
         commitFailed = failed
+        // The two are separate flags rather than one, so a restored line
+        // cannot say "couldn't set the end time" over a time that was set.
+        commitPartial = partial
         if (!wasCommitting) return
         // Named, so the answer this resumes is the one this sheet asked for.
         // Unnamed it would take whatever the channel happened to be holding,

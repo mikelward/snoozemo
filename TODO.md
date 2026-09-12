@@ -5201,32 +5201,65 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
 
 ## Decisions needing review
 
-- [ ] **Is the exit-warning card worth what it is costing to get right?** Seven Codex
-      findings across PR #267's rounds 15-20 have been about this one card's lifetime —
-      where the clear belongs, the teardown, the no-service release, the restore, the
-      no-op restore — and several were consequences of the previous fix rather than of
-      the original change. Every one was real, and each is fixed and tested. But the rate
-      is the signal: a partial-success warning has to be posted by whichever operation
-      failed to remove an exit, and retired by every operation that removes one, ends a
-      snooze, or replaces it — which is a lot of sites for one line of text. **The
-      alternatives**, for whoever decides: (a) keep it as it is, now that the rule is
-      stated and the sites are enumerated; (b) drop the separate card and fold "an exit
-      stayed armed" into the ongoing notification, which is restated on every transition
-      and therefore cannot go stale — cheaper to keep correct, less visible; (c) drop the
-      warning entirely and let the sheet report the partial success inline, accepting that
-      a user who dismisses it is not told. Reversible: it is one notification id, one post
-      site and a handful of retires.
-      **An eighth finding arrived while this was pending and is deliberately unfixed**
-      (Codex, PR #267, round 23), so whoever decides is deciding with it in view: the
-      standalone `Until I move` row keys its retire to whether the *motion* flag changed,
-      which is wrong in both directions. A `Still ends if you move` survives a later tap on
-      that row — the flag is already true, so nothing retires, even though the user has now
-      chosen that exit deliberately; and a `Still ends when you leave` is deleted by a tap
-      that newly arms motion, though departure is still armed. The fix under option (a) is
-      the shape round 19 already settled — recompute from both flags after the whole
-      choice, rather than from the one that moved — and under (b) or (c) it disappears with
-      the card. Round 18's reasoning for the `changing` guard was the wrong half of this:
-      it treated a repeat tap as a no-op, when a repeat tap is the user affirming the exit.
+- [ ] **The idle rows' steppers should adjust, not arm** (maintainer, 2026-09-12: "the
+      user has to tap the until button to apply any minus or plus"). Already true over a
+      *running* snooze — `stepEndFromScreen`'s first branch moves the drawn offer and
+      nothing else, and the sheet's steppers do the same, so `Until (time)` is what
+      applies it. Not true on the offer to start, where `+` and `−` call
+      `rows.commit(stepped.endsAt)` and arm a snooze on the spot; `EndChoiceUiState`'s
+      own doc records that as deliberate ("its steppers arm rather than step, so there is
+      no chosen position to preserve"). Making the two consistent means the idle offer
+      keeps a stepped position the way a running one does, and the time row becomes the
+      only thing that arms — which also settles what `refreshStart` is rebuilding every
+      tick, since there would then be a user-chosen position it must not move under them.
+      Deferred deliberately: worth doing, not worth holding PR #267 for.
+
+- [ ] **Should "the user asked for timer-only" live on the record?** Five consecutive
+      Codex rounds on PR #267 have been about where the partial-success report lives and
+      how long it survives — nine findings on the separate shade card, then the reseed
+      after an idle-row start, then the rotation, and now a retry that clears it before
+      its own outcome lands. Every one has been real, and every fix has added another
+      *preserve it across this transition too* rule to a piece of view state. The rate is
+      the signal, and the fifth is the one this entry exists for rather than a sixth
+      patch. **The alternative**: `ActiveSnooze` gains a `timerOnlyRequested` flag — the
+      user asked for a chosen time and nothing else — and "partial" stops being state at
+      all: it is `timerOnlyRequested && (endsOnDeparture || endsOnMotion)`, derivable by
+      the sheet, the screen, the tile and the ongoing card alike, surviving a rotation, a
+      process death and a reboot for free. `commitPartial` and its three saved keys
+      disappear with it. **What it costs**: a new persisted field, a default for records
+      written before it, a `docs/PRIVACY.md` row, and the ongoing card becoming able to
+      say *you asked for a time and this can still end sooner* rather than only naming the
+      exits — which is a copy decision too. **What is deferred behind it**: the retry case
+      Codex raised (`EndChoiceController.dispatch` clears `commitPartial` before the
+      retry's outcome, so a refused retry shows `Couldn't set the end time` while an exit
+      is still armed). Under the record flag that case disappears; patched as view state
+      it is a sixth preservation rule. Maintainer's call — a design change, not one to
+      make solo.
+
+- [x] **The exit-warning card is gone; the ongoing notification carries it**
+      (maintainer, 2026-09-12, choosing (b)+(c) from the three options this entry
+      recorded). Nine Codex findings across PR #267's rounds 15-24 were about one
+      card's lifetime — where the clear belongs, the teardown, the no-service
+      release, the restore, the no-op restore, the repeat tap — and several were
+      consequences of the previous fix. Every one was real. The rate was the
+      signal: a claim about the *snooze* rather than about the attempt has to be
+      retired by every operation that removes an exit, ends a snooze, replaces
+      one, or discards a record, and that set is not closed. The ninth finding
+      added the other half — where `POST_NOTIFICATIONS` is denied or the channel
+      is off, the card was never seen at all, and the sheet dismissed as though
+      everything had applied. **What replaced it**: the ongoing card is rebuilt
+      from the record on every post and already names every armed exit, so the
+      durable statement is derived rather than posted and cannot go stale; and
+      the choice now answers `EndChoiceResult.PARTIAL`, so the sheet says
+      `Set, but this can still end sooner` at the tap instead of dismissing. A
+      toast was considered as a fallback for the denied-notifications case and
+      rejected: the platform suppresses toasts from a package whose
+      notifications are off unless it is in the foreground, so it fails in
+      exactly that case — and a three-second toast cannot carry a claim that
+      stays true for hours. The eighth finding (the repeat-tap retire) is
+      deleted by this rather than fixed: there is nothing left to retire.
+      **What the maintainer should check on a device**: the partial line is
+      untranslated autopilot copy, and it is the one new string here.
 
 - [x] **The partial-success warnings have their own notification id** (`ID_EXITS`), taken
       under autopilot on PR #267 after a **fourth** finding on the same card's lifetime. The
@@ -5240,6 +5273,10 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
       being asked to review**: the shade can now carry two cards at once — an attempt's
       failure and a still-armed exit — where before it carried whichever posted last.
       Reverting is one id and one cancel site.
+      **Retired 2026-09-12**: the card it split off is gone, so the id is too. The entry
+      stays as the record of why splitting it did not settle the problem — the lifetime
+      belonged to a claim nothing could keep true by hand, which is what the entry above
+      answers.
 
 - [ ] **What keeps tracking capability current while a timer-only snooze's watch is
       stopped?** Raised by Codex as a P1 on PR #267 and left for the maintainer, because the

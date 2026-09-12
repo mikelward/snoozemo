@@ -280,6 +280,7 @@ class TileTrampolineActivity : ComponentActivity() {
         outState.putLong(STATE_REQUEST_ID, sheet.committingRequestId)
         sheet.offerFor?.let { outState.putLong(STATE_OFFERED_FOR, it.toEpochMilli()) }
         outState.putBoolean(STATE_COMMIT_FAILED, sheet.commitFailed)
+        outState.putBoolean(STATE_COMMIT_PARTIAL, sheet.commitPartial)
         sheet.endCondition?.let {
             outState.putLong(STATE_ENDS_AT, it.endsAt.toEpochMilli())
             outState.putLong(STATE_FLOOR, it.floor.toEpochMilli())
@@ -394,6 +395,7 @@ class TileTrampolineActivity : ComponentActivity() {
                 savedCondition,
                 wasCommitting = false,
                 failed = state.getBoolean(STATE_COMMIT_FAILED),
+                partial = state.getBoolean(STATE_COMMIT_PARTIAL),
                 // This whole path runs only under `marker().created` — see
                 // `onCreate`. A process restore re-dispatches the tap instead
                 // of restoring, so a commit reached here is always live.
@@ -408,6 +410,7 @@ class TileTrampolineActivity : ComponentActivity() {
             condition = savedCondition,
             wasCommitting = state.getBoolean(STATE_COMMITTING),
             failed = state.getBoolean(STATE_COMMIT_FAILED),
+            partial = state.getBoolean(STATE_COMMIT_PARTIAL),
             configurationChange = true,
             requestId = state.getLong(STATE_REQUEST_ID),
             offeredFor = savedOfferedFor(state),
@@ -705,11 +708,16 @@ class TileTrampolineActivity : ComponentActivity() {
                             // tracking is already armed and the default cap is
                             // already the backstop (§4.4). Over a *running*
                             // snooze the row of the same name is the way back
-                            // from a chosen time and does real work.
-                            onChooseDeparture = ::finish,
+                            // from a chosen time and does real work — and a
+                            // partial choice turns this sheet into that one,
+                            // since the cap has moved under it (Codex, PR #267).
+                            onChooseDeparture = {
+                                if (sheet.commitPartial) sheet.commitDeparture() else finish()
+                            },
                             onStepDown = sheet::stepDown,
                             onStepUp = sheet::stepUp,
                             failed = sheet.commitFailed,
+                            partial = sheet.commitPartial,
                             committing = sheet.committing,
                             tracksDeparture = PRESENCE_TRACKS_DEPARTURE,
                             modifier = Modifier.navigationBarsPadding(),
@@ -736,6 +744,7 @@ class TileTrampolineActivity : ComponentActivity() {
         const val STATE_REQUEST_ID = "requestId"
         const val STATE_OFFERED_FOR = "offeredFor"
         const val STATE_COMMIT_FAILED = "commit_failed"
+        const val STATE_COMMIT_PARTIAL = "commit_partial"
 
         // The sheet's own three instants. On-device only and never logged: when
         // a user intends to stop being disturbed is theirs (`AGENTS.md`,

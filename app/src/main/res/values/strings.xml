@@ -480,17 +480,12 @@
     <!--
       A chosen time that applied, over an exit that would not come off. The end
       time is set, so "Couldn't set the end time" describes the opposite
-      failure; what the user needs is what the snooze will actually still do
-      (principle 2). Named per exit rather than one shared line, because the two
-      leave the user watching for different things.
+      failure; what the user needs is that the snooze can still stop early.
+      Which exit is not named here on purpose — the ongoing notification names
+      it, rebuilt from the record, and this line reports the tap.
     -->
     <!-- TODO: translate -->
-    <string name="failure_movement_exit_stayed_on" tools:ignore="MissingTranslation">Still ends if you move</string>
-    <!-- TODO: translate -->
-    <string name="failure_departure_exit_stayed_on" tools:ignore="MissingTranslation">Still ends when you leave</string>
-    <!-- Both at once: the two share one card, so neither may be named alone. -->
-    <!-- TODO: translate -->
-    <string name="failure_both_exits_stayed_on" tools:ignore="MissingTranslation">Still ends if you move or leave</string>
+    <string name="failure_exit_stayed_armed" tools:ignore="MissingTranslation">Set, but this can still end sooner</string>
     <!--
       Both end conditions need the location grant: `Until I leave` to measure a
       departure, `When I move` because the foreground service that keeps the
