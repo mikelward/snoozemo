@@ -1,5 +1,6 @@
 package app.snoozemo.snooze
 
+import android.content.Intent
 import android.os.Looper.getMainLooper
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.DegradationCause
@@ -18,6 +19,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.android.controller.ServiceController
+import org.robolectric.annotation.Config
 
 /**
  * `When I move` end to end through the service (SPEC.md §4.4).
@@ -60,6 +63,12 @@ class SnoozeServiceMotionEndTest {
     fun tearDown() {
         watch?.close()
         watch = null
+        // A test that fails a snooze open under a refusing alarm leaves the
+        // release/retry work posted to the main looper; drain it with alarms
+        // available again so nothing carries into the next class. Resetting the
+        // process-wide refuse flag is part of the same hygiene.
+        TogglableAlarmManager.refuse = false
+        shadowOf(getMainLooper()).idle()
     }
 
     private fun setMotionEnd(record: ActiveSnooze?, value: Boolean) =
@@ -69,6 +78,28 @@ class SnoozeServiceMotionEndTest {
         }
 
     private fun stored(): ActiveSnooze? = ActiveSnoozeStore(appContext).load()
+
+    /**
+     * A second start on the **same** service instance, so an alarm refusal a
+     * test arms after the service is up meets this action rather than the
+     * restore that seeded it — a fresh instance would re-arm the cap on its own
+     * restore first and fail there instead.
+     */
+    private fun ServiceController<TestSnoozeService>.send(action: String, startId: Int, extras: Intent.() -> Unit = {}) =
+        get().onStartCommand(
+            Intent(appContext, TestSnoozeService::class.java).setAction(action).apply(extras),
+            0,
+            startId,
+        )
+
+    /** The pending delay of the latest armed cap-check alarm. */
+    private fun armedCapDelay(): Duration {
+        val alarmManager = appContext.getSystemService(android.app.AlarmManager::class.java)
+        val alarm = shadowOf(alarmManager).scheduledAlarms.last { scheduled ->
+            shadowOf(scheduled.operation).savedIntent.action == SnoozeService.ACTION_CHECK_CAP
+        }
+        return Duration.ofMillis(alarm.triggerAtMs - android.os.SystemClock.elapsedRealtime())
+    }
 
     @Test
     fun `nothing listens until the user asks`() {
@@ -85,6 +116,221 @@ class SnoozeServiceMotionEndTest {
         assertTrue(TestSnoozeService.motionRegistrar.armed)
         assertEquals(true, stored()?.endsOnMotion)
         assertEquals("and the row is told it took", EndChoiceResult.APPLIED, reported)
+    }
+
+    @Test
+    fun `until I move drops a chosen time and restores the failsafe cap`() {
+        // End conditions are mutually exclusive with a chosen time (maintainer,
+        // 2026-09-13): a movement exit replaces it. The timer-only intent comes
+        // off *and* the shortened cap goes back to the 8h failsafe, so the snooze
+        // cannot end at the old chosen time hidden behind `Snoozing until you
+        // move` (SPEC.md §4.4; Codex, PR #278).
+        val chosen = snoozeFixture(now).copy(
+            capExpiresAt = now.plus(Duration.ofHours(1)),
+            endsOnDeparture = false,
+            timerOnlyRequested = true,
+        )
+        assertTrue("precondition: a shortened chosen cap", chosen.capExpiresAt.isBefore(chosen.capCeilingAt))
+
+        setMotionEnd(chosen, value = true)
+
+        val after = stored()
+        assertEquals("the movement exit is armed", true, after?.endsOnMotion)
+        assertEquals("the chosen time is dropped", false, after?.timerOnlyRequested)
+        assertEquals("the cap is back at the failsafe", chosen.capCeilingAt, after?.capExpiresAt)
+        assertEquals(EndChoiceResult.APPLIED, reported)
+    }
+
+    @Test
+    fun `until I move leaves an already-failsafe cap alone`() {
+        // The restore is a no-op when the cap already sits at its ceiling: a
+        // plain movement snooze keeps its failsafe, nothing to move.
+        val record = snoozeFixture(now)
+        assertFalse(
+            "precondition: cap already at the failsafe",
+            record.capExpiresAt.isBefore(record.capCeilingAt),
+        )
+
+        setMotionEnd(record, value = true)
+
+        val after = stored()
+        assertEquals(true, after?.endsOnMotion)
+        assertEquals("the cap is untouched", record.capExpiresAt, after?.capExpiresAt)
+        assertEquals(EndChoiceResult.APPLIED, reported)
+    }
+
+    @Test
+    @Config(shadows = [TogglableAlarmManager::class])
+    fun `the failsafe restore survives the cap alarm being unavailable`() {
+        // Record-first (Codex, PR #278, P1): the ceiling is persisted before the
+        // alarm moves, so a refused alarm leaves the record at the ceiling and the
+        // old *shorter* alarm behind — which fires early and reschedules to the
+        // ceiling. The restore has durably taken; the tap succeeds and nothing is
+        // surfaced as failed.
+        val chosen = snoozeFixture(now).copy(
+            capExpiresAt = now.plus(Duration.ofHours(1)),
+            endsOnDeparture = false,
+            timerOnlyRequested = true,
+        )
+        assertTrue("precondition: a shortened chosen cap", chosen.capExpiresAt.isBefore(chosen.capCeilingAt))
+        // Restore with the alarm accepting, so the seed's own cap arm succeeds;
+        // only the failsafe re-arm the tap attempts is refused.
+        val service = startService(SnoozeService.ACTION_RESTORE, chosen)
+
+        TogglableAlarmManager.refuse = true
+        service.send(SnoozeService.ACTION_SET_MOTION_END, startId = 2) {
+            putExtra(SnoozeService.EXTRA_ENDS_ON_MOTION, true)
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+
+        val after = stored()
+        assertEquals("the movement exit is armed", true, after?.endsOnMotion)
+        assertEquals("the timer-only intent is dropped", false, after?.timerOnlyRequested)
+        assertEquals("the cap is at the failsafe on the record", chosen.capCeilingAt, after?.capExpiresAt)
+        assertTrue("the sensor is listening", TestSnoozeService.motionRegistrar.armed)
+        assertEquals("the tap applied", EndChoiceResult.APPLIED, reported)
+    }
+
+    @Test
+    @Config(shadows = [TogglableAlarmManager::class])
+    fun `an early cap check re-arms the exact wake to the ceiling after a refused restore`() {
+        // Where the refused failsafe re-arm heals (Codex, PR #278, P1). After
+        // `restoreCapToFailsafe` persists the ceiling but its exact re-arm is
+        // refused, the old shorter alarm is left behind. When it fires early,
+        // `rescheduleIfUnfinished` finds the snooze unexpired and re-arms the
+        // exact wake to the controller's cap — the shared heal for every
+        // lengthening path — rather than returning and leaving the cap on the
+        // deferrable backstop alone.
+        val chosen = snoozeFixture(now).copy(
+            capExpiresAt = now.plus(Duration.ofHours(1)),
+            endsOnDeparture = false,
+            timerOnlyRequested = true,
+        )
+        val service = startService(SnoozeService.ACTION_RESTORE, chosen)
+
+        // The restore's ceiling re-arm is refused, so the exact alarm stays at
+        // the chosen hour while the record lengthens to the failsafe.
+        TogglableAlarmManager.refuse = true
+        service.send(SnoozeService.ACTION_SET_MOTION_END, startId = 2) {
+            putExtra(SnoozeService.EXTRA_ENDS_ON_MOTION, true)
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+        assertEquals(
+            "precondition: the record lengthened to the ceiling",
+            chosen.capCeilingAt,
+            stored()?.capExpiresAt,
+        )
+
+        // The old shorter alarm fires early, with alarms available again.
+        TogglableAlarmManager.refuse = false
+        service.send(SnoozeService.ACTION_CHECK_CAP, startId = 3)
+
+        assertEquals(
+            "the exact wake is re-armed to the ceiling, not left at the chosen hour",
+            Duration.between(now, chosen.capCeilingAt),
+            armedCapDelay(),
+        )
+        assertEquals("and the snooze is still running to the ceiling", chosen.capCeilingAt, stored()?.capExpiresAt)
+    }
+
+    @Test
+    @Config(shadows = [TogglableAlarmManager::class])
+    fun `a cap check whose re-arm is also refused fails open and ends the snooze`() {
+        // The heal's own refusal (Codex, PR #278, fifth finding). When the
+        // restore's ceiling re-arm is refused AND the early cap check's re-arm is
+        // refused too, there is no further heal before the deferrable backstop —
+        // so the shared choke point fails open (`failOpenUnschedulableCap`),
+        // ending the snooze rather than leaving DND on the backstop past the cap
+        // (SPEC.md §7, principle 1).
+        val chosen = snoozeFixture(now).copy(
+            capExpiresAt = now.plus(Duration.ofHours(1)),
+            endsOnDeparture = false,
+            timerOnlyRequested = true,
+        )
+        val service = startService(SnoozeService.ACTION_RESTORE, chosen)
+
+        // Alarms refused from here on: the restore's ceiling re-arm fails, then
+        // the cap check's re-arm fails too.
+        TogglableAlarmManager.refuse = true
+        service.send(SnoozeService.ACTION_SET_MOTION_END, startId = 2) {
+            putExtra(SnoozeService.EXTRA_ENDS_ON_MOTION, true)
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+        service.send(SnoozeService.ACTION_CHECK_CAP, startId = 3)
+
+        assertNull("the snooze is ended fail-open, not left on the backstop", stored())
+        assertEquals(
+            "and the rule is driven off",
+            false,
+            TestSnoozeService.zen.calls.lastOrNull()?.first,
+        )
+    }
+
+    @Test
+    fun `a failed failsafe restore keeps the exit and surfaces a retry`() {
+        // The exit the user asked for is armed and its shortened cap stays visible
+        // (capCountdownShown), so a restore that cannot persist the ceiling keeps
+        // the exit and surfaces the failure for a retry rather than unwinding a
+        // good write (maintainer, 2026-09-13; Codex, PR #278).
+        val chosen = snoozeFixture(now).copy(
+            capExpiresAt = now.plus(Duration.ofHours(1)),
+            endsOnDeparture = false,
+            timerOnlyRequested = true,
+        )
+        val service = startService(SnoozeService.ACTION_RESTORE, chosen)
+
+        // Refuse only the write that moves the cap to the ceiling; the exit's own
+        // write and the intent clear (both at the chosen time) land.
+        TestSnoozeService.refuseRecordUpdateWhen = { it.capExpiresAt == chosen.capCeilingAt }
+        service.send(SnoozeService.ACTION_SET_MOTION_END, startId = 2) {
+            putExtra(SnoozeService.EXTRA_ENDS_ON_MOTION, true)
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+        TestSnoozeService.refuseRecordUpdateWhen = null
+
+        val after = stored()
+        assertEquals("the movement exit is kept", true, after?.endsOnMotion)
+        assertTrue("the sensor is listening", TestSnoozeService.motionRegistrar.armed)
+        assertEquals("the cap is left at the chosen time, still visible", chosen.capExpiresAt, after?.capExpiresAt)
+        assertEquals("the tap applied — the exit took", EndChoiceResult.APPLIED, reported)
+        assertTrue(
+            "and the failure is surfaced for a retry",
+            shadeShows(stringOf(app.snoozemo.R.string.failure_could_not_set_end)),
+        )
+    }
+
+    @Test
+    fun `a retry over an armed exit clears a lingering timer-only intent`() {
+        // Codex, PR #278: retrying "Until I move" over a partial timer whose
+        // motion exit is already armed can leave applyMotionEnd's own intent
+        // clear refused — it reports APPLIED because that tap added no exit — so
+        // folding the clear into the failsafe cap write is what settles it, and
+        // the snooze does not read back a false partial timer.
+        val partial = snoozeFixture(now).copy(
+            capExpiresAt = now.plus(Duration.ofHours(1)),
+            endsOnDeparture = false,
+            endsOnMotion = true,
+            timerOnlyRequested = true,
+        )
+        assertTrue("precondition: a partial timer", partial.isPartialTimer)
+        val service = startService(SnoozeService.ACTION_RESTORE, partial)
+
+        // Refuse applyMotionEnd's own intent clear (the shortened-cap write that
+        // drops timerOnly), leaving the fold in restoreCapToFailsafe to do it.
+        TestSnoozeService.refuseRecordUpdateWhen =
+            { it.capExpiresAt == partial.capExpiresAt && !it.timerOnlyRequested }
+        service.send(SnoozeService.ACTION_SET_MOTION_END, startId = 2) {
+            putExtra(SnoozeService.EXTRA_ENDS_ON_MOTION, true)
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+        TestSnoozeService.refuseRecordUpdateWhen = null
+
+        val after = stored()
+        assertEquals("the exit stays armed", true, after?.endsOnMotion)
+        assertEquals("the timer-only intent is cleared by the fold", false, after?.timerOnlyRequested)
+        assertEquals("the cap is at the failsafe", partial.capCeilingAt, after?.capExpiresAt)
+        assertFalse("so it no longer reads as a partial timer", after!!.isPartialTimer)
+        assertEquals(EndChoiceResult.APPLIED, reported)
     }
 
     @Test
