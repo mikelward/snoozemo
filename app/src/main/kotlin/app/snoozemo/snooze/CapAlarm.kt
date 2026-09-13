@@ -525,8 +525,13 @@ class CapAlarmReceiver : BroadcastReceiver() {
             }
             return
         }
+        // A fired cap alarm (or a release retry sharing the action). Hand it to
+        // the service, which reconciles the alarm to the record's cap — re-arming
+        // an early one and failing open only if the cap genuinely cannot be
+        // scheduled. If the service will not start, reconcile here rather than
+        // end the snooze blind (Codex, PR #278, findings 7 & 8).
         if (SnoozeService.checkCap(context)) return
-        releaseDirectly(context, EndReason.DURATION_CAP)
+        capReleaseFallback(context)
     }
 }
 
@@ -590,6 +595,39 @@ private fun releaseDirectlyIfStillOurs(
         return
     }
     releaseDirectly(context, reason)
+}
+
+/**
+ * The no-service stand-in for the cap check's reconcile ([rescheduleIfUnfinished]).
+ * When a fired cap alarm cannot start the service, ending the snooze blind as
+ * [EndReason.DURATION_CAP] is wrong: an early alarm — one a lengthening left
+ * behind when its exact re-arm was refused or interrupted — fires *before* the
+ * record's cap, so reading it as the duration cap ends an `Until I move` snooze
+ * early and mislabels it (Codex, PR #278, finding 7). So read the record: if its
+ * cap really is reached, or there is no record, that is the duration cap and the
+ * snooze ends. An unexpired record re-arms the exact wake and runs on.
+ *
+ * If that re-arm is refused, **fail open** as [EndReason.LOST_CAPABILITY]. Unlike
+ * the service's reconcile, this path has no in-process record of the cap it last
+ * armed, so it cannot tell a duplicate delivery of an alarm a prior pass already
+ * re-armed (still covered — ending it is an early end) from the genuine first
+ * delivery of a spent one (uncovered — its one-shot is gone). Ending needs no
+ * alarm while the re-arm just failed, so the ambiguity resolves toward ending
+ * (principle 1): leaving an uncovered cap on the deferrable backstop past the
+ * cap is the worse failure, and an early end is the accepted small annoyance
+ * (Codex, PR #278, findings 7 and the escalate-the-uncovered-fallback P1 on
+ * `38b66e7`). Duplicate suppression lives only in the service's reconcile, where
+ * the in-process record *can* tell the two apart; the receiver does not try.
+ */
+private fun capReleaseFallback(context: Context) {
+    val snooze = ActiveSnoozeStore(context).load()
+    val now = SnoozeClock.read()
+    if (snooze != null && !snooze.isExpired(now)) {
+        if (CapAlarm.arm(context, snooze, now)) return
+        releaseDirectly(context, EndReason.LOST_CAPABILITY)
+        return
+    }
+    releaseDirectly(context, EndReason.DURATION_CAP)
 }
 
 /**

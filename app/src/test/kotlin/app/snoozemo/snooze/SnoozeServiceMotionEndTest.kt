@@ -11,6 +11,7 @@ import java.time.Duration
 import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.After
@@ -221,7 +222,11 @@ class SnoozeServiceMotionEndTest {
             stored()?.capExpiresAt,
         )
 
-        // The old shorter alarm fires early, with alarms available again.
+        // The old shorter alarm fires early, with alarms available again. The
+        // last cap armed in-process is the chosen hour, not the record's ceiling,
+        // so the reconcile sees the ceiling uncovered and re-arms the exact wake
+        // to it — no marker on the intent, just the in-process cap it last armed
+        // measured against the record.
         TogglableAlarmManager.refuse = false
         service.send(SnoozeService.ACTION_CHECK_CAP, startId = 3)
 
@@ -256,12 +261,129 @@ class SnoozeServiceMotionEndTest {
             putExtra(SnoozeService.EXTRA_ENDS_ON_MOTION, true)
             putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
         }
+        // The early-firing shortened alarm reaches the cap check: the ceiling is
+        // uncovered (the last cap armed was the chosen hour), so its re-arm is
+        // attempted, and refused too.
         service.send(SnoozeService.ACTION_CHECK_CAP, startId = 3)
 
         assertNull("the snooze is ended fail-open, not left on the backstop", stored())
         assertEquals(
             "and the rule is driven off",
             false,
+            TestSnoozeService.zen.calls.lastOrNull()?.first,
+        )
+    }
+
+    @Test
+    @Config(shadows = [TogglableAlarmManager::class])
+    fun `a backstop cap check leaves a healthy snooze running when a re-arm would be refused`() {
+        // The sixth finding (Codex, PR #278). BackstopWorker pokes
+        // ACTION_CHECK_CAP on every periodic wake while the real cap alarm is
+        // still scheduled. On a healthy snooze — the record's cap covered by the
+        // alarm the arm scheduled for it — the reconcile does nothing: it re-arms
+        // only an uncovered cap, so a poke whose scheduled alarm still ends the
+        // snooze on time never re-arms-and-fails-open. Alarms are refused for the
+        // poke to prove that a re-arm which WOULD fail is never even attempted.
+        val chosen = snoozeFixture(now).copy(
+            capExpiresAt = now.plus(Duration.ofHours(1)),
+            endsOnDeparture = false,
+            timerOnlyRequested = true,
+        )
+        // Restored with alarms available, so the cap alarm is armed for exactly
+        // the record's cap and the reconcile knows that cap is covered.
+        val service = startService(SnoozeService.ACTION_RESTORE, chosen)
+
+        // A backstop poke with alarms refused: the cap is already covered, so the
+        // guard returns before any re-arm and the refusal never bites.
+        TogglableAlarmManager.refuse = true
+        service.send(SnoozeService.ACTION_CHECK_CAP, startId = 2)
+
+        assertNotNull(
+            "the healthy snooze survives a backstop poke",
+            stored(),
+        )
+        assertEquals(
+            "the rule is left on, not driven off",
+            true,
+            TestSnoozeService.zen.calls.lastOrNull()?.first,
+        )
+    }
+
+    @Test
+    @Config(shadows = [TogglableAlarmManager::class])
+    fun `a duplicate delivery of an already-healed cap alarm leaves the snooze running`() {
+        // The eighth finding (Codex, PR #278). An early cap alarm can be
+        // delivered twice. The first delivery heals — it re-arms the exact wake
+        // to the ceiling, so the in-process cap last armed becomes the ceiling.
+        // The duplicate then finds the record's cap already covered and does
+        // nothing, rather than re-arming redundantly and failing open on a
+        // transient refusal. No marker distinguishes the two deliveries; the
+        // in-process cap already covering the record does.
+        val chosen = snoozeFixture(now).copy(
+            capExpiresAt = now.plus(Duration.ofHours(1)),
+            endsOnDeparture = false,
+            timerOnlyRequested = true,
+        )
+        val service = startService(SnoozeService.ACTION_RESTORE, chosen)
+
+        // The restore's ceiling re-arm is refused, leaving the old shorter alarm
+        // behind while the record lengthens to the ceiling.
+        TogglableAlarmManager.refuse = true
+        service.send(SnoozeService.ACTION_SET_MOTION_END, startId = 2) {
+            putExtra(SnoozeService.EXTRA_ENDS_ON_MOTION, true)
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+
+        // First delivery of the old alarm, alarms available: it heals, re-arming
+        // the exact wake to the ceiling.
+        TogglableAlarmManager.refuse = false
+        service.send(SnoozeService.ACTION_CHECK_CAP, startId = 3)
+        assertEquals(
+            "precondition: the heal armed the ceiling",
+            Duration.between(now, chosen.capCeilingAt),
+            armedCapDelay(),
+        )
+
+        // The duplicate of that same old alarm arrives with alarms refused. The
+        // ceiling the heal armed now covers the record, so the duplicate must not
+        // re-arm-and-fail-open the snooze it already covers.
+        TogglableAlarmManager.refuse = true
+        service.send(SnoozeService.ACTION_CHECK_CAP, startId = 4)
+
+        assertNotNull("the snooze survives the duplicate delivery", stored())
+        assertEquals(
+            "the rule is left on, not driven off",
+            true,
+            TestSnoozeService.zen.calls.lastOrNull()?.first,
+        )
+    }
+
+    @Test
+    @Config(shadows = [TogglableAlarmManager::class])
+    fun `a backstop poke on a freshly-armed chosen-time snooze does not fail open`() {
+        // The ninth finding (Codex, PR #278). A snooze started from the idle
+        // chosen-time row arms its cap through the pre-arm — the one cap arm that
+        // does not route through the in-service helper — so the pre-arm records
+        // the cap it covers itself. Without that, the reconcile would not know the
+        // fresh snooze was already covered: the first backstop poke would re-arm
+        // and fail open on a refusal, ending a snooze whose cap was never lost.
+        val chosenAt = now.plus(Duration.ofHours(1))
+        val service = startService(SnoozeService.ACTION_ARM) {
+            putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, chosenAt.toEpochMilli())
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+        assertEquals("precondition: armed to the chosen time", chosenAt, stored()?.capExpiresAt)
+
+        // A backstop poke with alarms refused: the pre-armed cap still covers the
+        // record, so the guard returns before any re-arm and the refusal never
+        // bites.
+        TogglableAlarmManager.refuse = true
+        service.send(SnoozeService.ACTION_CHECK_CAP, startId = 2)
+
+        assertNotNull("the freshly-armed snooze survives a backstop poke", stored())
+        assertEquals(
+            "the rule is left on, not driven off",
+            true,
             TestSnoozeService.zen.calls.lastOrNull()?.first,
         )
     }

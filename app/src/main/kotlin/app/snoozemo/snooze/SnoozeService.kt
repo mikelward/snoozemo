@@ -1170,7 +1170,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // (SPEC.md §7). Without that guarantee at the source, a stale
             // offset plus a backwards clock change would make this re-arm
             // schedule the cap *past* its own deadline instead of at it.
-            if (!CapAlarm.arm(applicationContext, record, readClock())) {
+            if (!armCapAlarm(record, readClock())) {
                 SnoozeDebugLog.warning("restore could not re-arm the cap; ending instead")
                 // No cap means no guaranteed exit, so don't restore into one.
                 // Released directly rather than through the controller: it has
@@ -1236,7 +1236,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         val running = controller.active ?: return
         // Restoring the bound this snooze already had, not a rung: idempotent
         // while the original is still pending, and it cannot extend the snooze.
-        val capArmed = CapAlarm.arm(applicationContext, running, readClock())
+        val capArmed = armCapAlarm(running, readClock())
         if (capArmed && running.isExpired(readClock())) return
 
         if (capArmed) {
@@ -1245,6 +1245,33 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             Log.e(TAG, "The release was refused and its cap could not be re-armed; escalating.")
         }
         beginRelease(running.startedAt, reason)
+    }
+
+    /**
+     * The cap deadline (epoch millis) an `ACTION_CHECK_CAP` alarm was last
+     * *successfully* armed for in this process; 0 when none has been. This is
+     * what lets [rescheduleIfUnfinished] reconcile the alarm to the record
+     * without asking who woke it: the record's cap is already covered exactly
+     * when this equals it, so a backstop poke — or a duplicate delivery of an
+     * early alarm a prior check already healed — does nothing, and only a
+     * genuinely uncovered cap re-arms or fails open (Codex, PR #278,
+     * findings 6 & 8; the origin-agnostic option (b)). In-memory on purpose: a
+     * process death drops it, and the cold-start restore re-arms the cap
+     * unconditionally, which sets it afresh.
+     */
+    @Volatile
+    private var capAlarmArmedFor: Long = 0L
+
+    /**
+     * Arms the cap alarm for [snooze] and, on success, records the deadline it
+     * now covers in [capAlarmArmedFor]. Every in-service cap-alarm arm routes
+     * through here so the reconcile in [rescheduleIfUnfinished] can trust that
+     * field to mean "an alarm is scheduled for exactly this cap."
+     */
+    private fun armCapAlarm(snooze: ActiveSnooze, now: ClockReading): Boolean {
+        val armed = CapAlarm.arm(applicationContext, snooze, now)
+        if (armed) capAlarmArmedFor = snooze.capExpiresAt.toEpochMilli()
+        return armed
     }
 
     /**
@@ -1502,8 +1529,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             }
             ACTION_CHECK_CAP -> {
                 controller.onCapCheck()
-                // The alarm that woke us is spent, so anything still unfinished
-                // needs a new one or it will never be revisited.
+                // Reconcile the cap alarm to the record, reading only whether the
+                // record's cap is already covered by an alarm this process armed —
+                // not who woke us. A backstop poke, a duplicate delivery, and a
+                // release retry sharing this action all reconcile to the same
+                // answer without a marker to tell them apart.
                 rescheduleIfUnfinished()
                 repairDegradedWatch()
                 restateOngoingCard()
@@ -1825,6 +1855,15 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             dischargeStuckRuleIfOrphaned()
             return EndChoiceResult.REFUSED
         }
+        // The alarm just armed covers exactly this cap, so record it — this is
+        // the one cap arm that does not route through [armCapAlarm] (there is no
+        // `ActiveSnooze` yet). Without it, [capAlarmArmedFor] stays 0 until some
+        // later in-service arm, and the reconcile would not recognize the initial
+        // alarm as covering the record: a backstop poke on a freshly-armed,
+        // healthy snooze would re-arm and could fail open on a transient refusal,
+        // the redundant-re-arm early end this guard exists to prevent (Codex, PR
+        // #278, finding 9; findings 6 & 8).
+        capAlarmArmedFor = capExpiresAt.toEpochMilli()
 
         lastArmFailure = null
         // Held across everything below, because `IDLE` and `ARMING` are both
@@ -2263,7 +2302,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // log saying why (flagged by Codex on PR #63). A cap that cannot be
         // scheduled where it is promised ends the snooze (SPEC.md §7), and
         // the ended notification is the user-visible account of it.
-        if (!CapAlarm.arm(applicationContext, restated, readClock())) {
+        if (!armCapAlarm(restated, readClock())) {
             Log.e(TAG, "Re-arming the cap after the clock change was refused; ending rather than letting the countdown lie.")
             SnoozeDebugLog.warning("clock-change re-arm refused; ending the snooze")
             // No heal behind a clock-change re-arm (it moves the alarm to a new
@@ -2297,7 +2336,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // worked: the alarm is the cap, so a countdown extended past an alarm
         // still set for the old time would be a promise the platform never made.
         val extended = snooze.copy(capExpiresAt = extendedCap)
-        if (!CapAlarm.arm(applicationContext, extended, readClock())) {
+        if (!armCapAlarm(extended, readClock())) {
             notifications.showCouldNotExtend()
             return
         }
@@ -2318,7 +2357,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // re-arm the cap for the later deadline. Writing the original back
             // is what actually undoes it.
             val recordRolledBack = store.update(snooze)
-            if (recordRolledBack && CapAlarm.arm(applicationContext, snooze, readClock())) {
+            if (recordRolledBack && armCapAlarm(snooze, readClock())) {
                 return
             }
 
@@ -2520,7 +2559,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             return false
         }
         controller.applyChange(changed)
-        if (!CapAlarm.arm(applicationContext, changed, reading)) {
+        if (!armCapAlarm(changed, reading)) {
             // The record already carries the ceiling; the alarm is still at the
             // shorter cap. This is a lenient first-chance path, so it only logs:
             // when the shorter alarm fires early, `rescheduleIfUnfinished` finds
@@ -3051,7 +3090,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // moment the user just chose — principle 1's failure, not a cosmetic
         // disagreement.
         val changed = snooze.copy(capExpiresAt = target)
-        if (!CapAlarm.arm(applicationContext, changed, reading)) {
+        if (!armCapAlarm(changed, reading)) {
             notifications.showCouldNotSetEnd()
             return EndChoiceResult.REFUSED
         }
@@ -3065,7 +3104,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // reading the record in this process would find the choice we have
             // just told the user did not take.
             val recordRolledBack = store.update(snooze)
-            if (recordRolledBack && CapAlarm.arm(applicationContext, snooze, readClock())) {
+            if (recordRolledBack && armCapAlarm(snooze, readClock())) {
                 // The rollback is the *success* of this branch and still a
                 // failure of the change the user asked for, so it answers like
                 // one.
@@ -3459,27 +3498,31 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         val running = controller.active ?: return
         val reading = readClock()
         if (!running.isExpired(reading)) {
-            // The one-shot that woke us was for an earlier deadline than the
-            // record now carries: a lengthening — `Until I move` restoring the
-            // failsafe ceiling, `+30 min`, a chosen time replaced — moved the
-            // cap out, and its exact re-arm was refused or died before it
-            // landed, leaving the old shorter alarm to fire early. The alarm is
-            // now spent, so without a fresh one the cap rests on the deferrable
-            // `WorkManager` backstop alone — the one invariant this app does not
-            // get to weaken (principle 1). Re-arm the exact wake at the
-            // controller's cap. This is the single place every lengthening
-            // path's refused re-arm heals, so those paths only have to log
-            // rather than each re-deriving this recovery (Codex, PR #278, P1).
-            if (!CapAlarm.arm(applicationContext, running, reading)) {
-                // This is the last line before the deferrable backstop: the
-                // arming paths route their refusal here, so a refusal *here* has
-                // nothing further to fall to. Fail open through the shared choke
-                // point rather than leaving DND on the backstop alone past the
-                // cap (Codex, PR #278, P1 #5).
-                Log.e(TAG, "The cap re-arm was refused on a live snooze; failing open.")
-                SnoozeDebugLog.warning("cap-check: the cap could not be re-armed; failing open to a release")
-                failOpenUnschedulableCap()
-            }
+            // The record's cap is already covered exactly when an alarm was last
+            // armed for it. So a backstop poke, or a duplicate delivery of an
+            // early alarm a prior check already healed, does nothing — no re-arm,
+            // and so no fail-open on a redundant refusal (Codex, PR #278, findings
+            // 6 & 8). This reads no alarm metadata, so who woke us and what a
+            // fired alarm carried are both immaterial: a refused re-arm can
+            // neither corrupt what a later comparison reads nor be misread as
+            // superseded (finding 11).
+            if (capAlarmArmedFor == running.capExpiresAt.toEpochMilli()) return
+            // The cap is uncovered: no alarm has been armed for this deadline in
+            // this process. It fired *early* because a lengthening — `Until I
+            // move` restoring the failsafe ceiling, `+30 min`, a chosen time
+            // replaced — moved the cap out and the exact re-arm was refused or
+            // interrupted, or the process died and this is the first check since.
+            // Re-arm to the record's cap; this is the single place every
+            // lengthening path's missing re-arm heals, so those paths only log
+            // (Codex, PR #278, P1).
+            if (armCapAlarm(running, reading)) return
+            // Nothing further to fall to: the record already promises this cap
+            // and it cannot be scheduled, so fail open through the shared choke
+            // point rather than leave Do Not Disturb on the deferrable backstop
+            // alone past the cap (SPEC.md §7; Codex, PR #278, #5).
+            Log.e(TAG, "The cap could not be armed for a live snooze; failing open.")
+            SnoozeDebugLog.warning("cap-check: the record's cap could not be scheduled; failing open to a release")
+            failOpenUnschedulableCap()
             return
         }
 
@@ -4591,6 +4634,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
 
         fun end(context: Context) = start(context, ACTION_END)
 
+        /**
+         * Pokes the cap check. It no longer matters who drives it — a fired cap
+         * alarm, a duplicate delivery of one, or the periodic backstop —
+         * because [rescheduleIfUnfinished] reconciles the alarm to the record's
+         * cap and re-arms only a cap that is genuinely uncovered.
+         */
         fun checkCap(context: Context) = start(context, ACTION_CHECK_CAP)
 
         fun restore(context: Context) = start(context, ACTION_RESTORE)

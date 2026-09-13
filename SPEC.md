@@ -4047,6 +4047,16 @@ to hold: **a snooze whose cap alarm could not be scheduled does not arm**, and a
 reschedule it ends the snooze instead of restoring it (§8.3). A snooze with no time bound is the
 one state this app must never reach.
 
+**The cap check reconciles; it does not depend on who woke it.** The one alarm is poked from three
+directions — the fired cap alarm itself, a duplicate delivery of one, and the periodic backstop that
+pokes while the real alarm is still scheduled — and a redundant poke must never be mistaken for a
+lost cap. So the check re-arms the wake whenever the record's cap is not covered by a live one, and
+ends the snooze (fail open, above) only when that cap cannot be scheduled at all — never merely
+because a re-arm was refused while a scheduled wake still stands. A check that instead keyed on
+*which* caller woke it could not tell a duplicate alarm delivery from a genuine one, and a transient
+scheduling refusal on the redundant re-arm then ended snoozes whose cap was never lost — the failure
+this reconcile-don't-ask design removes (Codex, PR #278).
+
 **The cap is measured against the clock the user cannot move.** Both of its enforcers originally
 rode wall time — an `RTC_WAKEUP` alarm at the record's expiry, and an expiry test reading
 `Clock.systemUTC()` — so winding the date back in Settings moved both out together and kept Do Not
