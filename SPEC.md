@@ -1455,6 +1455,25 @@ Three differences from the sheet, and all three are behavior rather than layout:
   (§6.5) gets no `Until I leave`, because nothing is watching for a departure and the row would name
   an end that cannot arrive. A calendar that cannot be read, or has nothing inside the window,
   contributes no meeting rows.
+- **The time row opens on the snooze's own end when time is what ends it, else an hour out**
+  (maintainer, 2026-09-13). The arm-time sheet seeds an hour out because it answers "how should this
+  *new* snooze end?"; over a running snooze the top row's job is to show what the snooze is set to
+  end at, so a user can read it and step from it. But only where *time* is the effective end: a
+  chosen timer, or a backstop **promoted** to the effective end because departure lost its location
+  fix (`effectiveMode` is `DURATION_ONLY` and no motion exit). A snooze still ending on departure
+  with a fix — or on motion — keeps the hour-out seed, because its `capExpiresAt` is a passive
+  eight-hour **backstop** (`startedAt + DEFAULT_CAP` from an arm at an arbitrary minute), not a time
+  the user chose; opening the row on it would front the failsafe as if it were the plan. The idle
+  offer to start keeps the hour-out seed too: there is no snooze end to open on. When it does open on
+  the end it seeds on `capExpiresAt` — the same instant the countdown targets — **not** rounded to
+  the half hour the way the hour-out seed is: a chosen timer is already on a half hour, and a
+  promoted backstop or a chosen meeting end is a real value the snooze holds that rounding would
+  misreport, so the row shows it honestly ("Until 4:52 PM"). Two edges keep it honest under a moving
+  clock: an end that has fallen within `MIN_CAP` is unsettable, so the row falls back to the hour-out
+  seed rather than clamping onto the floor the service would then refuse; and an untouched row
+  tracks what the snooze effectively ends on — following a moved end (a `+30 min`), taking on a
+  backstop a degradation promotes, and reverting to the hour-out seed when departure recovers — while
+  a stepped value is the user's and is left alone.
 
 **The offer is decided against the clock, not against the moment the record was
 read.** The rows sit there for as long as the snooze does, so the snapshot they
