@@ -1886,16 +1886,74 @@ the point is that every other line of the app is worthless if it isn't true.
       exit), opens the row on that end rather than an hour out; a snooze still ending on
       departure with a fix, or on motion, keeps the hour-out seed, since its cap is a passive
       backstop. See `SPEC.md` §4.4.
-- [ ] **Deemphasize the backstop in the status line — follow-up, not PR #277** (maintainer,
-      2026-09-13). The `SnoozeStatus` detail currently always shows `Xh Ym left`, which for an
-      active location snooze is a countdown to the 8-hour backstop — the failsafe, not the plan.
-      Show the remaining-time/backstop only when it is the effective end (the same
-      `effectiveMode == DURATION_ONLY` question the top row now uses), and deemphasize it
-      otherwise. Touches a deliberately-designed line (the "cap is the guarantee, always shown"
-      framing in `MainScreen.StatusBlock`), so it wants its own PR and a `SPEC.md` §4.2 note.
+- [x] **Drop the failsafe countdown until it is the plan — follow-up to PR #277** (maintainer,
+      2026-09-13). The countdown (`SnoozeStatus`'s `Xh Ym left` and the notification chronometer)
+      used to show on every running snooze, which for an active location or motion snooze is a
+      countdown to the passive 8-hour failsafe — the backstop, not the plan. Now shown only when
+      the cap is a real deadline (`ActiveSnooze.capCountdownShown` — the effective end
+      `capIsEffectiveEnd`: a chosen timer or a promoted failsafe; **or** a cap shortened below the
+      ceiling, which only a chosen time does, so a chosen deadline shows even behind an armed exit).
+      The **seed** stays on the narrower `capIsEffectiveEnd` — the top time row opens on the plan.
+      The tile keeps its narrower `Timer only` qualifier (`claimsTimerOnly`) rather than a bare
+      countdown it has no copy for; the other two surfaces carry the shortened-cap countdown.
+      **Dropped rather than deemphasized** (the original framing above): a failsafe deadline shown
+      quietly is still a deadline shown, and each surface already says *how* the snooze ends. See
+      `SPEC.md` §4.2. The display broadened to `capCountdownShown` (from a first attempt at a single
+      `capIsEffectiveEnd` gate) because exit/time exclusivity cannot be made absolute: a `PARTIAL`
+      exit-removal failure or a process death mid-"Until I move" leaves a shortened cap behind an
+      exit that `capIsEffectiveEnd` would hide (Codex, PR #278).
 
 ## Phase 5 (M5) — Edge cases and degraded modes
 
+- [ ] **Warn on entering a non-time "ending soon" state — build next PR** (maintainer,
+      2026-09-13). **Decided to build**, its own follow-up PR after the drop-the-failsafe-from-UI
+      change. The intent: **any time the snooze enters an "ending soon"/about-to-end state whose
+      end is *not* a chosen time, post a default-priority notification, behind a setting.** The
+      phone coming back to life unannounced can startle in the wrong room; a notification a little
+      ahead of it lets the user re-snooze, extend, or step away first.
+      - **The states that qualify** are the non-time endings, the ones with no visible countdown
+        already warning the user: `WIFI_GRACE` (already rendered `Wi-Fi lost — ending soon`),
+        **departure confirming** (a fix has landed outside the anchor and §6.6's two-fix
+        confirmation is running — "probably leaving" is nearly "leaving"), and **motion detected**
+        (about to end on movement). These are the strong signals; a bare anchor-SSID drop is *not*
+        one, since it is the start of the departure test, not its conclusion, and would fire on a
+        microwave-grade Wi-Fi blip.
+      - **A time-based end is excluded *from this PR*** — a chosen timer, or a failsafe promoted
+        to the effective end (`ActiveSnooze.capIsEffectiveEnd`). Its countdown is already on screen
+        after the drop-the-failsafe change, so it is not a *non-time* surprise. The time-based
+        **failsafe** is not dropped, though — the maintainer (2026-09-13) still wants it surfaced,
+        likely by a notification, but as its own later to-do *after* this one (see the separate
+        entry below). A plain chosen timer, which the user set and can see counting down, is the
+        one that plausibly needs nothing.
+      - **The response is a default-priority notification, not a bare haptic** (maintainer,
+        2026-09-13). Default priority — it posts visibly and alerts per its channel, rather than a
+        silent post or a full heads-up. Being a notification, it can carry actions (extend /
+        re-snooze / end now), which answers the passive-vs-actionable question in favor of
+        actionable.
+      - **Behind a setting.** Default (on or off) and the toggle's home in Settings still to
+        decide.
+      **Open questions for the build PR:**
+      - DND and alerting: a default-priority notification still *posts* (visible in the shade)
+        even if DND mutes its sound/vibration (§5.7), so the visible warning lands regardless —
+        but whether it should *alert* through the very DND rule Snoozemo armed needs a device
+        check and a decision.
+      - The exact state set above, and whether the promoted-failsafe exclusion is right (see the
+        confirm above).
+      - Whether the notification is a *new* post or a temporary promotion of the ongoing card
+        (§4.3), and its channel/importance so it is not lumped with the quiet ongoing one.
+- [ ] **Surface the time-based failsafe too — separate, after the non-time notification PR**
+      (maintainer, 2026-09-13). The non-time entry above deliberately excludes a time-based end,
+      but the **failsafe** — a passive 8-hour cap the user did not choose, or one promoted to the
+      effective end because departure lost its fix — can still reach its deadline as a surprise,
+      unlike a chosen timer. So it wants surfacing of its own, "somehow, and I'm thinking a
+      notification." Kept a **separate** to-do on purpose, sequenced after the non-time
+      notification lands, so the two designs (a non-time "ending soon" alert vs. a
+      you-set-no-real-end-and-the-cap-is-about-to-fire alert) are settled one at a time rather
+      than bundled. Open: the promoted failsafe already shows a countdown once it becomes the
+      effective end (the drop-the-failsafe change), so decide whether that countdown is surfacing
+      enough or a notification is still wanted, and whether a plain chosen timer is in scope at
+      all (probably not — the user set it and can see it). Same DND-alerting and channel questions
+      as the entry above.
 - [ ] **Decide what tapping an end condition means** — maintainer, 2026-09-11, and the
       question behind the report that opened PR #262. **As raised**, the three rows had three
       different semantics, which is why neither the card nor the behavior matched the row the
@@ -1925,11 +1983,23 @@ the point is that every other line of the app is worthless if it isn't true.
       (`ActiveSnooze.endsOnDeparture`, kept apart from `mode`, which stays capability) rather
       than the tracking mode itself.
 
-      **`Until I move` is the row still to decide, and nothing has changed about it**: it adds an
-      exit and takes none off, so a departure snooze given a movement exit still ends on either.
-      Making it replace is now merely a product call rather than a blocked one, and it is not
-      one to take on autopilot — it would mean a tap on `Until I move` silently ending departure
-      tracking, which is the direction that can leave a phone quiet after the user walks out.
+      **`Until I move` — half decided (maintainer, 2026-09-13, PR #278).** It is now mutually
+      exclusive *with a chosen time*: tapping it drops any chosen time and restores the cap to the
+      8h failsafe (`SnoozeService.restoreCapToFailsafe`), so "Until I move" carries the failsafe,
+      never a parallel user-chosen end. That exclusivity is the normal case but not absolute — a
+      `PARTIAL` exit-removal failure or a process death mid-replacement can leave a shortened cap
+      behind an exit — so the countdown gate is the broader `capCountdownShown` (a cap below the
+      ceiling shows even behind an exit). The restore is record-first (it lengthens, so it persists
+      the ceiling before moving the alarm, and folds the intent clear into that write); a restore
+      that cannot persist the ceiling keeps the armed exit and surfaces the failure for a retry
+      (`showCouldNotSetEnd`) rather than unwinding a good exit, since `capCountdownShown` keeps the
+      leftover cap visible and the unwinding machinery was its own source of findings (maintainer,
+      "A" + surface-for-retry; Codex, PR #278). **What stays open is
+      exit-vs-exit exclusivity**: `Until I move` still leaves departure armed (a leave+motion snooze
+      ends on either over the failsafe), because making it clear departure too means a tap silently
+      ending departure tracking — the direction that can leave a phone quiet after the user walks
+      out — and it introduces a "no way back to leave" gap (no row switches motion→leave today).
+      That half is a product call, not one for autopilot.
 
       **The cinema case is answered by the replacement model rather than accepted as a cost:**
       walk out at the interval and a snooze narrowed to a time does stay silent until that time,
@@ -1943,6 +2013,28 @@ the point is that every other line of the app is worthless if it isn't true.
       is consistent but has not been looked at on a device. The duration cap stays a separate
       decision, below.
 
+- [ ] **Should the failsafe be longer than 8 hours (e.g. 24h)?** — maintainer, 2026-09-13,
+      discussed, not decided. The duration cap is D7's fail-open backstop and principle 1's last
+      line of defense: what ends a snooze when every sensor has failed, a geofence never fired, or
+      the process was killed. Its length is really *how long the phone may stay silent when
+      everything else has broken*. Raising it to 24h **triples that exposure** — a silently-dead
+      presence engine (permission revoked, One UI Sleeping Apps, an undelivered geofence) leaves
+      the phone quiet for a day rather than 8h, which is exactly principle 1's worst case; and
+      presence has never run on a handset (Phase 3), so the trust a longer net needs is unearned.
+      The case *for* is a genuine all-day/overnight stay where 8h fires the cap before the user
+      leaves (rings while still there) — the lesser evil under D7, but it undercuts "until you
+      leave".
+      **The coupling that probably matters more:** `capCeilingAt` (the 8h cap) also bounds what a
+      *chosen* time can be — the `+` stepper stops at 8h — so this is the same axis as *Should a
+      named time be allowed past the 8-hour ceiling?* below. Decoupling the two (keep an 8h
+      *failsafe* for the exits that can fail, but let a *chosen* time run to 24h, since a chosen
+      time needs nothing behind it) likely gets the long-snooze want without weakening the
+      broken-app guarantee — the maintainer's lean, to confirm. Other middle grounds: a
+      user-configurable cap; a longer cap only while presence is confirmed healthy. **The cap is
+      the maintainer's call and a heavy one** (not autopilot's — see *Decide what tapping an end
+      condition means*, which already carves the cap out as separate); decide the chosen-time
+      ceiling first, since it may answer the real need on its own. `SPEC.md` D7 / §7 move with
+      whatever is decided.
 - [ ] **Should a named time be allowed past the 8-hour ceiling?** — maintainer, 2026-09-12.
       **First, the backstop it is not competing with:** `Until I move` and `Until I leave` keep
       the 8-hour backstop, because each depends on something *happening* — a sensor firing, a fix

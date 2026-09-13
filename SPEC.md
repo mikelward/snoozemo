@@ -1302,6 +1302,36 @@ nothing (§7's `MIN_CAP`), on either path.
   "differed only in whether there is a time bound below the backstop": that made a row name one
   thing while the snooze did another, which is the confusion the rows exist to remove.
 
+  **A chosen time is mutually exclusive with the event exits, both directions** (maintainer,
+  2026-09-13). A chosen time already clears both exits (above); the reverse now holds too — tapping
+  `Until I move` (like restoring `Until I leave`) drops any chosen time *and* restores the cap to
+  the 8h failsafe. So `Until I move` carries the failsafe,
+  never a parallel user-chosen end that would otherwise end the snooze at a time behind
+  `Snoozing until you move` — "Until I move should have a failsafe but not a parallel user-chosen
+  end time."
+
+  **The exclusivity is the normal case, not an absolute the display can rely on** (maintainer,
+  2026-09-13, "A"). Two failure paths leave a shortened chosen cap behind an armed exit despite the
+  replacement: a `PARTIAL` end-choice where an exit removal could not persist (below), and a process
+  death mid-replacement. So the countdown gate is `capCountdownShown`, not `capIsEffectiveEnd` — it
+  also shows a cap shortened below the ceiling (`capExpiresAt < capCeilingAt`, which only a chosen
+  time does), so a chosen deadline is shown even behind an exit and the snooze can never end at a
+  time the user cannot see (§4.2; Codex, PR #278). The **seed** stays on `capIsEffectiveEnd`: the top
+  time row opens on the plan, not on a failure-state cap.
+
+  **The `Until I move` cap restore is ordered to fail safe, and surfaces a failure rather than
+  unwinding** (maintainer, 2026-09-13; Codex, PR #278). It *lengthens* the cap (a shortened chosen
+  time back to the ceiling), and its durable writes are ordered so that any interruption leaves the
+  enforced wake *earlier* than the recorded deadline, never later — the mirror of how a *shortening*
+  change is ordered. So the worst an interrupted restore can do is fire early and reschedule to the
+  ceiling; it can never leave the phone quiet past the deadline the record promises. The timer-only
+  intent is cleared in that same durable write, so a retry over an already-armed exit cannot leave a
+  chosen-time flag beside a restored ceiling. And a restore that cannot persist the ceiling **keeps
+  the armed exit and surfaces the failure for a retry** rather than rolling a good exit back off: the
+  exit the user asked for is real, its shortened cap stays visible (the §4.2 display rule) so the
+  snooze is safe and ends early at worst, and the unwinding machinery was itself a source of
+  partial-failure states.
+
   **What stays open is exit-vs-exit exclusivity.** `Until I move` still leaves departure tracking
   armed, so a leave+motion snooze ends on either over the failsafe; whether tapping one exit should
   also clear the *other* exit — and how the user would switch back — is the remaining half of the
