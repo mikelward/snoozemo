@@ -4247,16 +4247,18 @@ question.
   and against the feet/meters locale split (`distanceUnitFor`). User-facing copy;
   US spelling (`meters`, not `metres`), maintainer sign-off before translating.
 
-- [ ] **Should the docs lane include images?** (maintainer, 2026-09-13). The lane
-  policy (`.github/lanes.conf`, engine `mikelward/lanes`) classifies a commit as
-  docs-only from its paths, and `STATES.md`'s diagram SVGs are not `.md`, so a
-  commit that only touches a dev doc and its rendered SVGs still rides the full
-  code lane. Decide whether image types that only ever accompany docs (`.svg`,
-  and doc `.png`) should count toward the docs lane, and whether that can be
-  scoped so it can't be used to slip a real asset change past CI.
+- [x] **Should the docs lane include images?** (maintainer, 2026-09-13; decided
+  2026-09-13, #280). Yes, via a folder allowlist rather than a repo-wide image
+  rule. Developer docs live in `dev-docs/` (`dev-docs/STATES.md` + its SVGs),
+  and `.github/lanes.conf` routes `dev-docs/**` to the docs lane whole, so a
+  dev-doc-plus-diagram change no longer drags the full code lane. Chosen over a
+  repo-wide `**/*.svg`/`**/*.png` rule precisely so nothing CI validates can slip
+  past: images outside `dev-docs/` (drawables, packaged assets, Roborazzi
+  snapshots, the drift-checked `docs/play-store/*.png`) stay code by default,
+  with no carve-out to forget.
 
 - [ ] **Show the Wi-Fi-grace countdown** (maintainer, 2026-09-13). The decided
-  design (`STATES.md`) is for a `WIFI_GRACE` card to name "Wi-Fi lost" and count
+  design (`dev-docs/STATES.md`) is for a `WIFI_GRACE` card to name "Wi-Fi lost" and count
   down to the 5-minute grace deadline, not the passive failsafe. It isn't built:
   the ongoing card is assembled from the snooze record alone, which carries no
   grace deadline, so `graceDeadlineMs` has to be threaded from presence state into
