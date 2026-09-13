@@ -34,15 +34,34 @@ internal data class TileSnapshot(
     val bootReference: Long? = null,
 ) {
 
-    fun subtitle(context: Context): String? = when {
-        !snoozing -> null
-        timerOnly -> context.getString(R.string.tile_timer_only, remaining(context))
-        else -> remaining(context)
-    }
+    /**
+     * Whether the shade shows the cap countdown at all: only when a snooze is
+     * running *and* [timerOnly] — a settled timer with no armed event exit. On a
+     * watched (departure or motion) snooze the cap is a passive eight-hour
+     * failsafe, so the shade carries no time rather than fronting a deadline the
+     * snooze does not expect to reach (SPEC.md §4.2).
+     *
+     * This is the tile's read of `ActiveSnooze.capIsEffectiveEnd`, the same
+     * question the status line and the ongoing notification gate their countdown
+     * on — they agree for a settled record, with [claimsTimerOnly] resolving the
+     * transient settling window here from the persisted record, since the tile
+     * has no live controller to ask.
+     *
+     * A pure val so the decision is unit-tested without a `Context`; [subtitle]
+     * and [stateDescription] map it to strings.
+     */
+    internal val showsCountdown: Boolean get() = snoozing && timerOnly
+
+    fun subtitle(context: Context): String? =
+        if (showsCountdown) context.getString(R.string.tile_timer_only, remaining(context)) else null
 
     fun stateDescription(context: Context): String = when {
         !snoozing -> context.getString(R.string.tile_state_off)
-        else -> context.getString(R.string.tile_state_on, remaining(context))
+        showsCountdown -> context.getString(R.string.tile_state_on, remaining(context))
+        // A watched snooze drops the countdown here too; TalkBack gets the plain
+        // on-state, the same rendering the optimistic paint already uses when it
+        // has no countdown to voice.
+        else -> context.getString(R.string.tile_snoozing)
     }
 
     /**
@@ -53,13 +72,12 @@ internal data class TileSnapshot(
      * English inside every locale.
      */
     private fun remaining(context: Context): String {
+        // The `tile_remaining_hours` resource always, passing the hours field
+        // even at zero — so it renders "0h 45m left" rather than "45m left"
+        // (maintainer, 2026-09-13), the same always-hours form the main screen
+        // uses, so the shade and the app never state the remaining time two ways.
         val minutes = Duration.ofMillis(remainingMillis()).toMinutes().coerceAtLeast(1)
-        val hours = minutes / 60
-        return if (hours > 0) {
-            context.getString(R.string.tile_remaining_hours, hours, minutes % 60)
-        } else {
-            context.getString(R.string.tile_remaining_minutes, minutes)
-        }
+        return context.getString(R.string.tile_remaining_hours, minutes / 60, minutes % 60)
     }
 
     /**
@@ -144,26 +162,26 @@ internal data class TileSnapshot(
                 TrackingMode.DURATION_ONLY -> true
                 // Watched, by something, so the countdown stands unqualified.
                 TrackingMode.FULL, TrackingMode.WIFI_ONLY, TrackingMode.WIFI_GRACE -> false
-                // The anchor has not landed *yet*. Not "nothing is watching" —
-                // the absence of an answer, so the shade shows the countdown
-                // without a qualifier rather than guessing at one. The ongoing
-                // notification beside it names what it is waiting on; saying
-                // `Timer only` here would be the contradictory pair this change
-                // exists to remove.
+                // The anchor has not landed *yet*, so this is not a settled
+                // `Timer only` claim: `false`, which drops the tile countdown
+                // entirely (`showsCountdown = snoozing && timerOnly`). That is
+                // the same as every other surface while the cap is the failsafe
+                // rather than the plan — during settling the cap is
+                // `startedAt + DEFAULT_CAP`, the backstop, not a chosen deadline,
+                // so fronting a countdown to it would front a plan the snooze has
+                // not made (SPEC.md §4.2, §491-494). The ongoing notification
+                // beside the tile names what the arm is waiting on. (This reader
+                // used to return an unqualified countdown here; the
+                // drop-the-failsafe decision made the three surfaces agree, and a
+                // tile countdown during settling was the one that no longer did —
+                // Codex, PR #278.)
                 //
-                // Unless the claim has outlived the capture that wrote it. A
-                // capture dies with its process and the record does not, and
-                // this reader is the one that cannot tell: it reads the
-                // preferences file directly, deliberately, because binding a
-                // service to paint the shade would put IPC on the path that has
-                // to feel instant. So the window does the telling instead —
-                // and past it nothing is watching, which is exactly what the
-                // qualifier says (Codex, PR #221).
-                //
-                // Both settling values read the same here. Which half the arm
-                // is still waiting on decides the *notification's* wording, not
-                // whether anything is pending — and pending is the only
-                // question the shade is asking.
+                // Past the window the claim is settled: a capture dies with its
+                // process while the record does not, and this reader — reading the
+                // preferences file directly so the shade stays instant — cannot
+                // tell a live capture from a dead one except by the window. Past
+                // it, nothing is watching, which is exactly `Timer only` (Codex,
+                // PR #221).
                 TrackingMode.SETTLING ->
                     !TrackingMode.settlingStillStands(startedAtMillis, nowMillis)
                 null -> true

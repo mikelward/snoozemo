@@ -8,9 +8,9 @@
     <string name="tile_timer_only">Timer only · %1$s</string>
     <string name="tile_state_off">Off</string>
     <string name="tile_state_on">Snoozing, %1$s</string>
-    <!-- The countdown, with an hour or more left. Abbreviated because Quick
-         Settings truncates the subtitle hard; %1$d is hours, %2$d minutes. -->
+    <!-- The remaining-time countdown; the hours field is always shown, even at
+         zero ("0h 45m left"), so the minutes can't be misread as a distance.
+         Abbreviated because Quick Settings truncates the subtitle hard;
+         %1$d is hours, %2$d minutes. -->
     <string name="tile_remaining_hours">%1$dh %2$dm left</string>
-    <!-- The countdown inside the last hour. -->
-    <string name="tile_remaining_minutes">%1$dm left</string>
 </resources>

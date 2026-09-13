@@ -1134,6 +1134,7 @@ class MainScreenScreenshotTest {
                 snoozing = true,
                 trackingMode = TrackingMode.DURATION_ONLY,
                 remaining = Duration.ofHours(3),
+                capCountdownShown = true,
                 degradation = null,
                 endChoice = EndChoiceUiState(
                     condition = EndCondition(
@@ -1201,7 +1202,10 @@ class MainScreenScreenshotTest {
         // preferred wherever it fits (maintainer, 2026-09-05).
         composeRule.onNodeWithText("Snoozing until you leave").assertExists()
         composeRule.onNodeWithText("Ends when you leave").assertDoesNotExist()
-        composeRule.onNodeWithText("3h 40m left").assertExists()
+        // Dropped: this snooze ends on departure, so its cap is a passive
+        // eight-hour failsafe, not the plan. The `Xh Ym left` line is shown only
+        // when the cap is the effective end (§4.2, `capIsEffectiveEnd`).
+        composeRule.onNodeWithText("3h 40m left").assertDoesNotExist()
         // The same slot, not a second line — a screen showing both at once
         // would contradict itself.
         composeRule.onNodeWithText("Not snoozing").assertDoesNotExist()
@@ -1493,7 +1497,9 @@ class MainScreenScreenshotTest {
         composeRule.onNodeWithText("Snoozing until you move").assertExists()
         composeRule.onNodeWithText("Snoozing until you leave").assertDoesNotExist()
         composeRule.onNodeWithText("Ends when you leave, or when you move").assertDoesNotExist()
-        composeRule.onNodeWithText("3h 40m left").assertExists()
+        // Dropped: a motion exit ends the snooze on movement, not the clock, so
+        // its cap is a passive failsafe and the countdown is not shown (§4.2).
+        composeRule.onNodeWithText("3h 40m left").assertDoesNotExist()
         // Departure information, on a snooze that does not report departure:
         // naming one exit and then putting a number on a different one is the
         // same inconsistency from a third direction (Codex, PR #263).
@@ -1537,7 +1543,9 @@ class MainScreenScreenshotTest {
         composeRule.onNodeWithText("Wi-Fi only").assertDoesNotExist()
         composeRule.onNodeWithText("Wi-Fi only — no location, or when you move")
             .assertDoesNotExist()
-        composeRule.onNodeWithText("45m left").assertExists()
+        // Dropped: a motion exit ends the snooze on movement, so the cap is a
+        // passive failsafe and the countdown is not shown (§4.2).
+        composeRule.onNodeWithText("0h 45m left").assertDoesNotExist()
     }
 
     /**
@@ -1606,6 +1614,7 @@ class MainScreenScreenshotTest {
                 snoozing = true,
                 trackingMode = TrackingMode.DURATION_ONLY,
                 remaining = Duration.ofHours(8),
+                capCountdownShown = true,
                 endsAtLabel = time,
                 degradation = null,
                 lastOutcome = null,
@@ -1654,6 +1663,10 @@ class MainScreenScreenshotTest {
                 snoozing = true,
                 trackingMode = TrackingMode.DURATION_ONLY,
                 remaining = Duration.ofHours(8),
+                // A motion snooze at the failsafe ceiling (8h): the cap is the
+                // passive backstop, not a shortened chosen deadline, so the
+                // countdown is dropped.
+                capCountdownShown = false,
                 endsAtLabel = time,
                 endsOnMotion = true,
                 degradation = null,
@@ -1753,8 +1766,11 @@ class MainScreenScreenshotTest {
         // satisfied by `Snoozing until you leave`.
         composeRule.onNodeWithText("Snoozing").assertExists()
         composeRule.onNodeWithText("Wi-Fi only").assertExists()
-        // Under an hour left, so the minutes-only form — no "0h" leaking in.
-        composeRule.onNodeWithText("45m left").assertExists()
+        // Dropped: this snooze ends on departure, so its cap is a passive
+        // failsafe and the countdown is not shown here (§4.2). The minutes-only
+        // formatting of `remainingText` is exercised on a timer-only fixture,
+        // where the countdown does show — see the minutes-only test below.
+        composeRule.onNodeWithText("0h 45m left").assertDoesNotExist()
     }
 
     @Test
@@ -1775,6 +1791,7 @@ class MainScreenScreenshotTest {
                 snoozing = true,
                 trackingMode = TrackingMode.DURATION_ONLY,
                 remaining = Duration.ofHours(8),
+                capCountdownShown = true,
                 endsAtLabel = time,
                 degradation = null,
                 lastOutcome = null,
@@ -1801,6 +1818,80 @@ class MainScreenScreenshotTest {
         composeRule.onNodeWithText("8h 0m left").assertExists()
     }
 
+    @Test
+    fun `a timer-only snooze under an hour still shows the hours field`() {
+        // The positive half of §4.2's countdown gate: when the cap *is* the
+        // effective end, the `Xh Ym left` line shows — and under an hour it keeps
+        // the hours field at zero (`0h 45m left`) rather than dropping to a bare
+        // `45m left`, so the countdown can't be misread as the `200 m` departure
+        // distance (maintainer, 2026-09-13). No snapshot: the assertion is the
+        // text, not a second recording of a layout the folded-timer test captures.
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.DURATION_ONLY,
+                remaining = Duration.ofMinutes(45),
+                capCountdownShown = true,
+                degradation = null,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("0h 45m left").assertExists()
+    }
+
+    @Test
+    fun `a motion snooze with a shortened cap shows both its exit and the countdown`() {
+        // Finding-3 on the status line: a chosen time whose motion-exit removal
+        // could not persist, or an interrupted "Until I move," leaves a shortened
+        // cap behind an armed exit. The sentence names the exit *and* the `Xh Ym
+        // left` line shows the chosen deadline the caller flagged with
+        // `capCountdownShown` — neither hides the other (SPEC.md §4.4). No
+        // snapshot: the assertion is the two lines, not a new layout.
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.DURATION_ONLY,
+                remaining = Duration.ofHours(3).plusMinutes(40),
+                capCountdownShown = true,
+                endsOnMotion = true,
+                degradation = null,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Snoozing until you move").assertExists()
+        composeRule.onNodeWithText("3h 40m left").assertExists()
+    }
+
     /**
      * The reason travels with the mode, not just to the notification.
      *
@@ -1819,6 +1910,7 @@ class MainScreenScreenshotTest {
                 snoozing = true,
                 trackingMode = TrackingMode.DURATION_ONLY,
                 remaining = Duration.ofHours(8),
+                capCountdownShown = true,
                 degradation = DegradationCause.NO_LOCATION_FIX,
                 lastOutcome = null,
                 crashPending = false,
@@ -1965,6 +2057,7 @@ class MainScreenScreenshotTest {
                 snoozing = true,
                 trackingMode = TrackingMode.DURATION_ONLY,
                 remaining = Duration.ofHours(8),
+                capCountdownShown = true,
                 degradation = DegradationCause.NO_LOCATION_IN_BACKGROUND,
                 lastOutcome = null,
                 crashPending = false,
@@ -2006,6 +2099,7 @@ class MainScreenScreenshotTest {
                 snoozing = true,
                 trackingMode = TrackingMode.DURATION_ONLY,
                 remaining = Duration.ofHours(8),
+                capCountdownShown = true,
                 endsAtLabel = time,
                 degradation = DegradationCause.NOTHING_WATCHING,
                 lastOutcome = null,
@@ -2859,6 +2953,12 @@ class MainScreenScreenshotTest {
                 snoozing = true,
                 trackingMode = TrackingMode.SETTLING,
                 remaining = Duration.ofHours(8),
+                // Settling surfaces the failsafe: nothing can detect a departure
+                // yet, so the cap is the only end and its time is shown. The real
+                // record computes this true for SETTLING (`ActiveSnoozeTest`);
+                // passed explicitly here so this screenshot is a valid oracle for
+                // the settling countdown, not silently the old no-countdown state.
+                capCountdownShown = true,
                 degradation = null,
                 lastOutcome = null,
                 crashPending = false,
@@ -2876,6 +2976,7 @@ class MainScreenScreenshotTest {
         }
 
         composeRule.onNodeWithText("Waiting for location").assertExists()
+        composeRule.onNodeWithText("8h 0m left").assertExists()
         composeRule.onNodeWithText("Timer only").assertDoesNotExist()
     }
 
@@ -2891,6 +2992,7 @@ class MainScreenScreenshotTest {
                 snoozing = true,
                 trackingMode = TrackingMode.DURATION_ONLY,
                 remaining = Duration.ofHours(8),
+                capCountdownShown = true,
                 degradation = DegradationCause.LOCATION_PERMISSION_GONE,
                 lastOutcome = null,
                 crashPending = false,
