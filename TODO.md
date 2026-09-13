@@ -1939,6 +1939,18 @@ the point is that every other line of the app is worthless if it isn't true.
       `extend`, `applyChosenEnd`'s rollback, `restoreCapToFailsafe`, and the backstop
       path at once, rather than gating each by origin. Planned as its own PR; the maintainer chose
       to land it in #278 instead (2026-09-13, "B"), heavily tested.
+- [ ] **Drop the `Timer only` qualifier from the tile — it adds no value** (maintainer,
+      2026-09-13). For a timer-only (chosen-time) snooze the tile subtitle currently reads
+      `Timer only • 1h 0m left`; the `Timer only` half is redundant and less useful than the time.
+      Preferred replacement: just the countdown, `1h 0m left`. Acceptable alternatives: copy the
+      main-screen headline (`Snoozing until 22:00`) or a truncated form (`until 22:00`). This
+      **reverses** the SPEC §4.2 position that the tile keeps its narrower `Timer only` qualifier
+      (`claimsTimerOnly`) rather than a bare countdown "it has no copy for" — the maintainer's point
+      is the tile agreed to be short and then kept the redundant half; the time is the copy. Its own
+      PR: update `TileSnapshot.subtitle`, the `SPEC.md` §4.2 tile note and its rationale, the tile
+      screenshot test, and verify on a device (Quick Settings truncates aggressively — the tile is
+      the tightest copy constraint in the app). Leave the status line and notification as they are;
+      this is only the tile.
 
 ## Phase 5 (M5) — Edge cases and degraded modes
 
