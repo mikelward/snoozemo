@@ -35,6 +35,7 @@ stateDiagram-v2
     WIFI_ONLY --> DURATION_ONLY: location grant or switch lost
 
     WIFI_ONLY --> WIFI_GRACE: anchor Wi-Fi dropped, departure unconfirmable (§6.6)
+    FULL --> WIFI_GRACE: anchor Wi-Fi gone, then the fix fails (§6.6)
     WIFI_GRACE --> WIFI_ONLY: Wi-Fi or fix recovers
     WIFI_GRACE --> [*]: grace elapses (ends)
 
@@ -53,6 +54,12 @@ stateDiagram-v2
         it no longer ends the snooze (maintainer, 2026-08-30).
     end note
 ```
+
+`WIFI_GRACE` needs both signals gone — the anchor Wi-Fi dropped *and* no usable
+fix to confirm a departure. That's usually reached from `WIFI_ONLY`, but also
+directly from `FULL`: losing Wi-Fi alone keeps a snooze in `FULL` (its fix still
+confirms departures), so grace arms only once that fix later fails — and the
+snooze was never on anchor Wi-Fi, so it never became `WIFI_ONLY`.
 
 Degradation carries a *reason* (`DegradationCause`) so the notification can say
 which kind of degraded it is — `NO_LOCATION_FIX` (location broken) reads

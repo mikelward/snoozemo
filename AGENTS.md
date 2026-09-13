@@ -37,6 +37,9 @@ nothing.
   helper names, and which composable holds a flag are code, not spec.
 - Keep `TODO.md` current: check items off as they land, add newly discovered work to the
   right phase.
+- **Developer-facing docs (state models, diagrams, dev notes) live in `dev-docs/`;
+  `docs/` is user/store-facing.** `dev-docs/` is allowlisted whole to the docs lane
+  (`.github/lanes.conf`), so a dev-doc-plus-diagram change skips the full code lane.
 - **A decision that changed belongs in `SPEC.md` with its reason, not silently swapped.**
   The spec is written as a chain of decisions and rationale (D1–D9, §3's distribution
   argument); a reversal that replaces the conclusion without touching the reasoning leaves
