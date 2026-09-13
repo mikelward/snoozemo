@@ -52,9 +52,14 @@ class EndChoiceControllerTest {
     @org.junit.Before
     fun clearChannel() = EndChoiceOutcome.reset()
 
-    private fun controller(seams: Seams, offersToStart: Boolean = false) = EndChoiceController(
+    private fun controller(
+        seams: Seams,
+        offersToStart: Boolean = false,
+        seedsFromRunningEnd: Boolean = false,
+    ) = EndChoiceController(
         surface = "a test host",
         offersToStart = offersToStart,
+        seedsFromRunningEnd = seedsFromRunningEnd,
         currentRecord = { seams.live },
         chooseEnd = { at, requestId, forSnooze ->
             seams.sent = at
@@ -99,13 +104,18 @@ class EndChoiceControllerTest {
         startedAt: Instant,
         capIn: Duration = ActiveSnooze.DEFAULT_CAP,
         ceilingIn: Duration = capIn,
+        mode: TrackingMode = TrackingMode.DURATION_ONLY,
+        endsOnDeparture: Boolean = true,
+        endsOnMotion: Boolean = false,
     ) =
         ActiveSnooze(
             anchor = Anchor(capturedAt = startedAt, ssid = "ExampleWifi"),
             startedAt = startedAt,
             capExpiresAt = startedAt.plus(capIn),
-            mode = TrackingMode.DURATION_ONLY,
+            mode = mode,
             capCeilingAt = startedAt.plus(ceilingIn),
+            endsOnDeparture = endsOnDeparture,
+            endsOnMotion = endsOnMotion,
         )
 
     private fun seeded(seams: Seams): EndChoiceController =
@@ -114,6 +124,207 @@ class EndChoiceControllerTest {
     /** The idle screen's offer: a host that offers to start, seeded from nothing. */
     private fun offerToStart(seams: Seams): EndChoiceController =
         controller(seams, offersToStart = true).also { it.seed(null, seams.now) }
+
+    /** The main-screen rows: seed from the running end, offer to start too. */
+    private fun rows(seams: Seams): EndChoiceController =
+        controller(seams, offersToStart = true, seedsFromRunningEnd = true)
+
+    @Test
+    fun `a chosen timer opens on its own end`() {
+        // A pure timer (no departure, no motion) shortened to a two-hour cap:
+        // time is what ends it, so the row opens on that end (startedAt + 2h),
+        // not an hour out (SPEC.md §4.4, maintainer, 2026-09-13).
+        val seams = Seams(now)
+        val startedAt = now.minus(Duration.ofHours(1))
+        val record = snoozeAt(
+            startedAt,
+            capIn = Duration.ofHours(2),
+            ceilingIn = ActiveSnooze.DEFAULT_CAP,
+            endsOnDeparture = false,
+        )
+        val controller = rows(seams)
+
+        controller.seed(record, seams.now)
+
+        assertEquals(record.capExpiresAt, controller.endCondition!!.endsAt)
+        // Bounded by the snooze's own backstop, and the `+` can still climb to
+        // it — the whole point of the ceiling being the backstop, not the cap.
+        assertEquals(startedAt.plus(ActiveSnooze.DEFAULT_CAP), controller.endCondition!!.ceiling)
+        assertTrue(controller.endCondition!!.canStepUp)
+    }
+
+    @Test
+    fun `an active departure snooze opens an hour out, not on its backstop`() {
+        // Ends on departure with a fix (FULL): its cap is a passive eight-hour
+        // backstop, not a time to front, so the row opens an hour out.
+        val seams = Seams(now)
+        val record = snoozeAt(now, mode = TrackingMode.FULL, endsOnDeparture = true)
+        val controller = rows(seams)
+
+        controller.seed(record, seams.now)
+
+        // 13:12 + 1h = 14:12, rounded to 14:00 — not now + DEFAULT_CAP.
+        assertEquals(Instant.parse("2026-01-01T14:00:00Z"), controller.endCondition!!.endsAt)
+    }
+
+    @Test
+    fun `a promoted backstop opens on that end when departure lost its fix`() {
+        // Ends on departure but the mode has degraded to DURATION_ONLY — no fix,
+        // so the backstop is now the effective end and the row shows it
+        // (SPEC.md §4.4).
+        val seams = Seams(now)
+        val record = snoozeAt(now, mode = TrackingMode.DURATION_ONLY, endsOnDeparture = true)
+        val controller = rows(seams)
+
+        controller.seed(record, seams.now)
+
+        assertEquals(record.capExpiresAt, controller.endCondition!!.endsAt)
+    }
+
+    @Test
+    fun `a motion snooze opens an hour out, not on its backstop`() {
+        // A motion exit can still fire regardless of a location fix, so its cap
+        // is a backstop too — the row opens an hour out.
+        val seams = Seams(now)
+        val record = snoozeAt(now, mode = TrackingMode.DURATION_ONLY, endsOnMotion = true)
+        val controller = rows(seams)
+
+        controller.seed(record, seams.now)
+
+        assertEquals(Instant.parse("2026-01-01T14:00:00Z"), controller.endCondition!!.endsAt)
+    }
+
+    @Test
+    fun `a timer within the floor falls back to the hour-out seed`() {
+        // A pure timer ending in ten minutes: its end is unsettable (below the
+        // 30-minute floor), so the row opens an hour out rather than clamping
+        // onto the floor the service would then refuse a moment later (Codex,
+        // PR #277).
+        val seams = Seams(now)
+        val record = snoozeAt(
+            now,
+            capIn = Duration.ofMinutes(10),
+            ceilingIn = ActiveSnooze.DEFAULT_CAP,
+            endsOnDeparture = false,
+        )
+        val controller = rows(seams)
+
+        controller.seed(record, seams.now)
+
+        assertEquals(Instant.parse("2026-01-01T14:00:00Z"), controller.endCondition!!.endsAt)
+    }
+
+    @Test
+    fun `an untouched row follows the cap when it moves, a stepped one does not`() {
+        // A cap moved elsewhere (a +30, a degradation) must not leave an
+        // untouched row promising the old end; a stepped value is the user's
+        // and is left alone (Codex, PR #277).
+        val seams = Seams(now)
+        val startedAt = now.minus(Duration.ofHours(1))
+        val twoHour = snoozeAt(
+            startedAt,
+            capIn = Duration.ofHours(2),
+            ceilingIn = ActiveSnooze.DEFAULT_CAP,
+            endsOnDeparture = false,
+        )
+        val controller = rows(seams).also { it.seed(twoHour, seams.now) }
+        assertEquals(twoHour.capExpiresAt, controller.endCondition!!.endsAt)
+
+        // Untouched: the cap slides out half an hour, and the row follows.
+        val laterCap = snoozeAt(
+            startedAt,
+            capIn = Duration.ofHours(2).plusMinutes(30),
+            ceilingIn = ActiveSnooze.DEFAULT_CAP,
+            endsOnDeparture = false,
+        )
+        controller.reconcile(laterCap, seams.now)
+        assertEquals(laterCap.capExpiresAt, controller.endCondition!!.endsAt)
+
+        // Once the user steps, the value is theirs: a further cap change leaves
+        // it where they put it.
+        controller.stepDown()
+        val stepped = controller.endCondition!!.endsAt
+        val laterStill = snoozeAt(
+            startedAt,
+            capIn = Duration.ofHours(3),
+            ceilingIn = ActiveSnooze.DEFAULT_CAP,
+            endsOnDeparture = false,
+        )
+        controller.reconcile(laterStill, seams.now)
+        assertEquals(stepped, controller.endCondition!!.endsAt)
+    }
+
+    @Test
+    fun `an untouched promoted-backstop row reverts to hour-out when departure recovers`() {
+        // Departure degraded (mode DURATION_ONLY) promotes the backstop onto the
+        // untouched row; when a later fix restores FULL, time no longer ends the
+        // snooze, so the row reverts to the hour-out seed rather than staying
+        // stuck on the passive backstop (Codex, PR #277).
+        val seams = Seams(now)
+        val degraded = snoozeAt(now, mode = TrackingMode.DURATION_ONLY, endsOnDeparture = true)
+        val controller = rows(seams).also { it.seed(degraded, seams.now) }
+        assertEquals(degraded.capExpiresAt, controller.endCondition!!.endsAt)
+
+        val recovered = snoozeAt(now, mode = TrackingMode.FULL, endsOnDeparture = true)
+        controller.reconcile(recovered, seams.now)
+
+        // 13:12 + 1h = 14:12, rounded to 14:00 — the hour-out seed, not the backstop.
+        assertEquals(Instant.parse("2026-01-01T14:00:00Z"), controller.endCondition!!.endsAt)
+    }
+
+    @Test
+    fun `a restored promoted-backstop row still reverts to hour-out on recovery`() {
+        // The recovery revert survives an activity recreation without a saved
+        // flag: restore puts the backstop condition and the record back, and the
+        // reconcile derives "on the snooze's own end" from them (Codex, PR #277).
+        val seams = Seams(now)
+        val backstop = now.plus(ActiveSnooze.DEFAULT_CAP)
+        val controller = rows(seams)
+        controller.restore(
+            condition = EndCondition(
+                endsAt = backstop,
+                floor = now.plus(ActiveSnooze.MIN_CAP),
+                ceiling = backstop,
+            ),
+            wasCommitting = false,
+            failed = false,
+            stepped = false,
+            configurationChange = true,
+            requestId = 0L,
+            offeredFor = now,
+        )
+
+        val recovered = snoozeAt(now, mode = TrackingMode.FULL, endsOnDeparture = true)
+        controller.reconcile(recovered, seams.now)
+
+        assertEquals(Instant.parse("2026-01-01T14:00:00Z"), controller.endCondition!!.endsAt)
+    }
+
+    @Test
+    fun `the main-screen rows still open an hour out with no snooze to name`() {
+        // The idle offer to start has no snooze end to seed from, so it keeps
+        // the hour-out seed even on the host that seeds running snoozes from
+        // their end.
+        val seams = Seams(now)
+        val controller = controller(seams, offersToStart = true, seedsFromRunningEnd = true)
+
+        controller.seed(null, seams.now)
+
+        // 13:12 + 1h = 14:12, rounded to 14:00.
+        assertEquals(Instant.parse("2026-01-01T14:00:00Z"), controller.endCondition!!.endsAt)
+    }
+
+    @Test
+    fun `the arm-time sheet keeps its hour-out seed over a running snooze`() {
+        // The sheet answers "how should this new snooze end?" and stays seeded
+        // an hour out (SPEC.md §4.4): its host leaves seedsFromRunningEnd false,
+        // so seeding over a fresh arm does not open on the eight-hour backstop.
+        val seams = Seams(now)
+        val controller = seeded(seams)
+
+        // 13:12 + 1h = 14:12, rounded to 14:00 — not now + DEFAULT_CAP.
+        assertEquals(Instant.parse("2026-01-01T14:00:00Z"), controller.endCondition!!.endsAt)
+    }
 
     @Test
     fun `an offer to start names no snooze and caps at the default`() {

@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.EndCondition
 import app.snoozemo.core.SnoozeDebugLog
+import app.snoozemo.core.TrackingMode
 import java.time.Instant
 import java.time.ZoneId
 
@@ -106,6 +107,22 @@ internal class EndChoiceController(
      * [reconcile] still means the offer is over.
      */
     private val offersToStart: Boolean = false,
+    /**
+     * Whether seeding over a running snooze opens the time row on that snooze's
+     * own end — but only when *time* is what actually ends it (SPEC.md §4.4,
+     * maintainer, 2026-09-13). See [runningEndToSeed] for the exact test.
+     *
+     * The main screen's rows set this: they stand for as long as a snooze does,
+     * so the top row shows what the snooze is set to end at, which the user can
+     * then step from — for a chosen timer, or a backstop promoted to the end
+     * because departure lost its fix. A snooze still ending on departure (with a
+     * fix) or motion keeps the hour-out seed: its cap is a passive eight-hour
+     * backstop, not a time to open on. The arm-time sheets leave this false —
+     * the sheet answers "how should this *new* snooze end?" and is seeded an
+     * hour out on purpose — and an offer to start (a null record) has no snooze
+     * end to seed from, so it keeps the hour-out seed too.
+     */
+    private val seedsFromRunningEnd: Boolean = false,
     /** Now, injectable so the refusal re-seed is reachable from a JVM test. */
     private val clock: () -> Instant = { Instant.ofEpochMilli(System.currentTimeMillis()) },
     /** The zone the offered times are rounded in — the user's own. */
@@ -175,12 +192,13 @@ internal class EndChoiceController(
     /**
      * Whether the standing offer's time is the user's rather than the clock's.
      *
-     * Only an offer to start needs this. A running snooze's offer is anchored
-     * to a record and is left alone by [reconcile] unless it goes stale, but
-     * an offer to *start* is rebuilt on every minute tick ([refreshStart]) —
-     * which was free while its steppers armed on the spot and there was
-     * nothing to preserve. Now that they step, a rebuild would throw the
-     * user's chosen time away once a minute (maintainer, 2026-09-12).
+     * An offer to *start* is rebuilt on every minute tick ([refreshStart]) —
+     * free while its steppers armed on the spot, but now that they step a
+     * rebuild would throw the user's chosen time away once a minute (maintainer,
+     * 2026-09-12). A seed-from-end running row uses it the same way: [reconcile]
+     * chases the snooze's moving end onto an untouched row but leaves a stepped
+     * one alone (Codex, PR #277), so a time the user dialed in survives every
+     * record read that changed the cap under it.
      */
     var steppedByUser by mutableStateOf(false)
         private set
@@ -220,10 +238,47 @@ internal class EndChoiceController(
         // that used to need a carried flag (Codex, PR #267) — draws the line
         // again the moment the host reads that snooze's record back.
         offerFor = record?.startedAt
-        endCondition = EndCondition.seededAt(now, EndCondition.ceilingFor(record, now), zone())
+        val ceiling = EndCondition.ceilingFor(record, now)
+        // Over a running snooze on a host that asks for it, open the row on the
+        // snooze's own end when *time* is what actually ends it — a chosen
+        // timer, or a backstop promoted to the effective end because departure
+        // lost its fix ([runningEndToSeed]). A snooze still ending on departure
+        // or motion keeps the hour-out seed: its cap is a passive backstop, not
+        // a time to open on (SPEC.md §4.4). An offer to start has no snooze end
+        // to seed from and keeps the hour-out seed too.
+        val runningEnd = if (seedsFromRunningEnd) runningEndToSeed(record, now) else null
+        endCondition = if (runningEnd != null) {
+            EndCondition.seededAtEnd(now, runningEnd, ceiling)
+        } else {
+            EndCondition.seededAt(now, ceiling, zone())
+        }
         commitFailed = false
         // A fresh offer is the clock's again until the user moves it.
         steppedByUser = false
+    }
+
+    /**
+     * The end to open the running-snooze row on, or null to fall back to the
+     * hour-out seed (SPEC.md §4.4, maintainer, 2026-09-13).
+     *
+     * Non-null only when *time* is what actually ends this snooze: its
+     * [ActiveSnooze.effectiveMode] is `DURATION_ONLY` — a chosen timer, or a
+     * backstop promoted to the effective end because departure lost its fix —
+     * and it carries no motion exit. A snooze still ending on departure (with a
+     * fix) or on motion has a passive backstop, not a time the user set, so it
+     * takes the hour-out seed rather than opening on eight arbitrary hours.
+     *
+     * The floor guard is why this returns the end rather than letting
+     * [EndCondition.seededAtEnd] clamp it: a cap that has fallen within
+     * [ActiveSnooze.MIN_CAP] would clamp to exactly the floor, which the
+     * service's own fresher floor then refuses a moment later — a dead tap that
+     * reseeds to the same boundary (Codex, PR #277). Below the floor the end is
+     * unsettable anyway, so the hour-out seed is the honest fallback.
+     */
+    private fun runningEndToSeed(record: ActiveSnooze?, now: Instant): Instant? {
+        if (record == null || record.endsOnMotion) return null
+        if (record.effectiveMode != TrackingMode.DURATION_ONLY) return null
+        return record.capExpiresAt.takeIf { it.isAfter(now.plus(ActiveSnooze.MIN_CAP)) }
     }
 
     /**
@@ -478,6 +533,35 @@ internal class EndChoiceController(
         if (standing.endsAt.isBefore(now.plus(ActiveSnooze.MIN_CAP))) {
             SnoozeDebugLog.event("end-condition sheet reseeded: its offer had gone stale")
             seed(record, now)
+            return
+        }
+        // An untouched row keeps matching what the snooze effectively ends on
+        // (Codex, PR #277). Three transitions move it, and nothing else does:
+        //  - the effective end moved (a +30, another end choice) — follow it;
+        //  - departure degraded, promoting the backstop onto the row — show it;
+        //  - departure recovered, so time no longer ends the snooze — revert to
+        //    the hour-out seed, or the row stays stuck on a backstop that is a
+        //    passive failsafe again.
+        // A stable hour-out offer (not on the snooze's end) is left where it was
+        // seeded rather than drifting each record read. A stepped value is the
+        // user's, and a refusal still showing is left to stand.
+        //
+        // Whether the row is *on* the snooze's own end is derived, not flagged:
+        // a seed-from-end row's `endsAt` equals `capExpiresAt` exactly (its end
+        // is above the floor and at or below the ceiling, so it clamps to
+        // itself), and an hour-out offer does not. Deriving it rather than
+        // carrying a `seededFromEnd` flag is what makes this survive an activity
+        // recreation for free — `restore` puts the condition and the record back,
+        // and this reads the answer off them — instead of needing the flag saved
+        // too (Codex, PR #277, the recovery finding's configuration-change twin).
+        if (seedsFromRunningEnd && !steppedByUser && !commitFailed && record != null) {
+            val end = runningEndToSeed(record, now)
+            val onOwnEnd = standing.endsAt == record.capExpiresAt
+            val shouldReseed = if (end != null) end != standing.endsAt else onOwnEnd
+            if (shouldReseed) {
+                SnoozeDebugLog.event("end-condition rows reseeded: the running snooze's effective end changed")
+                seed(record, now)
+            }
         }
     }
 

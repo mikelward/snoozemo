@@ -164,6 +164,34 @@ data class EndCondition(
         }
 
         /**
+         * The row seeded on a snooze's own [end] — the value the top row opens
+         * on when *time* is what ends the running snooze (SPEC.md §4.4). Whether
+         * that is the case is the caller's decision
+         * (`EndChoiceController.runningEndToSeed`); this is the arithmetic once
+         * it is made.
+         *
+         * Clamped to the same [floor] and [ceiling] a fresh seed is, so an end
+         * that has fallen inside the floor or somehow sits above the backstop
+         * cannot open the row on a time the service would refuse. The clamp
+         * order is [seededAt]'s and for its reason — ceiling last, so a ceiling
+         * below the floor cannot leave `endsAt` past the cap.
+         *
+         * **Not rounded to the half hour, unlike [seededAt].** The hour-out seed
+         * is rounded because it is a fresh suggestion and a ragged one reads as a
+         * bug; this is a real value the snooze already holds — a chosen timer
+         * (already on a half hour), a promoted backstop, or a chosen meeting
+         * end — and rounding it would misreport when the snooze actually ends.
+         */
+        fun seededAtEnd(now: Instant, end: Instant, ceiling: Instant): EndCondition {
+            val floor = now.plus(ActiveSnooze.MIN_CAP)
+            return EndCondition(
+                endsAt = end.coerceAtLeast(floor).coerceAtMost(ceiling),
+                floor = floor,
+                ceiling = ceiling,
+            )
+        }
+
+        /**
          * [instant] moved to whichever :00 or :30 is closest **in [zone]**,
          * halves rounding up.
          *

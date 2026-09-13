@@ -216,4 +216,46 @@ class EndConditionTest {
             condition.endsAt.atZone(zone).minute % 30,
         )
     }
+
+    // The main-screen rows over a running snooze open on that snooze's own end
+    // rather than an hour out (SPEC.md §4.4), and unlike the hour-out seed the
+    // value is shown as-is rather than rounded.
+
+    @Test
+    fun `seeds a running snooze on its own end, unrounded`() {
+        // A snooze ending at a ragged 15:37 opens the row at 15:37, not at a
+        // rounded 15:30 that would misreport the end it is running to.
+        val now = Instant.parse("2026-08-25T13:12:00Z")
+        val end = Instant.parse("2026-08-25T15:37:00Z")
+        val condition = EndCondition.seededAtEnd(now, end, ceilingFrom(now))
+
+        assertEquals(end, condition.endsAt)
+        assertEquals(now.plus(ActiveSnooze.MIN_CAP), condition.floor)
+        assertEquals(ceilingFrom(now), condition.ceiling)
+    }
+
+    @Test
+    fun `clamps a running end that has fallen inside the floor up to it`() {
+        // A snooze about to expire — ten minutes left — has an end below the
+        // floor. The row opens on the floor rather than a time the service
+        // would decline.
+        val now = Instant.parse("2026-08-25T13:12:00Z")
+        val end = now.plus(Duration.ofMinutes(10))
+        val condition = EndCondition.seededAtEnd(now, end, ceilingFrom(now))
+
+        assertEquals(now.plus(ActiveSnooze.MIN_CAP), condition.endsAt)
+    }
+
+    @Test
+    fun `clamps a running end above the backstop down to it`() {
+        // The end can never legitimately sit past the backstop, but a stale
+        // reading against a moved ceiling could; the seed opens on the ceiling
+        // rather than a time above it.
+        val now = Instant.parse("2026-08-25T13:12:00Z")
+        val ceiling = ceilingFrom(now)
+        val end = ceiling.plus(Duration.ofHours(1))
+        val condition = EndCondition.seededAtEnd(now, end, ceiling)
+
+        assertEquals(ceiling, condition.endsAt)
+    }
 }

@@ -1880,6 +1880,19 @@ the point is that every other line of the app is worthless if it isn't true.
       chosen time now takes departure off, so the card names the timer because the timer is
       what ends the snooze. What still waits on *Decide what tapping an end condition means*
       below is the `Until I move` row, the one direction of the replacement model still open.
+- [x] **The top time row opens on the running snooze's own end when time is what ends it**
+      (maintainer, 2026-09-13; PR #277). A chosen timer, or a backstop promoted to the
+      effective end because departure lost its fix (`effectiveMode == DURATION_ONLY`, no motion
+      exit), opens the row on that end rather than an hour out; a snooze still ending on
+      departure with a fix, or on motion, keeps the hour-out seed, since its cap is a passive
+      backstop. See `SPEC.md` §4.4.
+- [ ] **Deemphasize the backstop in the status line — follow-up, not PR #277** (maintainer,
+      2026-09-13). The `SnoozeStatus` detail currently always shows `Xh Ym left`, which for an
+      active location snooze is a countdown to the 8-hour backstop — the failsafe, not the plan.
+      Show the remaining-time/backstop only when it is the effective end (the same
+      `effectiveMode == DURATION_ONLY` question the top row now uses), and deemphasize it
+      otherwise. Touches a deliberately-designed line (the "cap is the guarantee, always shown"
+      framing in `MainScreen.StatusBlock`), so it wants its own PR and a `SPEC.md` §4.2 note.
 
 ## Phase 5 (M5) — Edge cases and degraded modes
 

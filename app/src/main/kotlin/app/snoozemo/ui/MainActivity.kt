@@ -468,6 +468,13 @@ class MainActivity : ComponentActivity() {
         watchOutcome = EndChoiceOutcome::watch,
         onDismiss = { refreshSnoozing() },
         offersToStart = true,
+        // Over a running snooze whose *time* is what ends it — a chosen timer,
+        // or a backstop promoted because departure lost its fix — open the top
+        // row on that end rather than an hour out (SPEC.md §4.4). A snooze still
+        // ending on departure or motion keeps the hour-out seed: its cap is a
+        // passive backstop, not a time to front. The arm-time sheets leave this
+        // false.
+        seedsFromRunningEnd = true,
     )
 
     /**
