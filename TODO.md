@@ -1902,6 +1902,43 @@ the point is that every other line of the app is worthless if it isn't true.
       `capIsEffectiveEnd` gate) because exit/time exclusivity cannot be made absolute: a `PARTIAL`
       exit-removal failure or a process death mid-"Until I move" leaves a shortened cap behind an
       exit that `capIsEffectiveEnd` would hide (Codex, PR #278).
+- [x] **Idempotent, origin-agnostic cap check — option (b), landed in PR #278**
+      (maintainer, 2026-09-13, choosing (b)). Replaced the option-(a) origin gate: the
+      cap check now reconciles the alarm to the record's cap and re-arms-or-fails-open by
+      whether the cap is actually covered — comparing the record's cap against the cap
+      this process last successfully armed (the in-process `capAlarmArmedFor`), reading
+      **no metadata off the alarm** — rather than by who woke it. That closed the backstop
+      case (#6), the no-service `releaseDirectly` mislabel (#7), and the
+      duplicate-alarm-delivery case (#8), which origin gating could not tell from a real
+      delivery, at once. Carrying no alarm metadata also deleted, as a class, a first-cut
+      mechanism that keyed on a deadline carried on the fired alarm's intent: it both left
+      the initial pre-arm untagged (#9) and let `FLAG_UPDATE_CURRENT` mutate the live
+      alarm's extras before the schedule could throw (#11); the pre-arm now records its own
+      cap instead. The no-service fallback (`capReleaseFallback`) reconciles the same way
+      but **fails open** on a refused re-arm — it has no in-process record to tell a
+      covered duplicate from an uncovered spent alarm, so principle 1 resolves the
+      ambiguity toward ending rather than leaving DND on the deferrable backstop past the
+      cap (the escalate-the-uncovered-fallback P1). Tested in `SnoozeServiceMotionEndTest`
+      (heal, fail-open, backstop, duplicate, the fresh-arm pre-arm path) and
+      `SnoozeServicePresenceTest` (the no-service fallback re-arming, ending a capped
+      snooze, and failing open on a refused re-arm). History below.
+      PR #278's sixth finding was
+      that `ACTION_CHECK_CAP` is driven by two callers — a fired cap alarm (a spent
+      one-shot) and the periodic backstop (the real alarm still scheduled) — but
+      `rescheduleIfUnfinished` treated them alike, so a backstop poke whose *redundant*
+      re-arm was transiently refused ended a healthy snooze. Fixed with option (a): mark
+      the fired-alarm origin (`EXTRA_FROM_CAP_ALARM`) so only an alarm-originated check
+      re-arms-or-fails-open an unexpired snooze; a backstop poke does nothing on one
+      (the live alarm still ends it). Chosen over (b) because finding #6 was itself a
+      regression from finding #5's consolidation, so another rethink of the
+      safety-critical cap path risked a #7. But this is the sixth finding in one
+      mechanism and the second regression-from-a-fix — a design signal. Option (b):
+      make the cap check idempotent and origin-agnostic — "reconcile the exact alarm to
+      the record's cap; fail open only when the record's cap genuinely cannot be
+      scheduled" — deleting the "who woke us / is the one-shot spent" question across
+      `extend`, `applyChosenEnd`'s rollback, `restoreCapToFailsafe`, and the backstop
+      path at once, rather than gating each by origin. Planned as its own PR; the maintainer chose
+      to land it in #278 instead (2026-09-13, "B"), heavily tested.
 
 ## Phase 5 (M5) — Edge cases and degraded modes
 

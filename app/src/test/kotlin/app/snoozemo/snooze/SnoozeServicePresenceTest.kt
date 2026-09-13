@@ -48,6 +48,7 @@ class SnoozeServicePresenceTest {
         TestSnoozeService.reset(now)
         TestSnoozeService.zen.outcome = ZenOutcome.Applied("refusing-zen-rule-id")
         ActiveSnoozeStore(appContext).clear()
+        TogglableAlarmManager.refuse = false
     }
 
     /** Arms and completes capture, so the watch is running. */
@@ -709,6 +710,95 @@ class SnoozeServicePresenceTest {
 
         assertNotNull(
             "the snooze must wait for its still-armed cap, not end hours early",
+            ActiveSnoozeStore(appContext).load(),
+        )
+    }
+
+    @Test
+    fun `a cap alarm the service cannot start re-arms an early snooze instead of ending it as the cap`() {
+        // Codex, PR #278, finding 7. When a fired cap alarm cannot start the
+        // service, ending the snooze blind as DURATION_CAP mislabels — and ends
+        // early — a snooze whose record cap is not actually reached: an early
+        // alarm a lengthening left behind when its exact re-arm was refused. The
+        // receiver's fallback reads the record and re-arms the exact wake
+        // instead, leaving the snooze running. The fixture is aligned to the
+        // receiver's own clock (SnoozeClock, which the fallback reads, not the
+        // service's injected test clock).
+        val clock = SnoozeClock.read()
+        val unexpired = snoozeFixture(now).copy(
+            capExpiresAt = Instant.ofEpochMilli(clock.wallMillis + java.time.Duration.ofHours(1).toMillis()),
+            bootReference = clock.wallMillis - clock.uptimeMillis,
+        )
+        ActiveSnoozeStore(appContext).arm(unexpired)
+        val refusingService = object : android.content.ContextWrapper(appContext) {
+            override fun startService(service: Intent?): android.content.ComponentName? =
+                throw IllegalStateException("the platform refuses the start")
+        }
+
+        CapAlarmReceiver().onReceive(refusingService, Intent(SnoozeService.ACTION_CHECK_CAP))
+
+        assertNotNull(
+            "an early snooze is not ended blind as the duration cap",
+            ActiveSnoozeStore(appContext).load(),
+        )
+        assertTrue(
+            "the exact cap wake is re-armed instead",
+            scheduledAlarmIntents().any { it.action == SnoozeService.ACTION_CHECK_CAP },
+        )
+    }
+
+    @Test
+    fun `a cap alarm the service cannot start ends a genuinely-capped snooze`() {
+        // The other side of finding 7: when the record's cap really is reached,
+        // the no-service fallback still ends the snooze (as the duration cap),
+        // so a spent cap alarm the service cannot pick up is not left running.
+        val clock = SnoozeClock.read()
+        val expired = snoozeFixture(now).copy(
+            capExpiresAt = Instant.ofEpochMilli(clock.wallMillis - java.time.Duration.ofMinutes(1).toMillis()),
+            bootReference = clock.wallMillis - clock.uptimeMillis,
+        )
+        ActiveSnoozeStore(appContext).arm(expired)
+        val refusingService = object : android.content.ContextWrapper(appContext) {
+            override fun startService(service: Intent?): android.content.ComponentName? =
+                throw IllegalStateException("the platform refuses the start")
+        }
+
+        CapAlarmReceiver().onReceive(refusingService, Intent(SnoozeService.ACTION_CHECK_CAP))
+
+        assertTrue(
+            "a snooze past its cap is released, not re-armed to run on",
+            scheduledAlarmIntents().none { it.action == SnoozeService.ACTION_CHECK_CAP },
+        )
+    }
+
+    @Test
+    @org.robolectric.annotation.Config(shadows = [TogglableAlarmManager::class])
+    fun `a cap alarm the service cannot start fails open when its re-arm is also refused`() {
+        // Codex, PR #278, escalate-the-uncovered-fallback P1 (on 38b66e7). When
+        // the service cannot start AND the fallback's re-arm is refused, the fired
+        // one-shot is spent and no exact wake remains. This path has no in-process
+        // record of the cap it last armed, so it cannot prove the cap is still
+        // covered — leaving DND on the deferrable backstop past the cap is
+        // principle 1's worst failure. Ending needs no alarm while the re-arm just
+        // failed, so it fails open. Duplicate suppression is the service's job,
+        // where the in-process record can tell a covered duplicate from an
+        // uncovered spent alarm; the receiver cannot, so it fails open.
+        val clock = SnoozeClock.read()
+        val unexpired = snoozeFixture(now).copy(
+            capExpiresAt = Instant.ofEpochMilli(clock.wallMillis + java.time.Duration.ofHours(1).toMillis()),
+            bootReference = clock.wallMillis - clock.uptimeMillis,
+        )
+        ActiveSnoozeStore(appContext).arm(unexpired)
+        val refusingService = object : android.content.ContextWrapper(appContext) {
+            override fun startService(service: Intent?): android.content.ComponentName? =
+                throw IllegalStateException("the platform refuses the start")
+        }
+        TogglableAlarmManager.refuse = true
+
+        CapAlarmReceiver().onReceive(refusingService, Intent(SnoozeService.ACTION_CHECK_CAP))
+
+        assertNull(
+            "an uncovered cap fails open rather than run on the deferrable backstop past the cap",
             ActiveSnoozeStore(appContext).load(),
         )
     }
