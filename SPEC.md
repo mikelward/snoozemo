@@ -488,10 +488,15 @@ past read worse than one that stands until the card fills in. So the objection i
 rather than answered** — the line can name a sensor that has already answered, or one that never
 will, for the length of the capture. What keeps that from being a silent failure is not the copy
 but the ceiling: the arm gives up at 10 s and degrades with its own reason (4.1), which is where
-principle 2 is actually discharged. The Quick
-Settings tile makes no claim at all in this window, showing its countdown without the `Timer only`
-qualifier: the qualifier *is* the claim, and the shade would otherwise contradict the notification
-directly below it.
+principle 2 is actually discharged. During settling the main screen and the ongoing notification now
+front the failsafe countdown: leaving cannot be detected yet, so the backstop is the only end there
+is, and its time is the one concrete thing to show (`Waiting for location · 0h 5m left`, the
+countdown rule below). The Quick Settings tile is the exception — it shows no countdown until the
+anchor resolves, because its subtitle has no room for the qualifier that would mark the time a
+backstop rather than a plan, and a bare countdown there would read as a chosen deadline. (This
+reverses an earlier rule that dropped the settling countdown from *every* surface to make the three
+agree: the rule is now to name the next end everywhere it fits, and while settling the failsafe is
+that end — maintainer, 2026-09-13.)
 
 **The ongoing card carries the distance too, in its top row** (maintainer, 2026-09-08). The main
 screen's readout answers "how is the test doing"; the card answers "how much longer", beside the
@@ -851,6 +856,34 @@ purpose: it is always literally `"Here"` today (saved/named places are unbuilt �
 places"), and the notification doesn't show it either, so surfacing it here first would only read
 as filler.
 
+**The remaining-time countdown is shown only when the cap is the most-specific end the snooze
+has** (maintainer, 2026-09-13). The cap alarm always fires (principle 1, §7), but on a snooze
+ending on departure with a fix, or on motion, that alarm is a passive eight-hour failsafe from an
+arm at an arbitrary minute — not a time the user chose or expects to reach — so fronting its
+countdown announces a deadline over a snooze whose plan is to end when the phone walks out the
+door. So the countdown appears in two cases, and only these:
+
+- **A time the user chose** — a chosen timer, or a chosen deadline still standing behind an exit
+  that survived a switch to `Until I move` (the fail-open of §4.4, or a process death mid-change).
+  A chosen time is always shown, even after repeated `+30 min` has walked it back up to the failsafe
+  ceiling, so the snooze can never end at a time the user cannot see.
+- **The failsafe, when it is the only automatic end** — nothing is watching for a departure and no
+  movement exit is armed. This covers a snooze degraded to duration-only *and* a snooze still
+  settling with no anchor captured yet: in both, leaving cannot be detected, so the failsafe is what
+  ends the snooze and its time is the only concrete thing the card can name.
+
+A snooze still watching a departure (with a fix) or a movement exit, its cap sitting at the failsafe
+ceiling, shows no time: the card names *how* it will end — `Ends when you leave`, `Snoozing until
+you move` — and that plan, not the clock, is the point. The end-adjuster's top row is narrower still:
+it opens only on a time that is the plan (§4.4), so a settling snooze surfaces the failsafe time
+without the adjuster opening on eight arbitrary hours. The countdown always shows its hours field
+(`0h 45m left`, never a bare `45m`) so it cannot be misread as the departure distance in meters. The
+status line and the notification (§4.3) carry it; the **tile** shows it for a plain timer only, not
+for a chosen deadline left behind an armed exit, because the shade has no room for the qualifier that
+would keep the two apart — a narrowing the other two surfaces do not share. §7's guarantee that the
+cap always fires is unchanged, and a degraded card still names its cause (§4.3) whether or not it
+fronts a time.
+
 **The status block is the screen's headline, centered and larger** (maintainer, 2026-09-05).
 Whether a snooze is running is the one thing this screen exists to say, and at body size across
 the full column it read as another paragraph rather than as the answer — so it steps up two
@@ -1092,6 +1125,10 @@ snooze was armed — still reading `8h 0m left` seven hours later, which is wors
 because it looks current. `setUsesChronometer` against the absolute cap ticks by itself and cannot
 go stale. It also means the body says only what *kind* of snooze this is — `Ends when you leave`,
 `Wi-Fi only`, `Wi-Fi lost — ending soon`, `Timer only` — which is the part that actually needs words.
+The chronometer is set only when the cap is the most-specific end (§4.2) — a time the user chose, or
+the failsafe when nothing watches a departure (a degraded or still-settling snooze); a snooze still
+watching a departure or a movement exit, whose cap is the passive failsafe, shows no time at all,
+since that cap is not the plan.
 
 **A plain timer-only snooze folds those two lines into one** (maintainer, 2026-09-12). When the body
 would say exactly `Timer only` — duration tracking with no degraded reason, no ringer shortfall, no
@@ -1265,14 +1302,13 @@ nothing (§7's `MIN_CAP`), on either path.
   "differed only in whether there is a time bound below the backstop": that made a row name one
   thing while the snooze did another, which is the confusion the rows exist to remove.
 
-  **This settles the time row, not the whole replacement model.** `Until I move` still *adds* an
-  exit rather than replacing one (§4.4's movement section), and whether it should clear departure
-  the way a chosen time does is a product question that stays open — nothing here answers it. What
-  this removes is the obstacle that made it hard to ask: departure used to be the tracking *mode*
-  rather than a flag, so there was nothing to turn off.
-  `ActiveSnooze.endsOnDeparture` is that flag: user intent, kept apart from
-  `mode`, which stays the machinery's capability and is recomputed from the anchor on every
-  presence update. `effectiveMode` is where the two meet for anything that renders.
+  **What stays open is exit-vs-exit exclusivity.** `Until I move` still leaves departure tracking
+  armed, so a leave+motion snooze ends on either over the failsafe; whether tapping one exit should
+  also clear the *other* exit — and how the user would switch back — is the remaining half of the
+  replacement model, unanswered here. What unblocked the chosen-time half was making departure a
+  flag: `ActiveSnooze.endsOnDeparture` is user intent, kept apart from `mode`, which stays the
+  machinery's capability and is recomputed from the anchor on every presence update. `effectiveMode`
+  is where the two meet for anything that renders.
 
   **Keeping them apart is what lets the card stay honest.** A snooze reading `Timer only` because
   the user chose it and one reading `Timer only` because location died are different situations,
@@ -3942,16 +3978,18 @@ Idempotent; safe to call twice.
 | **Manual** | Tile tap, notification action, or in-app | Always available, always instant |
 | **Movement** | `TYPE_SIGNIFICANT_MOTION`, opt-in per snooze | §4.4's `When I move`; on trial, off by default |
 
-**Movement is the one genuinely additional exit, and it is opt-in.** It adds to whatever the
-snooze already has rather than replacing any of it — the cap still bounds the snooze, and
-arming movement never turns departure off or on. A snooze that has not asked for it behaves
-exactly as this table read before.
+**Movement is opt-in, and it adds to the event exits but replaces a chosen time.** Arming
+movement never turns departure off or on — a leave+motion snooze ends on either — but it *is*
+mutually exclusive with a chosen time: tapping `Until I move` drops any chosen time and restores
+the cap to the failsafe (§4.4), so the snooze ends on movement over the 8h backstop, never at an
+old chosen time hidden behind it. A snooze that has not asked for movement behaves exactly as this
+table read before.
 
 **"All four" is therefore a claim about a snooze whose departure exit is still enabled**, not
-about every motion snooze. A chosen time takes departure off (below), and `Until I move` over
-one of those re-arms movement without putting departure back — so that snooze has two ways to
-end, the timer and the movement, and leaving is not one of them. Whichever of the exits a
-snooze actually has, the first to fire wins.
+about every motion snooze. A chosen time takes departure off (below); `Until I move` over such a
+timer-only snooze replaces the timer — dropping the chosen time and restoring the failsafe cap — so
+it then ends on movement over the failsafe, not at the old timer and not on leaving. Whichever of
+the exits a snooze actually has, the first to fire wins.
 
 A time chosen in the §4.4 sheet adds no exit — it *moves the cap* and **takes the others away**.
 Picking 14:00 sets `capExpiresAt` to 14:00, clears the movement exit, and takes departure tracking

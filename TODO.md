@@ -4229,6 +4229,49 @@ question.
 
 ## Deferred
 
+- [ ] **Decide the countdown format** (maintainer, 2026-09-13). Still open, and
+  independent of how much detail the tile shows. What ships now is a labeled,
+  minute-granularity form with the hours always present (`0h 50m left`, never a
+  bare `50m left`) — an `h:mm:ss` per-second ticking experiment was reverted for
+  simplicity. The undecided question is the form itself: a colon clock (`00:50` /
+  `0:50`) versus the labeled `0h 50m` versus something else. Bound up with it: the
+  `m`-for-minutes vs `m`-for-meters clash (the countdown and the `200 m` departure
+  distance both use `m`), which a non-`m` countdown form would also settle.
+  User-facing copy, so it needs maintainer sign-off before it is translated.
+
+- [ ] **Should the distance readout spell its unit out?** (maintainer,
+  2026-09-13). The other side of the `m`-disambiguation above: instead of
+  changing the countdown's minute unit, spell the distance out (`200 meters` /
+  `200 feet`) so a bare `m` only ever means minutes. Weigh it against the tile's
+  hard width limit (`200 m` is there precisely because Quick Settings truncates),
+  and against the feet/meters locale split (`distanceUnitFor`). User-facing copy;
+  US spelling (`meters`, not `metres`), maintainer sign-off before translating.
+
+- [ ] **Should the docs lane include images?** (maintainer, 2026-09-13). The lane
+  policy (`.github/lanes.conf`, engine `mikelward/lanes`) classifies a commit as
+  docs-only from its paths, and `STATES.md`'s diagram SVGs are not `.md`, so a
+  commit that only touches a dev doc and its rendered SVGs still rides the full
+  code lane. Decide whether image types that only ever accompany docs (`.svg`,
+  and doc `.png`) should count toward the docs lane, and whether that can be
+  scoped so it can't be used to slip a real asset change past CI.
+
+- [ ] **Show the Wi-Fi-grace countdown** (maintainer, 2026-09-13). The decided
+  design (`STATES.md`) is for a `WIFI_GRACE` card to name "Wi-Fi lost" and count
+  down to the 5-minute grace deadline, not the passive failsafe. It isn't built:
+  the ongoing card is assembled from the snooze record alone, which carries no
+  grace deadline, so `graceDeadlineMs` has to be threaded from presence state into
+  the main screen and notification and selected ahead of the cap. Until then the
+  card reads `Wi-Fi lost — ending soon` with no countdown.
+
+- [x] **Tile stays narrower than the other surfaces** (decided, maintainer,
+  2026-09-13). The main screen and notification show a time whenever the cap is
+  the most-specific end — including while settling, and for a chosen deadline
+  left behind an armed exit. The tile shows a countdown for a plain timer only,
+  so it shows no time in those two cases where the other surfaces do. Kept
+  narrower on purpose: the shade's width, and a bare tile countdown can read as a
+  chosen deadline. The inconsistency is the accepted cost; documented in SPEC
+  §4.2.
+
 - [ ] **Decide whether a paid tier exists at all, and what is in it** — this half
   does **not** wait for discovery, and asking it late is what creates the problem
   it exists to avoid. Per-feature: before any `SPEC.md` §14 candidate ships free,
