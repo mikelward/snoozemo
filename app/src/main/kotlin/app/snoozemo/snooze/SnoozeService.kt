@@ -1247,6 +1247,30 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         beginRelease(running.startedAt, reason)
     }
 
+    /**
+     * The single fail-open answer to "a cap this snooze must run to could not be
+     * scheduled." Reached once the record already promises the deadline and
+     * `CapAlarm.arm` has refused, so the promise cannot be kept: end the snooze
+     * now — in-process, needing no alarm — and hand any refusal of *that* to the
+     * release ladder ([ensureCapAfterRefusedEnd], which re-arms the cap or
+     * escalates). Fail open because a cap we cannot schedule is one we cannot
+     * keep (SPEC.md §7); Do Not Disturb stuck on past the cap is principle 1's
+     * failure.
+     *
+     * Every record-committed re-arm path that has **no further heal behind it**
+     * funnels here rather than re-deriving the answer, which is what stops this
+     * class sprouting a new branch per site (Codex, PR #278, findings 1–5): the
+     * clock-change re-arm, [applyChosenEnd]'s double failure, and the cap-check
+     * heal's own refusal ([rescheduleIfUnfinished]). The lenient first-chance
+     * paths ([restoreCapToFailsafe], [extend]) only log, because the shorter
+     * alarm they leave behind routes their refusal to the heal — which lands
+     * here if it too cannot arm.
+     */
+    private fun failOpenUnschedulableCap() {
+        controller.end(EndReason.LOST_CAPABILITY)
+        ensureCapAfterRefusedEnd(EndReason.LOST_CAPABILITY)
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Recorded before anything can transition, since a transition inside
         // this call is exactly when a shutdown gets decided without an id.
@@ -2242,8 +2266,9 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         if (!CapAlarm.arm(applicationContext, restated, readClock())) {
             Log.e(TAG, "Re-arming the cap after the clock change was refused; ending rather than letting the countdown lie.")
             SnoozeDebugLog.warning("clock-change re-arm refused; ending the snooze")
-            controller.end(EndReason.LOST_CAPABILITY)
-            ensureCapAfterRefusedEnd(EndReason.LOST_CAPABILITY)
+            // No heal behind a clock-change re-arm (it moves the alarm to a new
+            // time, leaving no shorter one to fire early), so fail open now.
+            failOpenUnschedulableCap()
             return
         }
 
@@ -2421,9 +2446,90 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // Folded into the exit's own checked write ([applyMotionEnd]) rather than
         // a best-effort transition after it, so the clear cannot outlive the exit
         // across a process death (Codex, PR #272); only when the exit is added.
-        return applyMotionEnd(snooze, wanted, clearTimerOnly = wanted).also {
-            if (it == EndChoiceResult.APPLIED) notifications.cancelFailure()
+        val result = applyMotionEnd(snooze, wanted, clearTimerOnly = wanted)
+        if (result == EndChoiceResult.APPLIED) {
+            notifications.cancelFailure()
+            // **The movement exit replaces any chosen time.** End conditions are
+            // mutually exclusive with a chosen time (maintainer, 2026-09-13):
+            // "Until I move" carries the 8h failsafe, never a parallel
+            // user-chosen end. Dropping the timer-only intent above is only half
+            // of that — the shortened cap the time left behind is the other, so
+            // it goes back to the ceiling here. Without it the snooze would still
+            // end at the old chosen time behind `Snoozing until you move`
+            // (SPEC.md §4.4; Codex, PR #278). Only when a motion exit was added,
+            // and a no-op unless a time had shortened the cap (or a timer-only
+            // intent lingers from a retry).
+            //
+            // **A failed restore surfaces for a retry rather than unwinding**
+            // (maintainer, 2026-09-13). The exit the user asked for is armed and
+            // its shortened cap stays visible (`capCountdownShown`) — safe, and
+            // ending early at worst — so it is kept and the failure is surfaced,
+            // rather than rolling a good exit back off. The user re-taps to reach
+            // the failsafe. `cancelFailure` above cleared any stale card first,
+            // so this posts a fresh one only when the restore actually failed.
+            if (wanted && !restoreCapToFailsafe()) notifications.showCouldNotSetEnd()
         }
+        return result
+    }
+
+    /**
+     * Moves the cap to its 8h failsafe ceiling and clears the timer-only intent
+     * after a movement exit replaced a chosen time, so "Until I move" ends on
+     * movement over the backstop rather than at the chosen time (SPEC.md §4.4).
+     * Returns `true` when the failsafe is durably in place — including the
+     * no-ops (a plain movement snooze already at the ceiling with no lingering
+     * intent, or a snooze that has already ended) — and `false` when the ceiling
+     * could not be persisted, which the caller surfaces for a retry.
+     *
+     * **Record first, then the alarm — because this lengthens the cap.** The
+     * safe direction is never to leave the alarm *longer* than the record:
+     * persist the ceiling first, and a death before the alarm moves leaves
+     * alarm(shortened) < record(ceiling), so the old shorter alarm fires early,
+     * `ACTION_CHECK_CAP` finds the snooze not expired and reschedules to the
+     * ceiling — self-healing, never a phone quiet past the deadline the record
+     * promises. Arming first (the *shortening* ordering [applyChosenEnd] uses)
+     * would leave alarm(ceiling) > record(shortened) across that window: silent
+     * past the shown deadline until the ceiling alarm or the deferrable backstop
+     * (Codex, PR #278, P1). The alarm re-arm failing after the record is
+     * persisted is therefore the safe direction and only logs.
+     *
+     * **The intent clear is folded into the same write.** A retry over an
+     * already-armed exit whose earlier `timerOnlyRequested` clear failed
+     * ([applyMotionEnd] reports `APPLIED` because that tap added no exit) would
+     * otherwise reach here with the intent still set, and restoring the ceiling
+     * beside it reads back a false partial timer (Codex, PR #278). One write
+     * settles both.
+     *
+     * **A failure surfaces for a retry rather than unwinding** (maintainer,
+     * 2026-09-13). The exit the user asked for is already armed and its shortened
+     * cap stays visible (`capCountdownShown`), so the snooze is safe and ends
+     * early at worst; [applyMotionEndChoice] posts `showCouldNotSetEnd` so the
+     * user re-taps to reach the failsafe, rather than rolling a good exit back
+     * off through machinery that is its own source of partial-failure states.
+     */
+    private fun restoreCapToFailsafe(): Boolean {
+        val running = controller.active ?: return true
+        val ceiling = running.capCeilingAt
+        // Nothing to do only when the cap is already the failsafe *and* no
+        // timer-only intent lingers — the retry case has the latter to clear.
+        if (!running.capExpiresAt.isBefore(ceiling) && !running.timerOnlyRequested) return true
+        val reading = readClock()
+        val changed = running.copy(capExpiresAt = ceiling, timerOnlyRequested = false)
+        if (!updateRecordOrUndo(changed, running)) {
+            SnoozeDebugLog.warning("until-i-move: could not persist the failsafe cap; surfacing for retry")
+            return false
+        }
+        controller.applyChange(changed)
+        if (!CapAlarm.arm(applicationContext, changed, reading)) {
+            // The record already carries the ceiling; the alarm is still at the
+            // shorter cap. This is a lenient first-chance path, so it only logs:
+            // when the shorter alarm fires early, `rescheduleIfUnfinished` finds
+            // the snooze unexpired and re-arms the exact wake to the ceiling —
+            // the shared heal — and fails open there ([failOpenUnschedulableCap])
+            // if it too cannot arm. Any restart also re-arms from the record.
+            SnoozeDebugLog.warning("until-i-move: failsafe cap persisted; the shorter alarm re-arms to it via the cap check")
+        }
+        return true
     }
 
     /**
@@ -2974,21 +3080,21 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // An earlier version of this kept the snooze running, reasoning that
             // both halves sit at or before the *original* cap so the worst case
             // ends early, which is where D7 sends every ambiguity. That was
-            // wrong about the end state (Codex, PR #118). The alarm left behind
-            // is at the *shortened* time, and it is one-shot: when it fires,
-            // `ACTION_CHECK_CAP` finds the controller not expired and
-            // `rescheduleIfUnfinished` returns without replacing it. The alarm
-            // is then spent, and the hard cap rests on the deferrable
-            // `WorkManager` backstop alone — which is the one invariant this app
-            // does not get to weaken.
+            // wrong about the end state (Codex, PR #118). After the double
+            // failure the record and the controller disagree — the failed
+            // commit left the *shortened* cap in the record's in-memory map
+            // while the controller still holds the original — so the cap can no
+            // longer be stated. Keeping the snooze would leave the early
+            // cap-check heal (`rescheduleIfUnfinished`, PR #278) re-arming to a
+            // cap the record contradicts; ending is the only answer that keeps
+            // the record and the enforcement honest (SPEC.md §7).
             Log.e(TAG, "Rolling back a refused end time failed; ending the snooze.")
             SnoozeDebugLog.warning("end-condition: could not restore the cap after a refused change")
-            controller.end(EndReason.LOST_CAPABILITY)
-            // And if even that release is refused, make sure something is
-            // scheduled: this re-arms at the controller's cap, which is still
-            // the original one, and so also drags back an alarm left sitting at
-            // the shortened deadline.
-            ensureCapAfterRefusedEnd(EndReason.LOST_CAPABILITY)
+            // The shared fail-open answer: end now, and if that release is
+            // refused too the ladder re-arms at the controller's cap (still the
+            // original one) or escalates, dragging back an alarm left at the
+            // shortened deadline.
+            failOpenUnschedulableCap()
             // `GONE` only if the release actually took. `controller.end` keeps
             // the snooze when the rule refuses to come off, and
             // `ensureCapAfterRefusedEnd` then reschedules it — so an
@@ -3331,11 +3437,14 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     /**
      * Puts a fresh alarm behind anything the cap check left undone.
      *
-     * The cap alarm is one-shot, so by the time this runs it is spent. Two
-     * things can survive it, and both would otherwise be revisited by nothing:
+     * The cap alarm is one-shot, so by the time this runs it is spent. Three
+     * things can survive it, and each would otherwise be revisited by nothing:
      * a snooze whose release the platform refused (still active, still past its
-     * cap, still silencing the phone), and a record that wouldn't erase. One
-     * short retry alarm covers both.
+     * cap, still silencing the phone), a record that wouldn't erase, and a live
+     * snooze whose cap alarm woke us *early* because a lengthening moved the cap
+     * out but its exact re-arm was refused or interrupted. The first two are
+     * ends; the third is a heal — re-arm the exact wake at the cap the record
+     * now carries.
      */
     private fun rescheduleIfUnfinished() {
         if (!recordErased) {
@@ -3348,7 +3457,31 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             return
         }
         val running = controller.active ?: return
-        if (!running.isExpired(readClock())) return
+        val reading = readClock()
+        if (!running.isExpired(reading)) {
+            // The one-shot that woke us was for an earlier deadline than the
+            // record now carries: a lengthening — `Until I move` restoring the
+            // failsafe ceiling, `+30 min`, a chosen time replaced — moved the
+            // cap out, and its exact re-arm was refused or died before it
+            // landed, leaving the old shorter alarm to fire early. The alarm is
+            // now spent, so without a fresh one the cap rests on the deferrable
+            // `WorkManager` backstop alone — the one invariant this app does not
+            // get to weaken (principle 1). Re-arm the exact wake at the
+            // controller's cap. This is the single place every lengthening
+            // path's refused re-arm heals, so those paths only have to log
+            // rather than each re-deriving this recovery (Codex, PR #278, P1).
+            if (!CapAlarm.arm(applicationContext, running, reading)) {
+                // This is the last line before the deferrable backstop: the
+                // arming paths route their refusal here, so a refusal *here* has
+                // nothing further to fall to. Fail open through the shared choke
+                // point rather than leaving DND on the backstop alone past the
+                // cap (Codex, PR #278, P1 #5).
+                Log.e(TAG, "The cap re-arm was refused on a live snooze; failing open.")
+                SnoozeDebugLog.warning("cap-check: the cap could not be re-armed; failing open to a release")
+                failOpenUnschedulableCap()
+            }
+            return
+        }
 
         // The cap that woke us is spent, so this snooze has nothing durable
         // behind it until something is put there. Handed to the ladder whole
