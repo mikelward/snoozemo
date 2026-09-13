@@ -7,5 +7,4 @@
     <string name="tile_state_off">Aus</string>
     <string name="tile_state_on">Schlummert, %1$s</string>
     <string name="tile_remaining_hours">noch %1$dh %2$dm</string>
-    <string name="tile_remaining_minutes">noch %1$dm</string>
 </resources>

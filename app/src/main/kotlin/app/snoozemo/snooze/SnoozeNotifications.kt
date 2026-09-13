@@ -748,9 +748,27 @@ class SnoozeNotifications(private val context: Context) {
             // and the countdown would show hours that the cap has no intention
             // of honoring. `remaining` reconciles them; adding it to wall-now
             // puts the answer back in the frame the platform will tick in.
-            .setWhen(System.currentTimeMillis() + snooze.remaining(SnoozeClock.read()).toMillis())
-            .setUsesChronometer(true)
-            .setChronometerCountDown(true)
+            //
+            // **Only when the cap is a real deadline** (SPEC.md §4.2, §4.4,
+            // `capCountdownShown`): the effective end — a chosen timer, or a cap
+            // promoted to it — or a shortened chosen cap even behind an exit (the
+            // `PARTIAL` removal-failure and interrupted-replacement cases a chosen
+            // time can survive an exit in). On a departure or motion snooze whose
+            // cap is the passive eight-hour failsafe, a ticking countdown to it
+            // fronts a deadline the snooze does not expect to reach; the whole
+            // time indicator is dropped (`setShowWhen(false)`, so no corner
+            // timestamp stands in for it) and the card says only what ends the
+            // snooze.
+            .let { builder ->
+                if (snooze.capCountdownShown) {
+                    builder
+                        .setWhen(System.currentTimeMillis() + snooze.remaining(SnoozeClock.read()).toMillis())
+                        .setUsesChronometer(true)
+                        .setChronometerCountDown(true)
+                } else {
+                    builder.setShowWhen(false)
+                }
+            }
             .setContentIntent(contentPendingIntent())
             .addAction(
                 android.app.Notification.Action.Builder(

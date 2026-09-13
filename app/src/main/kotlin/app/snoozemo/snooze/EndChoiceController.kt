@@ -7,7 +7,6 @@ import androidx.compose.runtime.setValue
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.EndCondition
 import app.snoozemo.core.SnoozeDebugLog
-import app.snoozemo.core.TrackingMode
 import java.time.Instant
 import java.time.ZoneId
 
@@ -261,12 +260,12 @@ internal class EndChoiceController(
      * The end to open the running-snooze row on, or null to fall back to the
      * hour-out seed (SPEC.md §4.4, maintainer, 2026-09-13).
      *
-     * Non-null only when *time* is what actually ends this snooze: its
-     * [ActiveSnooze.effectiveMode] is `DURATION_ONLY` — a chosen timer, or a
-     * backstop promoted to the effective end because departure lost its fix —
-     * and it carries no motion exit. A snooze still ending on departure (with a
-     * fix) or on motion has a passive backstop, not a time the user set, so it
-     * takes the hour-out seed rather than opening on eight arbitrary hours.
+     * Non-null only when *time* is what actually ends this snooze
+     * ([ActiveSnooze.capIsEffectiveEnd]) — a chosen timer, or a failsafe
+     * promoted to the effective end because departure lost its fix. A snooze
+     * still ending on departure (with a fix) or on motion has a passive
+     * backstop, not a time the user set, so it takes the hour-out seed rather
+     * than opening on eight arbitrary hours.
      *
      * The floor guard is why this returns the end rather than letting
      * [EndCondition.seededAtEnd] clamp it: a cap that has fallen within
@@ -276,8 +275,7 @@ internal class EndChoiceController(
      * unsettable anyway, so the hour-out seed is the honest fallback.
      */
     private fun runningEndToSeed(record: ActiveSnooze?, now: Instant): Instant? {
-        if (record == null || record.endsOnMotion) return null
-        if (record.effectiveMode != TrackingMode.DURATION_ONLY) return null
+        if (record == null || !record.capIsEffectiveEnd) return null
         return record.capExpiresAt.takeIf { it.isAfter(now.plus(ActiveSnooze.MIN_CAP)) }
     }
 

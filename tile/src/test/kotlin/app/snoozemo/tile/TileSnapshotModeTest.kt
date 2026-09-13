@@ -111,10 +111,24 @@ class TileSnapshotModeTest {
     }
 
     @Test
-    fun `a watched snooze shows its countdown unqualified`() {
+    fun `a watched snooze is not a timer`() {
+        // Not timer-only, so the shade drops the countdown entirely rather than
+        // fronting the passive failsafe deadline (SPEC.md §4.2, showsCountdown).
         assertFalse(justArmed(TrackingMode.FULL.name))
         assertFalse(justArmed(TrackingMode.WIFI_ONLY.name))
         assertFalse(justArmed(TrackingMode.WIFI_GRACE.name))
+    }
+
+    @Test
+    fun `the countdown shows only for a running timer snooze`() {
+        // The cap countdown is fronted only when the cap is the effective end —
+        // a running timer-only snooze (SPEC.md §4.2). A watched snooze and an
+        // idle tile carry no time.
+        fun snap(snoozing: Boolean, timerOnly: Boolean) =
+            TileSnapshot(snoozing = snoozing, capExpiresAtMillis = STARTED_AT, timerOnly = timerOnly)
+        assertTrue("running timer", snap(snoozing = true, timerOnly = true).showsCountdown)
+        assertFalse("running, watched", snap(snoozing = true, timerOnly = false).showsCountdown)
+        assertFalse("idle", snap(snoozing = false, timerOnly = true).showsCountdown)
     }
 
     @Test

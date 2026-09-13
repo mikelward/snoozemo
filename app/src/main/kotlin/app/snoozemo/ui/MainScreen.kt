@@ -165,6 +165,15 @@ internal fun MainScreen(
      * will actually end on.
      */
     endsOnMotion: Boolean = false,
+    /**
+     * Whether the status line should front the `Xh Ym left` cap countdown —
+     * `ActiveSnooze.capCountdownShown`, precomputed by the caller because
+     * `(trackingMode, endsOnMotion)` alone cannot tell a shortened chosen cap
+     * (which shows, even behind an exit) from a passive failsafe (which does
+     * not). Defaulted, so a screenshot test pinning another state need not state
+     * an opinion; the default hides the countdown.
+     */
+    capCountdownShown: Boolean = false,
     onOpenPermissions: () -> Unit,
     onOpenSettings: () -> Unit,
     /**
@@ -368,7 +377,15 @@ internal fun MainScreen(
             // first would only read as filler.
             when {
                 snoozing == true && trackingMode != null && remaining != null ->
-                    SnoozeStatus(trackingMode, remaining, degradation, departure, endsOnMotion, endsAtLabel)
+                    SnoozeStatus(
+                        trackingMode,
+                        remaining,
+                        degradation,
+                        departure,
+                        endsOnMotion,
+                        capCountdownShown,
+                        endsAtLabel,
+                    )
                 snoozing == false -> NotSnoozingStatus()
                 // Nothing yet: either the record is still being read, or it read
                 // as running but without the mode and cap the line reports. Same
@@ -625,9 +642,9 @@ private fun StatusBlock(
  * `ongoing_timer_only`), the degraded reason joined to it reuses that
  * notification's join too (`ongoing_degraded_reason`, and the same
  * [degradationReasonRes] mapping behind it), and the remaining-time line
- * reuses the tile's (`tile_remaining_hours` / `tile_remaining_minutes`,
- * `:tile` module) — the same facts stated the same way everywhere they
- * already appear, rather than a third phrasing.
+ * reuses the tile's (`tile_remaining_hours`, `:tile` module, always shown with
+ * the hours field — see [remainingText]) — the same facts stated the same way
+ * everywhere they already appear, rather than a third phrasing.
  *
  * Why a degraded snooze says why here and not only in the notification: the
  * notification can be swiped away, silenced by the user's own channel
@@ -649,6 +666,11 @@ private fun SnoozeStatus(
     degradation: DegradationCause?,
     departure: DepartureObservation?,
     endsOnMotion: Boolean,
+    // Whether to front the `Xh Ym left` countdown — `ActiveSnooze.capCountdownShown`,
+    // precomputed by the caller. Threaded rather than reconstructed from
+    // `(mode, endsOnMotion)`: those cannot tell a shortened chosen cap (shown,
+    // even behind an exit) from a passive failsafe (hidden). See below.
+    capCountdownShown: Boolean,
     // The cap end already formatted by the caller; see [MainScreen.endsAtLabel].
     // No formatting happens here, so this composable does no 12/24-hour Settings
     // lookup on the minute tick (Codex, PR #276).
@@ -756,7 +778,11 @@ private fun SnoozeStatus(
             else -> null
         },
         condition = condition,
-        detail = remainingText(remaining),
+        // Fronted whenever the cap is a real deadline — the effective end, or a
+        // shortened chosen cap even behind an exit (`capCountdownShown`,
+        // precomputed by the caller). A passive eight-hour failsafe behind a
+        // departure or motion exit is dropped rather than fronted (§4.2, §4.4).
+        detail = if (capCountdownShown) remainingText(remaining) else null,
         // Only under `FULL`. The other modes are not measuring a distance —
         // showing one from the last fix before tracking degraded would explain
         // a threshold that is no longer what ends this snooze.
@@ -851,16 +877,20 @@ private fun rememberDistanceUnit(): DistanceUnit {
     return remember(configuration) { distanceUnitFor(configuration) }
 }
 
-/** The same hours/minutes split and copy [app.snoozemo.tile.TileSnapshot] formats the tile's countdown from. */
+/**
+ * The remaining time via the `tile_remaining_hours` resource
+ * (`%1$dh %2$dm left`), always passing the hours field even when it is zero — so
+ * under an hour it renders as "0h 45m left" rather than dropping the hours to
+ * "45m left" (maintainer, 2026-09-13). The minutes-only form read ambiguously
+ * once the failsafe surfaces more often: a bare "45m" sits next to the "200 m"
+ * departure distance. The tile renders the identical resource the same way
+ * ([app.snoozemo.tile.TileSnapshot]), so the two surfaces never state the
+ * remaining time differently.
+ */
 @Composable
 private fun remainingText(remaining: Duration): String {
     val minutes = remaining.toMinutes().coerceAtLeast(1)
-    val hours = minutes / 60
-    return if (hours > 0) {
-        stringResource(TileR.string.tile_remaining_hours, hours, minutes % 60)
-    } else {
-        stringResource(TileR.string.tile_remaining_minutes, minutes)
-    }
+    return stringResource(TileR.string.tile_remaining_hours, minutes / 60, minutes % 60)
 }
 
 /**

@@ -350,6 +350,74 @@ data class ActiveSnooze(
         get() = timerOnlyRequested && (endsOnDeparture || endsOnMotion)
 
     /**
+     * Whether the duration cap is what actually ends this snooze — a chosen
+     * timer, or the failsafe *promoted* to the effective end because departure
+     * lost its fix — rather than a passive limit sitting behind a departure or
+     * motion exit (SPEC.md §4.2, §4.4).
+     *
+     * This is the *seed* question — what the end-adjuster's top time row opens on
+     * (`EndChoiceController.runningEndToSeed`): the row seeds on the running
+     * snooze's own end only when the cap is the plan. The *display* question — do
+     * the countdown surfaces front the cap — is [capCountdownShown], which is
+     * broader: a shortened chosen cap is a real deadline the countdown must show
+     * even behind an armed exit, because tapping "Until I move" cannot make the
+     * combination truly impossible (a `PARTIAL` exit-removal failure, or a
+     * process death mid-replacement, leaves one; Codex, PR #278). The seed stays
+     * on this narrower question because it opens on the plan, not on every cap
+     * that could fire.
+     *
+     * On an active departure or motion snooze the cap is `startedAt + DEFAULT_CAP`
+     * from an arbitrary arm minute — a number the snooze does not expect to reach
+     * — so counting down to it would front a plan the snooze has not made.
+     *
+     * `!endsOnMotion` before the mode, for [effectiveMode]'s reason: a movement
+     * exit ends the snooze on something other than the clock whatever the mode
+     * says.
+     */
+    val capIsEffectiveEnd: Boolean
+        get() = !endsOnMotion && effectiveMode == TrackingMode.DURATION_ONLY
+
+    /**
+     * Whether the countdown surfaces should front a time — the *display*
+     * question, distinct from [capIsEffectiveEnd]'s *seed* question (SPEC.md
+     * §4.2, §4.4). A time is shown when the cap is the most-specific end the
+     * snooze has: a deadline the user chose, or a passive failsafe that is the
+     * only automatic end because presence has no departure to watch for.
+     *
+     * The seed keys on [capIsEffectiveEnd] because the top time row opens on
+     * *the plan*; the countdown is broader, in two directions:
+     *
+     * - **A chosen time always shows**, whether or not an event exit is also
+     *   armed, because the snooze can end at it first and hiding it lets the
+     *   snooze end at a time the user cannot reconstruct. [timerOnlyRequested]
+     *   is the intent, and it covers the case a bare `capExpiresAt < capCeilingAt`
+     *   misses: repeated `+30 min` can clamp a chosen cap back up to
+     *   [capCeilingAt] ([extendedCap]), where the shortened-below-ceiling test
+     *   goes false while the deadline is still one the user set (Codex, PR #279).
+     *   The `PARTIAL` fail-open ([isPartialTimer]) and an interrupted "Until I
+     *   move" replacement are how a chosen cap coexists with an armed exit
+     *   (Codex, PR #278).
+     * - **A passive failsafe shows only when it is the only automatic end** —
+     *   nothing watches a departure and no motion exit is armed. That is
+     *   `!effectiveMode.tracksDeparture` (false for `DURATION_ONLY` *and*
+     *   `SETTLING`) with `!endsOnMotion`, which folds the still-arming snooze in
+     *   with the degraded ones: while presence cannot yet — or can no longer —
+     *   detect leaving, the failsafe is what ends the snooze and its time is the
+     *   only concrete thing the card can name (maintainer, 2026-09-13). Broader
+     *   than [capIsEffectiveEnd]'s `effectiveMode == DURATION_ONLY` by exactly
+     *   `SETTLING`, on purpose.
+     *
+     * A departure- or motion-watched snooze with its cap at the ceiling shows no
+     * time here: the exit is the plan, and the card names *it* instead.
+     * `WIFI_GRACE` is departure-watched too, so its own grace countdown is a
+     * separate surface, not this cap.
+     */
+    val capCountdownShown: Boolean
+        get() = timerOnlyRequested ||
+            capExpiresAt.isBefore(capCeilingAt) ||
+            (!endsOnMotion && !effectiveMode.tracksDeparture)
+
+    /**
      * How long is left before the cap fires, floored at zero. Never negative: an
      * overdue cap is expressed as [isExpired], not as a negative countdown that a
      * caller might format into the notification as "ends in -4m".

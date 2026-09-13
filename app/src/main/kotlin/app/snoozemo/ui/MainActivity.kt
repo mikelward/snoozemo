@@ -1694,6 +1694,12 @@ class MainActivity : ComponentActivity() {
                             // What this snooze will end on, not what this build
                             // can offer — see `MainScreen`'s own parameter doc.
                             endsOnMotion = activeSnooze?.endsOnMotion == true,
+                            // Precomputed from the whole record: the display
+                            // question of whether the cap is a real deadline
+                            // (effective end, or a shortened chosen cap even
+                            // behind an exit), which `(mode, endsOnMotion)`
+                            // alone cannot answer.
+                            capCountdownShown = activeSnooze?.capCountdownShown == true,
                             // Freshness decided here, against the same tick
                             // the countdown uses: a reading older than
                             // [DepartureObservation.FRESH_FOR_MS] describes

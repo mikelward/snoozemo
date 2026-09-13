@@ -696,4 +696,131 @@ class ActiveSnoozeTest {
         )
         assertFalse(snooze.isPartialTimer)
     }
+
+    // capIsEffectiveEnd — whether the cap is what actually ends the snooze, the
+    // question the countdown surfaces gate on (SPEC.md §4.2).
+
+    @Test
+    fun `the cap is the effective end for a pure timer`() {
+        // No departure exit: the clock is the whole of what ends it.
+        assertTrue(snooze().copy(endsOnDeparture = false).capIsEffectiveEnd)
+    }
+
+    @Test
+    fun `the cap is the effective end for a promoted failsafe`() {
+        // Still ends on departure, but the mode has degraded to duration-only —
+        // no fix, so the failsafe is now the effective end.
+        assertTrue(
+            snooze().copy(endsOnDeparture = true, mode = TrackingMode.DURATION_ONLY).capIsEffectiveEnd,
+        )
+    }
+
+    @Test
+    fun `the cap is not the effective end for an active departure snooze`() {
+        // Ends on departure with a fix (FULL): the cap is a passive failsafe.
+        assertFalse(snooze().copy(endsOnDeparture = true, mode = TrackingMode.FULL).capIsEffectiveEnd)
+    }
+
+    @Test
+    fun `the cap is not the effective end for a motion snooze`() {
+        // A movement exit ends it on something other than the clock, whatever
+        // the mode would otherwise say.
+        assertFalse(
+            snooze().copy(endsOnMotion = true, endsOnDeparture = false, mode = TrackingMode.DURATION_ONLY)
+                .capIsEffectiveEnd,
+        )
+    }
+
+    @Test
+    fun `the cap is not the effective end while still settling`() {
+        assertFalse(snooze().copy(endsOnDeparture = true, mode = TrackingMode.SETTLING).capIsEffectiveEnd)
+    }
+
+    // capCountdownShown — the display question the countdown surfaces gate on
+    // (SPEC.md §4.2, §4.4): broader than capIsEffectiveEnd because a shortened
+    // chosen cap is a real deadline even behind an armed exit.
+
+    @Test
+    fun `the countdown shows for the effective end even at the ceiling`() {
+        // A pure timer whose cap sits at the ceiling: not shortened, but the
+        // effective end, so it counts down.
+        assertTrue(snooze().copy(endsOnDeparture = false).capCountdownShown)
+    }
+
+    @Test
+    fun `the countdown shows a shortened cap behind a motion exit`() {
+        // The Finding-3 case: a chosen time whose motion-exit removal could not
+        // persist (PARTIAL), or an interrupted "Until I move" — a shortened cap
+        // the user must still see counting down, though capIsEffectiveEnd hides
+        // it because a motion exit is armed.
+        val snooze = snooze(Duration.ofHours(1)).copy(endsOnMotion = true, endsOnDeparture = false)
+        assertFalse("precondition: not the effective end", snooze.capIsEffectiveEnd)
+        assertTrue(snooze.capCountdownShown)
+    }
+
+    @Test
+    fun `the countdown shows a shortened cap behind a departure exit`() {
+        // The same, for a partial timer whose departure exit stayed armed: the
+        // chosen cap can still end the snooze first and is shown.
+        val snooze = snooze(Duration.ofHours(1)).copy(endsOnDeparture = true, mode = TrackingMode.FULL)
+        assertFalse("precondition: not the effective end", snooze.capIsEffectiveEnd)
+        assertTrue(snooze.capCountdownShown)
+    }
+
+    @Test
+    fun `the countdown is hidden for a passive failsafe behind a departure exit`() {
+        // Cap at the ceiling, ends on departure with a fix: the eight-hour
+        // backstop, not a chosen deadline, so nothing to count down.
+        assertFalse(snooze().copy(endsOnDeparture = true, mode = TrackingMode.FULL).capCountdownShown)
+    }
+
+    @Test
+    fun `the countdown is hidden for a plain motion snooze at the ceiling`() {
+        // "Until I move" restores the cap to the ceiling, so a settled motion
+        // snooze has no shortened cap and drops the countdown.
+        assertFalse(
+            snooze().copy(endsOnMotion = true, endsOnDeparture = false).capCountdownShown,
+        )
+    }
+
+    @Test
+    fun `the countdown shows a settling snooze's failsafe`() {
+        // Still arming, no anchor yet: presence can't detect a departure, so the
+        // failsafe is the only automatic end and its time is shown. This is the
+        // reversal of the old effectiveMode == DURATION_ONLY gate, which hid it
+        // (maintainer, 2026-09-13).
+        val snooze = snooze().copy(mode = TrackingMode.SETTLING, endsOnDeparture = true)
+        assertFalse("precondition: not the effective end", snooze.capIsEffectiveEnd)
+        assertTrue(snooze.capCountdownShown)
+    }
+
+    @Test
+    fun `the countdown shows a partial timer clamped to the ceiling`() {
+        // +30 min can walk a chosen cap back up to the ceiling (extendedCap),
+        // where capExpiresAt < capCeilingAt goes false while the deadline is
+        // still one the user set. timerOnlyRequested keeps it shown (Codex,
+        // PR #279).
+        val snooze = snooze().copy(
+            timerOnlyRequested = true,
+            endsOnMotion = true,
+            endsOnDeparture = false,
+        )
+        assertFalse(
+            "precondition: cap sits at the ceiling",
+            snooze.capExpiresAt.isBefore(snooze.capCeilingAt),
+        )
+        assertFalse("precondition: not the effective end", snooze.capIsEffectiveEnd)
+        assertTrue("precondition: a partial timer", snooze.isPartialTimer)
+        assertTrue(snooze.capCountdownShown)
+    }
+
+    @Test
+    fun `the countdown is hidden during Wi-Fi grace`() {
+        // WIFI_GRACE is departure-watched (the grace period is a departure being
+        // resolved), so the passive cap stays hidden — the grace deadline is a
+        // separate surface, not this cap.
+        assertFalse(
+            snooze().copy(mode = TrackingMode.WIFI_GRACE, endsOnDeparture = true).capCountdownShown,
+        )
+    }
 }
