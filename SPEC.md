@@ -61,7 +61,7 @@ DND back off.
 | D6 | **Three independent exits**: departure, max duration, manual | Any one sensor can fail; the phone must always come back |
 | D7 | **Fail open, always** | Every ambiguous state resolves toward ending the snooze, not extending it |
 | D8 | **Build the `play` flavor first, on Pixel** | Pixel and Play are the priority targets. Nothing blocks developing `play` — the declaration gates *distribution*, not local installs — so the earlier testability argument for `direct`-first did not hold. (`direct` retired 2026-09-12; `play` is now the only build — §3.4) |
-| D9 | **Arm first, refine second** — the tile arms on tap, and a sheet then offers a time (default now + 1 h) or "until I leave" | Keeps the zero-friction one-tap path intact while making a time bound one tap away. The calendar landed instead on the ongoing notification (§4.3), leaving the arm path untouched |
+| D9 | **Ask-off: arm on tap. Ask-on: the tile opens the chooser, and a row arms** (revised 2026-09-14, §4.4) | With `Ask when to unsnooze` off the tile arms instantly (the zero-friction path, untouched). With it on the tile opens the main-screen chooser and a row commits the end and arms — choose-then-arm, because "ask when to unsnooze" should ask before committing. *Superseded:* "arm first, refine second" — the tile armed on tap and a sheet refined the running snooze afterward; the app screen's own `Snooze` still does this pending a later milestone |
 
 ---
 
@@ -1234,36 +1234,56 @@ the snooze is legible, so how much survives collapsing is a real question and a 
 
 ### 4.4 Choosing an end condition
 
-> **Status: provisional.** The direction — arm instantly, refine in a sheet — looks right, but the
-> specifics are not settled. Treat the mockups as a starting point, not a spec.
+> **Status: provisional.** The direction is settling toward *the tile opens a chooser you pick from*
+> rather than *arm instantly, refine in a sheet*, and the two coexist mid-migration (below). Treat
+> the mockups as a starting point, not a spec.
 
 "Until I leave" is the thesis, but it is not always the *best available* answer. If you are in a
 meeting that ends at 14:00, "until 14:00" is sharper than "until I walk out" — you might not walk out
-for another hour. So the sheet offers a time as well as a place, without taxing the common case.
+for another hour. So the chooser offers a time as well as a place, without taxing the common case.
 
-**The rule (D9): the tile arms immediately with a sane default, then shows a sheet that refines it.
-Dismissing the sheet — or never seeing it — leaves you correctly snoozed.**
+**The rule (D9, revised 2026-09-14): with `Ask when to unsnooze` off, the tile arms immediately with
+a sane default — goal 1, untouched. With it on, the tile opens the main screen as the end-condition
+chooser and arms *nothing* until you pick a row (choose-then-arm); each row commits that end and, for
+a tile-opened chooser, closes back to where you were.** This replaces the earlier D9, where the tile
+armed first and a sheet refined the running snooze afterward. The reason is what "ask when to
+unsnooze" should mean: a question asked *before* committing, not a refinement of a snooze already
+running. A user who has opted into being asked has opted out of the instant one-tap arm for that
+tap, so the choose-then-arm delay is theirs to have asked for; the off default keeps the one-tap
+path exactly as it was.
 
-The trampoline activity (§6.9) already sits on the arm path. It starts the service first, then
-renders a compact bottom sheet. Arming never waits on the UI, so the one-tap path survives.
+**The chooser is the main screen's own idle end-condition rows** — the same rows the app screen shows
+when nothing is running, now reachable from the tile. A row that needs a permission (location for
+`Until I leave` / `Until I move`) prompts for it on the tap and arms once granted; without it, only
+the time-based rows arm. Missing Do Not Disturb access surfaces as the screen's banner rather than a
+silent refusal.
 
-**Every way of arming offers the sheet, not just the tile** (2026-08-30). It was the tile's alone,
-so the same action asked when it came from the shade and silently took the default cap when it came
-from the app screen's `Snooze` button — a split the user has no way to predict and no way to see.
-Both now drive one shared flow, so the setting, the times offered, and what a refusal does cannot
-drift apart between them.
+**Reading which mode the tile is in stays off the arm path** (§6.9). The setting is read from an
+in-memory cache (`EndSheetStore`), never disk, and defaults to *off* until the warm-up lands — so a
+tap that overtakes a cold start arms instantly rather than waiting, the arm-preserving fallback.
 
-What each surface keeps is only what genuinely differs. The tile arms from a transparent activity
-with nothing behind it, so it draws its own scrim; the app screen has a real screen to sit on and
-uses the platform's modal sheet. And the two learn the snooze's cap differently — the tile loads the
-record, the app screen already keeps it warm — which is why the ceiling is supplied to the flow
-rather than read by it: neither surface may put a disk wait in front of the sheet.
+**The chooser does not check the keyguard**, because it cannot: telling a locked tap apart would
+need `isKeyguardLocked` before `startService`, and §6.9 keeps that system call off the arm path.
+So with the setting on, an arm tap opens the chooser whether the phone is locked or not — it shows
+once the user unlocks. The **instant locked arm (§4.2) stays the off default**, where this branch
+never runs: a user who has opted into being asked cannot be asked behind the keyguard, and
+unlocking to answer is inherent to having opted in. (Losing the instant locked arm for opted-in
+users is a trade of §4.2 against §6.9; noted for the maintainer.)
 
-The app screen also cannot decide at the moment of the tap, because the service has only just been
-asked to arm and the record that says what cap to offer against does not exist yet. It waits for the
-next record it reads — which it reads off the main thread anyway — and opens the sheet on the first
-frame it can be honest on. A snooze whose whole backstop is already inside the floor still offers
-nothing (§7's `MIN_CAP`), on either path.
+**Mid-migration, the app screen's `Snooze` button still arms-then-refines with a sheet.** The tile
+no longer does — the trampoline (§6.9) hosts no sheet at all now — but the app screen's own button
+keeps the older flow until the chooser rows fully replace it. What each surface learns differently is
+only the cap: the app screen keeps the record warm, the tile-opened chooser reads it like any launch,
+and a snooze whose whole backstop is already inside the floor offers nothing (§7's `MIN_CAP`) either
+way.
+
+**The subsections below describe the arm-then-refine sheet.** After PR #284 that sheet survives only
+on the app screen's `Snooze` button; the tile opens the chooser (D9) and its trampoline hosts no
+sheet at all. So read anything below about the *trampoline* reading a post-arm record, or the *tile*
+arming and then refining in a sheet, as the **retired tile flow** — kept here only until the open
+"does the sheet survive?" question (end of this section, and `TODO.md`) is settled and §4.4 is
+rewritten around the chooser. The sheet mechanics themselves (the rows, the steppers, `OK`, the two
+clamps) still describe the surviving `Snooze`-button sheet.
 
 #### v1
 
@@ -3815,19 +3835,27 @@ runs *before* the arm rather than after it. The converse does not follow: nothin
 ahead of a block this activity posts, so a later read of the snooze record is a best-effort one. The arm keeps
 the thread; everything else takes what's left.
 
-**The trampoline is also where the tile-first user is asked for notification permission.** The tile
-can be added straight from the Quick Settings editor, so someone may arm many times without ever
-opening the app, and the app screen's request never runs for them. Given §4.2 — the tile is 1×1 and
-icon-only, so it carries no status — that user would have an armed snooze with no visible state
-anywhere, and a failed arm with no explanation. This activity is the one place the tile-first path
-passes through. It is skipped on the lock screen, where a dialog can't be answered and arming locked
-is a supported case, and the platform's own two-refusal cap stops it becoming a nag.
+**On the instant-arm path, the trampoline is where the tile-first user is asked for notification
+permission.** The tile can be added straight from the Quick Settings editor, so someone may arm many
+times without ever opening the app. Given §4.2 — the tile is 1×1 and icon-only, so it carries no
+status — that user would otherwise have an armed snooze with no visible state anywhere, and a failed
+arm with no explanation. It is skipped on the lock screen, where a dialog can't be answered and
+arming locked is a supported case, and the platform's own two-refusal cap stops it becoming a nag.
+
+**On the chooser path (`Ask when to unsnooze` on) the ask moves to the main screen**, because the
+tile no longer arms — it opens the chooser, which arms and then finishes, so the notifications banner
+a launcher-opened app relies on is never dwelt on. `MainActivity.maybeAskChooserNotifications` makes
+the same request there, once per tile-chooser launch and only when askable, deferred past the first
+frame (§6.9). So which surface asks depends on the branch: the trampoline for an instant arm, the
+main screen for a chooser arm.
 
 It uses a **transparent** theme (`Theme.Material3.DayNight.Dialog` over a translucent window), not
-`Theme.NoDisplay`, because it hosts the §4.4 sheet and the notification-permission dialog — neither
-is possible from a no-display activity. It issues no runtime permission request of its own: the
-`READ_CALENDAR` request belongs to the permissions screen (§4.3), deliberately off the arm path. It finishes as soon as the sheet is dismissed or a
-row is committed, and finishes immediately in `onCreate` if the sheet is disabled in settings.
+`Theme.NoDisplay`, because it still hosts the notification-permission dialog — impossible from a
+no-display activity. It hosts no end-condition sheet any more: with `Ask when to unsnooze` on, an arm
+opens the main-screen chooser instead (§4.4), which it launches and then finishes. It issues no other
+runtime permission request of its own: the `READ_CALENDAR` request belongs to the permissions screen
+(§4.3), deliberately off the arm path. It finishes as soon as its decision is made — the chooser
+launched, the permission dialog answered, or nothing owed.
 
 This activity is on the critical path of the app's only interaction, so it carries a hard budget:
 service started within one frame of `onCreate`, sheet rendered without a visible flash of a blank

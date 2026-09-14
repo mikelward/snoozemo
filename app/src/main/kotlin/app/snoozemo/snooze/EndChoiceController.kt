@@ -96,6 +96,21 @@ internal class EndChoiceController(
     /** Called when the sheet has nothing left to ask and should go away. */
     private val onDismiss: () -> Unit,
     /**
+     * Called with the outcome of a commit that dismissed the rows —
+     * [EndChoiceResult.APPLIED] or [EndChoiceResult.GONE], never [PARTIAL] or
+     * [REFUSED], which keep the rows up. The main screen's rows use it to finish
+     * when the tile opened them as the chooser (SPEC.md §4.4).
+     *
+     * **On the outcome, not the record write.** `beginArming` publishes a
+     * provisional non-partial `ARMING` record before `armWithCap` confirms the
+     * zen write and persistence, and before a timer-only arm can report
+     * `PARTIAL` — so a host watching the record for "armed" sees a transition
+     * that names neither the confirmation nor the partial state reliably. The
+     * service's outcome carries both, so the close rides that instead (Codex,
+     * PR #284).
+     */
+    private val onArmOutcome: (EndChoiceResult) -> Unit = {},
+    /**
      * Whether this host also offers the rows with **no snooze running**, as
      * a way to start one (SPEC.md §4.4, maintainer, 2026-09-10).
      *
@@ -449,6 +464,7 @@ internal class EndChoiceController(
         if (result == EndChoiceResult.PARTIAL) return
         if (result != EndChoiceResult.REFUSED) {
             dismiss()
+            onArmOutcome(result)
             return
         }
         commitFailed = true

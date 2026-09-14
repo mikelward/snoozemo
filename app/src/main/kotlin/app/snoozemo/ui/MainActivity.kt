@@ -73,6 +73,7 @@ import app.snoozemo.core.TrackingMode
 import java.time.Instant
 import app.snoozemo.snooze.EndChoiceController
 import app.snoozemo.snooze.EndChoiceOutcome
+import app.snoozemo.snooze.EndChoiceResult
 import app.snoozemo.snooze.EndSheetStore
 import app.snoozemo.dnd.SnoozeRingerStore
 import app.snoozemo.snooze.DebugReport
@@ -150,7 +151,6 @@ private const val KEY_PENDING_LOCATION_FOR = "pending_location_for"
 private const val KEY_PENDING_LOCATION_ARM_COUNT = "pending_location_arm_count"
 private const val KEY_IDLE_OFFER_ARM_COUNT = "idle_offer_arm_count"
 private const val KEY_BACKGROUND_RATIONALE = "background_location_rationale"
-private const val KEY_OPENED_AS_TILE_CHOOSER = "openedAsTileChooser"
 private const val KEY_PERMISSIONS_ORIGIN = "permissionsOrigin"
 private const val KEY_ROUTED_TO_PERMISSIONS_ONCE = "routedToPermissionsOnce"
 private const val KEY_WELCOME_TAP_BLOCKED = "welcomeTapBlocked"
@@ -485,6 +485,24 @@ class MainActivity : ComponentActivity() {
         // refresh below is what these rows read from.
         watchOutcome = EndChoiceOutcome::watch,
         onDismiss = { refreshSnoozing() },
+        // Opened from the tile as the chooser, a row that cleanly arms finishes
+        // the activity, collapsing back to where the user was the way the tile
+        // tap would have (SPEC.md §4.4). On the service's outcome, not the record
+        // write: an arm publishes a provisional `ARMING` record before it is
+        // confirmed or known to be partial (Codex, PR #284).
+        //
+        // **`APPLIED` only, not `GONE`.** For these idle-start rows the service
+        // returns `GONE` when the chosen end was *not* applied — a snooze is
+        // already running (a rapid plain `Snooze` before the row tap) or the arm
+        // count moved under the offer (`armAsAsked`). Finishing on that would
+        // collapse the chooser over a snooze whose deadline is the default cap,
+        // not the time the user picked — reading as accepted when it wasn't. On
+        // `GONE` the controller's `dismiss` re-reads the record instead, so the
+        // screen shows the running snooze's own rows. `PARTIAL` and `REFUSED`
+        // never reach this hook and keep the rows up.
+        onArmOutcome = { result ->
+            if (openedAsTileChooser && result == EndChoiceResult.APPLIED) finish()
+        },
         offersToStart = true,
         // Over a running snooze whose *time* is what ends it — a chosen timer,
         // or a backstop promoted because departure lost its fix — open the top
@@ -562,10 +580,14 @@ class MainActivity : ComponentActivity() {
      * finishes the activity (see [EXTRA_TILE_CHOOSER]).
      *
      * A plain field, not compose state: nothing draws from it, [refreshSnoozing]
-     * reads it when a snooze appears. Restored across a rotation from the saved
-     * bundle so a turn of the phone mid-chooser doesn't strand it open on arm,
-     * and re-read from the intent on [onNewIntent] so a launcher-opened app a
-     * later tile tap reuses (this activity is `singleTask`) picks the flag up.
+     * reads it when a snooze appears. Derived from the launch intent alone — the
+     * intent is the single source of truth for who owns this launch, because
+     * [onNewIntent] calls `setIntent` when a later tile tap reuses this
+     * `singleTask` activity, and the platform re-delivers that same intent across
+     * a configuration recreation. It is deliberately **not** carried in the saved
+     * bundle: a second copy there could outlive the intent and let a launcher
+     * relaunch of a killed tile task inherit tile-ownership it no longer has,
+     * finishing an app the user opened from the launcher (Codex, PR #284).
      */
     private var openedAsTileChooser = false
 
@@ -1447,12 +1469,17 @@ class MainActivity : ComponentActivity() {
         // `EndChoiceOutcome` and consumed synchronously — and settling one
         // re-reads the record, which needs this.
         store = ActiveSnoozeStore(applicationContext)
-        // From the launch intent on a fresh start; the saved bundle overwrites
-        // it on a rotation just below. No disk, before the first frame.
-        openedAsTileChooser = intent?.getBooleanExtra(EXTRA_TILE_CHOOSER, false) == true
+        // The launch intent is the whole answer, on every path: a fresh start,
+        // a rotation (the platform re-delivers this intent), and a live-instance
+        // tile tap ([onNewIntent] calls `setIntent`). Deliberately not restored
+        // from the saved bundle — a copy there could outlive the intent and let
+        // a launcher relaunch of a killed tile task keep tile-ownership it no
+        // longer has, finishing an app opened from the launcher (Codex, PR #284).
+        // No disk, before the first frame.
+        val openedFromTileChooserIntent = intent?.getBooleanExtra(EXTRA_TILE_CHOOSER, false) == true
+        openedAsTileChooser = openedFromTileChooserIntent
         savedInstanceState?.let {
             screen = Screen.entries.firstOrNull { s -> s.name == it.getString(KEY_SCREEN) } ?: screen
-            openedAsTileChooser = it.getBoolean(KEY_OPENED_AS_TILE_CHOOSER, openedAsTileChooser)
             pendingLocationAction = PendingLocationAction.entries
                 .firstOrNull { a -> a.name == it.getString(KEY_PENDING_LOCATION_ACTION) }
             // Its snooze rides with it, or the recreation would resume the tap
@@ -1500,6 +1527,26 @@ class MainActivity : ComponentActivity() {
             routedToPermissionsOnce = it.getBoolean(KEY_ROUTED_TO_PERMISSIONS_ONCE, routedToPermissionsOnce)
             restoreSheet(it, configurationChange = wasRecreatedByConfiguration)
             restoreRows(it, configurationChange = wasRecreatedByConfiguration)
+        }
+        // **A genuinely new tile-chooser launch — not a rotation.** The one
+        // signal both the routing below and the notification ask further down key
+        // off, so a process-death restore that delivers a fresh tile tap is
+        // treated as the new launch it is, at every site rather than one (Codex,
+        // PR #284). A system-kill restore hands `onCreate` a non-null bundle just
+        // like a rotation, so `savedInstanceState` alone cannot tell them apart;
+        // `wasRecreatedByConfiguration` can — it is false on the process-death
+        // path (the retained marker died with the process) and true on a
+        // rotation.
+        val freshTileChooserLaunch = openedFromTileChooserIntent && !wasRecreatedByConfiguration
+        // A fresh tile-chooser launch reclaims the screen from the restore above:
+        // otherwise a process-death restore routes to the killed instance's
+        // screen (Settings, say), leaving the tile showing that rather than the
+        // chooser. The flag itself already came from the intent — the chooser is
+        // the tile's launch — so only the screen needs overriding here. A
+        // rotation keeps the restored in-progress screen instead. Mirrors
+        // `onNewIntent`'s routing for a live-instance tap.
+        if (freshTileChooserLaunch) {
+            screen = Screen.MAIN
         }
         promptStore = NotificationPromptStore(applicationContext)
         locationPromptStore = LocationPromptStore(applicationContext)
@@ -1579,6 +1626,24 @@ class MainActivity : ComponentActivity() {
         // Before the first frame is composed, and off this thread — a
         // `SensorManager` lookup belongs to neither.
         warmMotionSensor()
+        // A tile-chooser launch asks for notifications up front, but **after the
+        // first frame** — `maybeAskChooserNotifications` reads notification state
+        // through `refreshNotifications`, which makes `NotificationManager` binder
+        // calls, and none of that may sit in front of the chooser's first frame
+        // (§6.9; Codex, PR #284). Through the frame callback then the post, the
+        // exact sequence `readNotificationsAfterFirstFrame` uses: a bare
+        // `decorView.post` is queued before `setContent` and can run ahead of the
+        // first traversal, so the frame callback is what actually orders this
+        // behind the first frame (Codex, PR #284). Gated on the same
+        // [freshTileChooserLaunch] as the routing above, not on
+        // `savedInstanceState == null`: a rotation's request was made on the
+        // original and its result is delivered to this instance, so re-asking
+        // would double it — but a process-death restore delivering a fresh tile
+        // tap has no earlier request in flight and *must* ask, or the user arms
+        // and closes with the ongoing card silently dropped (Codex, PR #284).
+        if (freshTileChooserLaunch) {
+            askChooserNotificationsAfterFirstFrame()
+        }
         setContent {
             // Created here rather than left to the theme's own default, so the
             // Settings slider and the pinch move one value (`SPEC.md` §4.8):
@@ -2015,7 +2080,9 @@ class MainActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putString(KEY_SCREEN, screen.name)
-        outState.putBoolean(KEY_OPENED_AS_TILE_CHOOSER, openedAsTileChooser)
+        // `openedAsTileChooser` is deliberately not saved — it is derived from
+        // the launch intent, which the platform re-delivers on restore; a bundle
+        // copy could disagree with it (see the field's doc).
         // Null when nothing is waiting, which reads back as nothing waiting —
         // a grant arriving with no tap behind it must not replay one.
         outState.putString(KEY_PENDING_LOCATION_ACTION, pendingLocationAction?.name)
@@ -2502,17 +2569,12 @@ class MainActivity : ComponentActivity() {
                 val running = loaded != null
                 val changed = snoozing != running
                 snoozing = running
-                // Opened from the tile as the chooser, a row has just armed a
-                // snooze — every start path ends in the record write this
-                // observes — so finish the way the tile tap would have,
-                // collapsing back to where the user was (SPEC.md §4.4). A
-                // refused arm never flips `running` true, so the screen stays and
-                // shows why; a pending location prompt has not armed yet, so it
-                // holds too. A launcher-opened app carries no flag and stays.
-                if (openedAsTileChooser && changed && running) {
-                    finish()
-                    return@runOnUiThread
-                }
+                // A tile-chooser launch that arms finishes on the commit's
+                // outcome ([rows]' `onArmOutcome`), not on this record write: the
+                // write can show a provisional `ARMING` record before the arm is
+                // confirmed or known to be partial, which is neither reliably
+                // "armed" nor reliably "partial" (Codex, PR #284).
+                //
                 // Before the assignment, so the comparison is against the
                 // record this screen was showing: a different snooze must not
                 // inherit the last one's meeting times for the moment before
@@ -2893,6 +2955,51 @@ class MainActivity : ComponentActivity() {
     private fun askForNotifications() {
         notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
+
+    /**
+     * Asks for `POST_NOTIFICATIONS` up front when the tile opened the chooser.
+     *
+     * A tile-chooser launch (§4.4) arms and finishes without the user dwelling
+     * on the screen, so the notifications banner — which a launcher-opened app
+     * relies on the user tapping — is never reached. Without this a tile-first
+     * user can pick an end, arm, and have the ongoing card the system drops for
+     * a denied permission leave no visible state anywhere (§4.2; Codex, PR #284).
+     * The tile's own arm path asked for exactly this reason; the chooser has to
+     * carry it now that the tile no longer arms.
+     *
+     * Only when **askable**: granted needs nothing, and the system ignores a
+     * request once it has been denied twice (the dialog is modal, so the user
+     * answers it before the chooser rows behind it, and the arm-and-close cannot
+     * race it). A launcher launch carries no flag and keeps the banner.
+     */
+    private fun maybeAskChooserNotifications() {
+        if (!openedAsTileChooser) return
+        if (refreshNotifications() == NotificationPermission.ASKABLE) requestNotifications()
+    }
+
+    /**
+     * Runs [maybeAskChooserNotifications] behind the first frame, through the
+     * frame callback then the post — the exact sequence
+     * [readNotificationsAfterFirstFrame] uses.
+     *
+     * A bare `decorView.post` from `onCreate` is queued before `setContent` and
+     * can run ahead of the first traversal, so its `NotificationManager` binder
+     * read would still front the chooser's first frame (§6.9; Codex, PR #284).
+     * The frame callback is what actually orders this behind the redraw.
+     */
+    private fun askChooserNotificationsAfterFirstFrame() {
+        Choreographer.getInstance().postFrameCallback {
+            window.decorView.post { maybeAskChooserNotifications() }
+        }
+    }
+
+    /**
+     * The notification request [maybeAskChooserNotifications] fires, as a seam a
+     * test can observe without the real `ActivityResultLauncher` — the same
+     * shape [runOffMainThread] uses. Production launches the system dialog.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal var requestNotifications: () -> Unit = ::askForNotifications
 
     /**
      * Re-reads both location permissions onto the screen, and returns what it
@@ -3719,7 +3826,12 @@ class MainActivity : ComponentActivity() {
             "tap: arm from the app screen" + if (started) "" else " (the service refused to start)",
         )
         if (started) {
-            offerSheetForThisArm()
+            // Opened as the tile chooser, the rows are the arm-and-close path
+            // (their `onArmOutcome`); the plain `Snooze` button starts the
+            // service with no `EndChoiceOutcome`, so it has no confirmed-arm
+            // signal to close on — it arms and leaves the screen rather than
+            // popping a sheet over the chooser (Codex, PR #284).
+            if (!openedAsTileChooser) offerSheetForThisArm()
             return
         }
         Log.e(TAG, "Starting the service to arm was refused.")
@@ -4772,6 +4884,12 @@ class MainActivity : ComponentActivity() {
         // `onNewIntent` that only set the flag left the user on the previous
         // screen with nothing to choose from (Codex, PR #284).
         if (openedAsTileChooser) screen = Screen.MAIN
+        // Same up-front ask as a fresh tile-chooser launch, deferred the same
+        // way: its `refreshNotifications` makes binder calls that must not front
+        // a frame, and the frame callback — not a bare post — is what orders it
+        // behind the redraw this new intent triggers (Codex, PR #284). A reuse
+        // arms and closes just as abruptly, so it needs the ask too.
+        askChooserNotificationsAfterFirstFrame()
         takeBlockedTileTapFrom(intent)
     }
 

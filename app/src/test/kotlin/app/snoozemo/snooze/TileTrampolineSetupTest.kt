@@ -41,6 +41,11 @@ class TileTrampolineSetupTest {
 
     @Before
     fun setUp() {
+        // The chooser off, and its process-static cache cleared: with it on, an
+        // arm tap would open the chooser rather than take the setup routing these
+        // cases assert on.
+        EndSheetStore.resetCacheForTest()
+        EndSheetStore(appContext).setEnabled(false)
         TestSnoozeService.reset(java.time.Instant.ofEpochMilli(System.currentTimeMillis()))
         // Unlocked unless a test says otherwise: the gate is skipped behind the
         // keyguard, so a leaked lock would make every routing case here pass for
