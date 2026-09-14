@@ -680,8 +680,11 @@ class SnoozeServiceSetCapTest {
         // choice already armed: this tap adds nothing (the record already says
         // `endsOnMotion`), so rolling the exit off would remove an exit the user
         // still wants and leave the phone quiet to the cap (Codex, PR #272). The
-        // exit is kept and the tap is APPLIED; only the clear failed to land, so
-        // the record is exactly the partial timer it was before the tap.
+        // exit is kept and untouched; the record is exactly the partial timer it
+        // was before the tap. But the outcome is PARTIAL, not APPLIED (maintainer,
+        // 2026-09-14; Codex, PR #286): the failsafe restore this tap tried failed,
+        // so the cap is still shortened and the chooser must stay up as the retry
+        // surface rather than close on APPLIED.
         TestSnoozeService.motionRegistrar.available = true
         val record = snoozeFixture(now).copy(
             endsOnDeparture = false,
@@ -696,7 +699,11 @@ class SnoozeServiceSetCapTest {
             putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
         }
 
-        assertEquals("the exit was already armed, so the tap holds", EndChoiceResult.APPLIED, reported)
+        assertEquals(
+            "the exit holds but the failed restore reports partial, keeping the retry surface",
+            EndChoiceResult.PARTIAL,
+            reported,
+        )
         val after = ActiveSnoozeStore(appContext).load()
         assertEquals("the pre-existing exit is untouched", true, after?.endsOnMotion)
         assertEquals("the intent stands, its clear having failed", true, after?.timerOnlyRequested)

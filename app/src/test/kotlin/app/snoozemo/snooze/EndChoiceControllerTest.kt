@@ -605,6 +605,28 @@ class EndChoiceControllerTest {
     }
 
     @Test
+    fun `a failed motion-cap restore reported partial shows the couldn't-set-end line`() {
+        // Unlike the deliberate partial-timer above, a motion-path PARTIAL means
+        // the exit armed but the failsafe restore failed — and adding the exit
+        // cleared timerOnlyRequested, so the record's isPartialTimer line does
+        // not explain it. The rows would otherwise stay up saying nothing, which
+        // with notifications denied hides the failure entirely (principle 2), so
+        // this raises the couldn't-set-end line the same way a refusal does
+        // (maintainer, 2026-09-14; Codex, PR #286). The exit stays armed and the
+        // rows stay up for a retry.
+        val seams = Seams(now)
+        val controller = seeded(seams)
+
+        controller.commitMotionEnd()
+        seams.onOutcome!!(EndChoiceResult.PARTIAL)
+
+        assertFalse("the rows come back for a retry", controller.committing)
+        assertTrue("the failure is shown where the tap happened", controller.commitFailed)
+        assertEquals("and the rows stay up", 0, seams.dismissals)
+        assertNotNull(controller.endCondition)
+    }
+
+    @Test
     fun `choosing a departure restores rather than naming a time`() {
         // The target is the record's own ceiling, which only the service can
         // read: a time computed here would be a guess about a backstop a clock
@@ -838,6 +860,55 @@ class EndChoiceControllerTest {
         requireNotNull(seams.onOutcome)(EndChoiceResult.APPLIED)
 
         assertEquals(1, seams.dismissals)
+    }
+
+    @Test
+    fun `a restored motion commit answered partial across a rotation still shows the failure`() {
+        // The rotation edge: commitMotionEnd dispatched, then the host was
+        // recreated before the service answered PARTIAL for a failed restore.
+        // The discriminator that makes a motion PARTIAL a failure is saved and
+        // restored with the request, so the resumed outcome still raises the
+        // couldn't-set-end line rather than reading as a deliberate partial
+        // (Codex, PR #286).
+        val seams = Seams(now)
+        val controller = controller(seams)
+        EndChoiceOutcome.report(RESUMED_REQUEST, EndChoiceResult.PARTIAL)
+
+        controller.restore(
+            EndCondition.seededAt(now, now.plus(ActiveSnooze.DEFAULT_CAP), zone),
+            wasCommitting = true,
+            failed = false,
+            partialIsFailure = true,
+            offeredFor = now,
+            configurationChange = true,
+            requestId = RESUMED_REQUEST,
+        )
+
+        assertTrue("the failed restore's line survives the rotation", controller.commitFailed)
+        assertFalse(controller.committing)
+        assertEquals("and the rows stay up", 0, seams.dismissals)
+    }
+
+    @Test
+    fun `a restored time commit answered partial across a rotation stays a deliberate partial`() {
+        // The other side of the discriminator: a time-path PARTIAL is a
+        // deliberate partial-timer (explained by the record's isPartialTimer),
+        // never a failure, and a rotation must not turn it into one.
+        val seams = Seams(now)
+        val controller = controller(seams)
+        EndChoiceOutcome.report(RESUMED_REQUEST, EndChoiceResult.PARTIAL)
+
+        controller.restore(
+            EndCondition.seededAt(now, now.plus(ActiveSnooze.DEFAULT_CAP), zone),
+            wasCommitting = true,
+            failed = false,
+            partialIsFailure = false,
+            offeredFor = now,
+            configurationChange = true,
+            requestId = RESUMED_REQUEST,
+        )
+
+        assertFalse("a deliberate partial is not a failure, even across a rotation", controller.commitFailed)
     }
 
     @Test

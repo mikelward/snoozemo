@@ -2514,7 +2514,20 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // rather than rolling a good exit back off. The user re-taps to reach
             // the failsafe. `cancelFailure` above cleared any stale card first,
             // so this posts a fresh one only when the restore actually failed.
-            if (wanted && !restoreCapToFailsafe()) notifications.showCouldNotSetEnd()
+            //
+            // **And it reports `PARTIAL`, not `APPLIED`** (maintainer, 2026-09-14,
+            // "report PARTIAL there"). The exit is armed but the cap is still the
+            // shortened one a chosen time left — a partial success, not the clean
+            // apply `APPLIED` promises. The chooser closes on `APPLIED`, so
+            // returning it here would take away the row the re-tap needs; with
+            // notifications denied the card above cannot show either, and the
+            // failure would vanish with the shortened cap left in place —
+            // principle 2's silent-wrong-thing. `PARTIAL` keeps the chooser up as
+            // that retry surface without unwinding the exit (Codex, PR #286).
+            if (wanted && !restoreCapToFailsafe()) {
+                notifications.showCouldNotSetEnd()
+                return EndChoiceResult.PARTIAL
+            }
         }
         return result
     }

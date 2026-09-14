@@ -389,11 +389,16 @@ class SnoozeServiceMotionEndTest {
     }
 
     @Test
-    fun `a failed failsafe restore keeps the exit and surfaces a retry`() {
+    fun `a failed failsafe restore keeps the exit and reports partial`() {
         // The exit the user asked for is armed and its shortened cap stays visible
         // (capCountdownShown), so a restore that cannot persist the ceiling keeps
         // the exit and surfaces the failure for a retry rather than unwinding a
-        // good write (maintainer, 2026-09-13; Codex, PR #278).
+        // good write (maintainer, 2026-09-13; Codex, PR #278). The outcome is
+        // PARTIAL, not APPLIED (maintainer, 2026-09-14; Codex, PR #286): the exit
+        // took but the cap did not reach the failsafe, so the chooser must stay up
+        // as the retry surface rather than close on APPLIED — which, with
+        // notifications denied, would take the card too and leave the failure
+        // silent behind the shortened cap.
         val chosen = snoozeFixture(now).copy(
             capExpiresAt = now.plus(Duration.ofHours(1)),
             endsOnDeparture = false,
@@ -414,7 +419,11 @@ class SnoozeServiceMotionEndTest {
         assertEquals("the movement exit is kept", true, after?.endsOnMotion)
         assertTrue("the sensor is listening", TestSnoozeService.motionRegistrar.armed)
         assertEquals("the cap is left at the chosen time, still visible", chosen.capExpiresAt, after?.capExpiresAt)
-        assertEquals("the tap applied — the exit took", EndChoiceResult.APPLIED, reported)
+        assertEquals(
+            "the tap is partial — the exit took but the cap did not reach the failsafe",
+            EndChoiceResult.PARTIAL,
+            reported,
+        )
         assertTrue(
             "and the failure is surfaced for a retry",
             shadeShows(stringOf(app.snoozemo.R.string.failure_could_not_set_end)),

@@ -229,6 +229,18 @@ internal class EndChoiceController(
     var committingRequestId: Long = 0L
         @VisibleForTesting internal set
 
+    /**
+     * Whether a `PARTIAL` from the outstanding commit means a failed restore
+     * (the motion path) rather than a deliberate partial-timer (the time path).
+     * [onOutcome] reads and clears it. The service usually answers on the same
+     * looper ([dispatch]), but a rotation can land between the dispatch and the
+     * answer — so this belongs to the outstanding *request*, like
+     * [committingRequestId], and is saved and restored with it. Dropped on a
+     * process death, where the request itself is gone (Codex, PR #286).
+     */
+    var committingPartialIsFailure = false
+        private set
+
     private var outcomeWatch: AutoCloseable? = null
 
     /**
@@ -378,7 +390,11 @@ internal class EndChoiceController(
      * already running to its ceiling.
      */
     fun commitMotionEnd() =
-        dispatch("until I move") { requestId, forSnooze -> chooseMotionEnd(requestId, forSnooze) }
+        // `partialIsFailure`: the motion path returns `PARTIAL` only when the
+        // exit armed but the failsafe cap restore failed — always a failure to
+        // surface, never a deliberate partial-timer (which comes from the time
+        // path). See [onOutcome].
+        dispatch("until I move", partialIsFailure = true) { requestId, forSnooze -> chooseMotionEnd(requestId, forSnooze) }
 
     /**
      * The commit lifecycle both choices share: one request out at a time, and
@@ -402,11 +418,13 @@ internal class EndChoiceController(
      */
     private fun dispatch(
         choice: String,
+        partialIsFailure: Boolean = false,
         start: (requestId: Long, forSnooze: Instant?) -> Boolean,
     ) {
         if (committing) return
         committing = true
         commitFailed = false
+        committingPartialIsFailure = partialIsFailure
         // A fresh identity, which is what keeps an *earlier* answer from
         // settling this one — whether the earlier request was this sheet's
         // previous tap or the other host's, since both surfaces share the
@@ -443,6 +461,8 @@ internal class EndChoiceController(
         outcomeWatch = null
         committing = false
         committingRequestId = 0L
+        val partialWasFailure = committingPartialIsFailure
+        committingPartialIsFailure = false
         // `GONE` dismisses like `APPLIED`, and deliberately: the snooze ended
         // under the sheet — a departure, the cap, a capability loss — so there
         // is nothing left to refine and every later tap would fail the same
@@ -453,15 +473,20 @@ internal class EndChoiceController(
         // and went since the offer was drawn — and the host's dismissal
         // re-reads the record that says which, and draws what there is.
         //
-        // **`PARTIAL` keeps the sheet up.** The time took, so there is nothing
-        // to retry for its own sake and nothing to reseed — but an exit stayed
-        // armed, and dismissing on that is indistinguishable from dismissing on
-        // a clean apply, which is principle 2's failure. The line that says so
-        // is derived by the rows from the record's [ActiveSnooze.isPartialTimer]
-        // now, so there is no flag to raise here — leaving the sheet up is the
-        // whole of it. A second tap on the same row retries the removal: the
-        // service's "changes nothing" path still runs it.
-        if (result == EndChoiceResult.PARTIAL) return
+        // **`PARTIAL` keeps the sheet up**, and means one of two things. A
+        // *deliberate* partial-timer — a chosen time that left an exit armed —
+        // is explained by the rows from the record's [ActiveSnooze.isPartialTimer]
+        // line, so there is nothing to raise here. A *failed motion-cap restore*
+        // ([committingPartialIsFailure]) is not: adding the exit cleared
+        // `timerOnlyRequested`, so `isPartialTimer` is false and the rows would
+        // otherwise stay up saying nothing — principle 2's silent failure. For
+        // that one, raise the `couldNotSetEnd` line the same way a refusal does
+        // (maintainer, 2026-09-14; Codex, PR #286). The exit stays armed either
+        // way; a second tap on the row retries the restore.
+        if (result == EndChoiceResult.PARTIAL) {
+            if (partialWasFailure) commitFailed = true
+            return
+        }
         if (result != EndChoiceResult.REFUSED) {
             dismiss()
             onArmOutcome(result)
@@ -624,6 +649,14 @@ internal class EndChoiceController(
         stepped: Boolean = false,
         configurationChange: Boolean,
         requestId: Long,
+        /**
+         * Whether the resumed commit's `PARTIAL` would be a failed motion-cap
+         * restore ([committingPartialIsFailure]) — saved with [requestId], since
+         * an answer arriving after a rotation reaches [onOutcome], which reads
+         * it to decide whether to raise the couldn't-set-end line (Codex, PR
+         * #286).
+         */
+        partialIsFailure: Boolean = false,
         offeredFor: Instant?,
     ) {
         endCondition = condition
@@ -636,6 +669,10 @@ internal class EndChoiceController(
         // the end time" over a time that was in fact set.
         steppedByUser = stepped
         if (!wasCommitting) return
+        // Restored before either resume path below reaches [onOutcome], so a
+        // motion-path PARTIAL that arrives after a rotation still raises the
+        // couldn't-set-end line rather than reading as a deliberate partial.
+        committingPartialIsFailure = partialIsFailure
         // Named, so the answer this resumes is the one this sheet asked for.
         // Unnamed it would take whatever the channel happened to be holding,
         // which after the second host arrived can be the other sheet's.
