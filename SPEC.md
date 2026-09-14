@@ -636,7 +636,22 @@ what the app *does*.
 - **Long press:** opens the app, via an activity registered for
   `android.service.quicksettings.action.QS_TILE_PREFERENCES`.
 - **Locked device:** arming works locked — no `unlockAndRun()` wrapper. The whole point is a
-  one-tap action from the shade. Ending also works locked. Only the settings screen requires unlock.
+  one-tap action from the shade. Starting, stopping, and *modifying* a snooze all work locked.
+  This is bought by declaring the trampoline `showWhenLocked` (maintainer, 2026-09-15): both taps
+  reach it through `startActivityAndCollapse`, and a secured keyguard otherwise holds an ordinary
+  activity launch behind the unlock prompt — so on a Pixel the tile lit up but nothing silenced until
+  the user authenticated. Showing over the keyguard lets the arm run at once.
+  **The guardrail is sensitivity, not the verb** (maintainer, 2026-09-15): what must stay behind
+  unlock is anything *sensitive* — reading the debug log, changing system settings, and seeing
+  meeting/place details or rule configuration — and every one of those lives on an app screen or a
+  system surface reached through `MainActivity` (or the system), which does not inherit
+  `showWhenLocked` and so still waits for unlock. Starting, stopping and modifying a snooze are not
+  sensitive: the trampoline draws nothing and only flips Snoozemo's own zen rule or its cap. That
+  covers the ongoing notification's own actions too — `End now`, `+30 min`, and `Until <time>` route
+  through the same trampoline, so all three work over the lock. `Until <time>` also switches the
+  snooze to timer-only (§4.3), but reveals nothing new — the time is already on the notification the
+  lock screen shows. Consistent with existing platform affordances: the volume keys and the shade's
+  own DND toggle already change the ringer from the lock screen with no auth.
 - **The tile tracks the snooze, not just its own taps.** A snooze can start or end with no tile tap
   behind it — the duration cap firing, `End now` or `+30 min` on the ongoing notification, a release
   from the app screen — and the notification the user taps sits in the same shade as the tile, so
