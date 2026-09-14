@@ -151,6 +151,7 @@ private const val KEY_PENDING_LOCATION_FOR = "pending_location_for"
 private const val KEY_PENDING_LOCATION_ARM_COUNT = "pending_location_arm_count"
 private const val KEY_IDLE_OFFER_ARM_COUNT = "idle_offer_arm_count"
 private const val KEY_BACKGROUND_RATIONALE = "background_location_rationale"
+private const val KEY_CHOOSER_ASK_OWED = "chooserNotificationAskOwed"
 private const val KEY_PERMISSIONS_ORIGIN = "permissionsOrigin"
 private const val KEY_ROUTED_TO_PERMISSIONS_ONCE = "routedToPermissionsOnce"
 private const val KEY_WELCOME_TAP_BLOCKED = "welcomeTapBlocked"
@@ -592,6 +593,23 @@ class MainActivity : ComponentActivity() {
     private var openedAsTileChooser = false
 
     /**
+     * Whether a fresh tile-chooser launch still owes its up-front notification
+     * ask (see [askChooserNotificationsAfterFirstFrame]).
+     *
+     * The ask rides a post-first-frame callback, and a configuration recreation
+     * *between* `onCreate` and that callback recomputes [freshTileChooserLaunch]
+     * as false and would never re-schedule it — dropping the ask for a tile-first
+     * user who has not granted the permission (Codex, PR #284). So the obligation
+     * is a flag that survives the recreation in the saved bundle: set when the
+     * launch owes the ask, saved and restored across the recreation, and cleared
+     * the moment the callback actually runs, so a later recreation does not
+     * re-ask. Unlike [openedAsTileChooser] this cannot be re-derived from the
+     * intent — the intent says the launch was a chooser, not whether its ask has
+     * already fired.
+     */
+    private var chooserNotificationAskOwed = false
+
+    /**
      * The record itself, read alongside [snoozing] and for the same reason —
      * `MainScreen`'s status line needs the mode and the cap to report anything
      * beyond "running", and re-deriving them separately would be a second read
@@ -682,6 +700,16 @@ class MainActivity : ComponentActivity() {
     internal var idleCalendarReadAtMillis: Long = 0L
 
     companion object {
+        /**
+         * Test seam for the up-front notification request that a `recreate()`-born
+         * instance uses. The per-instance [requestNotifications] cannot be set on
+         * that new instance before its first-frame callback fires, so its default
+         * routes through this when non-null. Null (the real launcher) in
+         * production; a test that sets it resets it after.
+         */
+        @androidx.annotation.VisibleForTesting
+        internal var testNotificationRequest: (() -> Unit)? = null
+
         /**
          * Whether the calendar read taken at [readAtMillis] no longer
          * describes the offer to start's window at [nowMillis].
@@ -1525,6 +1553,9 @@ class MainActivity : ComponentActivity() {
                 Screen.entries.firstOrNull { s -> s.name == it.getString(KEY_PERMISSIONS_ORIGIN) }
                     ?: permissionsOrigin
             routedToPermissionsOnce = it.getBoolean(KEY_ROUTED_TO_PERMISSIONS_ONCE, routedToPermissionsOnce)
+            // Restored so a configuration recreation before the first-frame ask
+            // fires still owes it (see [chooserNotificationAskOwed]).
+            chooserNotificationAskOwed = it.getBoolean(KEY_CHOOSER_ASK_OWED, false)
             restoreSheet(it, configurationChange = wasRecreatedByConfiguration)
             restoreRows(it, configurationChange = wasRecreatedByConfiguration)
         }
@@ -1547,6 +1578,11 @@ class MainActivity : ComponentActivity() {
         // `onNewIntent`'s routing for a live-instance tap.
         if (freshTileChooserLaunch) {
             screen = Screen.MAIN
+            // A fresh tile-chooser launch owes the up-front notification ask. The
+            // obligation is recorded here and restored across a recreation (above)
+            // rather than re-derived from [freshTileChooserLaunch], which a
+            // configuration change turns false — see [chooserNotificationAskOwed].
+            chooserNotificationAskOwed = true
         }
         promptStore = NotificationPromptStore(applicationContext)
         locationPromptStore = LocationPromptStore(applicationContext)
@@ -1634,14 +1670,16 @@ class MainActivity : ComponentActivity() {
         // exact sequence `readNotificationsAfterFirstFrame` uses: a bare
         // `decorView.post` is queued before `setContent` and can run ahead of the
         // first traversal, so the frame callback is what actually orders this
-        // behind the first frame (Codex, PR #284). Gated on the same
-        // [freshTileChooserLaunch] as the routing above, not on
-        // `savedInstanceState == null`: a rotation's request was made on the
-        // original and its result is delivered to this instance, so re-asking
-        // would double it — but a process-death restore delivering a fresh tile
-        // tap has no earlier request in flight and *must* ask, or the user arms
-        // and closes with the ongoing card silently dropped (Codex, PR #284).
-        if (freshTileChooserLaunch) {
+        // behind the first frame (Codex, PR #284). Gated on
+        // [chooserNotificationAskOwed], not directly on [freshTileChooserLaunch]:
+        // a configuration recreation *between* `onCreate` and the callback would
+        // recompute the latter as false and drop the ask, so the obligation is
+        // restored from the bundle and re-scheduled here (Codex, PR #284). The
+        // callback clears the flag as it runs, so a rotation after it has fired
+        // does not re-ask — while a process-death restore delivering a fresh tile
+        // tap owes it anew and asks, or the user arms and closes with the ongoing
+        // card silently dropped.
+        if (chooserNotificationAskOwed) {
             askChooserNotificationsAfterFirstFrame()
         }
         setContent {
@@ -2082,7 +2120,10 @@ class MainActivity : ComponentActivity() {
         outState.putString(KEY_SCREEN, screen.name)
         // `openedAsTileChooser` is deliberately not saved — it is derived from
         // the launch intent, which the platform re-delivers on restore; a bundle
-        // copy could disagree with it (see the field's doc).
+        // copy could disagree with it (see the field's doc). Its *ask* obligation
+        // is saved, though: that cannot be re-derived from the intent, and a
+        // recreation before the first-frame ask fires must carry it forward.
+        outState.putBoolean(KEY_CHOOSER_ASK_OWED, chooserNotificationAskOwed)
         // Null when nothing is waiting, which reads back as nothing waiting —
         // a grant arriving with no tap behind it must not replay one.
         outState.putString(KEY_PENDING_LOCATION_ACTION, pendingLocationAction?.name)
@@ -2974,6 +3015,10 @@ class MainActivity : ComponentActivity() {
      */
     private fun maybeAskChooserNotifications() {
         if (!openedAsTileChooser) return
+        // The obligation is discharged the moment this callback runs — whatever it
+        // decides — so a configuration recreation after this point does not
+        // re-ask (see [chooserNotificationAskOwed]).
+        chooserNotificationAskOwed = false
         if (refreshNotifications() == NotificationPermission.ASKABLE) requestNotifications()
     }
 
@@ -2999,7 +3044,7 @@ class MainActivity : ComponentActivity() {
      * shape [runOffMainThread] uses. Production launches the system dialog.
      */
     @androidx.annotation.VisibleForTesting
-    internal var requestNotifications: () -> Unit = ::askForNotifications
+    internal var requestNotifications: () -> Unit = { (testNotificationRequest ?: ::askForNotifications)() }
 
     /**
      * Re-reads both location permissions onto the screen, and returns what it
@@ -4879,17 +4924,24 @@ class MainActivity : ComponentActivity() {
         // carries no extra and turns arm-and-close back off, so the next arm
         // leaves the app open where a stale flag would have closed it.
         openedAsTileChooser = intent.getBooleanExtra(EXTRA_TILE_CHOOSER, false)
-        // A tile-chooser tap reusing an instance sitting on Settings, Permissions
-        // or Licenses has to land on the chooser, which is Main's idle rows — an
-        // `onNewIntent` that only set the flag left the user on the previous
-        // screen with nothing to choose from (Codex, PR #284).
-        if (openedAsTileChooser) screen = Screen.MAIN
-        // Same up-front ask as a fresh tile-chooser launch, deferred the same
-        // way: its `refreshNotifications` makes binder calls that must not front
-        // a frame, and the frame callback — not a bare post — is what orders it
-        // behind the redraw this new intent triggers (Codex, PR #284). A reuse
-        // arms and closes just as abruptly, so it needs the ask too.
-        askChooserNotificationsAfterFirstFrame()
+        // Owed iff this reuse is a chooser, replaced not or'd — a launcher tap
+        // reusing this instance turns both the flag and its ask obligation back
+        // off (see [chooserNotificationAskOwed]).
+        chooserNotificationAskOwed = openedAsTileChooser
+        if (openedAsTileChooser) {
+            // A tile-chooser tap reusing an instance sitting on Settings,
+            // Permissions or Licenses has to land on the chooser, which is Main's
+            // idle rows — an `onNewIntent` that only set the flag left the user on
+            // the previous screen with nothing to choose from (Codex, PR #284).
+            screen = Screen.MAIN
+            // Same up-front ask as a fresh tile-chooser launch, deferred the same
+            // way: its `refreshNotifications` makes binder calls that must not
+            // front a frame, and the frame callback — not a bare post — is what
+            // orders it behind the redraw this new intent triggers. A reuse arms
+            // and closes just as abruptly, so it needs the ask too, and owing it
+            // (above) makes a recreation before the callback fires re-schedule it.
+            askChooserNotificationsAfterFirstFrame()
+        }
         takeBlockedTileTapFrom(intent)
     }
 
