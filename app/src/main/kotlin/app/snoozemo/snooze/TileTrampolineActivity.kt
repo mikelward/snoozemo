@@ -6,44 +6,20 @@ import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager.PERMISSION_GRANTED
 import android.os.Bundle
-import android.text.format.DateFormat
 import android.util.Log
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
-import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.VisibleForTesting
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import app.snoozemo.core.ActiveSnooze
-import app.snoozemo.core.EndCondition
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.tileTapNeedsSetup
-import app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE
 import app.snoozemo.ui.EXTRA_BLOCKED_TAP_ID
 import app.snoozemo.ui.EXTRA_OPEN_PERMISSIONS
-import app.snoozemo.ui.EndConditionSheetContent
+import app.snoozemo.ui.EXTRA_TILE_CHOOSER
 import app.snoozemo.ui.MainActivity
-import app.snoozemo.ui.formatSheetTime
-import app.snoozemo.ui.SnoozemoTheme
-import java.time.Instant
-import java.time.ZoneId
-import java.util.Date
 import java.util.UUID
 
 private const val TAG = "TileTrampoline"
@@ -58,11 +34,15 @@ private const val TAG = "TileTrampoline"
  * phone quiet with the user's own exit spent.
  *
  * It starts the service **first, before any UI**, so arming never waits on
- * rendering. The end-condition sheet (§4.4) lives here — which is why this is a
- * transparent activity rather than `Theme.NoDisplay`: a no-display activity
- * cannot host a sheet or a runtime permission request. The sheet is off by
- * default ([EndSheetStore]), so on most installs this activity still draws
- * nothing at all and finishes as soon as the service start is queued.
+ * rendering. It is transparent rather than `Theme.NoDisplay` because it still
+ * has to host the runtime notification-permission dialog, which a no-display
+ * activity cannot; most taps draw nothing at all and finish as soon as the
+ * service start is queued.
+ *
+ * The one arm tap that does not start the service is the chooser: with
+ * "ask when to unsnooze" on ([EndSheetStore]), an arm opens the main screen as
+ * the end-condition chooser instead, and the user's row tap there is what arms
+ * (SPEC.md §4.4). That branch never touches the service — see [dispatch].
  */
 class TileTrampolineActivity : ComponentActivity() {
 
@@ -82,104 +62,22 @@ class TileTrampolineActivity : ComponentActivity() {
     private val promptStore by lazy { NotificationPromptStore(this) }
 
     /**
-     * Lazy for the same reason [promptStore] is, and read in the same place:
-     * from the posted block, after the service start. Off by default, so most
-     * taps never open this file at all — the read happens only where the sheet
-     * is actually being considered.
-     */
-    private val endSheetStore by lazy { EndSheetStore(this) }
-
-    /**
-     * The sheet's state and commit lifecycle, shared with the app screen's
-     * `Snooze` button so the same action behaves the same either way
-     * (`EndChoiceController`). What stays here is what is genuinely this
-     * activity's: the transparent window, `singleInstance` re-entry, and the
-     * rotation handling below.
-     */
-    @VisibleForTesting
-    internal val sheet = EndChoiceController(
-        surface = "the sheet from the tile",
-        // Loaded here rather than kept warm: this activity exists for one tap
-        // and reads it only after the service start, so a load is the honest
-        // shape — and the sheet is off by default, so most taps never reach it.
-        // Read from disk, which this activity keeps no copy of. Only ever
-        // called from a refusal, long after the service start, so it is not on
-        // the arm path (SPEC.md §6.9).
-        currentRecord = { ActiveSnoozeStore(this).load() },
-        chooseEnd = { endsAt, requestId, forSnooze ->
-            SnoozeService.chooseEnd(this, endsAt, requestId, forSnooze)
-        },
-        // Wired but unreached from here: this sheet's departure row dismisses,
-        // because the snooze it is offered over was armed seconds ago and is
-        // already running to its ceiling. Supplied rather than made optional so
-        // there is no null branch to reason about in the controller.
-        restoreDeparture = { requestId, forSnooze ->
-            SnoozeService.restoreEnd(this, requestId, forSnooze)
-        },
-        // Wired but unreached for the same reason: this sheet offers no
-        // `Until I move` row.
-        chooseMotionEnd = { requestId, forSnooze ->
-            SnoozeService.setMotionEnd(this, true, requestId, forSnooze)
-        },
-        watchOutcome = { requestId, onOutcome ->
-            EndChoiceOutcome.watch(requestId) { result ->
-                onOutcome(result)
-                // A settled commit may have moved the record — a partial timer
-                // keeps an exit armed — so reload it, since the partial line
-                // reads [ActiveSnooze.isPartialTimer] off the record rather
-                // than a saved flag. On an outcome, so long after the start.
-                offeredRecord = ActiveSnoozeStore(this).load()
-            }
-        },
-        onDismiss = ::finish,
-    )
-
-    /** Whether [setContent] has already run, so a re-seed doesn't re-set it. */
-    private var sheetRendered = false
-
-    /**
-     * The record the sheet is offered over, reloaded whenever a commit settles.
-     *
-     * The "can still end sooner" line is derived from this record's
-     * [ActiveSnooze.isPartialTimer] rather than a saved flag, so a chosen time
-     * that left an exit armed shows the line and turns the departure row into
-     * the way back — the same way it does over a running snooze on the app
-     * screen (Codex, PR #267). Reloaded off the arm path, on an outcome — and,
-     * across a restore, only from a record still naming the offered snooze (see
-     * [restore]).
-     */
-    @VisibleForTesting
-    internal var offeredRecord by mutableStateOf<ActiveSnooze?>(null)
-
-    /**
-     * Whether [restore] is still reloading [offeredRecord] off the first frame.
-     *
-     * True only in the window between a restored sheet drawing and its record
-     * landing (see [restore]). While it holds, the departure row is inert rather
-     * than dismissing — the record is what says whether that row is the way back
-     * from a partial timer or a plain dismissal, and it is not known yet.
-     */
-    private var offerRecordLoading by mutableStateOf(false)
-
-    /**
      * Whether the tap being handled got the service started at all.
      *
-     * Necessary but **not sufficient** for the sheet — see [snoozeIsRunning].
      * The notification-permission request still runs on a refused start, since
-     * that card is exactly what the permission makes visible.
+     * that card is exactly what the permission makes visible; this only records
+     * whether the start was accepted, for the debug log line.
      */
     private var startAccepted = false
 
     /**
      * Whether a posted [decide] is still owed an answer.
      *
-     * Survives a configuration change because the runnable does not: a second
-     * tile tap reaching `onNewIntent` while a sheet is already up posts a fresh
-     * decision, and a recreation before it ran left the replacement rendering
-     * the *old* sheet and never asking again — a stale sheet over a snooze the
-     * new tap had ended, or a kept selection where a new arm should have
-     * reseeded (Codex, PR #118). `sheetRendered` cannot answer this; it says
-     * what was drawn, not what is owed.
+     * Survives a configuration change because the runnable does not: a
+     * recreation before the posted decision ran left the replacement with a
+     * started service and nothing left to do, so it never asked for the
+     * notification permission the arm needed (Codex, PR #118). [restore] re-posts
+     * it from this flag.
      */
     private var decisionPending = false
 
@@ -209,31 +107,16 @@ class TileTrampolineActivity : ComponentActivity() {
             // is `singleInstance`, so a tap arriving while the dialog is up
             // reaches `onNewIntent`, which dispatches it and calls `setIntent`.
             // Asking the *current* intent rather than assuming an arm is what
-            // stops an `End now` tap being answered with a sheet offering to
-            // extend the snooze they just asked to leave — reachable whenever
-            // the release is refused, since the record then survives (Codex,
-            // PR #118).
-            //
-            // Where the arm is still current and took, the sheet is what comes
-            // next (SPEC.md §4.4): finishing here would mean a user who answered
-            // the dialog never got offered a time, while one who was never asked
-            // did. Where it didn't, the card the grant has just made visible is
-            // the whole answer.
+            // keeps an `End now` tap from being routed as if it were still the
+            // arm that opened the dialog (Codex, PR #118).
             val stillArming = serviceActionFor(intent) == SnoozeService.ACTION_ARM
-            // One reading for the gate and the seed alike, as in [decide], and
-            // not [decide] itself: the permission has just been answered, so
-            // re-running its ask branch would put the dialog straight back up.
-            val now = Instant.ofEpochMilli(System.currentTimeMillis())
             // Re-asked after the answer, because granting notifications does
             // not grant the other half: a user who has just allowed the prompt
             // while Do Not Disturb access is still missing has a snooze that
-            // did not happen and now no dialog left to explain it.
-            val offering = if (stillArming && tapNeedsSetup()) null else offerableRecord(stillArming, now)
-            when {
-                stillArming && tapNeedsSetup() -> openApp()
-                offering != null -> showEndConditionSheet(offering, now)
-                else -> finish()
-            }
+            // did not happen and now no dialog left to explain it. Otherwise
+            // there is nothing more to show — the card the grant just made
+            // visible is the whole answer — so get out of the way.
+            if (stillArming && tapNeedsSetup()) openApp() else finish()
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -275,29 +158,19 @@ class TileTrampolineActivity : ComponentActivity() {
         if (savedState != null && marker().created) {
             // A rotation, not a tap. Re-dispatching here would send the tile's
             // action to the service a *second* time — arming again because the
-            // user turned the phone — and would reseed the sheet, throwing away
-            // the time they had already stepped to.
+            // user turned the phone. [restore] only re-posts a decision the
+            // rotation interrupted; it never re-dispatches.
             restore(savedState)
         } else {
-            // Either a fresh tap or a tap that restored a killed process. The
-            // sheet's saved state is deliberately *not* restored on the second:
-            // its in-flight commit, if any, was answered into a process that no
-            // longer exists, so waiting on it would wait forever. This tap gets
-            // the same treatment as any other.
+            // Either a fresh tap or a tap that restored a killed process, and
+            // both are dispatched fresh: a process restore has no live in-flight
+            // work to pick up, so it is treated as any other tap.
             dispatch(intent)
             // After the service, for the reason above. The next creation only
             // needs the marker to exist by the time it looks.
             marker().created = true
         }
     }
-
-    /** The snooze a saved offer was made against, if it named one. */
-    private fun savedOfferedFor(state: Bundle): Instant? =
-        if (state.containsKey(STATE_OFFERED_FOR)) {
-            Instant.ofEpochMilli(state.getLong(STATE_OFFERED_FOR))
-        } else {
-            null
-        }
 
     /** The recreation marker for this activity; see [RecreationMarker]. */
     private fun marker(): RecreationMarker =
@@ -308,37 +181,17 @@ class TileTrampolineActivity : ComponentActivity() {
         outState.putBoolean(STATE_DECISION_PENDING, decisionPending)
         outState.putBoolean(STATE_START_ACCEPTED, startAccepted)
         outState.putBoolean(STATE_AWAITING_PERMISSION, awaitingPermission)
-        outState.putBoolean(STATE_SHEET_SHOWN, sheetRendered)
-        outState.putBoolean(STATE_COMMITTING, sheet.committing)
-        outState.putLong(STATE_REQUEST_ID, sheet.committingRequestId)
-        sheet.offerFor?.let { outState.putLong(STATE_OFFERED_FOR, it.toEpochMilli()) }
-        outState.putBoolean(STATE_COMMIT_FAILED, sheet.commitFailed)
-        sheet.endCondition?.let {
-            outState.putLong(STATE_ENDS_AT, it.endsAt.toEpochMilli())
-            outState.putLong(STATE_FLOOR, it.floor.toEpochMilli())
-            outState.putLong(STATE_CEILING, it.ceiling.toEpochMilli())
-        }
     }
 
-    /**
-     * Picks the sheet back up after a configuration change, exactly where it
-     * was — the chosen time included, since stepping to it is the only work the
-     * user has done here and reseeding would silently undo it.
-     *
-     * A commit that was in flight is picked back up too. The watch went with the
-     * old activity, so the service may have answered while nothing was
-     * listening; [EndChoiceOutcome.takePending] is that answer, and a fresh
-     * watch covers the case where it hasn't come yet.
-     */
     /**
      * Queues [decide] behind the arm, and is the only way it is ever reached.
      *
      * Separate from [dispatch] because a configuration change can land between
      * the two: the block belongs to the activity that posted it, so a
-     * replacement built before it ran inherited a started service, no sheet,
-     * and nothing left to render or finish — a transparent window blank for as
-     * long as the user left it there (Codex, PR #118). [restore] posts it again
-     * rather than re-dispatching, which would arm a second time.
+     * replacement built before it ran inherited a started service and nothing
+     * left to do — the notification-permission ask the arm needed never
+     * happened (Codex, PR #118). [restore] posts it again rather than
+     * re-dispatching, which would arm a second time.
      */
     private fun postDecision(arming: Boolean) {
         decisionPending = true
@@ -346,18 +199,16 @@ class TileTrampolineActivity : ComponentActivity() {
     }
 
     /**
-     * What happens once the arm is away: ask, offer the sheet, or get out of
-     * the way. Never called directly — see [postDecision].
+     * What happens once the arm is away: ask for notifications, route to setup,
+     * or get out of the way. Never called directly — see [postDecision].
+     *
+     * This is the instant-arm path: the chooser branch in [dispatch] has already
+     * peeled off the choose-then-arm case, so an arm reaching here has been made
+     * and the only questions left are whether to surface a permission the
+     * tile-first user needs.
      */
     private fun decide(arming: Boolean) {
         decisionPending = false
-        // One reading, handed to the gate and the seed alike. Two would let a
-        // cap sitting just outside the floor pass the gate and then be seeded
-        // against a clock that has moved past it, opening a sheet whose every
-        // row the service refuses and whose reseed reproduces the same dead
-        // offer (Codex, PR #118). The window is vanishing, and a screen the
-        // user cannot answer is precisely what the gate exists to prevent.
-        val now = Instant.ofEpochMilli(System.currentTimeMillis())
         // A tap that arrived while the user is mid-answer gets the service
         // action and nothing else: asking again would stack a second dialog
         // on the one in front of them, and finishing would dismiss it and
@@ -374,24 +225,17 @@ class TileTrampolineActivity : ComponentActivity() {
         // better answer: [shouldAskForNotifications] fixes an askable
         // permission in one tap, and a screen would be a detour past it.
         val needsSetup = arming && !askFirst && tapNeedsSetup()
-        // Read once, and only where it can be used: both this and the record
-        // load below are IPC or disk, and this path runs on the main thread.
-        val offering = if (askFirst || needsSetup) null else offerableRecord(arming, now)
         if (askFirst) {
             awaitingPermission = true
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else if (needsSetup) {
             openApp()
-        } else if (offering != null) {
-            showEndConditionSheet(offering, now)
         } else {
             // Nothing to render, so don't linger: an empty transparent
             // window on screen is the "flash of blank" §6.9 warns about.
-            // This is the default path, not an edge case: the sheet is off
-            // unless asked for, so an ordinary tap arms and gets out of the
-            // way exactly as it did before the sheet existed. Ending or
-            // extending never gets one either — a user on their way out of
-            // the app's way is the last person to offer a menu to.
+            // An ordinary arm gets out of the way exactly as it did before, and
+            // ending or extending never lingers either — a user on their way out
+            // of the app's way is the last person to hold a window in front of.
             finish()
         }
     }
@@ -399,77 +243,14 @@ class TileTrampolineActivity : ComponentActivity() {
     private fun restore(state: Bundle) {
         startAccepted = state.getBoolean(STATE_START_ACCEPTED)
         awaitingPermission = state.getBoolean(STATE_AWAITING_PERMISSION)
-        val savedCondition = if (state.containsKey(STATE_ENDS_AT)) {
-            EndCondition(
-                endsAt = Instant.ofEpochMilli(state.getLong(STATE_ENDS_AT)),
-                floor = Instant.ofEpochMilli(state.getLong(STATE_FLOOR)),
-                ceiling = Instant.ofEpochMilli(state.getLong(STATE_CEILING)),
-            )
-        } else {
-            null
-        }
-        // Owed a decision, whether or not a sheet was drawn before it. Posted
-        // again against the same intent and *without* touching the service,
-        // which is already handling that action — re-dispatching is round 6's
-        // second arm. Where nothing is owed this stays false and the sheet is
-        // simply restored, which is what keeps a rotation from reseeding the
-        // time the user stepped to.
-        val owedDecision = state.getBoolean(STATE_DECISION_PENDING)
-        if (owedDecision) postDecision(serviceActionFor(intent) == SnoozeService.ACTION_ARM)
-        // Nothing drawn yet: the decision above is the whole of what happens
-        // next, and without it this activity would sit blank and transparent
-        // for as long as the user left it there.
-        if (!state.getBoolean(STATE_SHEET_SHOWN)) {
-            // Nothing was drawn, so there is no sheet to put back — and no
-            // partial line to derive, so the record is not read here at all: it
-            // would be disk in front of a frame that never draws.
-            sheet.restore(
-                savedCondition,
-                wasCommitting = false,
-                failed = state.getBoolean(STATE_COMMIT_FAILED),
-                // This whole path runs only under `marker().created` — see
-                // `onCreate`. A process restore re-dispatches the tap instead
-                // of restoring, so a commit reached here is always live.
-                configurationChange = true,
-                requestId = 0L,
-                offeredFor = savedOfferedFor(state),
-            )
-            return
-        }
-        renderSheet()
-        sheet.restore(
-            condition = savedCondition,
-            wasCommitting = state.getBoolean(STATE_COMMITTING),
-            failed = state.getBoolean(STATE_COMMIT_FAILED),
-            configurationChange = true,
-            requestId = state.getLong(STATE_REQUEST_ID),
-            offeredFor = savedOfferedFor(state),
-        )
-        // The saved sheet may be a partial timer; the line that says so is
-        // derived from the record. Read it back **after** the first frame, not
-        // synchronously in `onCreate`: a rotation during the arm's warm-up would
-        // otherwise put a cold `ActiveSnoozeStore.load()` (and the
-        // `DeviceStamp` / PackageManager behind it) in front of the sheet — the
-        // flash of blank §6.9 forbids (Codex, PR #272). Until it lands the sheet
-        // is inert: no partial line, and the departure row holds rather than
-        // dismissing a restore the user asked for. `decorView.post` is where
-        // `postDecision` already puts work that must wait for the first frame.
-        //
-        // Only a record for the snooze this sheet was offering counts: the read
-        // races the rest of the world, so by the time it lands the offered
-        // snooze may have ended and a different one armed. Deriving the partial
-        // line — or driving the departure row's commit — from *that* record
-        // would answer for a snooze the sheet never named (Codex, PR #272). A
-        // non-matching (or absent) record leaves `offeredRecord` null, so the
-        // sheet reads as the ordinary arm-time one it is: no partial line, and
-        // the departure row dismisses (departure is already this sheet's
-        // default) rather than committing against the wrong snooze.
-        val offer = savedOfferedFor(state)
-        offerRecordLoading = true
-        window.decorView.post {
-            val loaded = ActiveSnoozeStore(this).load()
-            offeredRecord = loaded?.takeIf { it.startedAt == offer }
-            offerRecordLoading = false
+        // Owed a decision if the arm's [postDecision] had not run before the
+        // rotation. Posted again against the same intent and *without* touching
+        // the service, which is already handling that action — re-dispatching
+        // would arm a second time. Where nothing is owed (the ordinary case:
+        // the decision ran and this window is only still up for the permission
+        // dialog) this does nothing and the dialog stays as it was.
+        if (state.getBoolean(STATE_DECISION_PENDING)) {
+            postDecision(serviceActionFor(intent) == SnoozeService.ACTION_ARM)
         }
     }
 
@@ -477,8 +258,8 @@ class TileTrampolineActivity : ComponentActivity() {
      * The second tap, while the first one's activity is still up.
      *
      * This activity is `singleInstance`, so a tile tap arriving while it is
-     * alive — which it is for as long as the notification-permission dialog or
-     * the end-condition sheet is showing — is
+     * alive — which it is for as long as the notification-permission dialog is
+     * showing — is
      * delivered here instead of creating another instance. Without this the tap
      * does nothing at all: on the arm path that reads as a broken tile, and on
      * the end path it is worse, because before the notification permission is
@@ -517,6 +298,31 @@ class TileTrampolineActivity : ComponentActivity() {
         // Whichever tap sent us here.
         val action = serviceActionFor(intent)
         val arming = action == SnoozeService.ACTION_ARM
+        // **Choose-then-arm: with the chooser on, an arm tap opens the main
+        // screen instead of arming** (SPEC.md §4.4). Nothing is armed here —
+        // the user's row tap on that screen is what starts the snooze, and
+        // finishes it back to where they were ([EXTRA_TILE_CHOOSER]). This
+        // replaces the old arm-first-then-sheet: the sheet refined a snooze
+        // already running, which is not what "ask when to unsnooze" should mean.
+        //
+        // The chooser flag is read from memory, never disk — [EndSheetStore]'s
+        // warmed cache — so this stays off the arm path (§6.9): a tap that
+        // overtakes the warm-up reads `false` and arms instantly below, the
+        // arm-preserving fallback.
+        //
+        // **No keyguard check here, deliberately** (Codex, PR #284). Knowing
+        // whether to arm-instead-when-locked would need `isKeyguardLocked`, a
+        // system call, before `startService` — exactly what §6.9 keeps off the
+        // arm path. So an unlocked chooser and a locked one are not told apart:
+        // the chooser opens either way, showing after the user unlocks. The
+        // instant locked arm (§4.2) stays the *off* default, where this branch
+        // never runs; a user who has opted into being asked cannot be asked
+        // behind the keyguard, and unlocking to answer is inherent to that.
+        if (arming && EndSheetStore.cachedEnabled()) {
+            SnoozeDebugLog.event("tap: arm from the tile, opening the chooser")
+            openChooser()
+            return
+        }
         // Contained, though an activity is on the documented exemption list for
         // starting a service — "documented" and "every OEM, every state of the
         // device" are not the same claim, and this is the app's only
@@ -594,227 +400,10 @@ class TileTrampolineActivity : ComponentActivity() {
         postDecision(arming)
     }
 
-    /**
-     * Whether to put the sheet in front of the user for the tap just handled.
-     *
-     * Three things have to hold, and the third is the one a started service
-     * cannot answer: this was an arm, the setting is on, and **a snooze is
-     * actually running**. `startService` succeeding only means the start was
-     * accepted — arming can still be refused for missing Do Not Disturb access,
-     * a switched-off rule, or a platform refusal, and every one of those erases
-     * the record on its way out. Gating on the start alone showed an opted-in
-     * user a sheet for a snooze that did not exist, over the top of the card
-     * saying it hadn't happened, and a time chosen there did nothing at all
-     * (Codex, PR #118).
-     *
-     * Read here, not in `onCreate`: this runs from the posted block, off the
-     * arm path, against a preferences file the application has already warmed.
-     *
-     * It is **not** guaranteed the arm has landed by then. `startService` is a
-     * binder round trip into `ActivityManagerService`, and the way back is a
-     * oneway `IApplicationThread` callback that posts `onStartCommand` from a
-     * binder thread — nothing orders that against a local `post` (Codex,
-     * PR #118). In practice the decor view's post lands in the `ViewRootImpl`
-     * run queue and drains on a traversal, which is later than the service
-     * message; but "in practice" is the honest word, and the options for making
-     * it a guarantee are in `TODO.md`.
-     *
-     * **Fails closed**, deliberately: if the record somehow isn't there yet, the
-     * user gets no sheet and a correctly armed snooze on its default cap, which
-     * is exactly what the setting being off would have given them. The opposite
-     * failure is a sheet whose taps go nowhere.
-     */
-    private fun offerableRecord(arming: Boolean, now: Instant): ActiveSnooze? {
-        if (!arming || !startAccepted || isLocked() || !endSheetStore.isEnabled()) return null
-        return recordOffering(now)
-    }
-
-    /**
-     * Whether the phone is locked, in which case there is no sheet.
-     *
-     * The same answer the notification-permission request already gives on this
-     * path, for the same reason: this activity declares no `showWhenLocked`, so
-     * a sheet rendered behind the keyguard is one the user cannot see, cannot
-     * answer, and would meet later — with a time chosen against a clock that has
-     * moved on — the moment they unlock (Codex, PR #118).
-     *
-     * Skipped rather than shown over the keyguard, deliberately. Arming locked
-     * is a supported case (SPEC.md §4.2) and the snooze is already running on
-     * its default cap; putting a window in front of a locked phone to refine it
-     * is the opposite of the one-tap path this activity exists to protect.
-     */
-    private fun isLocked(): Boolean =
-        getSystemService(KeyguardManager::class.java).isKeyguardLocked
-
-    /**
-     * Whether there is a snooze on disk *and* a time the sheet could set on it.
-     *
-     * The record alone is not enough. A cap already closer than [MIN_CAP] leaves
-     * nothing to choose — the service declines anything inside that floor, and
-     * the only value above it is later than the cap, which the service honors by
-     * doing nothing and reports as applied. Either way the sheet would be a
-     * screen the user cannot answer. A duplicate arm from a stale tile snapshot
-     * is what produces one, since the service keeps the snooze already running
-     * (§4.2) and that snooze can be minutes from its cap (Codex, PR #118).
-     *
-     * Failing closed here is the same trade the rest of this gate makes: no
-     * sheet and a correctly armed snooze is exactly what the setting being off
-     * would have given them.
-     */
-    private fun recordOffering(now: Instant): ActiveSnooze? {
-        // Returned rather than reduced to a yes: the sheet is seeded from this
-        // very record, so its ceiling and the gate that admitted it cannot
-        // disagree, and the disk is read once rather than twice (Codex,
-        // PR #152).
-        val record = ActiveSnoozeStore(this).load() ?: return null
-        return record.takeIf { EndCondition.offersAChoice(it, now) }
-    }
-
-    /**
-     * The end-condition sheet (SPEC.md §4.4), once the snooze is already armed.
-     *
-     * **Nothing here is on the arm path.** It runs from the posted block, so
-     * every call below — `enableEdgeToEdge`, the clock read, the first
-     * composition — happens after `startService` rather than in front of it,
-     * which is what §6.9 asks for. (Whether the service has *finished* arming
-     * by then is a different question, and not one this path waits on; see
-     * `thereIsAChoice`.)
-     *
-     * The sheet's ceiling is derived from the clock rather than read back from
-     * the record, deliberately: the record is written by the service that is
-     * still starting, and waiting on it is exactly what §6.9 forbids. A snooze
-     * armed a few milliseconds ago has its backstop a default cap from now, so
-     * this is that value to within the gap — and the service re-clamps whatever
-     * gets committed against the record that actually exists, so a stale
-     * reading can never outlive the tap.
-     *
-     * Edge-to-edge is declared here for the same reason: the trampoline's own
-     * theme leaves it off so nothing runs before the service start, and the
-     * sheet is the first thing this activity has ever drawn.
-     */
-    private fun showEndConditionSheet(record: ActiveSnooze, now: Instant) {
-        // Re-seeded on every arm, including a second tile tap arriving at
-        // `onNewIntent` while the sheet is up: that tap armed a *new* snooze, so
-        // an hour from the first tap is no longer the offer being made.
-        //
-        // The zone is the device default because that is the one `formatTime`
-        // renders in: rounding against any other would put the seed on a half
-        // hour the user is not being shown (Codex, PR #118). Reading it here is
-        // an in-memory lookup, and this runs after the service is already away.
-        sheet.seed(record, now)
-        offeredRecord = record
-        renderSheet()
-    }
-
-    /**
-     * Puts the sheet on screen from whatever [endCondition] currently holds.
-     *
-     * Split from the seeding above so a configuration change can put the same
-     * sheet back rather than a new one. Idempotent: a second tile tap arriving
-     * while the sheet is up re-seeds through the caller and this does nothing,
-     * since the composition already reads that state.
-     */
-    private fun renderSheet() {
-        if (sheetRendered) return
-        sheetRendered = true
-
-        enableEdgeToEdge()
-        setContent {
-            SnoozemoTheme {
-                // The scrim is the dismissal: §4.4 says dismissing leaves the
-                // user correctly snoozed, and they are — the snooze is running
-                // on its default cap, and the back gesture finishes this
-                // activity to the same effect.
-                // Held while a commit is out, so the sheet cannot be dismissed
-                // out from under the answer it is waiting for: `onDestroy`
-                // drops the watch, and a failure arriving after that is silent
-                // for a user who denied notifications — which is the whole
-                // reason the sheet waits at all (Codex, PR #118). Both exits
-                // are covered, the scrim and the back gesture.
-                BackHandler(enabled = sheet.committing) {}
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.BottomCenter,
-                ) {
-                    // The scrim is its own layer *behind* the sheet, not the
-                    // parent holding it. As the parent it received every tap the
-                    // sheet's own content didn't consume — the title, the footer,
-                    // the padding — so touching inside the sheet dismissed it
-                    // (Codex, PR #118). A sibling only ever sees what misses.
-                    //
-                    // No ripple and no indication: this is the whole screen
-                    // behind a sheet, and a ripple spreading across it would read
-                    // as the background itself being a control.
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                enabled = !sheet.committing,
-                                onClick = ::finish,
-                            ),
-                    )
-                    sheet.endCondition?.let { condition ->
-                        EndConditionSheetContent(
-                            condition = condition,
-                            formattedTime = formatSheetTime(this@TileTrampolineActivity, condition.endsAt),
-                            onChooseTime = { sheet.commit(condition.endsAt) },
-                            // The departure row commits by changing nothing
-                            // **on this sheet**: it is the arm-time one, so
-                            // tracking is already armed and the default cap is
-                            // already the backstop (§4.4). Over a *running*
-                            // snooze the row of the same name is the way back
-                            // from a chosen time and does real work — and a
-                            // partial choice turns this sheet into that one,
-                            // since the cap has moved under it (Codex, PR #267).
-                            onChooseDeparture = {
-                                when {
-                                    // The record has not landed after a restore,
-                                    // so hold rather than dismiss a departure
-                                    // restore the user asked for.
-                                    offerRecordLoading -> Unit
-                                    offeredRecord?.isPartialTimer == true -> sheet.commitDeparture()
-                                    else -> finish()
-                                }
-                            },
-                            onStepDown = sheet::stepDown,
-                            onStepUp = sheet::stepUp,
-                            failed = sheet.commitFailed,
-                            partial = offeredRecord?.isPartialTimer == true,
-                            committing = sheet.committing,
-                            tracksDeparture = PRESENCE_TRACKS_DEPARTURE,
-                            modifier = Modifier.navigationBarsPadding(),
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        // The channel holds a lambda reaching this activity, so an unclosed
-        // watch outlives the sheet it was answering and leaks the activity.
-        sheet.close()
-    }
-
     private companion object {
         const val STATE_DECISION_PENDING = "decision_pending"
         const val STATE_START_ACCEPTED = "start_accepted"
         const val STATE_AWAITING_PERMISSION = "awaiting_permission"
-        const val STATE_SHEET_SHOWN = "sheet_shown"
-        const val STATE_COMMITTING = "committing"
-        const val STATE_REQUEST_ID = "requestId"
-        const val STATE_OFFERED_FOR = "offeredFor"
-        const val STATE_COMMIT_FAILED = "commit_failed"
-
-        // The sheet's own three instants. On-device only and never logged: when
-        // a user intends to stop being disturbed is theirs (`AGENTS.md`,
-        // *Privacy*), and saved instance state does not leave the process.
-        const val STATE_ENDS_AT = "ends_at"
-        const val STATE_FLOOR = "floor"
-        const val STATE_CEILING = "ceiling"
     }
 
     /**
@@ -972,6 +561,55 @@ class TileTrampolineActivity : ComponentActivity() {
             // ignored.
             Log.e(TAG, "Could not open the app to repair a tile tap.", it)
             SnoozeDebugLog.failure(it, "tile tap needed setup and the app would not open")
+        }
+        finish()
+    }
+
+    /**
+     * Opens the main screen as the end-condition chooser (SPEC.md §4.4), and
+     * gets this transparent window out of the way.
+     *
+     * [EXTRA_TILE_CHOOSER] is what tells the screen this launch came from the
+     * tile, so a row that arms finishes it and collapses back to where the user
+     * was — the tile's one-tap feel across two taps. Nothing is armed here; the
+     * screen's own arm path handles Do Not Disturb access, notifications and
+     * location, showing why on the spot rather than in a notification the
+     * tile-first user may have denied.
+     */
+    private fun openChooser() {
+        runCatching {
+            startActivity(
+                Intent(this, MainActivity::class.java)
+                    .putExtra(EXTRA_TILE_CHOOSER, true)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            )
+        }.onFailure {
+            // The chooser could not open, and the Ask-on branch deliberately did
+            // not arm — so without a fallback the tap does nothing and says
+            // nothing, principle 2's silent failure. Fall back to the instant
+            // arm, the Ask-off behavior: a user who tapped the tile to snooze
+            // gets the snooze (on its default cap, still endable on departure)
+            // rather than nothing when the app cannot be shown to ask (SPEC.md
+            // §4.1). The failure is logged either way, and if the fallback arm
+            // is itself refused there is genuinely nothing left to try.
+            Log.e(TAG, "Could not open the app as the end-condition chooser; arming instead.", it)
+            SnoozeDebugLog.failure(it, "tile tap opening the chooser and the app would not open; arming instead")
+            // Through the same start-and-recover the Ask-off instant arm uses,
+            // not a bare `startService`: a refused fallback arm must remember the
+            // failure and show "could not arm" — the notification a later grant
+            // can still explain — rather than only logging, principle 2 (Codex,
+            // PR #284). The notification-permission *ask* is not part of the
+            // fallback: the app window just failed to open, so there is nowhere
+            // to host that dialog; the refusal recovery is what matters here.
+            val started = runCatching {
+                startService(
+                    Intent(this, SnoozeService::class.java).setAction(SnoozeService.ACTION_ARM),
+                )
+            }.onFailure { armFailure ->
+                Log.e(TAG, "Falling back to an instant arm after the chooser would not open also failed.", armFailure)
+                SnoozeDebugLog.failure(armFailure, "tile tap fell back to an instant arm and the service would not start")
+            }.getOrNull() != null
+            if (!started) recoverFromRefusedStart(SnoozeService.ACTION_ARM)
         }
         finish()
     }

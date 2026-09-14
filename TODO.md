@@ -5453,6 +5453,95 @@ are simply what the one build ships.
 
 ## Decisions needing review
 
+- [ ] **Ask-on + locked: the chooser opens after unlock, not an instant arm** (PR #284,
+      maintainer 2026-09-14: "keep whatever you've got for the lock screen question and add
+      a to-do to decide later"). With `Ask when to unsnooze` on, a tile tap opens the
+      main-screen chooser; telling a *locked* tap apart to arm-instantly-instead would need
+      `isKeyguardLocked` before `startService`, which §6.9 keeps off the arm path (Codex
+      flagged the earlier version that did this). So the chooser opens whether locked or
+      not — it surfaces once the user unlocks — and the **instant locked arm (§4.2) stays
+      the Ask-off default**, where the branch never runs. **The trade**: an opted-in user
+      whose phone is locked no longer silences it in one tap; they unlock, then pick a row.
+      **The alternative** is to restore instant-locked-arm for Ask-on at the cost of that
+      keyguard query on the arm path (a §6.9 exception the maintainer would sign off), or a
+      cheaper lock signal if one exists. Reversible: it is one gate in `dispatch` and the
+      SPEC §4.4 paragraph. See SPEC §4.4.
+
+- [x] **Tile-chooser first frame: ship the fill-in now (decided), skeleton is the follow-up
+      below** (PR #284, Codex P2 on `697e1e6`; maintainer 2026-09-14: "to-do for a skeleton
+      but you can ship whatever is cheapest first"). A cold Ask-on tile tap opens
+      `MainActivity`, which renders its scaffold immediately but hides the idle `endChoice`
+      rows until `access == GRANTED` and `snoozing == false` (`MainScreen.kt`) — both read
+      *after* the first frame, since §6.9 keeps the `NotificationManager` policy binder call
+      and the record disk read off it, and the gate itself guards against arming over an
+      unread snooze. So the rows fill in a frame or two later. **Decided: option (a), the
+      fill-in — ships as-is, zero code.** The scaffold is shown at once (§6.9's "show the
+      screen and fill it in", not a blank flash); "seed from warmed state" can't cover a live
+      DND grant that §6.9 forbids reading synchronously. The rejected alternatives: (b) render
+      the rows disabled on the first frame and enable once access/record confirm — real
+      content at once, but a disabled→enabled flicker, it touches the idle screen for every
+      launch not just the tile, and it entangles with the access-missing state; (c) the
+      skeleton below.
+
+- [ ] **Skeleton for the tile-chooser's first frame** (PR #284 follow-up; maintainer
+      2026-09-14). On a cold Ask-on tile launch, paint row-shaped placeholders in the first
+      frame, swapped for the real end-condition rows (and the footer's `Snooze` button) once
+      `access`/`snoozing` land — the honest §6.9 placeholder for "genuinely not ready", the
+      real rows being impossible on frame 1 without the sync binder/disk read §6.9 forbids.
+      Scope it to the tile-chooser launch so the ordinary idle screen is untouched. **Keep it
+      reflow-free**: today's fill-in already is (top-anchored scroll + a separate pinned
+      footer slot, so appearing content fills blank space and nothing visible shifts —
+      `MainScreen.kt`), so the placeholders must reserve the *same heights* as the real rows
+      and footer, or the skeleton→real swap reintroduces the jump it exists to remove. Needs a
+      `*ScreenshotTest` wired into the CI allow-list.
+
+- [ ] **Tile-chooser notification ask survives a configuration recreation** (PR #284
+      follow-up; Codex P2). The up-front POST_NOTIFICATIONS ask rides a post-first-frame
+      Choreographer callback keyed on `freshTileChooserLaunch`, which is false after a
+      configuration recreation (rotation) — so a recreation between onCreate and that first
+      frame drops the ask, and a tile-first user who has not granted it silently loses the
+      ongoing card. Narrow and safe-direction (the banner still offers it later; nothing
+      arms wrong). Fix: persist an "ask-owed" flag through the recreation and consume it on
+      the next first frame, rather than re-deriving from the launch intent. Add a
+      Robolectric test that recreates the activity before the frame runs and asserts the ask
+      still fires.
+
+- [ ] **Tile paints "Snoozing" before an Ask-on chooser tap arms anything** (PR #284
+      follow-up; Codex P2). `SnoozeTileService.onClick` optimistically paints the tile
+      `Snoozing` before the trampoline decides what to do, but with Ask on the trampoline
+      opens the chooser and arms *nothing* until the user picks a row — so the shade shows
+      an active tile over a snooze that has not started (and stays wrong if the user backs
+      out without choosing). `:tile` can't read `EndSheetStore` (it depends on `:core`/`:dnd`
+      only, not `:app`), so the fix needs the chooser-mode signal visible to `:tile` via a
+      `:core`-level store, or the trampoline to drive the tile's repaint once it knows. Until
+      then the tile self-corrects on its next `onStartListening` refresh. Safe-direction (a
+      wrongly-lit tile, never a wrongly-armed snooze).
+
+- [ ] **Publish `Ask when to unsnooze` to the cache when the toggle is accepted** (PR #284
+      follow-up; Codex P2). `EndSheetStore.setEnabled` publishes the new value to the
+      process-static `cached` only at the *end* of the FIFO disk write, so a tile tap between
+      flipping the Settings switch and that write completing reads the old value — enabling can
+      arm instantly instead of opening the chooser, disabling can still open it. Second finding
+      in this cache mechanism (the first was the Round-8 warm-read clobber), so the clean fix is
+      a design change to the write path — a maintainer call: publish the choice to the cache on
+      the main thread when the toggle is accepted and roll it back if persistence fails, which
+      also has to avoid `setEnabled`'s own `isEnabled()` read re-publishing the stale disk value.
+      Deferred because it is safe-direction and self-correcting: the window is sub-second (the
+      worker starts near-immediately) against a user action measured in seconds, the wrong route
+      is the same arm-preserving fallback `cachedEnabled()` already documents for a cold-start
+      tap (never a wrong or stuck snooze), and it self-corrects the instant the write lands.
+
+- [ ] **Rewrite SPEC §4.4 around the chooser once the sheet's fate is decided** (PR #284
+      follow-up; Codex P2). §4.4's D9 and "Mid-migration" paragraph now state the choose-then-arm
+      tile flow correctly, and a scoping note flags the subsections below them as describing the
+      arm-then-refine *sheet* — the surviving app-screen `Snooze`-button one, with the
+      trampoline/tile references being the retired flow. The deeper per-passage rewrite (the v1
+      mockup, the "trampoline reads a post-arm record" arithmetic, "`until I leave` commits by
+      changing nothing on a snooze the tile just armed", "the sheet is the only refinement a tile
+      user ever sees") is deferred because it is tied to the open **"does the sheet survive?"**
+      product question at the end of the section — resolving it presupposes an answer that is the
+      maintainer's, and the whole section gets rewritten around the chooser once that lands.
+
 - [x] **The idle rows' steppers adjust rather than arm** (maintainer, 2026-09-12: "I
       agree they should be consistent and for now that means requiring tapping the until
       time button after"). It was already the behavior over a *running* snooze —

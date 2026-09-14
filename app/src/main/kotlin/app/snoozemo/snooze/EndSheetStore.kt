@@ -23,7 +23,22 @@ import java.util.concurrent.Executors
 internal class EndSheetStore(context: Context) {
     private val prefs = SerializedPreferences(context, FILE_NAME)
 
-    fun isEnabled(): Boolean = prefs.getBoolean(KEY_ENABLED, false)
+    fun isEnabled(): Boolean {
+        // Publish to `cached` only if no write landed while we were reading disk.
+        // A slow warm-up read could otherwise read the old value, be preempted by
+        // `setEnabled` committing and caching the new one, and then overwrite
+        // `cached` back to the stale value — so the next tile tap in this still-
+        // live process takes the opposite route to the toggle the user just made
+        // (Codex, PR #284). The generation is bumped under [cacheLock] by every
+        // write, so a read that sees it unchanged knows its value is not stale.
+        val seenGeneration = synchronized(cacheLock) { writeGeneration }
+        val value = prefs.getBoolean(KEY_ENABLED, false)
+        afterReadBeforePublishForTest?.invoke()
+        synchronized(cacheLock) {
+            if (writeGeneration == seenGeneration) cached = value
+        }
+        return value
+    }
 
     /**
      * Pulls the file into memory off the main thread, like the record and the
@@ -60,10 +75,68 @@ internal class EndSheetStore(context: Context) {
         if (!persisted) {
             prefs.putBoolean(KEY_ENABLED, before)
         }
+        // The value now in force, published under [cacheLock] with a bumped
+        // generation so a concurrent [isEnabled] read cannot clobber it with a
+        // stale value it read before this write (see [isEnabled]).
+        synchronized(cacheLock) {
+            writeGeneration++
+            cached = if (persisted) enabled else before
+        }
         persisted
     }
 
     internal companion object {
+        /**
+         * The last read value, held in memory so the tile can learn whether to
+         * open the chooser **without a disk read on the tap** (SPEC.md §6.9).
+         *
+         * The arm decision is choose-then-arm when the chooser is on, so unlike
+         * the sheet it cannot be read after the service start — nothing has
+         * started yet. A `SharedPreferences` getter blocks on the initial load,
+         * which is exactly what §6.9 keeps off the arm path; this field never
+         * touches disk. [warm] and every [isEnabled]/[setEnabled] refresh it.
+         *
+         * **Defaults to null → "off"** ([cachedEnabled]), the arm-preserving
+         * fallback: a tap that overtakes the warm-up arms instantly rather than
+         * waiting, which is goal 1 (SPEC.md §4.1). The rare cost is that the very
+         * first tap after a cold start can miss an enabled chooser and arm
+         * straight away — one snooze on the default cap, never a stall.
+         *
+         * Process-static so it survives the throwaway [EndSheetStore] instances
+         * the trampoline and the settings screen each build; the value is one
+         * boolean about app behavior, nothing about the user (see the class doc).
+         */
+        @Volatile
+        private var cached: Boolean? = null
+
+        /** Guards [cached] publication and [writeGeneration]; see [isEnabled]. */
+        private val cacheLock = Any()
+
+        /**
+         * Bumped under [cacheLock] on every write, so a read can tell whether a
+         * write landed while it was reading disk and decline to publish a value
+         * that is now stale (see [isEnabled]/[setEnabled]). Monotonic; never
+         * reset, so an in-flight read's captured value cannot match a later one.
+         */
+        private var writeGeneration = 0L
+
+        /**
+         * Test seam: runs between [isEnabled]'s disk read and its cache publish,
+         * so a test can interpose a concurrent write and prove the stale read
+         * does not clobber it. Null (a no-op) in production.
+         */
+        @VisibleForTesting
+        internal var afterReadBeforePublishForTest: (() -> Unit)? = null
+
+        /** The warmed value, or `false` until the warm-up has landed. */
+        fun cachedEnabled(): Boolean = cached ?: false
+
+        /** Drops the cache, so a test cannot inherit another's warmed value. */
+        @VisibleForTesting
+        internal fun resetCacheForTest() {
+            cached = null
+        }
+
         /**
          * Test seam: runs [block] holding this file's write lock, so a write
          * from another thread can be seen to wait for it.

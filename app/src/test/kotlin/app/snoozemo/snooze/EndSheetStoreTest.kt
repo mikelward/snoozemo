@@ -89,6 +89,63 @@ class EndSheetStoreTest {
     }
 
     @Test
+    fun `the cache defaults off until warmed`() {
+        // The tile reads this without a disk hit (SPEC.md §6.9), and an unwarmed
+        // read must fall back to "off" so a cold tap arms instantly rather than
+        // waiting.
+        EndSheetStore.resetCacheForTest()
+
+        assertFalse(EndSheetStore.cachedEnabled())
+    }
+
+    @Test
+    fun `the cache follows a write, so the next tap sees the toggle`() {
+        EndSheetStore.resetCacheForTest()
+
+        store.setEnabled(true)
+        assertTrue(EndSheetStore.cachedEnabled())
+
+        store.setEnabled(false)
+        assertFalse(EndSheetStore.cachedEnabled())
+    }
+
+    @Test
+    fun `a read warms the cache`() {
+        EndSheetStore.resetCacheForTest()
+        store.setEnabled(true)
+        EndSheetStore.resetCacheForTest()
+
+        store.isEnabled()
+
+        assertTrue(EndSheetStore.cachedEnabled())
+    }
+
+    @Test
+    fun `a stale read does not clobber a newer write`() {
+        // The warm-up read and a settings write can overlap: isEnabled reads the
+        // old value, and before it publishes to the cache a write commits the new
+        // one. The stale read must not overwrite it, or the next tile tap takes
+        // the opposite route to the toggle the user just made (Codex, PR #284).
+        EndSheetStore.resetCacheForTest()
+        store.setEnabled(false)
+        EndSheetStore.resetCacheForTest()
+
+        // Interpose the write between the read's disk read and its publish, the
+        // exact ordering the race needs — deterministic, not timing-based.
+        EndSheetStore.afterReadBeforePublishForTest = {
+            EndSheetStore.afterReadBeforePublishForTest = null // once; setEnabled reads too
+            store.setEnabled(true)
+        }
+        try {
+            store.isEnabled()
+        } finally {
+            EndSheetStore.afterReadBeforePublishForTest = null
+        }
+
+        assertTrue("the newer write wins over the stale read", EndSheetStore.cachedEnabled())
+    }
+
+    @Test
     fun `it keeps its own file, so the debug log's switch is not this one`() {
         // Two one-key boolean stores with the same key name: a shared file would
         // make each switch silently move the other.
