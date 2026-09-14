@@ -75,6 +75,35 @@ data class Anchor(
  * extend a snooze, so the cap continues from its original start time however many
  * times the process dies in between (SPEC.md §8.3).
  */
+/**
+ * Whether the cap's *time* is the fronted end of a snooze — a time the user
+ * chose, a cap shortened below its ceiling, or a failsafe that is the only
+ * automatic end left. The single home of this disjunction, so every surface
+ * that fronts a time (the countdown card, the ongoing notification, the tile
+ * subtitle) consumes it rather than re-deriving it from the raw record and
+ * drifting: the tile re-derived it and diverged twice in one review — once on
+ * `WIFI_GRACE`, once on the partial-timer state — because each missing input
+ * was invisible until a reviewer named it (Codex, PR #281). A new input added
+ * here now reaches all of them at once.
+ *
+ * [tracksDeparture] is passed in, not computed here, because it is the one
+ * input the surfaces legitimately resolve differently. [ActiveSnooze.capCountdownShown]
+ * passes [effectiveMode]'s own answer, where [TrackingMode.SETTLING] counts as
+ * *not* tracking, so the failsafe time fronts while an anchor is still being
+ * captured. The tile instead treats a *live* settling capture as tracking — it
+ * shows the exit it is capturing an anchor for, not the failsafe time
+ * (SPEC.md §4.2) — and only a settling record left by a dead process as not
+ * tracking. The disjunction is identical either way; only what `SETTLING`
+ * means to each surface differs, and that stays at each call site.
+ */
+fun capTimeFronted(
+    timerOnlyRequested: Boolean,
+    capBelowCeiling: Boolean,
+    endsOnMotion: Boolean,
+    tracksDeparture: Boolean,
+): Boolean =
+    timerOnlyRequested || capBelowCeiling || (!endsOnMotion && !tracksDeparture)
+
 data class ActiveSnooze(
     val anchor: Anchor,
     val startedAt: Instant,
@@ -413,9 +442,15 @@ data class ActiveSnooze(
      * separate surface, not this cap.
      */
     val capCountdownShown: Boolean
-        get() = timerOnlyRequested ||
-            capExpiresAt.isBefore(capCeilingAt) ||
-            (!endsOnMotion && !effectiveMode.tracksDeparture)
+        get() = capTimeFronted(
+            timerOnlyRequested = timerOnlyRequested,
+            capBelowCeiling = capExpiresAt.isBefore(capCeilingAt),
+            endsOnMotion = endsOnMotion,
+            // The model's own reading of SETTLING: not tracking, so the failsafe
+            // time fronts while an anchor is captured. The tile resolves it
+            // differently — see [capTimeFronted].
+            tracksDeparture = effectiveMode.tracksDeparture,
+        )
 
     /**
      * How long is left before the cap fires, floored at zero. Never negative: an

@@ -1958,20 +1958,22 @@ the point is that every other line of the app is worthless if it isn't true.
       so a stale one from a prior snooze is ignored) to a store the tile reads at shade-open. Motion
       has no distance/time-to-go, so `Until you move` stays bare — the one exit with no readout.
       Its own PR; verify truncation/marquee on a device for the longest string.
-- [ ] **Tile: share the "front the time" decision with the model rather than re-deriving it**
-      (Codex, PR #281 — the maintainer's design call). The tile's `claimsTimerOnly` re-derives
-      whether to front a time from raw preference keys, and it drifted from `ActiveSnooze`'s
-      authoritative `capCountdownShown` twice in one review: it ignored `WIFI_GRACE` (claimed a
-      leave/move exit for a grace deadline) and ignored `timerOnlyRequested` + a shortened cap
-      (claimed a sole exit over a chosen deadline in the durable PARTIAL state). Both are fixed
-      in-place in #281 by mirroring `capCountdownShown`'s first two disjuncts, but the *class* is
-      the re-derivation: a new input to the model's decision won't reach the tile automatically.
-      The tile deliberately diverges from `capCountdownShown` on `SETTLING` (it shows the exit it
-      is capturing an anchor for, not the failsafe time — SPEC §4.2), so it can't simply adopt the
-      property. Options: extract a shared pure `frontTheTime(...)` in `:core` that both call,
-      parameterized for the settling difference; or have `:app` persist the already-decided answer
-      for the tile to read (do-the-work-ahead-of-time). Either is a design change, so it waits for
-      the maintainer rather than being taken under drive.
+- [x] **Tile: share the "front the time" decision with the model rather than re-deriving it**
+      (Codex, PR #281; maintainer chose the shared-function option 2026-09-14). The tile's
+      `claimsTimerOnly` re-derived whether to front a time from raw preference keys and drifted
+      from `ActiveSnooze`'s authoritative `capCountdownShown` twice in one review: it ignored
+      `WIFI_GRACE` (claimed a leave/move exit for a grace deadline) and ignored `timerOnlyRequested`
+      + a shortened cap (claimed a sole exit over a chosen deadline in the durable PARTIAL state).
+      #281 fixed both in-place; this change deletes the *class* by extracting the disjunction into
+      one pure `capTimeFronted(timerOnlyRequested, capBelowCeiling, endsOnMotion, tracksDeparture)`
+      in `:core` that both `capCountdownShown` and the tile consume — a new input reaches both at
+      once. `tracksDeparture` stays each caller's to resolve, which is the one input they
+      legitimately disagree on: the model reads `SETTLING` as not tracking (failsafe time fronts
+      while capturing), the tile treats a *live* settling capture as tracking (shows the exit it is
+      capturing an anchor for — SPEC §4.2). Behavior-preserving; `:core`'s `capCountdownShown`
+      tests and the tile's `TileSnapshotModeTest` both pass unchanged, plus new `capTimeFronted`
+      tests. Chose the shared function over `:app` persisting the answer to avoid a second copy of
+      the same fact that could go stale.
 
 ## Phase 5 (M5) — Edge cases and degraded modes
 

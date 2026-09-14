@@ -3,6 +3,7 @@ package app.snoozemo.tile
 import android.content.Context
 import android.text.format.DateFormat
 import app.snoozemo.core.TrackingMode
+import app.snoozemo.core.capTimeFronted
 import java.util.Date
 
 /**
@@ -107,48 +108,39 @@ internal data class TileSnapshot(
     companion object {
 
         /**
-         * Whether the record is a settled claim that nothing is watching.
+         * Whether the tile fronts the cap's *time* rather than naming an exit —
+         * the tile's side of [app.snoozemo.core.ActiveSnooze.capCountdownShown].
          *
-         * **Any event exit at all disqualifies the claim.** `Timer only` says
-         * nothing but the clock can end this snooze, so the movement exit
-         * counts as much as departure does — and a time chosen *then*
-         * `Until I move` is a state this change made newly reachable, which
-         * the tile alone rendered as `Timer only` while the notification and
-         * the screen both named the movement exit (Codex, PR #267).
+         * The disjunction itself lives once, in [app.snoozemo.core.capTimeFronted];
+         * this resolves the one input the surfaces read differently — whether a
+         * departure is tracked — and delegates the rest. Sharing it is what stops
+         * the tile drifting from the model: it re-derived the whole decision
+         * before and diverged twice in one review, on `WIFI_GRACE` and on the
+         * partial-timer state, because each missing input was invisible until a
+         * reviewer named it (Codex, PR #281).
          *
-         * **The user's choice first, then the mode.** `ends_on_departure` is
-         * the tile's half of [app.snoozemo.core.ActiveSnooze.effectiveMode]:
-         * a snooze narrowed to its timer keeps the capability `mode` it was
-         * tracking with, deliberately, so `Until I leave` can put the exit
-         * back — and reading the mode alone therefore left the shade showing
-         * an unqualified countdown, as though a departure were still watched,
-         * while the screen and the notification said `Timer only` (Codex,
-         * PR #267). Missing reads as `true`, matching the record's own
-         * default: a record written before the flag existed comes from a build
-         * where leaving always ended a snooze.
-         *
-         * Parsed to the enum and decided by an exhaustive `when` rather than
-         * compared to the string `"FULL"`, which is how the tile came to
-         * report `Timer only` for a mode that means the opposite. The mode is
-         * persisted as text, so the compiler cannot see this reader from
-         * [TrackingMode]'s declaration: a member added there used to reach the
-         * shade as a silent misreading, while the screen and the notification
-         * — which switch on the enum — failed to compile until they were
-         * taught. Parsing first puts this reader under the same rule, so the
-         * next member is a build error here too (Codex, PR #221).
-         *
-         * A missing or unrecognized value degrades to timer-only, matching
-         * `ActiveSnoozeStore`'s own fallback for the same input — a record
-         * written before the mode was stored, or by a newer build than this
-         * tile. Reading it as "no claim" was wrong twice over: the store
-         * already answers `DURATION_ONLY`, so the app and the shade would
-         * contradict each other over one record, and the tile has only two
-         * renderings — dropping the qualifier is not silence, it is the
-         * tracked-looking one (Codex, PR #221).
-         *
-         * A settling mode is the one case where dropping it is right, because
-         * something genuinely is pending. Nothing is pending for a value nobody
-         * can read.
+         * Resolving `tracksDeparture`:
+         * - `ends_on_departure` is the tile's half of [app.snoozemo.core.ActiveSnooze.effectiveMode]:
+         *   a snooze narrowed to its timer keeps the capability `mode` it was
+         *   tracking with, so the mode alone would read as still watching a
+         *   departure while the user has switched to a timer. Off ⇒ not tracking.
+         * - The mode is parsed to the enum and decided by an exhaustive `when`
+         *   rather than compared to the string `"FULL"`, so a member added to
+         *   [TrackingMode] is a build error here too rather than a silent
+         *   misreading (Codex, PR #221). A missing or unrecognized value ⇒ not
+         *   tracking, matching `ActiveSnoozeStore`'s own `DURATION_ONLY`
+         *   fallback for a record written before the mode existed, or by a
+         *   newer build than this tile.
+         * - `SETTLING` is where the tile diverges from the model deliberately.
+         *   A *live* capture (within the window) is still on its way to watching
+         *   a departure, so the tile counts it as tracking and shows the exit it
+         *   is capturing an anchor for (SPEC.md §4.2), rather than fronting a
+         *   countdown to a backstop the snooze has not chosen. A record left past
+         *   the window is a dead process's — the capture died with it while the
+         *   record did not, and this reader, reading the preferences file
+         *   directly so the shade stays instant, cannot tell a live capture from
+         *   a dead one except by the window — so past it nothing is watching and
+         *   the failsafe time fronts (Codex, PR #221, #278).
          */
         internal fun claimsTimerOnly(
             stored: String?,
@@ -158,63 +150,24 @@ internal data class TileSnapshot(
             endsOnMotion: Boolean = false,
             timerOnlyRequested: Boolean = false,
             capBelowCeiling: Boolean = false,
-        ): Boolean =
-            if (timerOnlyRequested || capBelowCeiling) {
-                // A chosen time always fronts, even with an exit still armed —
-                // it can end the snooze before the exit fires, and naming only
-                // the residual exit would hide a deadline the user set. Two
-                // ways a chosen cap coexists with an armed exit: the durable
-                // PARTIAL state (`timerOnlyRequested` — an exit-removal write
-                // failed, or the process died mid-replacement), and a cap
-                // shortened below its ceiling (`capBelowCeiling`) that repeated
-                // `+30 min` can clamp back up while it is still a time the user
-                // set. These are `ActiveSnooze.capCountdownShown`'s first two
-                // disjuncts; the tile front-loads them ahead of every exit so
-                // it never claims a sole exit over a chosen deadline (Codex,
-                // PR #281). Kept as the tile's own re-derivation rather than the
-                // model property because the tile diverges from it deliberately
-                // on SETTLING below; the shared-decision question is in
-                // `TODO.md`.
-                true
-            } else if (endsOnMotion) {
-                // An armed movement exit ends this snooze on something other
-                // than the clock, whatever the mode says and whatever the
-                // departure choice was. Asked after the chosen time, because a
-                // time the user set can still end the snooze before it.
-                false
-            } else if (!endsOnDeparture) {
-                // Nothing pending and nothing to wait for: the user answered
-                // this question themselves, so no mode — a settling one
-                // included — can soften it.
-                true
-            } else when (TrackingMode.entries.firstOrNull { it.name == stored }) {
-                TrackingMode.DURATION_ONLY -> true
-                // Watched, by something, so it names the exit rather than a time.
-                TrackingMode.FULL, TrackingMode.WIFI_ONLY, TrackingMode.WIFI_GRACE -> false
-                // The anchor has not landed *yet*, so this is not a settled
-                // `Timer only` claim: `false`, which names the exit rather than a
-                // time ([subtitleKind]). That is
-                // the same as every other surface while the cap is the failsafe
-                // rather than the plan — during settling the cap is
-                // `startedAt + DEFAULT_CAP`, the backstop, not a chosen deadline,
-                // so fronting a countdown to it would front a plan the snooze has
-                // not made (SPEC.md §4.2, §491-494). The ongoing notification
-                // beside the tile names what the arm is waiting on. (This reader
-                // used to return an unqualified countdown here; the
-                // drop-the-failsafe decision made the three surfaces agree, and a
-                // tile countdown during settling was the one that no longer did —
-                // Codex, PR #278.)
-                //
-                // Past the window the claim is settled: a capture dies with its
-                // process while the record does not, and this reader — reading the
-                // preferences file directly so the shade stays instant — cannot
-                // tell a live capture from a dead one except by the window. Past
-                // it, nothing is watching, which is exactly `Timer only` (Codex,
-                // PR #221).
-                TrackingMode.SETTLING ->
-                    !TrackingMode.settlingStillStands(startedAtMillis, nowMillis)
-                null -> true
-            }
+        ): Boolean {
+            val tracksDeparture: Boolean =
+                if (!endsOnDeparture) {
+                    false
+                } else when (TrackingMode.entries.firstOrNull { it.name == stored }) {
+                    TrackingMode.FULL, TrackingMode.WIFI_ONLY, TrackingMode.WIFI_GRACE -> true
+                    TrackingMode.DURATION_ONLY -> false
+                    TrackingMode.SETTLING ->
+                        TrackingMode.settlingStillStands(startedAtMillis, nowMillis)
+                    null -> false
+                }
+            return capTimeFronted(
+                timerOnlyRequested = timerOnlyRequested,
+                capBelowCeiling = capBelowCeiling,
+                endsOnMotion = endsOnMotion,
+                tracksDeparture = tracksDeparture,
+            )
+        }
 
         fun read(context: Context): TileSnapshot {
             val prefs = context.getSharedPreferences("active_snooze", Context.MODE_PRIVATE)
