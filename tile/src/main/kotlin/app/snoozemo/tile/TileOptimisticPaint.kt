@@ -28,8 +28,25 @@ internal data class TileOptimisticPaint(
         private const val REQUEST_ARM = 1
         private const val REQUEST_END = 2
 
-        /** [currentlySnoozing] is the tile's last known state — see `SnoozeTileService.listening`. */
-        fun forTap(currentlySnoozing: Boolean): TileOptimisticPaint {
+        /**
+         * [currentlySnoozing] is the tile's last known state — see
+         * `SnoozeTileService.listening`. [chooserModeOn] is whether "ask when to
+         * unsnooze" is on ([app.snoozemo.core.ChooserMode]); when it is, an arm
+         * tap opens the chooser and arms *nothing* (SPEC.md §4.4), so the tile
+         * must not paint itself Snoozing over a snooze that has not started — and
+         * may never, if the chooser is dismissed. It stays inactive; the arm the
+         * user commits from a chooser row reconciles on the next `onStartListening`.
+         * An end tap, and an arm tap with the chooser off, are unchanged.
+         */
+        fun forTap(currentlySnoozing: Boolean, chooserModeOn: Boolean): TileOptimisticPaint {
+            if (!currentlySnoozing && chooserModeOn) {
+                return TileOptimisticPaint(
+                    action = ACTION_ARM,
+                    requestCode = REQUEST_ARM,
+                    active = false,
+                    labelRes = R.string.tile_snooze_here,
+                )
+            }
             val snoozingNow = !currentlySnoozing
             return TileOptimisticPaint(
                 action = if (currentlySnoozing) ACTION_END else ACTION_ARM,
