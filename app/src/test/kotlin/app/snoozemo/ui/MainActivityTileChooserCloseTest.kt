@@ -9,6 +9,7 @@ import java.time.Duration
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -41,6 +42,12 @@ class MainActivityTileChooserCloseTest {
         // Past the welcome flow, so the chooser is the screen rather than a card.
         WelcomeStore(context).markSeen()
         ActiveSnoozeStore(context).clear()
+    }
+
+    @After
+    fun tearDown() {
+        // Process-static, so a value left here would decide the next test's ask.
+        MainActivity.testNotificationRequest = null
     }
 
     /**
@@ -250,6 +257,36 @@ class MainActivityTileChooserCloseTest {
         settle()
 
         assertTrue("a process-death restore still asks up front", asked[0])
+    }
+
+    @Test
+    fun `a configuration recreation before the first-frame ask still fires it`() {
+        // The up-front ask rides a post-first-frame callback. A rotation between
+        // onCreate and that callback recomputes freshTileChooserLaunch as false;
+        // without carrying the obligation across the recreation the ask is dropped
+        // and a tile-first user silently loses the ongoing card (Codex, PR #284).
+        //
+        // Observed through the companion seam, not a per-instance one: `recreate()`
+        // dispatches the recreated instance's first-frame callback before a test
+        // can set a field on it, so the default request routes through the hook.
+        val asked = booleanArrayOf(false)
+        MainActivity.testNotificationRequest = { asked[0] = true }
+        val controller = Robolectric.buildActivity(
+            MainActivity::class.java,
+            Intent(context, MainActivity::class.java).putExtra(EXTRA_TILE_CHOOSER, true),
+        ).also { it.get().runOffMainThread = { work -> work() } }
+        // Resume without `visible()`/`settle()`, so the original's first-frame ask
+        // has not fired — its obligation is still owed and saved on the recreation.
+        controller.create().start().resume()
+        assertFalse("precondition: the original has not asked yet", asked[0])
+
+        // A configuration recreation: the retained ViewModelStore makes
+        // wasRecreatedByConfiguration true, so freshTileChooserLaunch is false and
+        // only the restored owed flag can re-schedule the ask.
+        controller.recreate()
+        settle()
+
+        assertTrue("the ask survives a recreation before its first frame", asked[0])
     }
 
     @Test
