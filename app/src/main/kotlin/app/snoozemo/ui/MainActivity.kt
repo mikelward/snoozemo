@@ -116,6 +116,23 @@ internal const val EXTRA_OPEN_PERMISSIONS = "app.snoozemo.OPEN_PERMISSIONS"
  */
 internal const val EXTRA_BLOCKED_TAP_ID = "app.snoozemo.BLOCKED_TAP_ID"
 
+/**
+ * Whether this launch is the tile opening the end-condition chooser (SPEC.md
+ * §4.4), rather than the launcher opening the app.
+ *
+ * It changes one thing: what happens after a row arms a snooze. Opened from the
+ * tile, the screen was a step past a tap the user expected to be about snoozing,
+ * so arming finishes it and collapses back to where they were — the one-tap feel
+ * the tile has always had. Opened from the launcher there is no such flag, so
+ * the same tap arms and leaves the app open, flipping the screen to its running
+ * state in place: the user came to *be* in the app, and yanking it away would be
+ * the wrong answer (maintainer, the tile-vs-launcher UX).
+ *
+ * Nothing else keys off it — the chooser rows, the permission prompts, and the
+ * arm paths behind them are the same on both launches.
+ */
+internal const val EXTRA_TILE_CHOOSER = "app.snoozemo.TILE_CHOOSER"
+
 private const val KEY_SCREEN = "screen"
 
 /**
@@ -133,6 +150,7 @@ private const val KEY_PENDING_LOCATION_FOR = "pending_location_for"
 private const val KEY_PENDING_LOCATION_ARM_COUNT = "pending_location_arm_count"
 private const val KEY_IDLE_OFFER_ARM_COUNT = "idle_offer_arm_count"
 private const val KEY_BACKGROUND_RATIONALE = "background_location_rationale"
+private const val KEY_OPENED_AS_TILE_CHOOSER = "openedAsTileChooser"
 private const val KEY_PERMISSIONS_ORIGIN = "permissionsOrigin"
 private const val KEY_ROUTED_TO_PERMISSIONS_ONCE = "routedToPermissionsOnce"
 private const val KEY_WELCOME_TAP_BLOCKED = "welcomeTapBlocked"
@@ -538,6 +556,18 @@ class MainActivity : ComponentActivity() {
      * recreation would re-assert the rule with no user action behind it.
      */
     private var snoozing by mutableStateOf<Boolean?>(null)
+
+    /**
+     * Whether this launch was the tile opening the chooser, so a row that arms
+     * finishes the activity (see [EXTRA_TILE_CHOOSER]).
+     *
+     * A plain field, not compose state: nothing draws from it, [refreshSnoozing]
+     * reads it when a snooze appears. Restored across a rotation from the saved
+     * bundle so a turn of the phone mid-chooser doesn't strand it open on arm,
+     * and re-read from the intent on [onNewIntent] so a launcher-opened app a
+     * later tile tap reuses (this activity is `singleTask`) picks the flag up.
+     */
+    private var openedAsTileChooser = false
 
     /**
      * The record itself, read alongside [snoozing] and for the same reason —
@@ -1417,8 +1447,12 @@ class MainActivity : ComponentActivity() {
         // `EndChoiceOutcome` and consumed synchronously — and settling one
         // re-reads the record, which needs this.
         store = ActiveSnoozeStore(applicationContext)
+        // From the launch intent on a fresh start; the saved bundle overwrites
+        // it on a rotation just below. No disk, before the first frame.
+        openedAsTileChooser = intent?.getBooleanExtra(EXTRA_TILE_CHOOSER, false) == true
         savedInstanceState?.let {
             screen = Screen.entries.firstOrNull { s -> s.name == it.getString(KEY_SCREEN) } ?: screen
+            openedAsTileChooser = it.getBoolean(KEY_OPENED_AS_TILE_CHOOSER, openedAsTileChooser)
             pendingLocationAction = PendingLocationAction.entries
                 .firstOrNull { a -> a.name == it.getString(KEY_PENDING_LOCATION_ACTION) }
             // Its snooze rides with it, or the recreation would resume the tap
@@ -1981,6 +2015,7 @@ class MainActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putString(KEY_SCREEN, screen.name)
+        outState.putBoolean(KEY_OPENED_AS_TILE_CHOOSER, openedAsTileChooser)
         // Null when nothing is waiting, which reads back as nothing waiting —
         // a grant arriving with no tap behind it must not replay one.
         outState.putString(KEY_PENDING_LOCATION_ACTION, pendingLocationAction?.name)
@@ -2467,6 +2502,17 @@ class MainActivity : ComponentActivity() {
                 val running = loaded != null
                 val changed = snoozing != running
                 snoozing = running
+                // Opened from the tile as the chooser, a row has just armed a
+                // snooze — every start path ends in the record write this
+                // observes — so finish the way the tile tap would have,
+                // collapsing back to where the user was (SPEC.md §4.4). A
+                // refused arm never flips `running` true, so the screen stays and
+                // shows why; a pending location prompt has not armed yet, so it
+                // holds too. A launcher-opened app carries no flag and stays.
+                if (openedAsTileChooser && changed && running) {
+                    finish()
+                    return@runOnUiThread
+                }
                 // Before the assignment, so the comparison is against the
                 // record this screen was showing: a different snooze must not
                 // inherit the last one's meeting times for the moment before
@@ -4717,6 +4763,15 @@ class MainActivity : ComponentActivity() {
         // So a later rotation restores from the intent that is actually current
         // rather than the one this activity was created with.
         setIntent(intent)
+        // Replaced, not or'd: a launcher tap reusing this `singleTask` instance
+        // carries no extra and turns arm-and-close back off, so the next arm
+        // leaves the app open where a stale flag would have closed it.
+        openedAsTileChooser = intent.getBooleanExtra(EXTRA_TILE_CHOOSER, false)
+        // A tile-chooser tap reusing an instance sitting on Settings, Permissions
+        // or Licenses has to land on the chooser, which is Main's idle rows — an
+        // `onNewIntent` that only set the flag left the user on the previous
+        // screen with nothing to choose from (Codex, PR #284).
+        if (openedAsTileChooser) screen = Screen.MAIN
         takeBlockedTileTapFrom(intent)
     }
 
