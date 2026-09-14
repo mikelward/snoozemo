@@ -200,6 +200,12 @@ internal object EndSheetSetting {
     /** Persists [enabled], calling [onDone] on the worker with whether it stuck. */
     fun setEnabled(context: Context, enabled: Boolean, onDone: (Boolean) -> Unit) {
         val store = EndSheetStore(context)
+        // Publish the choice to the shared cache now, on the calling thread,
+        // ahead of the FIFO disk write below — so a tile tap between this toggle
+        // and the write completing routes by the new value rather than the old
+        // (Codex, PR #284). The worker's `store.setEnabled` re-publishes the value
+        // actually in force, rolling this back if the write is refused.
+        ChooserMode.publish(enabled)
         worker.execute {
             val persisted = store.setEnabled(enabled)
             lastSaveRefused = !persisted

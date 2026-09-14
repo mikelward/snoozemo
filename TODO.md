@@ -5495,52 +5495,51 @@ are simply what the one build ships.
       and footer, or the skeleton→real swap reintroduces the jump it exists to remove. Needs a
       `*ScreenshotTest` wired into the CI allow-list.
 
-- [ ] **Tile-chooser notification ask survives a configuration recreation** (PR #284
+- [x] **Tile-chooser notification ask survives a configuration recreation** (PR #284
       follow-up; Codex P2). The up-front POST_NOTIFICATIONS ask rides a post-first-frame
       Choreographer callback keyed on `freshTileChooserLaunch`, which is false after a
       configuration recreation (rotation) — so a recreation between onCreate and that first
       frame drops the ask, and a tile-first user who has not granted it silently loses the
-      ongoing card. Narrow and safe-direction (the banner still offers it later; nothing
-      arms wrong). Fix: persist an "ask-owed" flag through the recreation and consume it on
-      the next first frame, rather than re-deriving from the launch intent. Add a
-      Robolectric test that recreates the activity before the frame runs and asserts the ask
-      still fires.
+      ongoing card. Done: a `chooserNotificationAskOwed` flag is set when the launch owes the
+      ask, saved and restored through the bundle, re-scheduled on the restored instance, and
+      cleared the moment the callback runs. A Robolectric test recreates before the frame and
+      asserts the ask still fires, observed through a companion seam.
 
-- [ ] **Tile paints "Snoozing" before an Ask-on chooser tap arms anything** (PR #284
-      follow-up; Codex P2). `SnoozeTileService.onClick` optimistically paints the tile
-      `Snoozing` before the trampoline decides what to do, but with Ask on the trampoline
-      opens the chooser and arms *nothing* until the user picks a row — so the shade shows
-      an active tile over a snooze that has not started (and stays wrong if the user backs
-      out without choosing). `:tile` can't read `EndSheetStore` (it depends on `:core`/`:dnd`
-      only, not `:app`), so the fix needs the chooser-mode signal visible to `:tile` via a
-      `:core`-level store, or the trampoline to drive the tile's repaint once it knows. Until
-      then the tile self-corrects on its next `onStartListening` refresh. Safe-direction (a
-      wrongly-lit tile, never a wrongly-armed snooze).
+- [x] **Tile paints "Snoozing" before an Ask-on chooser tap arms anything** (PR #284
+      follow-up; Codex P2). `SnoozeTileService.onClick` optimistically painted the tile
+      `Snoozing` before the trampoline decided, but with Ask on the trampoline opens the
+      chooser and arms *nothing* until the user picks a row — so the shade showed an active
+      tile over a snooze that had not started. Done: the chooser-mode cache moved to a
+      `:core` `ChooserMode` singleton (single source both `:app` and `:tile` read, generation
+      guard and all), and `TileOptimisticPaint.forTap` now takes the mode — an Ask-on arm tap
+      paints no change rather than flipping to Snoozing. Safe-direction either way (a wrongly-
+      lit tile, never a wrongly-armed snooze).
 
-- [ ] **Publish `Ask when to unsnooze` to the cache when the toggle is accepted** (PR #284
-      follow-up; Codex P2). `EndSheetStore.setEnabled` publishes the new value to the
-      process-static `cached` only at the *end* of the FIFO disk write, so a tile tap between
-      flipping the Settings switch and that write completing reads the old value — enabling can
-      arm instantly instead of opening the chooser, disabling can still open it. Second finding
-      in this cache mechanism (the first was the Round-8 warm-read clobber), so the clean fix is
-      a design change to the write path — a maintainer call: publish the choice to the cache on
-      the main thread when the toggle is accepted and roll it back if persistence fails, which
-      also has to avoid `setEnabled`'s own `isEnabled()` read re-publishing the stale disk value.
-      Deferred because it is safe-direction and self-correcting: the window is sub-second (the
-      worker starts near-immediately) against a user action measured in seconds, the wrong route
-      is the same arm-preserving fallback `cachedEnabled()` already documents for a cold-start
-      tap (never a wrong or stuck snooze), and it self-corrects the instant the write lands.
+- [x] **Publish `Ask when to unsnooze` to the cache when the toggle is accepted** (PR #284
+      follow-up; Codex P2). `EndSheetStore.setEnabled` published the new value to the cache
+      only at the *end* of the FIFO disk write, so a tile tap between flipping the Settings
+      switch and that write completing read the old value — enabling could arm instantly
+      instead of opening the chooser. Done: `EndSheetSetting.setEnabled` now publishes the
+      choice to `ChooserMode` on the calling thread up front, ahead of the worker, and the
+      worker's `setEnabled` re-publishes the value in force (rolling back on a refused write);
+      `setEnabled`'s `before` is now a raw read so it no longer re-publishes the stale disk
+      value over the optimistic one.
 
-- [ ] **Rewrite SPEC §4.4 around the chooser once the sheet's fate is decided** (PR #284
-      follow-up; Codex P2). §4.4's D9 and "Mid-migration" paragraph now state the choose-then-arm
-      tile flow correctly, and a scoping note flags the subsections below them as describing the
-      arm-then-refine *sheet* — the surviving app-screen `Snooze`-button one, with the
-      trampoline/tile references being the retired flow. The deeper per-passage rewrite (the v1
-      mockup, the "trampoline reads a post-arm record" arithmetic, "`until I leave` commits by
-      changing nothing on a snooze the tile just armed", "the sheet is the only refinement a tile
-      user ever sees") is deferred because it is tied to the open **"does the sheet survive?"**
-      product question at the end of the section — resolving it presupposes an answer that is the
-      maintainer's, and the whole section gets rewritten around the chooser once that lands.
+- [ ] **Delete the arm-then-refine sheet; the main screen serves both flows** (next milestone;
+      maintainer, 2026-09-14: "My goal was to delete the bottom sheet entirely if possible …
+      keep the main screen for both use cases, possibly with different when-to-close behavior").
+      The tile side already landed in PR #284 (tile opens the chooser; trampoline sheet retired).
+      What remains: make the app's own `Snooze`-button flow use the main-screen chooser rows
+      instead of the arm-then-refine bottom sheet, then remove the sheet, then rewrite SPEC §4.4
+      around the chooser (the v1 mockup, the "trampoline reads a post-arm record" arithmetic,
+      "`until I leave` commits by changing nothing on a snooze the tile just armed", and the
+      "sheet is the only refinement a tile user ever sees" rationale — now inverted, since the
+      tile user gets the chooser). The when-to-close split already exists: a tile-opened chooser
+      finishes on arm (`openedAsTileChooser`), an app-opened one stays open and flips to running
+      in place.
+  - **Open question (maintainer, 2026-09-14):** should the *app-opened* main view also finish
+    after a row arms an end condition, rather than staying open? Today only the tile-opened
+    chooser closes. Decide before rewriting §4.4's when-to-close text.
 
 - [x] **The idle rows' steppers adjust rather than arm** (maintainer, 2026-09-12: "I
       agree they should be consistent and for now that means requiring tapping the until
