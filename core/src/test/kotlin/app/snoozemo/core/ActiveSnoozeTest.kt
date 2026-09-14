@@ -736,9 +736,76 @@ class ActiveSnoozeTest {
         assertFalse(snooze().copy(endsOnDeparture = true, mode = TrackingMode.SETTLING).capIsEffectiveEnd)
     }
 
+    // capTimeFronted — the shared disjunction capCountdownShown and the tile
+    // both consume (PR #281), so a surface that fronts a time reads one answer
+    // instead of re-deriving it. tracksDeparture is the caller's to resolve.
+
+    @Test
+    fun `a chosen time fronts whatever else is armed`() {
+        // First disjunct: a chosen time always fronts, even behind a tracked
+        // departure and a motion exit.
+        assertTrue(
+            capTimeFronted(
+                timerOnlyRequested = true,
+                capBelowCeiling = false,
+                endsOnMotion = true,
+                tracksDeparture = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `a shortened cap fronts whatever else is armed`() {
+        // Second disjunct: a cap below its ceiling is a real deadline behind an
+        // armed exit.
+        assertTrue(
+            capTimeFronted(
+                timerOnlyRequested = false,
+                capBelowCeiling = true,
+                endsOnMotion = false,
+                tracksDeparture = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `the failsafe fronts only when nothing else ends the snooze`() {
+        // Third disjunct: no chosen time, no shortened cap, no motion exit, and
+        // nothing tracking a departure — the failsafe time is the only end.
+        assertTrue(
+            capTimeFronted(
+                timerOnlyRequested = false,
+                capBelowCeiling = false,
+                endsOnMotion = false,
+                tracksDeparture = false,
+            ),
+        )
+        // A tracked departure, or an armed motion exit, is a non-time end that
+        // the surface names instead — the time does not front.
+        assertFalse(
+            "tracked departure names the exit",
+            capTimeFronted(
+                timerOnlyRequested = false,
+                capBelowCeiling = false,
+                endsOnMotion = false,
+                tracksDeparture = true,
+            ),
+        )
+        assertFalse(
+            "an armed motion exit is a non-time end",
+            capTimeFronted(
+                timerOnlyRequested = false,
+                capBelowCeiling = false,
+                endsOnMotion = true,
+                tracksDeparture = false,
+            ),
+        )
+    }
+
     // capCountdownShown — the display question the countdown surfaces gate on
     // (SPEC.md §4.2, §4.4): broader than capIsEffectiveEnd because a shortened
-    // chosen cap is a real deadline even behind an armed exit.
+    // chosen cap is a real deadline even behind an armed exit. Delegates to
+    // capTimeFronted with effectiveMode's own SETTLING reading.
 
     @Test
     fun `the countdown shows for the effective end even at the ceiling`() {

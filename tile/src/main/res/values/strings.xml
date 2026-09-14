@@ -5,12 +5,41 @@
     <string name="tile_name">Snoozemo</string>
     <string name="tile_snooze_here">Snooze here</string>
     <string name="tile_snoozing">Snoozing</string>
-    <string name="tile_timer_only">Timer only · %1$s</string>
     <string name="tile_state_off">Off</string>
-    <string name="tile_state_on">Snoozing, %1$s</string>
+
+    <!-- The subtitle names how the running snooze ends. A timer shows the end
+         time itself (absolute, in the phone's own 12/24-hour format, %1$s); a
+         watched snooze names its exit, since its cap is the passive failsafe
+         rather than a deadline to front (SPEC.md §4.2). -->
+    <!-- TODO: translate -->
+    <string name="tile_until_time" tools:ignore="MissingTranslation">Until %1$s</string>
+    <!-- TODO: translate -->
+    <string name="tile_until_leave" tools:ignore="MissingTranslation">Until you leave</string>
+    <!-- TODO: translate -->
+    <string name="tile_until_move" tools:ignore="MissingTranslation">Until you move</string>
+
+    <!-- Wi-Fi grace: the anchor's Wi-Fi is gone and no fix can confirm a
+         departure, so a short grace period is running that ends the snooze on
+         expiry whether or not the phone leaves or moves (SPEC.md §6.6). Named
+         "ending soon" rather than an exit it may never reach — the screen and
+         notification say "Wi-Fi lost — ending soon" for the same reason. -->
+    <!-- TODO: translate -->
+    <string name="tile_ending_soon" tools:ignore="MissingTranslation">Ending soon</string>
+
+    <!-- The accessibility state description, a full sentence for TalkBack. -->
+    <!-- TODO: translate -->
+    <string name="tile_state_until_time" tools:ignore="MissingTranslation">Snoozing until %1$s</string>
+    <!-- TODO: translate -->
+    <string name="tile_state_leave" tools:ignore="MissingTranslation">Snoozing until you leave</string>
+    <!-- TODO: translate -->
+    <string name="tile_state_move" tools:ignore="MissingTranslation">Snoozing until you move</string>
+    <!-- TODO: translate -->
+    <string name="tile_state_ending_soon" tools:ignore="MissingTranslation">Snoozing — ending soon</string>
+
     <!-- The remaining-time countdown; the hours field is always shown, even at
          zero ("0h 45m left"), so the minutes can't be misread as a distance.
-         Abbreviated because Quick Settings truncates the subtitle hard;
-         %1$d is hours, %2$d minutes. -->
+         The tile itself now names an end time rather than a countdown, but the
+         main screen reuses this resource (`TileR.string.tile_remaining_hours`)
+         for its own always-hours countdown; %1$d is hours, %2$d minutes. -->
     <string name="tile_remaining_hours">%1$dh %2$dm left</string>
 </resources>

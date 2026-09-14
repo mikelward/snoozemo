@@ -1,8 +1,10 @@
 package app.snoozemo.tile
 
+import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.AnchorCapture
 import app.snoozemo.core.TrackingMode
 import java.time.Duration
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -93,6 +95,104 @@ class TileSnapshotModeTest {
     }
 
     /**
+     * A chosen time fronts even with an exit still armed — the durable PARTIAL
+     * state (an exit-removal write failed, or the process died mid-replacement)
+     * where a chosen cap coexists with an armed departure or movement exit. The
+     * time can end the snooze first, so naming only the residual exit would hide
+     * a deadline the user set; `capCountdownShown`'s first disjunct
+     * (`timerOnlyRequested`) is what the tile mirrors here (Codex, PR #281).
+     */
+    @Test
+    fun `a chosen time fronts even when an exit is left armed`() {
+        assertTrue(
+            "departure exit left armed after a timer request",
+            TileSnapshot.claimsTimerOnly(
+                TrackingMode.FULL.name,
+                startedAtMillis = STARTED_AT,
+                nowMillis = STARTED_AT + 500,
+                endsOnDeparture = true,
+                timerOnlyRequested = true,
+            ),
+        )
+        assertTrue(
+            "movement exit left armed after a timer request",
+            TileSnapshot.claimsTimerOnly(
+                TrackingMode.FULL.name,
+                startedAtMillis = STARTED_AT,
+                nowMillis = STARTED_AT + 500,
+                endsOnMotion = true,
+                timerOnlyRequested = true,
+            ),
+        )
+    }
+
+    /**
+     * A cap shortened below its ceiling is a real deadline the tile fronts, even
+     * behind an armed exit — `capCountdownShown`'s second disjunct. Repeated
+     * `+30 min` can clamp it back to the ceiling, where this goes false while
+     * `timerOnlyRequested` still stands, so the two are complementary (Codex,
+     * PR #281).
+     */
+    @Test
+    fun `a cap shortened below its ceiling fronts the time`() {
+        assertTrue(
+            TileSnapshot.claimsTimerOnly(
+                TrackingMode.FULL.name,
+                startedAtMillis = STARTED_AT,
+                nowMillis = STARTED_AT + 500,
+                endsOnDeparture = true,
+                capBelowCeiling = true,
+            ),
+        )
+    }
+
+    /**
+     * A legacy record written before `cap_ceiling_at` existed derives the
+     * ceiling to `startedAt + DEFAULT_CAP`, matching `ActiveSnoozeStore.read()`,
+     * so a shortened chosen cap on such a record still reads as below the
+     * ceiling — rather than 0, which hid it (Codex, PR #281).
+     */
+    @Test
+    fun `a legacy record derives its missing ceiling like the model`() {
+        val defaultCapMillis = ActiveSnooze.DEFAULT_CAP.toMillis()
+        assertTrue(
+            "shortened cap on a legacy record (no stored ceiling) reads as below the ceiling",
+            TileSnapshot.capBelowCeiling(
+                capExpiresAtMillis = STARTED_AT + Duration.ofHours(1).toMillis(),
+                storedCeilingMillis = 0L,
+                startedAtMillis = STARTED_AT,
+            ),
+        )
+        assertFalse(
+            "a legacy record whose cap sits at the derived ceiling is not shortened",
+            TileSnapshot.capBelowCeiling(
+                capExpiresAtMillis = STARTED_AT + defaultCapMillis,
+                storedCeilingMillis = 0L,
+                startedAtMillis = STARTED_AT,
+            ),
+        )
+    }
+
+    @Test
+    fun `a stored ceiling is compared directly`() {
+        val ceiling = STARTED_AT + Duration.ofHours(6).toMillis()
+        assertTrue(
+            TileSnapshot.capBelowCeiling(
+                capExpiresAtMillis = ceiling - Duration.ofMinutes(30).toMillis(),
+                storedCeilingMillis = ceiling,
+                startedAtMillis = STARTED_AT,
+            ),
+        )
+        assertFalse(
+            TileSnapshot.capBelowCeiling(
+                capExpiresAtMillis = ceiling,
+                storedCeilingMillis = ceiling,
+                startedAtMillis = STARTED_AT,
+            ),
+        )
+    }
+
+    /**
      * The default a record written before the flag existed reads as, matching
      * the record's own: departure tracking was not something a user could
      * switch off then, so an old record still ends on leaving and its mode is
@@ -112,23 +212,89 @@ class TileSnapshotModeTest {
 
     @Test
     fun `a watched snooze is not a timer`() {
-        // Not timer-only, so the shade drops the countdown entirely rather than
-        // fronting the passive failsafe deadline (SPEC.md §4.2, showsCountdown).
+        // Not timer-only, so the shade names the exit rather than fronting the
+        // passive failsafe deadline (SPEC.md §4.2, subtitleKind).
         assertFalse(justArmed(TrackingMode.FULL.name))
         assertFalse(justArmed(TrackingMode.WIFI_ONLY.name))
         assertFalse(justArmed(TrackingMode.WIFI_GRACE.name))
     }
 
     @Test
-    fun `the countdown shows only for a running timer snooze`() {
-        // The cap countdown is fronted only when the cap is the effective end —
-        // a running timer-only snooze (SPEC.md §4.2). A watched snooze and an
-        // idle tile carry no time.
-        fun snap(snoozing: Boolean, timerOnly: Boolean) =
-            TileSnapshot(snoozing = snoozing, capExpiresAtMillis = STARTED_AT, timerOnly = timerOnly)
-        assertTrue("running timer", snap(snoozing = true, timerOnly = true).showsCountdown)
-        assertFalse("running, watched", snap(snoozing = true, timerOnly = false).showsCountdown)
-        assertFalse("idle", snap(snoozing = false, timerOnly = true).showsCountdown)
+    fun `the subtitle names how a running snooze ends`() {
+        // A running snooze always says how it ends; idle says nothing. A timer
+        // names its end time, a watched snooze names its exit — move if a
+        // movement exit is armed, otherwise leave (SPEC.md §4.2).
+        fun snap(
+            snoozing: Boolean,
+            timerOnly: Boolean,
+            endsOnMotion: Boolean = false,
+            mode: TrackingMode? = null,
+            endsOnDeparture: Boolean = true,
+        ) =
+            TileSnapshot(
+                snoozing = snoozing,
+                capExpiresAtMillis = STARTED_AT,
+                timerOnly = timerOnly,
+                endsOnMotion = endsOnMotion,
+                mode = mode,
+                endsOnDeparture = endsOnDeparture,
+            )
+        assertEquals(
+            "running timer",
+            TileSnapshot.SubtitleKind.UNTIL_TIME,
+            snap(snoozing = true, timerOnly = true).subtitleKind,
+        )
+        assertEquals(
+            "watched, departure",
+            TileSnapshot.SubtitleKind.UNTIL_LEAVE,
+            snap(snoozing = true, timerOnly = false, mode = TrackingMode.FULL).subtitleKind,
+        )
+        assertEquals(
+            "watched, movement",
+            TileSnapshot.SubtitleKind.UNTIL_MOVE,
+            snap(snoozing = true, timerOnly = false, endsOnMotion = true, mode = TrackingMode.FULL)
+                .subtitleKind,
+        )
+        assertEquals(
+            "Wi-Fi grace ends on its deadline, not an exit",
+            TileSnapshot.SubtitleKind.ENDING_SOON,
+            snap(snoozing = true, timerOnly = false, mode = TrackingMode.WIFI_GRACE).subtitleKind,
+        )
+        assertEquals(
+            "grace outranks an armed movement exit, as the screen and notification do",
+            TileSnapshot.SubtitleKind.ENDING_SOON,
+            snap(
+                snoozing = true,
+                timerOnly = false,
+                endsOnMotion = true,
+                mode = TrackingMode.WIFI_GRACE,
+            ).subtitleKind,
+        )
+        assertEquals(
+            "active grace outranks a chosen time — the grace deadline can end it first",
+            TileSnapshot.SubtitleKind.ENDING_SOON,
+            snap(
+                snoozing = true,
+                timerOnly = true,
+                mode = TrackingMode.WIFI_GRACE,
+                endsOnDeparture = true,
+            ).subtitleKind,
+        )
+        assertEquals(
+            "a residual WIFI_GRACE mode after a successful timer conversion is a plain timer",
+            TileSnapshot.SubtitleKind.UNTIL_TIME,
+            snap(
+                snoozing = true,
+                timerOnly = true,
+                mode = TrackingMode.WIFI_GRACE,
+                endsOnDeparture = false,
+            ).subtitleKind,
+        )
+        assertEquals(
+            "idle",
+            TileSnapshot.SubtitleKind.NONE,
+            snap(snoozing = false, timerOnly = true).subtitleKind,
+        )
     }
 
     @Test

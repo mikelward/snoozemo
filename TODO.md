@@ -1939,18 +1939,41 @@ the point is that every other line of the app is worthless if it isn't true.
       `extend`, `applyChosenEnd`'s rollback, `restoreCapToFailsafe`, and the backstop
       path at once, rather than gating each by origin. Planned as its own PR; the maintainer chose
       to land it in #278 instead (2026-09-13, "B"), heavily tested.
-- [ ] **Drop the `Timer only` qualifier from the tile — it adds no value** (maintainer,
-      2026-09-13). For a timer-only (chosen-time) snooze the tile subtitle currently reads
-      `Timer only • 1h 0m left`; the `Timer only` half is redundant and less useful than the time.
-      Preferred replacement: just the countdown, `1h 0m left`. Acceptable alternatives: copy the
-      main-screen headline (`Snoozing until 22:00`) or a truncated form (`until 22:00`). This
-      **reverses** the SPEC §4.2 position that the tile keeps its narrower `Timer only` qualifier
-      (`claimsTimerOnly`) rather than a bare countdown "it has no copy for" — the maintainer's point
-      is the tile agreed to be short and then kept the redundant half; the time is the copy. Its own
-      PR: update `TileSnapshot.subtitle`, the `SPEC.md` §4.2 tile note and its rationale, the tile
-      screenshot test, and verify on a device (Quick Settings truncates aggressively — the tile is
-      the tightest copy constraint in the app). Leave the status line and notification as they are;
-      this is only the tile.
+- [x] **Tile subtitle names how the snooze ends — the `Until …` family** (maintainer,
+      2026-09-13/14). Dropped the redundant `Timer only ·` and made all three end conditions read as
+      one family: a timer shows its **absolute end time** (`Until 10:30`, device 12/24-hour format,
+      no countdown to go stale), and a watched snooze names its **exit** (`Until you leave` /
+      `Until you move`) rather than fronting the passive failsafe time. Reverses the earlier SPEC
+      §4.2 "tile keeps the `Timer only` qualifier / shows no subtitle for a watched snooze" position;
+      §4.2 rewritten with the reason. Tile-only (`TileSnapshot`); the status line and notification are
+      unchanged. Device verification still owed (Quick Settings truncates hard — the subtitle
+      marquees on the maintainer's phone). New copy carries the deferral markers until translated.
+- [ ] **Tile: a live readout beside the exit — `Until you leave · 45 m to go`** (maintainer,
+      2026-09-14; deferred from the `Until …` change above). For a departure snooze, show the
+      distance-remaining the ongoing card already computes (`distanceSubText`: the meters/feet *to
+      go*, or `leaving` / `on Wi-Fi` / nothing) after the exit label. Snapshot-at-open, like the rest
+      of the tile — no live tile repaint on presence updates. The work is the plumbing, not the copy:
+      `:tile` depends on `:core`/`:dnd`, **not** `:app`, so it cannot call `:app`'s distance
+      formatter — `:app` would persist the formatted readout (stamped with the snooze's `startedAt`
+      so a stale one from a prior snooze is ignored) to a store the tile reads at shade-open. Motion
+      has no distance/time-to-go, so `Until you move` stays bare — the one exit with no readout.
+      Its own PR; verify truncation/marquee on a device for the longest string.
+- [x] **Tile: share the "front the time" decision with the model rather than re-deriving it**
+      (Codex, PR #281; maintainer chose the shared-function option 2026-09-14). The tile's
+      `claimsTimerOnly` re-derived whether to front a time from raw preference keys and drifted
+      from `ActiveSnooze`'s authoritative `capCountdownShown` twice in one review: it ignored
+      `WIFI_GRACE` (claimed a leave/move exit for a grace deadline) and ignored `timerOnlyRequested`
+      + a shortened cap (claimed a sole exit over a chosen deadline in the durable PARTIAL state).
+      #281 fixed both in-place; this change deletes the *class* by extracting the disjunction into
+      one pure `capTimeFronted(timerOnlyRequested, capBelowCeiling, endsOnMotion, tracksDeparture)`
+      in `:core` that both `capCountdownShown` and the tile consume — a new input reaches both at
+      once. `tracksDeparture` stays each caller's to resolve, which is the one input they
+      legitimately disagree on: the model reads `SETTLING` as not tracking (failsafe time fronts
+      while capturing), the tile treats a *live* settling capture as tracking (shows the exit it is
+      capturing an anchor for — SPEC §4.2). Behavior-preserving; `:core`'s `capCountdownShown`
+      tests and the tile's `TileSnapshotModeTest` both pass unchanged, plus new `capTimeFronted`
+      tests. Chose the shared function over `:app` persisting the answer to avoid a second copy of
+      the same fact that could go stale.
 
 ## Phase 5 (M5) — Edge cases and degraded modes
 
