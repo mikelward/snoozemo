@@ -759,7 +759,11 @@ something to do rather than something to allow; and, last, the crash-report and 
 own — the debug log is not mentioned, since a card whose job is one question about data leaving the
 phone is the wrong place for a sentence about a log that never does (maintainer, 2026-09-05). Each card offers the grant for the thing it just introduced, drawn
 as the same tri-state rows `PermissionsScreen` uses (§5.2), and `Next` never waits on one — the
-rows' own fail-open rule. `PermissionsScreen` then follows only when a permission is still missing,
+rows' own fail-open rule. **Tapping `Allow` on the Do Not Disturb access row opens a short help
+dialog first** (maintainer, 2026-09-14): the system access screen it then launches is a list the
+user has to find Snoozemo in and toggle on, a step the button alone does not explain — confirming
+the dialog opens that screen, dismissing leaves the row to try again. `PermissionsScreen` then
+follows only when a permission is still missing,
 as the recap, and its once-only routing stays as the backstop for an install that skipped the
 flow; a user who allowed everything on the cards lands on `MainScreen`. A row whose permission is
 already granted is dropped from its card rather than shown with no action (maintainer,
@@ -2399,8 +2403,9 @@ is granted or revoked. Revocation mid-snooze ⇒ end the snooze and tell the use
 #### How the app screen presents this, and `POST_NOTIFICATIONS` beside it
 
 Snoozemo asks for three things on this screen, and they are not all the same kind of thing. Do Not
-Disturb access is the settings screen above — the user leaves the app, flips a toggle, and comes
-back, with no in-app dialog and no result callback. `POST_NOTIFICATIONS` (§4.3) and location (§3.2)
+Disturb access is the settings screen above — tapping `Allow` shows a short in-app help dialog first
+(§4.2), then `Open settings` from it leaves the app, the user flips a toggle, and comes back; the
+toggle itself has no result callback. `POST_NOTIFICATIONS` (§4.3) and location (§3.2)
 are both genuine runtime prompts that appear in place — location's own disclosure-then-permission
 sequence is described there rather than repeated here. They sit next to each other on the same
 screen, so the same rules apply to all three:

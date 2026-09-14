@@ -323,9 +323,12 @@ the point is that every other line of the app is worthless if it isn't true.
       - **It is not a runtime permission**, which was part of why the old shape was confusing:
         Do Not Disturb access is a Settings toggle reached with
         `ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS`, so the user leaves the app, flips it, and
-        comes back — there is no in-app dialog and no result callback (`SPEC.md` §5.2). What the
-        app *does* own is noticing the return: the service reconciles on every non-arm wake-up and
-        the screen reconciles on open, so the state updates by itself once they are back.
+        comes back — there is no *system* result callback (`SPEC.md` §5.2). (Superseded in part,
+        2026-09-14: `Allow` now shows a short in-app help dialog *before* that Settings screen,
+        explaining that the user must scroll to Snoozemo there and turn it on — the toggle itself is
+        still the Settings screen with no callback.) What the app *does* own is noticing the return:
+        the service reconciles on every non-arm wake-up and the screen reconciles on open, so the
+        state updates by itself once they are back.
       - **`POST_NOTIFICATIONS` is the one that really is a runtime prompt**, and the two sit next
         to each other on the same screen looking alike. Each row now carries an action line in the
         same position — `Opens Settings` or `Tap to allow` — so the difference is stated rather
