@@ -113,18 +113,19 @@ screen already has a reason attached.
 
 > **Snoozemo**
 >
-> Silence your phone until you leave.
+> Silence your phone with one tap.
 >
-> One tap.
+> Ends automatically, when you choose.
 
-Illustration: the `Zzz` mark, large.
+Illustration: the Quick Settings panel with Snoozemo's tile ringed among the
+others — the same tile the user will look for in their own shade.
 
-The first line is §1's one-sentence product with the meeting clause dropped — the
-next card carries that. The second is `One tap.` alone: it used to read `One tap.
-It turns itself back on.`, and the second sentence went (maintainer,
-2026-09-05). Card 2 is *about* the snooze ending by itself and says so at length,
-so promising it here spent the first card's two lines saying what the next one
-exists for — and a first screen that front-loads is the one people skip.
+Both lines are build-neutral (maintainer, 2026-09-14): they hold on a
+duration-only build as much as on one that tracks departure, so card 1 no longer
+splits by flavor. The first names the action — one tap, wherever you are. The
+second is the promise card 2 then unfolds at length: *how* it ends is that card's
+job, so this line only says that it does and that the choice is the user's. A
+first screen that front-loads the detail is the one people skip.
 
 The 8-hour cap is deliberately not stated on this card
 (maintainer, 2026-09-05). It still fires, and `Ends automatically` covers it —

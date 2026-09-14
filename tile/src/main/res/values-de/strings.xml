@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
     <string name="tile_name">Snoozemo</string>
+    <!-- TODO: translate — English is now "Snooze now" (maintainer, 2026-09-14). -->
     <string name="tile_snooze_here">Hier schlummern</string>
     <string name="tile_snoozing">Schlummert</string>
     <string name="tile_state_off">Aus</string>

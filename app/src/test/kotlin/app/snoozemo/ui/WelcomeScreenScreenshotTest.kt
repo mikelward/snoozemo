@@ -36,10 +36,10 @@ import org.robolectric.annotation.GraphicsMode
  * The welcome flow's five cards (`SPEC.md` §4.2, wording in `TUTORIAL.md`).
  *
  * Each card is one idea and one picture, so each gets its own capture — the
- * states are the point rather than the pixels. The two that differ by whether
- * the build tracks departure are captured both ways: cards 1 and 2 promise
- * departure, and on a build that cannot deliver it they must promise something
- * else instead.
+ * states are the point rather than the pixels. Card 1's two lines are
+ * build-neutral (maintainer, 2026-09-14), so it no longer varies by flavor;
+ * card 2 still promises departure and is captured both ways, since on a build
+ * that cannot deliver it it must promise something else instead.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], qualifiers = "w411dp-h914dp-420dpi")
@@ -55,8 +55,9 @@ class WelcomeScreenScreenshotTest {
     fun `card one says what the app is`() {
         capture("welcome-what.png") { Flow(WelcomeCard.WHAT) }
 
-        composeRule.onNodeWithText("Silence your phone until you leave.").assertExists()
-        composeRule.onNodeWithText("One tap.").assertExists()
+        // Card 1's two lines (maintainer, 2026-09-14), build-neutral.
+        composeRule.onNodeWithText("Silence your phone with one tap.").assertExists()
+        composeRule.onNodeWithText("Ends automatically, when you choose.").assertExists()
         // The picture card 1 leads with (maintainer, 2026-09-07). Asserted by
         // its description rather than by the tile labels, because that is the
         // whole of what a screen reader gets: the panel is one image, and four
@@ -106,18 +107,6 @@ class WelcomeScreenScreenshotTest {
         assertTrue("the dots share the bottom row", dots.y > title.y)
     }
 
-    @Test
-    fun `card one promises no departure on a build that cannot track it`() {
-        capture("welcome-what-timer-only.png") {
-            Flow(WelcomeCard.WHAT, tracksDeparture = false)
-        }
-
-        // The promise a build that cannot track departure can actually keep.
-        // Promising departure there sets up exactly the silence-until-the-cap
-        // this app exists to prevent (SPEC.md §3).
-        composeRule.onNodeWithText("Silence your phone.").assertExists()
-        composeRule.onNodeWithText("Silence your phone until you leave.").assertDoesNotExist()
-    }
 
     @Test
     fun `a tile tap that could not snooze says so on the card it lands back on`() {
