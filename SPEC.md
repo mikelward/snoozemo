@@ -61,7 +61,7 @@ DND back off.
 | D6 | **Three independent exits**: departure, max duration, manual | Any one sensor can fail; the phone must always come back |
 | D7 | **Fail open, always** | Every ambiguous state resolves toward ending the snooze, not extending it |
 | D8 | **Build the `play` flavor first, on Pixel** | Pixel and Play are the priority targets. Nothing blocks developing `play` — the declaration gates *distribution*, not local installs — so the earlier testability argument for `direct`-first did not hold. (`direct` retired 2026-09-12; `play` is now the only build — §3.4) |
-| D9 | **Ask-off: arm on tap. Ask-on: the tile opens the chooser, and a row arms** (revised 2026-09-14, §4.4) | With `Ask when to unsnooze` off the tile arms instantly (the zero-friction path, untouched). With it on the tile opens the main-screen chooser and a row commits the end and arms — choose-then-arm, because "ask when to unsnooze" should ask before committing. *Superseded:* "arm first, refine second" — the tile armed on tap and a sheet refined the running snooze afterward; the app screen's own `Snooze` still does this pending a later milestone |
+| D9 | **Ask-off: arm on tap. Ask-on: the tile opens the chooser, and a row arms** (revised 2026-09-14, §4.4) | With `Ask when to unsnooze` off the tile arms instantly (the zero-friction path, untouched). With it on the tile opens the main-screen chooser and a row commits the end and arms — choose-then-arm, because "ask when to unsnooze" should ask before committing. *Superseded:* "arm first, refine second" — the tile armed on tap and a bottom sheet refined the running snooze afterward; the sheet is now deleted, and the main-screen chooser is the one surface for choosing an end, tile-opened and app-opened alike (2026-09-14) |
 
 ---
 
@@ -747,8 +747,8 @@ it lives; the panel is drawn rather than screenshotted, so it follows the app's 
 size instead of rotting with a platform release, and the ring is what marks Snoozemo's tile
 rather than a different tile style, which would teach the user to look for something the shade
 will never show them; how a snooze ends, shown on a render of the ongoing notification (§4.3), the one surface
-that carries every way it can — departure, a chosen time, `End now` — so the end sheet (§4.4) needs
-neither a card nor a switch in the flow (maintainer, 2026-09-05); the one Do Not Disturb
+that carries every way it can — departure, a chosen time, `End now` — so the end-condition chooser
+(§4.4) needs neither a card nor a switch in the flow (maintainer, 2026-09-05); the one Do Not Disturb
 rule and the ringer choice (§5.9) — plus, since that card calls the rule the user's, the same
 Filters row `SettingsScreen` offers, absent until there is a rule to edit (maintainer,
 2026-09-05); the tile, **after** the rule rather than before it (maintainer, 2026-09-08), because
@@ -928,7 +928,7 @@ no degraded reason to carry and no movement exit: a timer-only snooze that is al
 the sentence will not fit — a narrow screen, a large accessibility font — the split names the same
 time, `Snoozing` over `Until 4:30 PM`, the way the motion and full fallbacks name their exit, so the
 end time survives the narrow layout rather than reverting to `Timer only`. The time is the cap,
-formatted through the same phone helper as the sheet and the notification.
+formatted through the same phone helper as the chooser and the notification.
 
 **The sentence is offered only where it is the whole statement.** It *replaces* the condition
 line rather than sitting above it, so anything the condition carries and the sentence does not
@@ -1091,7 +1091,7 @@ Channel `snooze_active`, `IMPORTANCE_DEFAULT`, ongoing, not dismissible while th
     [ End now ]   [ +30 min ]   [ Until 17:00 ]
 ```
 
-`+30 min` matches the sheet's step (§4.4), so extending uses the same mental unit as choosing.
+`+30 min` matches the chooser's step (§4.4), so extending uses the same mental unit as choosing.
 
 **The third action is the next meeting's end, and it is there only when there is one worth
 offering** (maintainer, 2026-08-31). The idea is the case the app is most often used for: a snooze
@@ -1108,7 +1108,7 @@ user did not ask for. That is also why this is the one permission whose absence 
 action rather than a mode — it is stated on the permissions screen as a gap in what is *offered*,
 not a degraded snooze.
 
-**The time is formatted by the phone, not by Snoozemo**, through the same helper the sheet uses —
+**The time is formatted by the phone, not by Snoozemo**, through the same helper the chooser uses —
 so the button reads `17:00` or `5:00 PM` exactly as the rest of the device does, and the two
 surfaces cannot render the same instant two ways.
 
@@ -1123,7 +1123,7 @@ every state change does not.
 longer matches** (§4.4's identity check). A notification is exactly where that matters: the card
 sits in the shade while the phone is in a pocket, and a snooze that ended and was replaced in
 between must not take a time chosen for the previous one. A refusal this action meets — an offered
-time that has since fallen inside the floor — is said in the shade, because unlike a sheet row it
+time that has since fallen inside the floor — is said in the shade, because unlike a chooser row it
 has nowhere to say it inline.
 
 Tapping the card itself, rather than one of its two actions, opens `MainScreen` (landed
@@ -1234,23 +1234,38 @@ the snooze is legible, so how much survives collapsing is a real question and a 
 
 ### 4.4 Choosing an end condition
 
-> **Status: provisional.** The direction is settling toward *the tile opens a chooser you pick from*
-> rather than *arm instantly, refine in a sheet*, and the two coexist mid-migration (below). Treat
-> the mockups as a starting point, not a spec.
-
 "Until I leave" is the thesis, but it is not always the *best available* answer. If you are in a
 meeting that ends at 14:00, "until 14:00" is sharper than "until I walk out" — you might not walk out
 for another hour. So the chooser offers a time as well as a place, without taxing the common case.
 
 **The rule (D9, revised 2026-09-14): with `Ask when to unsnooze` off, the tile arms immediately with
 a sane default — goal 1, untouched. With it on, the tile opens the main screen as the end-condition
-chooser and arms *nothing* until you pick a row (choose-then-arm); each row commits that end and, for
-a tile-opened chooser, closes back to where you were.** This replaces the earlier D9, where the tile
-armed first and a sheet refined the running snooze afterward. The reason is what "ask when to
+chooser and arms *nothing* until you pick a row (choose-then-arm).** This replaces the earlier D9,
+where the tile armed first and a bottom sheet refined the running snooze afterward. That sheet is now
+deleted; the main-screen chooser is the one surface for choosing an end, and it serves both cases —
+opened from the tile and opened from the app. The reason for choose-then-arm is what "ask when to
 unsnooze" should mean: a question asked *before* committing, not a refinement of a snooze already
 running. A user who has opted into being asked has opted out of the instant one-tap arm for that
 tap, so the choose-then-arm delay is theirs to have asked for; the off default keeps the one-tap
 path exactly as it was.
+
+**An end-condition row choice finishes the view, in both cases** (maintainer, 2026-09-14).
+Tapping a row that commits an end condition collapses the screen back to where the user was —
+whether starting a snooze from idle or adjusting one already running. Closing on a row is
+`applied`-only: a `gone`, `partial`, or `refused` outcome (below) keeps the screen up, because
+each is something the user still needs to see. What makes the close safe is that a row carries an
+`EndChoiceOutcome`, so the screen closes on the service's *confirmed* answer, never on the bare
+service start.
+
+**The plain `Snooze` button and `End now` do not close.** Both are committing actions, but neither
+carries an `EndChoiceOutcome`: the plain `Snooze` is the unqualified one-tap arm, and `End now`
+releases asynchronously (its start returns before the zen rule is actually off). With no confirmed
+signal to close on, closing on the bare service start would drop the only in-app surface for a
+failure the platform reports late — an arm that is refused after it was accepted, a release the
+service rolls back and reschedules — which is invisible where notifications are denied. So they arm
+or end and leave the screen up; the store observer flips it to the new state when the record lands.
+The `−` / `+` time steppers never commit or close either: they only adjust the time row, and
+committing a time takes a row tap.
 
 **The chooser is the main screen's own idle end-condition rows** — the same rows the app screen shows
 when nothing is running, now reachable from the tile. A row that needs a permission (location for
@@ -1270,21 +1285,6 @@ never runs: a user who has opted into being asked cannot be asked behind the key
 unlocking to answer is inherent to having opted in. (Losing the instant locked arm for opted-in
 users is a trade of §4.2 against §6.9; noted for the maintainer.)
 
-**Mid-migration, the app screen's `Snooze` button still arms-then-refines with a sheet.** The tile
-no longer does — the trampoline (§6.9) hosts no sheet at all now — but the app screen's own button
-keeps the older flow until the chooser rows fully replace it. What each surface learns differently is
-only the cap: the app screen keeps the record warm, the tile-opened chooser reads it like any launch,
-and a snooze whose whole backstop is already inside the floor offers nothing (§7's `MIN_CAP`) either
-way.
-
-**The subsections below describe the arm-then-refine sheet.** After PR #284 that sheet survives only
-on the app screen's `Snooze` button; the tile opens the chooser (D9) and its trampoline hosts no
-sheet at all. So read anything below about the *trampoline* reading a post-arm record, or the *tile*
-arming and then refining in a sheet, as the **retired tile flow** — kept here only until the open
-"does the sheet survive?" question (end of this section, and `TODO.md`) is settled and §4.4 is
-rewritten around the chooser. The sheet mechanics themselves (the rows, the steppers, `OK`, the two
-clamps) still describe the surviving `Snooze`-button sheet.
-
 #### v1
 
 ```
@@ -1292,46 +1292,26 @@ clamps) still describe the surviving `Snooze`-button sheet.
 
         ⏰  until 14:00          [ − ]  [ + ]
         📍  until I leave
-
-        Ends when you leave, either way.
-
-                                        [ OK ]
 ```
 
-- **Off by default, behind `Ask when to unsnooze` in Settings.** One tap from the shade with
-  nothing in the way is goal 1, and the sheet — however cheap — is something between the tap
-  and getting on with what you were doing. A user who wants to be asked says so once; a user
-  who doesn't never has to. So on a default install the trampoline still draws nothing at all
-  and finishes as soon as the service start is queued, exactly as it did before the sheet
-  existed. This inverts the debug log's own default (§4.6) on purpose: that one is off-by-
-  default's mirror because an uncaptured failure is unrepeatable, while a sheet not shown
-  costs nothing that can't be had by turning it on.
+- **Off by default, behind `Ask when to unsnooze` in Settings — and it governs the tile.** One tap
+  from the shade with nothing in the way is goal 1, and the chooser — however cheap — is something
+  between the tap and getting on with what you were doing. A user who wants to be asked says so once;
+  a user who doesn't never has to. So on a default install the tile still arms in one tap and the
+  trampoline draws nothing at all, finishing as soon as the service start is queued, exactly as it
+  did before the chooser existed; the chooser is what you opt the *tile* into. This inverts the debug
+  log's own default (§4.6) on purpose: that one is off-by-default's mirror because an uncaptured
+  failure is unrepeatable, while a chooser not opened from the tile costs nothing that can't be had
+  by turning it on.
 - **A sane default, no inference.** The time is seeded at **one hour from now, rounded to the
   nearest half hour** — a tap at 13:12 offers 14:00, not 14:12. Ragged times look like a bug and
   invite pointless fiddling.
-- **`−` / `+` adjust in 30-minute steps** without dismissing the sheet. Floor is 30 minutes from now;
-  ceiling is the 8-hour backstop (§7). Two taps covers 13:00–15:00, which is most meetings.
+- **`−` / `+` adjust in 30-minute steps** without committing — the steppers only move the time row,
+  and committing takes a choice-button tap. Floor is 30 minutes from now; ceiling is the 8-hour
+  backstop (§7). Two taps covers 13:00–15:00, which is most meetings.
 - **Two rows, both live.** Tapping a row commits that end condition
-  and dismisses. `until I leave` ends the snooze on departure, and the build tracks departure,
-  so the sheet always offers it.
-- **`OK` is the explicit way out, and it accepts the time as shown** (maintainer,
-  2026-09-01). The rows commit on tap, but they read as labels rather than buttons: after
-  stepping `−`/`+` to a time there was nothing on screen that said *done*, and the two exits
-  that were obvious — the scrim and the back gesture — both discard the time just chosen.
-  This does not add a third end condition. It is the time row's own commit under a control
-  shaped like one, so the sheet has a terminal action a user can find without having to know
-  that a card is tappable. It is always present, since it
-  is the sheet's confirm rather than anything the departure row was carrying.
-  A user who meant `until I leave` and pressed `OK` out of habit gets whatever time the row
-  is showing, which is at most the backstop the snooze armed with and never beyond it — and,
-  since a chosen time now replaces the other end conditions (below), that snooze runs to the
-  time rather than ending when they walk out. **That is a real cost of the ambiguity, and it
-  is what the bullet below traded for**: the earlier reading kept departure armed either way,
-  so the worst case was a snooze ending no later than it was always going to. The floor that
-  survives is the backstop: whatever `OK` commits, the snooze cannot outlast the cap it armed
-  with, and `Until I leave` is one tap away on the same sheet. The alternative considered was
-  making the rows a selection that only `OK` commits; rejected because it charges every user a
-  second tap on the app's one-tap path.
+  and finishes the screen. `until I leave` ends the snooze on departure, and the build tracks
+  departure, so the chooser always offers it.
 - **Choosing a time makes the timer the only exit** (maintainer, 2026-09-11: "The Until (time)
   button should start/switch to a timer only snooze"). It *moves the cap* and it also takes the
   other end conditions off — the movement exit and departure tracking both — so a snooze told to
@@ -1425,26 +1405,27 @@ clamps) still describe the surviving `Snooze`-button sheet.
   independent, and abandoning the second because the first failed left a snooze ending on an exit
   nothing had mentioned.
 
-  **Whether the snooze was narrowed to its timer is on the record, not held in the sheet's
-  state** (maintainer, 2026-09-12). It used to be a sheet flag saved with the sheet, on the
-  reasoning that a chosen time over a snooze that also ends on movement is a combination the
-  rows offer deliberately — so a record carrying a chosen cap and an armed exit looked the
-  same whether the removal failed or the combination was asked for, and only the sheet knew
-  which. `ActiveSnooze.timerOnlyRequested` now records the intent — *a fixed time and nothing
-  else* — set when a time is chosen and cleared when an exit is put back, so `isPartialTimer =
+  **Whether the snooze was narrowed to its timer is on the record, not held in UI state**
+  (maintainer, 2026-09-12). It used to be a flag held by the chooser, on the reasoning that a
+  chosen time over a snooze that also ends on movement is a combination the rows offer
+  deliberately — so a record carrying a chosen cap and an armed exit looked the same whether the
+  removal failed or the combination was asked for, and only the UI knew which.
+  `ActiveSnooze.timerOnlyRequested` now records the intent — *a fixed time and nothing else* — set
+  when a time is chosen and cleared when an exit is put back, so `isPartialTimer =
   timerOnlyRequested && (endsOnDeparture || endsOnMotion)` tells the two apart from the record
-  alone. Partial then survives a rotation, a process death and a reboot because the record
-  does, and shows on the sheet even where notifications are denied and the ongoing card
-  cannot; the sheet's `commitPartial` flag and its saved keys are deleted with it. The signal
-  to move it was the rate rather than any one finding — five consecutive review rounds, each
-  adding a *preserve this flag across that transition too* rule to a piece of view state.
+  alone. Partial then survives a rotation, a process death and a reboot because the record does,
+  and shows on the chooser even where notifications are denied and the ongoing card cannot; the
+  flag no longer lives in view state at all. The signal to move it was the rate rather than any one
+  finding — five consecutive review rounds, each adding a *preserve this flag across that
+  transition too* rule to a piece of view state.
 
   **The durable half of that report is the ongoing notification, and it needs no machinery to
   keep it true.** That card is rebuilt from the record every time it is posted, and it already
   names every armed exit — so an exit that stayed armed goes on being named for exactly as long
-  as the record carries it, and stops the instant the record does. The sheet says the same thing
-  once, at the tap, because a sheet that dismissed on a partial success is indistinguishable from
-  one that dismissed on a clean one.
+  as the record carries it, and stops the instant the record does. The chooser can show it inline —
+  a partial choice keeps the screen up rather than finishing it (the close rule above) — but that
+  lasts only as long as the screen does, so the notification is the copy that carries the partial
+  state once the user has moved on.
 
   A separate warning card was tried first and removed (maintainer, 2026-09-12). Being a claim
   about the *snooze* rather than about the attempt, it had to be retired by every operation that
@@ -1470,7 +1451,7 @@ clamps) still describe the surviving `Snooze`-button sheet.
   shape as a refused release.
 
   **The choice takes effect on every surface at once**, including during the arm's anchor-capture
-  window, which is where a choice made from the tile sheet ordinarily lands. The card and the
+  window, which is where a choice made from the chooser ordinarily lands. The card and the
   tile both say what the snooze now ends on rather than what it was armed for.
 
   **A pending anchor capture is allowed to finish**, and the process is kept alive until it does.
@@ -1482,46 +1463,47 @@ clamps) still describe the surviving `Snooze`-button sheet.
   it re-arms the cap, re-asserts the zen rule and reconciles policy access, none of which a
   timer-only snooze needs less than any other, and all of which matter more when the timer is the
   only thing left ending it.
-- **The sheet does its own arithmetic; the service has the final word.** §6.9 forbids the
-  trampoline *waiting* on the service it has just started, not reading what that service has
-  already written: the sheet is decided after the start is away, so it reads the record to learn
-  the backstop the running snooze actually carries and offers nothing later. It seeds and steps
-  against the clock from there, and the service re-clamps whatever is committed. Two clamps rather
-  than one, on purpose: the sheet's keeps the steppers from offering times the service would
-  refuse, and the service's keeps a value chosen against a stale reading from outliving it. The
-  ceiling has to be **that record's own `capCeilingAt`** and not a fresh eight hours from now,
+- **The chooser does its own arithmetic; the service has the final word.** §6.9 forbids *waiting*
+  on the service, not reading what it has already written: over a running snooze the chooser reads
+  the record to learn the backstop the snooze actually carries and offers nothing later. It seeds
+  and steps against the clock from there, and the service re-clamps whatever is committed. Two
+  clamps rather than one, on purpose: the chooser's keeps the steppers from offering times the
+  service would refuse, and the service's keeps a value chosen against a stale reading from
+  outliving it. The ceiling has to be **that record's own `capCeilingAt`** and not a fresh eight
+  hours from now,
   because a duplicate arm from a stale tile snapshot keeps the snooze already running (§4.2) —
   offering eight hours over a snooze with one left would promise time the service would clamp
   away. It is the backstop rather than the current cap because a chosen time moves the cap either
   way, so the cap is no longer the edge of what can be chosen.
-- **`until I leave` commits by changing nothing — on a snooze the tile just armed.** Departure
-  tracking is already armed and the backstop is already the cap, so on that snooze the row is
-  exactly what the tile left, which is why dismissing the sheet and choosing it are the same
-  outcome, as the rule above requires. **It stopped being a no-op in general on 2026-09-11**: a
-  chosen time now replaces the other exits, so over a snooze narrowed to its timer this row is
-  the way back — it puts departure on and restores the cap to the backstop. It is offered on the strength of what the *build* tracks, which is not the same
-  question as what this snooze ended up tracking: a `play` anchor that degrades to duration-only
-  (§6.5) still gets the row. The degradation says so where the user is looking, but the row is a
-  promise made before the answer is known — see `TODO.md`.
+- **`until I leave` commits — it arms from idle, and restores over a running snooze.** From the
+  idle chooser it starts the plain snooze the tile's instant arm makes: departure tracking on, the
+  backstop as the cap. Over a snooze already running — narrowed to its timer, or shortened — it is
+  the way back, putting departure on and restoring the cap to the backstop. Either way it is a real
+  commit; it stopped being a no-op when a chosen time began replacing the other exits (2026-09-11),
+  and with no sheet to dismiss instead it is a plain commit everywhere now. It is offered on the
+  strength of what the *build* tracks, which is not the same question as what this snooze ended up
+  tracking: a `play` anchor that degrades to duration-only (§6.5) still gets the row. The
+  degradation says so where the user is looking, but the row is a promise made before the answer is
+  known — see `TODO.md`.
 - **A step that would land inside the floor disables its button rather than clamping onto it.**
   Rounding the seed onto the half hour can leave less than a step of headroom, and a control
   whose promise is half-hour steps must not answer a tap with a ragged time.
 
 #### The same choices on the main screen
 
-**The sheet is offered once, at the arm; the main screen offers the same choices for as long as the
-snooze runs** (maintainer, 2026-09-08). The sheet answers "how should this snooze end?" in the
-seconds after arming, and a user who works that out an hour later — a meeting appears, plans change,
-they simply forgot to pick — had nowhere to say so. Opening the app showed the snooze and offered
-exactly two things: end it, or nothing. So the same rows now sit on the main screen, under the status
-line and above `End now`, whenever a snooze is running and there is a time the service would
-accept (§7's `MIN_CAP`).
+**The chooser rows serve a running snooze too, not only an idle start** (maintainer, 2026-09-08).
+The rows answer "how should this snooze end?", and a user who works that out an hour after arming — a
+meeting appears, plans change, they simply forgot to pick — needs somewhere to say so; opening the
+app used to show the snooze and offer exactly two things, end it or nothing. So the same rows sit on
+the main screen, under the status line and above `End now`, whenever a snooze is running and there is
+a time the service would accept (§7's `MIN_CAP`) — the one surface, used to start from idle and to
+refine what is running alike.
 
-Three differences from the sheet, and all three are behavior rather than layout:
+Over a running snooze, three things about the rows are worth stating, all behavior rather than
+layout:
 
-- **`Until I leave` commits, where the sheet's dismisses.** On the sheet that row changes nothing,
-  because the snooze it is offered over was armed seconds ago and is already running to its
-  ceiling. Here the snooze may have been shortened half an hour ago, so choosing it has to put the
+- **`Until I leave` restores here.** From the idle chooser this row starts a plain snooze; over one
+  already running the snooze may have been shortened half an hour ago, so choosing it has to put the
   cap **back** — no longer the *only* choice that lengthens one, since a chosen time moves the cap
   in whichever direction it lies, but still the only one that names no time. It is bounded by the
   same ceiling
@@ -1560,8 +1542,8 @@ Three differences from the sheet, and all three are behavior rather than layout:
   an end that cannot arrive. A calendar that cannot be read, or has nothing inside the window,
   contributes no meeting rows.
 - **The time row opens on the snooze's own end when time is what ends it, else an hour out**
-  (maintainer, 2026-09-13). The arm-time sheet seeds an hour out because it answers "how should this
-  *new* snooze end?"; over a running snooze the top row's job is to show what the snooze is set to
+  (maintainer, 2026-09-13). The idle offer to start seeds an hour out because it answers "how should
+  this *new* snooze end?"; over a running snooze the top row's job is to show what the snooze is set to
   end at, so a user can read it and step from it. But only where *time* is the effective end: a
   chosen timer, or a backstop **promoted** to the effective end because departure lost its location
   fix (`effectiveMode` is `DURATION_ONLY` and no motion exit). A snooze still ending on departure
@@ -1608,7 +1590,7 @@ copy implies fails in the safe direction (principle 1) while one that runs on pa
 The `?` sits beside the card rather than inside it, the shape the steppers already use, so the row
 keeps its whole surface as one target and a screen reader names each. It is tappable even where
 the row is not: a row held by a missing location reading is the one most worth explaining, and the
-card commits nothing. `Until time` needs none, and neither does the arm-time sheet — that is the
+card commits nothing. `Until time` needs none, and neither does the instant tile arm — that is the
 fast path and stays bare.
 
 **The leave card names only the signals that snooze actually has** (maintainer, 2026-09-11). An
@@ -1662,8 +1644,8 @@ control changing state rather than two controls trading places. §4.2's asymmetr
 `End now` shows on anything but a confident "nothing is running", `Snooze` only on that.
 
 **Idle, the same rows are a way to start** (maintainer, 2026-09-10). The screen used to offer one
-thing when nothing was running — arm — and the choice of how it ends only afterwards, in the sheet
-or in these rows. That is "arm, then refine", and the refine step existed only because arming had to
+thing when nothing was running — arm — and the choice of how it ends only afterwards, in these
+rows. That is "arm, then refine", and the refine step existed only because arming had to
 come first. So the idle screen shows the rows too, and **a tap on one arms immediately with that
 end**: `Until 2:30 PM` starts a snooze that caps there, a meeting row starts one that caps at the
 meeting's end, `Until I move` starts one that also ends on movement. **`−` and `+` are the
@@ -1675,7 +1657,7 @@ a row the user then tapped. A stepper that commits is also one whose tap cannot 
 started a snooze. Three things follow:
 
 - **The offer comes from the clock, the default cap and the calendar**, since there is no record to
-  compute it from: the time row is seeded an hour out and rounded as the sheet's is, its ceiling is
+  compute it from: the time row is seeded an hour out and rounded to the half hour, its ceiling is
   the cap a snooze started now would carry (§7's default), and the meeting rows are the calendar's
   ends inside that window on the same rules as the running rows. It is derived from the clock alone
   — its time, its floor, and a ceiling that has to equal the cap the service would set — so the
@@ -1709,7 +1691,7 @@ started a snooze. Three things follow:
   footer's `Snooze` stays as the unqualified arm for now — with every row a way to start, it
   duplicates `Until I leave`, and whether it stays, goes, or becomes a configurable default in
   step with the tile is an open decision (`TODO.md`). Withheld only on a build that cannot track a
-  departure at all, as the sheet withholds it, and gated on the same location grant the running
+  departure at all, and gated on the same location grant the running
   row needs, since a departure nothing can watch for is not what the row names.
 - **The arm path's guarantee still governs** (§4.1, §6.9): a row that arms waits on nothing. The
   chosen end goes into the same cap alarm the plain arm sets, bounded by the same ceiling; a time
@@ -1746,18 +1728,20 @@ For the same reason the rows are offered while the *backstop* is still more than
 rather than while the cap is: asked of the cap, a snooze stepped down to half an hour lost its rows
 exactly where the way back out is the thing the user wants.
 
-**Whether the sheet survives this is an open question**, recorded in `TODO.md`: the screen now does
-everything the sheet does and more, but the sheet is the only refinement a *tile* user ever sees, and
-the tile-first user who never opens the app is exactly who D9 was written for.
+**The sheet did not survive: it was deleted** (maintainer, 2026-09-14). The main-screen chooser does
+everything the sheet did and more, and D9 now routes the tile-first user to it as well — with `Ask
+when to unsnooze` on, the tile opens the chooser rather than arming and then refining in a sheet — so
+the one refinement surface a tile user could reach is the chooser too. There is no longer a second
+surface to keep in step.
 
 #### Candidates considered
 
 | End condition | Signal needed | Verdict |
 |---|---|---|
-| **I leave here** | §6 presence engine | **v1.** The build tracks departure, so the sheet always offers it |
+| **I leave here** | §6 presence engine | **v1.** The build tracks departure, so the chooser always offers it |
 | **A time, adjustable** | none | **v1.** Seeded at now + 1 h; also the §7 cap |
 | **Whichever comes first** | both | **v1 as designed, reversed 2026-09-11.** Setting a time used to leave departure armed so whichever came first won; a chosen time now *replaces* the other exits (§4.4), so the timer is the only one. `Until I leave` is the way back |
-| **This meeting ends** | `READ_CALENDAR` | **Landed 2026-08-31**, as a notification action rather than a sheet row — see below |
+| **This meeting ends** | `READ_CALENDAR` | **Landed 2026-08-31** as a notification action, later as chooser rows too — see below |
 | **My next alarm** | `AlarmManager.getNextAlarmClock()` | **Explore.** No permission at all, and a natural fit for a bedtime snooze. Offer only when the next alarm is 3–12 h out, so it doesn't propose a 4-minute snooze |
 | **Wi-Fi goes** | `NetworkCallback.onLost` | **Fallback only, if §6.10 measurement forces it.** Instant and free, but it inverts D4 — it *is* the failure mode we designed around |
 | **I start moving** | `TYPE_SIGNIFICANT_MOTION` | **Fallback only, same condition (§6.10).** No permission, already wired for §6.7. But "moved" is not "left" — standing up for coffee would end it |
@@ -2103,7 +2087,7 @@ happened:
 - The cap: that it was armed, that it fired, and whether the alarm or the in-service timer got there
   first.
 - **Which control a tap came from** — the tile, an action on the ongoing notification, a button
-  in the app, or a refinement row or sheet choosing an end — and whether the service accepted the
+  in the app, or a chooser row choosing an end — and whether the service accepted the
   start. `MANUAL` names a person and not a place,
   and the two controls that produce it are the app's `End now` and the tile, which ends a snooze
   whenever it believes one is running. Those are exactly the pair a user cannot tell apart
@@ -2327,8 +2311,8 @@ keeps that, and this only says how much bigger or smaller Snoozemo should be tha
 80%–160%, **continuous**, **defaulting a notch above the system's own size** (115%). It defaulted to
 the system's size at first, on the argument that Snoozemo's screens are read at leisure and should
 look like the rest of the system until the user says otherwise; reversed on seeing it (maintainer,
-2026-09-07), because this app's screens are short — a card, a row of settings, a sheet with three
-choices — and matching the system left space unused and the text smaller than it needed to be. The
+2026-09-07), because this app's screens are short — a card, a row of settings, a chooser with a few
+rows — and matching the system left space unused and the text smaller than it needed to be. The
 setting is still an adjustment rather than a correction: 100% is one drag away and is stored like
 any other choice, and only the starting point moved, so a size already chosen is read back
 unchanged. Only text scales; paddings, icons, and touch targets keep the layout the 4dp grid
@@ -2338,8 +2322,8 @@ Two ways to change it, both moving the same value:
 
 - **The Settings slider**, which resizes the page as it is dragged — the settings screen is its own
   preview — and persists once on release.
-- **A two-finger pinch anywhere in Snoozemo** — every screen, the welcome flow, the tile's
-  end-condition sheet, both dialogs and the ringer menu included — tracking the fingers as they
+- **A two-finger pinch anywhere in Snoozemo** — every screen, the welcome flow, both dialogs and the
+  ringer menu included — tracking the fingers as they
   move and persisting where they stop. *Anywhere* is meant literally (maintainer, 2026-09-07):
   each popup the app opens is a window of its own that neither the chosen size nor a gesture
   reaches on its own, so every one of them re-establishes both. A dialog hosts the pinch on its
@@ -3261,7 +3245,7 @@ boundary is explicit: capability evidence counts only if it post-dates the last 
 observation.
 
 One implementation: `GeofencePresenceMonitor` (§3 option B). Everything above this line is
-monitor-agnostic — the state machine, the DND handling, the tile, and the §4.4 sheet are all shared,
+monitor-agnostic — the state machine, the DND handling, the tile, and the §4.4 chooser are all shared,
 and independent of it. (`ForegroundPresenceMonitor`, option A's foreground-service detector, was
 never built — it was Phase 7, cancelled when `direct` was retired; §3.4.)
 
@@ -3858,8 +3842,8 @@ runtime permission request of its own: the `READ_CALENDAR` request belongs to th
 launched, the permission dialog answered, or nothing owed.
 
 This activity is on the critical path of the app's only interaction, so it carries a hard budget:
-service started within one frame of `onCreate`, sheet rendered without a visible flash of a blank
-window, and correct behavior when launched over the lock screen (§4.2).
+service started within one frame of `onCreate`, any content it hosts rendered without a visible flash
+of a blank window, and correct behavior when launched over the lock screen (§4.2).
 
 ---
 
@@ -4031,7 +4015,7 @@ do not depend on it as end conditions the user can pick outright:
 
 **Preference, in order.** First, fix it invisibly: the three-source layering above should absorb most
 geofence flakiness without the user ever choosing a mechanism. Second, if a place is reliably bad,
-have the app pick the fallback itself and *say so* in the sheet — `until Wi-Fi goes` shown in place of
+have the app pick the fallback itself and *say so* in the chooser — `until Wi-Fi goes` shown in place of
 `until I leave`, because the geofence has proven unreliable here — which keeps the user's mental model
 about places rather than sensors. Only third, and only if both fail, expose them as standing options.
 
@@ -4067,7 +4051,7 @@ timer-only snooze replaces the timer — dropping the chosen time and restoring 
 it then ends on movement over the failsafe, not at the old timer and not on leaving. Whichever of
 the exits a snooze actually has, the first to fire wins.
 
-A time chosen in the §4.4 sheet adds no exit — it *moves the cap* and **takes the others away**.
+A time chosen in the §4.4 chooser adds no exit — it *moves the cap* and **takes the others away**.
 Picking 14:00 sets `capExpiresAt` to 14:00, clears the movement exit, and takes departure tracking
 off, so 14:00 is when the snooze ends and leaving at 13:40 does not (maintainer, 2026-09-11). There
 is then one exit rather than four, which is what "timer only" means. `Until I leave` puts departure
@@ -4076,7 +4060,7 @@ back; `Until I move` re-arms movement.
 The move is in whichever direction the chosen time lies: a time later than the current cap pushes it
 out, which is what makes `+` a stepper rather than a one-way door. The 8-hour default remains an
 absolute backstop above any chosen value, and neither a chosen time nor `+30 min` may push past it —
-so the longest a snooze can run is still the one it armed with, whatever the sheet is used to do in
+so the longest a snooze can run is still the one it armed with, whatever the chooser is used to do in
 between. **That is what keeps the narrowing safe**: taking exits away can only ever make a snooze
 outlast a departure it would have ended on, never outlast its cap, and the cap is the layer §7
 exists to guarantee.
@@ -5080,7 +5064,7 @@ merge result.
 | Arm, force-stop app | DND state resolves; no permanently stuck silence |
 | Arm on Samsung with Sleeping Apps on, wait 4 h | Still tracking |
 | Arm while DND already on from a bedtime schedule, then leave | Snoozemo's rule off, bedtime rule untouched |
-| Arm with no meeting in progress | No sheet, armed in one tap |
+| Arm with no meeting in progress (ask off) | Armed in one tap; no chooser opens |
 | Arm during a meeting, tap `Until <time>`, then leave early | **Stays snoozed until that time** — a chosen time replaces the other exits (§4.4). Reversed 2026-09-11; this row used to expect a departure |
 | Arm during a meeting, tap `Until <time>`, then tap `Until I leave` | Ends on departure again — the way back is one tap |
 | Arm during a meeting, tap `Until <time>`, stay put | Ends at the meeting end |
