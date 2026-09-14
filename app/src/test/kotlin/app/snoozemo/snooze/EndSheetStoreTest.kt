@@ -146,6 +146,41 @@ class EndSheetStoreTest {
     }
 
     @Test
+    fun `a toggle publishes to the cache before the disk write completes`() {
+        // A tile tap between flipping the setting and the FIFO disk write
+        // finishing must route by the new value, so the choice is published to the
+        // cache on the calling thread up front, ahead of the worker (Codex,
+        // PR #284).
+        EndSheetStore.resetCacheForTest()
+        store.setEnabled(false)             // start from off, on disk and in cache
+        EndSheetStore.resetCacheForTest()   // cache back to the unwarmed default
+
+        val holding = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val holder = thread {
+            EndSheetStore.holdWritesForTest {
+                holding.countDown()
+                release.await(30, TimeUnit.SECONDS)
+            }
+        }
+        assertTrue("precondition: the write lock is held", holding.await(5, TimeUnit.SECONDS))
+        try {
+            EndSheetSetting.setEnabled(appContext, enabled = true) {}
+            // The worker's write is parked on the held lock, so a true cache here
+            // can only be the up-front optimistic publish, not the write's.
+            assertTrue(
+                "the toggle is visible to a tap before the write lands",
+                EndSheetStore.cachedEnabled(),
+            )
+        } finally {
+            release.countDown()
+        }
+        holder.join()
+        assertTrue("the queued write drains", EndSheetSetting.awaitIdleForTest())
+        assertTrue("and the cache still reflects the choice", EndSheetStore.cachedEnabled())
+    }
+
+    @Test
     fun `it keeps its own file, so the debug log's switch is not this one`() {
         // Two one-key boolean stores with the same key name: a shared file would
         // make each switch silently move the other.
