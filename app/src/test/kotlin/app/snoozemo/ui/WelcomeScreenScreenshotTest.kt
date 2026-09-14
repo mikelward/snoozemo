@@ -15,8 +15,6 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.assertIsDisplayed
-import app.snoozemo.core.CalendarPermission
-import app.snoozemo.core.LocationPermission
 import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.SnoozeRinger
@@ -35,11 +33,12 @@ import org.robolectric.annotation.GraphicsMode
 /**
  * The welcome flow's five cards (`SPEC.md` §4.2, wording in `TUTORIAL.md`).
  *
- * Each card is one idea and one picture, so each gets its own capture — the
- * states are the point rather than the pixels. The two that differ by whether
- * the build tracks departure are captured both ways: cards 1 and 2 promise
- * departure, and on a build that cannot deliver it they must promise something
- * else instead.
+ * Order: what the app is, the rule, how a snooze ends, the tile, the consent
+ * (maintainer, 2026-09-14 put the rule second). Each card is one idea and one
+ * picture, so each gets its own capture — the states are the point rather than
+ * the pixels. The ends card differs by whether the build tracks departure and
+ * is captured both ways: it promises departure, and on a build that cannot
+ * deliver it that promise must become something else.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], qualifiers = "w411dp-h914dp-420dpi")
@@ -55,17 +54,16 @@ class WelcomeScreenScreenshotTest {
     fun `card one says what the app is`() {
         capture("welcome-what.png") { Flow(WelcomeCard.WHAT) }
 
-        composeRule.onNodeWithText("Silence your phone until you leave.").assertExists()
-        composeRule.onNodeWithText("One tap.").assertExists()
-        // The picture card 1 leads with (maintainer, 2026-09-07). Asserted by
-        // its description rather than by the tile labels, because that is the
-        // whole of what a screen reader gets: the panel is one image, and four
-        // labels read out in a row say nothing about what it is for.
+        // The two lines the maintainer asked for on 2026-09-14, build-neutral so
+        // both hold on a duration-only build too.
+        composeRule.onNodeWithText("Silence your phone with one tap.").assertExists()
+        composeRule.onNodeWithText("Ends automatically, when you choose.").assertExists()
+        // The Quick Settings panel moved to the tile card, so it is not here.
         composeRule
             .onNodeWithContentDescription(
                 "Quick Settings, with Snoozemo's tile ringed among the others",
             )
-            .assertExists()
+            .assertDoesNotExist()
         // No `Skip` here (maintainer, 2026-09-06): offering to leave beside the
         // one line that says what the app is invites skipping before there is
         // anything to skip. D7 is untouched — back still exits card 1, so the
@@ -83,7 +81,8 @@ class WelcomeScreenScreenshotTest {
         // the two controls that step through the flow either side of the thing
         // that says where in it you are.
         //
-        // Card 2, because card 1 is the one card with no `Skip`.
+        // The ends card, because card 1 is the one card with no `Skip` — it is
+        // card 3 in the current order.
         //
         // Asserted rather than left to the snapshot: a recorded image goes red
         // for any pixel that moves, so it says nothing about which arrangement
@@ -94,7 +93,7 @@ class WelcomeScreenScreenshotTest {
             .fetchSemanticsNode().positionInRoot
         val skip = composeRule.onNodeWithText("Skip").fetchSemanticsNode().positionInRoot
         val back = composeRule.onNodeWithText("Back").fetchSemanticsNode().positionInRoot
-        val dots = composeRule.onNodeWithContentDescription("Card 2 of 5")
+        val dots = composeRule.onNodeWithContentDescription("Card 3 of 5")
             .fetchSemanticsNode().positionInRoot
         val next = composeRule.onNodeWithText("Next").fetchSemanticsNode().positionInRoot
 
@@ -104,19 +103,6 @@ class WelcomeScreenScreenshotTest {
         assertTrue("Back leads the bottom row", back.x < dots.x)
         assertTrue("Next trails it", dots.x < next.x)
         assertTrue("the dots share the bottom row", dots.y > title.y)
-    }
-
-    @Test
-    fun `card one promises no departure on a build that cannot track it`() {
-        capture("welcome-what-timer-only.png") {
-            Flow(WelcomeCard.WHAT, tracksDeparture = false)
-        }
-
-        // The promise a build that cannot track departure can actually keep.
-        // Promising departure there sets up exactly the silence-until-the-cap
-        // this app exists to prevent (SPEC.md §3).
-        composeRule.onNodeWithText("Silence your phone.").assertExists()
-        composeRule.onNodeWithText("Silence your phone until you leave.").assertDoesNotExist()
     }
 
     @Test
@@ -133,7 +119,7 @@ class WelcomeScreenScreenshotTest {
     }
 
     @Test
-    fun `card two reads the endings off the notification render`() {
+    fun `the ends card reads the endings off the notification render`() {
         capture("welcome-ends.png") { Flow(WelcomeCard.ENDS) }
 
         // One line now (maintainer, 2026-09-05): the title says the endings are
@@ -150,7 +136,7 @@ class WelcomeScreenScreenshotTest {
     }
 
     @Test
-    fun `card two drops departure and the location row on a timer-only build`() {
+    fun `the ends card drops departure on a timer-only build`() {
         capture("welcome-ends-timer-only.png") {
             Flow(WelcomeCard.ENDS, tracksDeparture = false)
         }
@@ -171,13 +157,15 @@ class WelcomeScreenScreenshotTest {
         // posts rather than invented copy — is held by construction and by the
         // captured image, which is what the snapshot is for.
         //
-        // No location row, though: a grant that buys the user nothing must not
-        // be invited, exactly as on such a build's permissions screen.
+        // No location or calendar row on any build now: both left the tutorial
+        // (maintainer, 2026-09-14) and live on the standalone permissions
+        // screen instead. Notifications is the only grant this card carries.
         composeRule.onNodeWithText("Location").assertDoesNotExist()
+        composeRule.onNodeWithText("Calendar").assertDoesNotExist()
     }
 
     @Test
-    fun `card three offers the tile`() {
+    fun `the tile card offers the tile under the Quick Settings panel`() {
         capture("welcome-tile.png") { Flow(WelcomeCard.TILE) }
 
         composeRule.onNodeWithText("Swipe down and tap the Zzz tile.").assertExists()
@@ -185,22 +173,31 @@ class WelcomeScreenScreenshotTest {
         // `Add`, the same verb the banner and the Settings row use — the row is
         // the real one, not a copy of it.
         composeRule.onNodeWithText("Add").assertExists()
+        // The Quick Settings panel leads this card now (maintainer, 2026-09-14):
+        // this is the card about tapping the tile. Asserted by its description
+        // rather than the tile labels, because that is the whole of what a
+        // screen reader gets — the panel is one image.
+        composeRule
+            .onNodeWithContentDescription(
+                "Quick Settings, with Snoozemo's tile ringed among the others",
+            )
+            .assertExists()
     }
 
     @Test
-    fun `card four carries the rule and the ringer choice`() {
+    fun `the rule card carries the rule and the ringer choice`() {
         capture("welcome-rule.png") { Flow(WelcomeCard.RULE) }
 
         composeRule.onNodeWithText("One rule, yours").assertExists()
         // The ringer ceiling is a live control here, not a description of one.
         composeRule.onNodeWithText("Vibrate").assertExists()
-        // Do Not Disturb access comes last of the grants: it is the one without
+        // Do Not Disturb access is asked second: it is the one grant without
         // which nothing here can snooze at all.
         composeRule.onNodeWithText("Do Not Disturb access").assertExists()
     }
 
     @Test
-    fun `card five asks the consent with the affirmative trailing`() {
+    fun `the consent card asks with the affirmative trailing`() {
         var answered: Boolean? = null
 
         capture("welcome-telemetry.png") {
@@ -222,23 +219,23 @@ class WelcomeScreenScreenshotTest {
         // nothing else on that card, so it would be a blank screen and a fifth
         // dot promising one.
         assertEquals(
-            listOf(WelcomeCard.WHAT, WelcomeCard.ENDS, WelcomeCard.RULE, WelcomeCard.TILE),
+            listOf(WelcomeCard.WHAT, WelcomeCard.RULE, WelcomeCard.ENDS, WelcomeCard.TILE),
             welcomeCards(collectsTelemetry = false),
         )
     }
 
     @Test
-    fun `the rule comes before the tile it will arm`() {
-        // Do Not Disturb access before `Add tile` (maintainer, 2026-09-08). A
-        // tile added first is one whose first tap fails with NO_POLICY_ACCESS;
-        // the grant taken first leaves an app that already snoozes from its own
-        // button, so this is the order that costs least when the user abandons
-        // the flow part way.
+    fun `the rule comes second, before the tile it will arm`() {
+        // Do Not Disturb access second, before `Add tile` (maintainer,
+        // 2026-09-14). A tile added first is one whose first tap fails with
+        // NO_POLICY_ACCESS; the grant taken first leaves an app that already
+        // snoozes from its own button, so this is the order that costs least
+        // when the user abandons the flow part way.
         assertEquals(
             listOf(
                 WelcomeCard.WHAT,
-                WelcomeCard.ENDS,
                 WelcomeCard.RULE,
+                WelcomeCard.ENDS,
                 WelcomeCard.TILE,
                 WelcomeCard.TELEMETRY,
             ),
@@ -272,7 +269,7 @@ class WelcomeScreenScreenshotTest {
     }
 
     @Test
-    fun `card four offers Filters once there is a rule to edit`() {
+    fun `the rule card offers Filters once there is a rule to edit`() {
         // The card's title calls the rule the user's; this is the button that
         // makes that true rather than a claim (maintainer, 2026-09-05).
         capture("welcome-rule-filters.png") {
@@ -289,7 +286,7 @@ class WelcomeScreenScreenshotTest {
     }
 
     @Test
-    fun `card four offers no Filters button before the rule exists`() {
+    fun `the rule card offers no Filters button before the rule exists`() {
         // Absent rather than disabled: with no access, or access granted and
         // the rule not yet created, there is nothing behind the button, and a
         // dead tap is what the row's null check exists to prevent.
@@ -315,7 +312,7 @@ class WelcomeScreenScreenshotTest {
     }
 
     @Test
-    fun `card four shows a disabled rule and its repair`() {
+    fun `the rule card shows a disabled rule and its repair`() {
         // Access granted with the rule switched off in Settings. Without the
         // verified state threaded through, `PermissionRows.Access` reads
         // granted-and-unread and renders nothing — hiding both the failure and
@@ -339,7 +336,7 @@ class WelcomeScreenScreenshotTest {
     }
 
     @Test
-    fun `card two in dark`() {
+    fun `the ends card in dark`() {
         RuntimeEnvironment.setQualifiers("+night")
         capture("welcome-ends-dark.png") { Flow(WelcomeCard.ENDS) }
     }
@@ -360,8 +357,6 @@ class WelcomeScreenScreenshotTest {
         tapBlocked: Boolean = false,
         notifications: NotificationPermission = NotificationPermission.ASKABLE,
         notificationsReachTheUser: Boolean = false,
-        location: LocationPermission = LocationPermission.ASKABLE,
-        calendar: CalendarPermission = CalendarPermission.ASKABLE,
         tileAdded: Boolean? = false,
         settingsFailure: SetupRowId? = null,
         onAnswerTelemetry: (Boolean) -> Unit = {},
@@ -379,8 +374,6 @@ class WelcomeScreenScreenshotTest {
             settingsFailure = settingsFailure,
             notifications = notifications,
             notificationsReachTheUser = notificationsReachTheUser,
-            location = location,
-            calendar = calendar,
             tracksDeparture = tracksDeparture,
             tileAdded = tileAdded,
             snoozeRinger = SnoozeRinger.VIBRATE,
@@ -391,49 +384,49 @@ class WelcomeScreenScreenshotTest {
     }
 
     @Test
-    fun `card two drops a permission row once it is satisfied`() {
+    fun `the ends card drops its notification row once it is satisfied`() {
         // The cards ask for what is still missing; a row with no action left is
         // a line the user reads past on a screen whose whole job is what still
         // needs them (maintainer, 2026-09-05). `PermissionsScreen` keeps its
         // granted rows — stating what is in place is that screen's job.
         //
-        // Captured nowhere: this is the absence of three rows, which a snapshot
-        // of an otherwise-unchanged card cannot distinguish from a card that
-        // never drew them.
+        // Captured nowhere: this is the absence of a row, which a snapshot of an
+        // otherwise-unchanged card cannot distinguish from a card that never
+        // drew it.
         capture {
             Flow(
                 WelcomeCard.ENDS,
                 notifications = NotificationPermission.GRANTED,
                 notificationsReachTheUser = true,
-                location = LocationPermission.GRANTED,
-                calendar = CalendarPermission.GRANTED,
             )
         }
 
+        composeRule.onNodeWithText("Notifications").assertDoesNotExist()
+        // Location and calendar are never on this card now (maintainer,
+        // 2026-09-14).
         composeRule.onNodeWithText("Location").assertDoesNotExist()
         composeRule.onNodeWithText("Calendar").assertDoesNotExist()
-        composeRule.onNodeWithText("Notifications").assertDoesNotExist()
-        // The card itself still stands: hiding the rows must not hide the idea.
+        // The card itself still stands: hiding the row must not hide the idea.
         composeRule.onNodeWithText("Ends automatically").assertExists()
     }
 
     @Test
-    fun `card three drops the tile row once the tile is added`() {
+    fun `the tile card drops the tile row once the tile is added`() {
         // The one row whose satisfied state has its own copy — an inert
         // "Added" line the user cannot act on (Codex, PR #206).
         capture { Flow(WelcomeCard.TILE, tileAdded = true) }
 
         composeRule.onNodeWithText("Quick Settings tile").assertDoesNotExist()
         composeRule.onNodeWithText("Added").assertDoesNotExist()
-        // The card itself still stands, and `card three offers the tile` holds
-        // the other direction: with the tile missing, the row and its `Add` are
-        // both there. Without that pair either assertion here would pass on a
-        // string that had simply been renamed.
-        composeRule.onNodeWithText("Snooze from Quick Settings").assertExists()
+        // The card itself still stands, and `the tile card offers the tile …`
+        // holds the other direction: with the tile missing, the row and its
+        // `Add` are both there. Without that pair either assertion here would
+        // pass on a string that had simply been renamed.
+        composeRule.onNodeWithText("Swipe down and tap the Zzz tile.").assertExists()
     }
 
     @Test
-    fun `card four drops the access row once the rule is ready`() {
+    fun `the rule card drops the access row once the rule is ready`() {
         // Granted *and* the rule created: `PermissionRows.Access` treats
         // granted-and-unread as not-yet-satisfied on purpose, so both halves
         // have to land before the row goes (Codex, PR #204).
@@ -453,11 +446,11 @@ class WelcomeScreenScreenshotTest {
 
     @Test
     fun `a refused filters launch is reported once`() {
-        // Card 3 is the only screen that draws the access row and the Filters
-        // row together, and with the rule disabled both buttons open the same
-        // settings screen. Reported on both, one refused tap printed the line
-        // twice and made the untouched row look like it had failed too (Codex,
-        // PR #206).
+        // The rule card is the only screen that draws the access row and the
+        // Filters row together, and with the rule disabled both buttons open the
+        // same settings screen. Reported on both, one refused tap printed the
+        // line twice and made the untouched row look like it had failed too
+        // (Codex, PR #206).
         capture {
             Flow(
                 WelcomeCard.RULE,
@@ -479,12 +472,12 @@ class WelcomeScreenScreenshotTest {
     @Config(sdk = [36], qualifiers = "w411dp-h240dp-420dpi", fontScale = 2f)
     fun `the body keeps a viewport when the title wraps on a short window`() {
         // Android's largest font scale in a short multi-window pane, on the
-        // card with the longest title. With the title row pinned above the
-        // body, the wrapped heading plus the pinned controls consumed the
-        // column before the weighted body was measured, so its text and its
-        // `Add` button were not clipped but absent — no viewport to scroll
-        // them into (Codex, PR #209). The title row now scrolls with the body,
-        // as on every other screen, so the body is always reachable.
+        // tile card. With the title row pinned above the body, the wrapped
+        // heading plus the pinned controls consumed the column before the
+        // weighted body was measured, so its text and its `Add` button were not
+        // clipped but absent — no viewport to scroll them into (Codex, PR #209).
+        // The title row now scrolls with the body, as on every other screen, so
+        // the body is always reachable.
         //
         // No capture: a snapshot of a wrapped heading at this size would say
         // nothing about whether what is below it can be reached.

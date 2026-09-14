@@ -229,13 +229,14 @@ class MainActivityWelcomeTileTapTest {
 
     @Test
     fun `a flow paused on the tile before the reorder resumes at the rule card`() {
-        // Codex, PR #226. The tile card used to precede the rule card, so a
-        // breadcrumb written by an older build names a card that now sits after
-        // the one it had not reached. Resuming in place would walk the user
-        // past the only card offering Do Not Disturb access — and, if they had
-        // already added the tile, straight into the tile-without-access state
-        // the reorder exists to prevent. Written under the legacy key by hand,
-        // because that is the only thing an older build could have left.
+        // Codex, PR #226. A breadcrumb written by an older build names a card
+        // that a reorder has since moved after the rule card. Resuming in place
+        // would walk the user past the only card offering Do Not Disturb access
+        // — and, if they had already added the tile, straight into the
+        // tile-without-access state the ordering exists to prevent. The tile
+        // sits after the rule in every order this app has shipped, so it is the
+        // stable case to pin. Written under the legacy key by hand, because that
+        // is the only thing an older build could have left.
         context.getSharedPreferences("welcome", Context.MODE_PRIVATE)
             .edit()
             .putString(WelcomeCardMemory.LEGACY_KEY, WelcomeCard.TILE.name)

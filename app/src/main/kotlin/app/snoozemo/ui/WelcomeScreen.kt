@@ -28,8 +28,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import app.snoozemo.R
-import app.snoozemo.core.CalendarPermission
-import app.snoozemo.core.LocationPermission
 import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.SnoozeRinger
@@ -47,11 +45,15 @@ enum class WelcomeCard {
     /** What the app is. */
     WHAT,
 
+    /**
+     * The one Do Not Disturb rule, and the ringer ceiling. Second so the one
+     * grant without which nothing snoozes is asked early (maintainer,
+     * 2026-09-14).
+     */
+    RULE,
+
     /** How a snooze ends, on a render of the ongoing notification. */
     ENDS,
-
-    /** The one Do Not Disturb rule, and the ringer ceiling. */
-    RULE,
 
     /** How to start one: the tile. */
     TILE,
@@ -83,22 +85,50 @@ enum class WelcomeCard {
 object WelcomeCardMemory {
 
     /** What this build writes. */
-    const val KEY = "welcomeCard2"
+    const val KEY = "welcomeCard3"
+
+    /** What the 2026-09-08 order wrote. Read, never written. */
+    const val LEGACY_KEY = "welcomeCard2"
 
     /** What builds before the 2026-09-08 reorder wrote. Read, never written. */
-    const val LEGACY_KEY = "welcomeCard"
+    const val LEGACY_KEY_V1 = "welcomeCard"
 
     /**
      * The stored name, preferring [KEY] and rewinding a legacy one.
      *
-     * A flow paused on the tile card by an older build has not seen the rule
-     * card — the tile came first then — so resuming it in place would walk the
-     * user past the only card that offers Do Not Disturb access, and, if they
-     * had already added the tile, into the tile-without-access state the
-     * reorder exists to prevent.
+     * **The invariant is that a pre-reorder breadcrumb never resumes the flow
+     * *past* the rule card** — the one card that offers Do Not Disturb access,
+     * without which nothing here can snooze. Every reorder has moved that card
+     * (2026-09-08 put it before the tile; 2026-09-14 made it second), so a name
+     * written under an older order can name a card that now sits after the rule.
+     * Resuming there would walk the user past the grant, and — if they had
+     * already added the tile — into the tile-without-access state the ordering
+     * exists to prevent. So a legacy name for any card after the rule rewinds to
+     * the rule; one for the rule itself or a card before it resumes in place.
+     *
+     * A name written under [KEY] is by definition in the current order, so it is
+     * never rewound. Writing only ever touches [KEY] (see `WelcomeStore`), so
+     * the rewind is spent the first time the flow moves.
+     *
+     * [legacy] is the first non-null of the two older keys, resolved by the
+     * caller — a name under either predates the current order.
      */
-    fun resolve(current: String?, legacy: String?): String? =
-        current ?: legacy?.let { if (it == WelcomeCard.TILE.name) WelcomeCard.RULE.name else it }
+    fun resolve(current: String?, legacy: String?): String? {
+        current?.let { return it }
+        val name = legacy ?: return null
+        return if (resumesPastRule(name)) WelcomeCard.RULE.name else name
+    }
+
+    /**
+     * Whether [name] is a known card that sits after [RULE][WelcomeCard.RULE] in
+     * the current order. An unknown name (a card a later build removed) is left
+     * as-is here and reads as "no usable memory" downstream
+     * ([rememberedWelcomeCard]).
+     */
+    private fun resumesPastRule(name: String): Boolean {
+        val card = WelcomeCard.entries.firstOrNull { it.name == name } ?: return false
+        return card.ordinal > WelcomeCard.RULE.ordinal
+    }
 }
 
 /**
@@ -174,21 +204,22 @@ fun shouldOpenWelcome(
 
 /**
  * Whether leaving the flow should land on the permissions recap rather than the
- * main screen (`SPEC.md` §4.2) — true when any capability this flavor offers is
+ * main screen (`SPEC.md` §4.2) — true when a capability the flow *asked for* is
  * still ungranted.
  *
- * **Every offered row, not just Do Not Disturb access.** Access alone was the
- * wrong test: a user who allowed it on card 3 and skipped the rest reached the
- * main screen able to arm with no notification to show status on, which is the
- * recap's whole job to catch, since each of its rows carries the consequence of
- * the no the user just gave (Codex, PR #204).
+ * **Only the grants the cards offer.** The recap catches the consequence of a
+ * "no" the user just gave on a card (Codex, PR #204), so it tracks exactly the
+ * grants the cards carry: Do Not Disturb access and notifications. Location and
+ * calendar left the tutorial (maintainer, 2026-09-14) — the cards no longer ask
+ * for them, so there is no card "no" to catch, and routing the exit over them
+ * would divert the user to a permissions screen for grants the flow never
+ * mentioned. Both are still offered on the standalone permissions screen
+ * reached from the main screen; they are simply not part of first-run.
  *
- * "Missing" means a permission the recap would show an **action** for, so the
- * two exclusions match the rows themselves: an *unread* capability is not a
- * missing one — the readings land after the first frame, and routing on one
- * would send the user to a recap of things nothing has checked — and on a build
- * that cannot track departure the location row offers nothing, so an ungranted
- * location permission there counts for nothing.
+ * "Missing" means a permission the recap would show an **action** for, so an
+ * *unread* capability is not a missing one — the readings land after the first
+ * frame, and routing on one would send the user to a recap of things nothing
+ * has checked.
  *
  * A pure function rather than a method on the activity: this is the decision
  * that either strands a user past the recap or shows them one with nothing on
@@ -198,9 +229,6 @@ fun welcomeExitNeedsRecap(
     access: PolicyAccess?,
     notifications: NotificationPermission?,
     notificationsReachTheUser: Boolean,
-    location: LocationPermission?,
-    calendar: CalendarPermission?,
-    tracksDeparture: Boolean,
 ): Boolean {
     val accessMissing = access?.let { it != PolicyAccess.GRANTED } == true
     // Granted is necessary and not sufficient here, exactly as the row says:
@@ -209,10 +237,7 @@ fun welcomeExitNeedsRecap(
     val notificationsMissing = notifications?.let {
         it != NotificationPermission.GRANTED || !notificationsReachTheUser
     } == true
-    val locationMissing = tracksDeparture &&
-        location?.let { it != LocationPermission.GRANTED } == true
-    val calendarMissing = calendar?.let { it != CalendarPermission.GRANTED } == true
-    return accessMissing || notificationsMissing || locationMissing || calendarMissing
+    return accessMissing || notificationsMissing
 }
 
 /**
@@ -250,21 +275,18 @@ fun WelcomeScreen(
     access: PolicyAccess?,
     notifications: NotificationPermission?,
     notificationsReachTheUser: Boolean,
-    location: LocationPermission?,
-    calendar: CalendarPermission? = null,
     /**
-     * Whether this build can end a snooze because the user left. Card 1 and
-     * card 2 both promise departure, and on a build that cannot deliver it
-     * that promise sets up exactly the silence-until-the-cap the app exists to
-     * prevent (§3) — so the seam is at the call site, as it is for
-     * [PermissionsScreen].
+     * Whether this build can end a snooze because the user left. The ends card
+     * promises departure, and on a build that cannot deliver it that promise
+     * sets up exactly the silence-until-the-cap the app exists to prevent
+     * (§3) — so the seam is at the call site, as it is for [PermissionsScreen].
      */
     tracksDeparture: Boolean = true,
     tileAdded: Boolean? = null,
     snoozeRinger: SnoozeRinger? = null,
     snoozeRingerSaveFailed: Boolean = false,
     /**
-     * The verified state of Snoozemo's own rule, or null while unread. Card 3's
+     * The verified state of Snoozemo's own rule, or null while unread. Card 2's
      * access row needs it for the same reason `PermissionsScreen`'s does: with
      * access granted and this null the row reads as unread and renders nothing,
      * which would hide both a known failure and, for a disabled rule, the
@@ -273,7 +295,7 @@ fun WelcomeScreen(
     ruleState: ZenRuleState? = null,
     /**
      * The rule's id, or null while there is nothing to edit — no access, or
-     * access granted and the rule not created yet. Card 3 offers Filters only
+     * access granted and the rule not created yet. Card 2 offers Filters only
      * when it is non-null, exactly as `SettingsScreen` does.
      */
     filtersRuleId: String? = null,
@@ -301,8 +323,6 @@ fun WelcomeScreen(
     onShareDebugLog: () -> Unit = {},
     onDismissCrash: () -> Unit = {},
     onNotificationsRow: () -> Unit = {},
-    onLocationRow: () -> Unit = {},
-    onCalendarRow: () -> Unit = {},
     onAddTile: () -> Unit = {},
     onSnoozeRinger: (SnoozeRinger) -> Unit = {},
     onAnswerTelemetry: (Boolean) -> Unit = {},
@@ -398,17 +418,13 @@ fun WelcomeScreen(
                 )
             }
             when (card) {
-                WelcomeCard.WHAT -> WhatCard(tracksDeparture)
+                WelcomeCard.WHAT -> WhatCard()
                 WelcomeCard.ENDS -> EndsCard(
                     tracksDeparture = tracksDeparture,
                     notifications = notifications,
                     notificationsReachTheUser = notificationsReachTheUser,
-                    location = location,
-                    calendar = calendar,
                     settingsFailure = settingsFailure,
                     onNotificationsRow = onNotificationsRow,
-                    onLocationRow = onLocationRow,
-                    onCalendarRow = onCalendarRow,
                 )
                 WelcomeCard.RULE -> RuleCard(
                     access = access,
@@ -470,66 +486,45 @@ fun WelcomeScreen(
     }
 }
 
-/** Card 1: the product in one line, and the promise the rest of the app keeps. */
+/**
+ * Card 1: the product in two lines (maintainer, 2026-09-14) — one tap to
+ * silence, and that it ends on its own or when you choose.
+ *
+ * Build-neutral copy: neither line names departure, so both hold on a
+ * duration-only build too, where "automatically" is the cap rather than a
+ * walk away. The Quick Settings panel that once led this card moved to the
+ * tile card, where the tap it pictures is the thing the card is about.
+ */
 @Composable
-private fun WhatCard(tracksDeparture: Boolean) {
-    // The shade rather than the app icon (maintainer, 2026-09-07): card 1 says
-    // what Snoozemo is, and what it is is a tile you tap. A logo says only that
-    // the app has one; the panel shows the user the thing they are about to go
-    // looking for, next to three tiles they already know.
-    QuickSettingsMock()
-    CardBody(
-        stringResource(
-            if (tracksDeparture) R.string.welcome_what_body else R.string.welcome_what_body_timer_only,
-        ),
-    )
+private fun WhatCard() {
+    CardBody(stringResource(R.string.welcome_what_body))
     CardBody(stringResource(R.string.welcome_what_promise))
 }
 
 /**
- * Card 2: how a snooze ends, read off a render of the ongoing notification.
+ * Card 3: how a snooze ends, read off a render of the ongoing notification.
  *
  * The render is the picture because it is the one surface that shows every way
- * a snooze ends at once (§4.3). The two body lines are the card's own division
- * and it is load-bearing: the first is what happens with nobody touching the
- * phone, the second is the taps. The calendar is never a trigger — it only
- * seeds an `Until <time>` action the user still has to press — so writing them
- * as one list would promise an automatic ending the app never delivers.
+ * a snooze ends at once (§4.3), and the body lists them.
+ *
+ * Notifications is the only grant here: it is where a snooze's status and every
+ * end control live, so the card that introduces the endings is where it is
+ * asked. Location and calendar left the tutorial (maintainer, 2026-09-14) and
+ * are offered on the standalone permissions screen instead.
  */
 @Composable
 private fun EndsCard(
     tracksDeparture: Boolean,
     notifications: NotificationPermission?,
     notificationsReachTheUser: Boolean,
-    location: LocationPermission?,
-    calendar: CalendarPermission?,
     settingsFailure: SetupRowId?,
     onNotificationsRow: () -> Unit,
-    onLocationRow: () -> Unit,
-    onCalendarRow: () -> Unit,
 ) {
     NotificationRender(tracksDeparture)
     CardBody(
         stringResource(
             if (tracksDeparture) R.string.welcome_ends_body else R.string.welcome_ends_body_timer_only,
         ),
-    )
-    // The location row is absent on a build that cannot track departure, as it
-    // is on the PermissionsScreen: a grant that buys the user nothing
-    // must not be invited.
-    if (tracksDeparture) {
-        PermissionRows.Location(
-            location = location,
-            settingsFailure = settingsFailure,
-            onAction = onLocationRow,
-            hideWhenSatisfied = true,
-        )
-    }
-    PermissionRows.Calendar(
-        calendar = calendar,
-        settingsFailure = settingsFailure,
-        onAction = onCalendarRow,
-        hideWhenSatisfied = true,
     )
     PermissionRows.Notifications(
         notifications = notifications,
@@ -541,17 +536,15 @@ private fun EndsCard(
 }
 
 /**
- * Card 3: one rule, and the ringer ceiling.
+ * Card 2: one rule, and the ringer ceiling.
  *
  * Do Not Disturb access is the one grant without which nothing here can snooze
- * at all, so it is asked once the user has seen what it is for — after what the
- * app is and how a snooze ends, and before the tile that will do the arming
- * (maintainer, 2026-09-08). It used to come after the tile, on the reasoning
- * that the essential grant should be last of them; the order is the other way
- * round now because a tile added before the grant is a tile whose first tap
- * fails with `NO_POLICY_ACCESS`, while a grant taken before the tile leaves an
- * app that already snoozes from its own button. Abandoning the flow half way
- * costs less in this order.
+ * at all, so it is asked second — right after what the app is, and before the
+ * ends card and the tile that will do the arming (maintainer, 2026-09-14). It
+ * comes before the tile because a tile added before the grant is a tile whose
+ * first tap fails with `NO_POLICY_ACCESS`, while a grant taken before the tile
+ * leaves an app that already snoozes from its own button; abandoning the flow
+ * half way costs less in this order.
  *
  * Filters is offered rather than only named (maintainer, 2026-09-05), through
  * the same row `SettingsScreen` draws. The objection to a button here was that
@@ -601,9 +594,9 @@ private fun RuleCard(
 /**
  * Card 4: the tile, which is the arm affordance and the one locked-phone path.
  *
- * After the rule card rather than before it — card 3's KDoc has the reasoning —
- * which also leaves the setup run ending on something to do rather than on
- * something to allow.
+ * The Quick Settings panel leads the card (maintainer, 2026-09-14): this is the
+ * card about tapping the tile, so the picture of the shade — Snoozemo's tile
+ * ringed among the others — sits with the thing it depicts rather than on card 1.
  */
 @Composable
 private fun TileCard(
@@ -611,6 +604,7 @@ private fun TileCard(
     settingsFailure: SetupRowId?,
     onAddTile: () -> Unit,
 ) {
+    QuickSettingsMock()
     CardBody(stringResource(R.string.welcome_tile_body))
     CardBody(stringResource(R.string.welcome_tile_locked))
     PermissionRows.Tile(

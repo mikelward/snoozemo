@@ -71,14 +71,16 @@ class WelcomeStore(context: Context) {
      * `WelcomeCard` otherwise, resolved by the caller so a card removed in a
      * later build reads as "no memory" rather than as a crash.
      *
-     * **A name written before the 2026-09-08 card reorder is migrated**, by the
-     * same [WelcomeCardMemory] the saved-instance-state path uses — the reasons
-     * are there, and one owner is what keeps the two stores from drifting
-     * (Codex, PR #226).
+     * **A name written before a card reorder is migrated**, by the same
+     * [WelcomeCardMemory] the saved-instance-state path uses — the reasons are
+     * there, and one owner is what keeps the two stores from drifting (Codex,
+     * PR #226). Both older keys are read, since a name under either predates the
+     * current order.
      */
     fun lastCard(): String? = WelcomeCardMemory.resolve(
         current = prefs.getString(WelcomeCardMemory.KEY, null),
-        legacy = prefs.getString(WelcomeCardMemory.LEGACY_KEY, null),
+        legacy = prefs.getString(WelcomeCardMemory.LEGACY_KEY, null)
+            ?: prefs.getString(WelcomeCardMemory.LEGACY_KEY_V1, null),
     )
 
     /** Remembers [card] as the one the flow is on. */
@@ -87,22 +89,24 @@ class WelcomeStore(context: Context) {
         // the last one to a kill is starting the flow one card earlier — worth
         // less than a disk write in front of the card's own frame.
         //
-        // The legacy key goes in the same edit, so the migration fires at most
+        // The legacy keys go in the same edit, so the migration fires at most
         // once per install: after this there is a new-key breadcrumb, and it
         // wins.
         prefs.edit()
             .putString(WelcomeCardMemory.KEY, card)
             .remove(WelcomeCardMemory.LEGACY_KEY)
+            .remove(WelcomeCardMemory.LEGACY_KEY_V1)
             .apply()
     }
 
     /** Forgets it, once the flow has been left. */
     fun forgetCard() {
-        // Both keys: leaving the legacy one behind would resume a flow the user
+        // Every key: leaving a legacy one behind would resume a flow the user
         // has finished with.
         prefs.edit()
             .remove(WelcomeCardMemory.KEY)
             .remove(WelcomeCardMemory.LEGACY_KEY)
+            .remove(WelcomeCardMemory.LEGACY_KEY_V1)
             .apply()
     }
 

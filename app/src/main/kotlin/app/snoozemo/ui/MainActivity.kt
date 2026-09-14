@@ -151,6 +151,7 @@ private const val KEY_PENDING_LOCATION_FOR = "pending_location_for"
 private const val KEY_PENDING_LOCATION_ARM_COUNT = "pending_location_arm_count"
 private const val KEY_IDLE_OFFER_ARM_COUNT = "idle_offer_arm_count"
 private const val KEY_BACKGROUND_RATIONALE = "background_location_rationale"
+private const val KEY_ACCESS_HELP = "accessHelp"
 private const val KEY_CHOOSER_ASK_OWED = "chooserNotificationAskOwed"
 private const val KEY_PERMISSIONS_ORIGIN = "permissionsOrigin"
 private const val KEY_ROUTED_TO_PERMISSIONS_ONCE = "routedToPermissionsOnce"
@@ -714,6 +715,18 @@ class MainActivity : ComponentActivity() {
      * since dismissing just means re-tapping the row.
      */
     internal var showBackgroundLocationRationale by mutableStateOf(false)
+
+    /**
+     * Whether the "how to grant Do Not Disturb access" help dialog is on screen
+     * (maintainer, 2026-09-14). Tapping the access row opens it rather than the
+     * system settings directly: that settings page is a list of apps the user
+     * must find Snoozemo in and toggle on, a step the button alone does not
+     * explain. Confirming it launches the settings; dismissing re-shows the row.
+     *
+     * Internal like [showBackgroundLocationRationale] so a test can drive it, and
+     * saved/restored for the same reason — a rotation with it up must not lose it.
+     */
+    internal var showAccessHelp by mutableStateOf(false)
 
     /**
      * Whether the tile is known to be in Quick Settings.
@@ -1415,14 +1428,17 @@ class MainActivity : ComponentActivity() {
             // callback left to resume or reject it, silently unapplied
             // (Codex, PR #252).
             showBackgroundLocationRationale = it.getBoolean(KEY_BACKGROUND_RATIONALE, false)
+            showAccessHelp = it.getBoolean(KEY_ACCESS_HELP, false)
             // Through `WelcomeCardMemory`, exactly as the `WelcomeStore`
             // breadcrumb is (Codex, PR #226): this bundle is held by the system
             // rather than by the process, so it survives an app update too, and
-            // a card name written before the reorder means the same thing
-            // whichever of the two carried it.
+            // a card name written before a reorder means the same thing
+            // whichever of the two carried it. Both older keys are read — a name
+            // under either predates the current order.
             val restoredCard = WelcomeCardMemory.resolve(
                 current = it.getString(WelcomeCardMemory.KEY),
-                legacy = it.getString(WelcomeCardMemory.LEGACY_KEY),
+                legacy = it.getString(WelcomeCardMemory.LEGACY_KEY)
+                    ?: it.getString(WelcomeCardMemory.LEGACY_KEY_V1),
             )
             welcomeCard = WelcomeCard.entries
                 .firstOrNull { c -> c.name == restoredCard } ?: welcomeCard
@@ -1602,8 +1618,6 @@ class MainActivity : ComponentActivity() {
                                 access = access,
                                 notifications = notifications,
                                 notificationsReachTheUser = notificationsReachTheUser,
-                                location = location,
-                                calendar = calendar,
                                 // The flavor seam, read at the call site like
                                 // PermissionsScreen's (SPEC.md §3.4).
                                 tracksDeparture = app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE,
@@ -1618,13 +1632,11 @@ class MainActivity : ComponentActivity() {
                                 shareFailed = shareFailed,
                                 dismissFailed = dismissFailed,
                                 sharing = sharing,
-                                onAccessRow = ::openPolicyAccessSettings,
+                                onAccessRow = ::askDoNotDisturbAccess,
                                 onRuleRow = ::openFilters,
                                 onShareDebugLog = ::shareDebugLog,
                                 onDismissCrash = ::dismissCrash,
                                 onNotificationsRow = ::fixNotifications,
-                                onLocationRow = ::fixLocation,
-                                onCalendarRow = ::fixCalendar,
                                 onAddTile = ::addTile,
                                 onSnoozeRinger = ::chooseSnoozeRinger,
                                 onAnswerTelemetry = ::answerTelemetryAndFinish,
@@ -1842,7 +1854,7 @@ class MainActivity : ComponentActivity() {
                                 shareFailed = shareFailed,
                                 dismissFailed = dismissFailed,
                                 sharing = sharing,
-                                onAccessRow = ::openPolicyAccessSettings,
+                                onAccessRow = ::askDoNotDisturbAccess,
                                 onRuleRow = ::openFilters,
                                 onNotificationsRow = ::fixNotifications,
                                 onLocationRow = ::fixLocation,
@@ -1955,6 +1967,42 @@ class MainActivity : ComponentActivity() {
                             },
                         )
                     }
+                    // Shown when the user taps Allow on the Do Not Disturb access
+                    // row, before the system access list opens (maintainer,
+                    // 2026-09-14). Same window/pinch wrapping as the rationale
+                    // above and for the same reason (Codex, PR #217): a dialog is
+                    // its own window, so the theme's scaled density does not reach
+                    // it without this.
+                    if (showAccessHelp) {
+                        AlertDialog(
+                            modifier = Modifier.pinchFontSizeHost(),
+                            onDismissRequest = ::dismissAccessHelp,
+                            title = {
+                                FontSizeWindow {
+                                    Text(stringResource(R.string.welcome_access_help_title))
+                                }
+                            },
+                            text = {
+                                FontSizeWindow {
+                                    Text(stringResource(R.string.welcome_access_help_body))
+                                }
+                            },
+                            confirmButton = {
+                                FontSizeWindow {
+                                    TextButton(onClick = ::confirmDoNotDisturbAccess) {
+                                        Text(stringResource(R.string.welcome_access_help_continue))
+                                    }
+                                }
+                            },
+                            dismissButton = {
+                                FontSizeWindow {
+                                    TextButton(onClick = ::dismissAccessHelp) {
+                                        Text(stringResource(R.string.welcome_access_help_dismiss))
+                                    }
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -1979,7 +2027,8 @@ class MainActivity : ComponentActivity() {
         outState.putLong(KEY_PENDING_LOCATION_ARM_COUNT, pendingLocationArmCount)
         outState.putLong(KEY_IDLE_OFFER_ARM_COUNT, idleOfferArmCount)
         outState.putBoolean(KEY_BACKGROUND_RATIONALE, showBackgroundLocationRationale)
-        // Only the current key — the legacy one is read, never written, which
+        outState.putBoolean(KEY_ACCESS_HELP, showAccessHelp)
+        // Only the current key — the legacy ones are read, never written, which
         // is what spends the rewind after the first save.
         outState.putString(WelcomeCardMemory.KEY, welcomeCard.name)
         outState.putString(KEY_PERMISSIONS_ORIGIN, permissionsOrigin.name)
@@ -4705,9 +4754,6 @@ class MainActivity : ComponentActivity() {
             access = access,
             notifications = notifications,
             notificationsReachTheUser = notificationsReachTheUser,
-            location = location,
-            calendar = calendar,
-            tracksDeparture = app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE,
         )
         if (needsRecap) openPermissions(Screen.MAIN)
     }
@@ -4716,6 +4762,26 @@ class MainActivity : ComponentActivity() {
     private fun openPermissions(origin: Screen) {
         permissionsOrigin = origin
         screen = Screen.PERMISSIONS
+    }
+
+    /**
+     * Opens the "how to grant Do Not Disturb access" help dialog rather than the
+     * settings list directly (maintainer, 2026-09-14) — the user still has to
+     * find Snoozemo in that list and toggle it on, which the dialog explains.
+     */
+    internal fun askDoNotDisturbAccess() {
+        showAccessHelp = true
+    }
+
+    /** The help dialog's confirm: dismiss it, then open the settings list. */
+    internal fun confirmDoNotDisturbAccess() {
+        showAccessHelp = false
+        openPolicyAccessSettings()
+    }
+
+    /** The help dialog's dismiss: close it, leaving the access row to try again. */
+    internal fun dismissAccessHelp() {
+        showAccessHelp = false
     }
 
     private fun openPolicyAccessSettings() {

@@ -740,33 +740,44 @@ yet built — `TODO.md` Phase 6, sketched with its copy in `TUTORIAL.md`). The r
 install lands on `PermissionsScreen` — put three permission rows in front of someone who had not
 yet been told what the app is for or how it is used, and the tile, which is the whole product, is
 invisible until someone adds it. So a short run of fixed cards comes first, each one idea: what the
-app is — led by **a mock Quick Settings panel with Snoozemo's tile ringed among Wi-Fi,
-Bluetooth and airplane mode** (maintainer, 2026-09-07), because what the app *is* is a tile you
-tap, and a user who has never seen it has no idea what a Quick Settings tile is called or where
-it lives; the panel is drawn rather than screenshotted, so it follows the app's theme and text
-size instead of rotting with a platform release, and the ring is what marks Snoozemo's tile
-rather than a different tile style, which would teach the user to look for something the shade
-will never show them; how a snooze ends, shown on a render of the ongoing notification (§4.3), the one surface
+app is — one tap to silence the phone, and that it ends on its own or when you choose
+(maintainer, 2026-09-14), two build-neutral lines rather than the mock Quick Settings panel that
+used to lead here; the one Do Not Disturb rule and the ringer choice (§5.9) — plus, since that
+card calls the rule the user's, the same Filters row `SettingsScreen` offers, absent until there
+is a rule to edit (maintainer, 2026-09-05) — placed **second** (maintainer, 2026-09-14) so the
+one grant without which nothing snoozes is asked early, and before the tile whose first tap needs
+it; how a snooze ends, shown on a render of the ongoing notification (§4.3), the one surface
 that carries every way it can — departure, a chosen time, `End now` — so the end-condition chooser
-(§4.4) needs neither a card nor a switch in the flow (maintainer, 2026-09-05); the one Do Not Disturb
-rule and the ringer choice (§5.9) — plus, since that card calls the rule the user's, the same
-Filters row `SettingsScreen` offers, absent until there is a rule to edit (maintainer,
-2026-09-05); the tile, **after** the rule rather than before it (maintainer, 2026-09-08), because
-a tile added before Do Not Disturb access is granted is a tile whose first tap fails, while the
-grant taken before the tile leaves an app that already snoozes from its own button — the order
-that costs least when someone abandons the flow part way, and it leaves the setup run ending on
-something to do rather than something to allow; and, last, the crash-report and analytics consent (§12) on its
-own — the debug log is not mentioned, since a card whose job is one question about data leaving the
-phone is the wrong place for a sentence about a log that never does (maintainer, 2026-09-05). Each card offers the grant for the thing it just introduced, drawn
-as the same tri-state rows `PermissionsScreen` uses (§5.2), and `Next` never waits on one — the
-rows' own fail-open rule. `PermissionsScreen` then follows only when a permission is still missing,
-as the recap, and its once-only routing stays as the backstop for an install that skipped the
-flow; a user who allowed everything on the cards lands on `MainScreen`. A row whose permission is
-already granted is dropped from its card rather than shown with no action (maintainer,
-2026-09-05) — the recap still shows it, since stating what is in place is that screen's job. The card's
+(§4.4) needs neither a card nor a switch in the flow (maintainer, 2026-09-05); the tile, **after**
+the rule (a tile added before Do Not Disturb access is granted is a tile whose first tap fails,
+while the grant taken before the tile leaves an app that already snoozes from its own button — the
+order that costs least when someone abandons the flow part way) and **led by a mock Quick Settings
+panel with Snoozemo's tile ringed among Wi-Fi, Bluetooth and airplane mode** (maintainer,
+2026-09-14, moved here from card 1) — because this is the card about tapping the tile, and a user
+who has never seen it has no idea what a Quick Settings tile is called or where it lives; the panel
+is drawn rather than screenshotted, so it follows the app's theme and text size instead of rotting
+with a platform release, and the ring marks Snoozemo's tile rather than a different tile style,
+which would teach the user to look for something the shade will never show them; and, last, the
+crash-report and analytics consent (§12) on its own — the debug log is not mentioned, since a card
+whose job is one question about data leaving the phone is the wrong place for a sentence about a log
+that never does (maintainer, 2026-09-05). The cards ask only for **Do Not Disturb access** (on the
+rule card) and **notifications** (on the ends card); **location and calendar left the tutorial**
+(maintainer, 2026-09-14) and are offered only on the standalone `PermissionsScreen` reached from
+`MainScreen`, since a first run focused on reaching a first snooze is not where those two secondary
+grants belong. The grants the cards keep are drawn as the same tri-state rows `PermissionsScreen`
+uses (§5.2), and `Next` never waits on one — the rows' own fail-open rule. **Tapping `Allow` on the
+Do Not Disturb access row opens a short help dialog first** (maintainer, 2026-09-14): the system
+access screen it then launches is a list the user has to find Snoozemo in and toggle on, a step the
+button alone does not explain — confirming the dialog opens that screen, dismissing leaves the row
+to try again. `PermissionsScreen` then follows on the way out only when access or notifications is
+still missing, as the recap — the two the cards asked for, so it catches a "no" the user just gave —
+and its once-only routing stays as the backstop for an install that skipped the flow; a user who
+allowed both lands on `MainScreen`. A row whose permission is already granted is dropped from its
+card rather than shown with no action (maintainer, 2026-09-05) — the recap still shows it, since
+stating what is in place is that screen's job. The card's
 title is the screen's title, in the same `SnoozemoTitleRow` every other screen uses, with
 `Skip` as its trailing action (maintainer, 2026-09-06) — absent on card 1, where offering to
-leave beside the one line that says what the app is invites skipping before there is anything
+leave beside the lines that say what the app is invites skipping before there is anything
 to skip. Along the bottom: `Back`, the progress dots, `Next`, so the two controls that step
 through the flow sit either side of the thing that says where in it you are. `Back` runs the
 same decision the system gesture does, and still exits card 1, so D7's way out is there
