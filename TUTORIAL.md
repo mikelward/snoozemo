@@ -242,10 +242,12 @@ never a tap with nothing behind it. A card titled *One rule, yours* that gave th
 user no way to open it was describing ownership rather than handing it over.
 
 Illustration: none; the ringer choice and the grants are the interactive elements.
-Do Not Disturb access is the one grant that is a Settings screen rather than a
-dialog (§5.2): `Allow` leaves the app, the user flips the toggle, and on return the
-row reads as it does on `PermissionsScreen` — the action gone, its capability
-sentence in place. It is the grant without which nothing here can snooze at all,
+Do Not Disturb access is a Settings toggle rather than a runtime prompt (§5.2),
+and `Allow` now opens a short help dialog first (maintainer, 2026-09-14): the
+Settings screen it then reaches is a list of apps the user has to find Snoozemo in
+and turn on, a step the button alone doesn't explain. From the dialog, *Open
+settings* leaves the app; the user flips the toggle, and on return the row reads as
+it does on `PermissionsScreen` — the action gone, its capability sentence in place. It is the grant without which nothing here can snooze at all,
 so it is asked once the user has seen what it is for — after what the app is and
 how a snooze ends, and **before** the tile that will do the arming (maintainer,
 2026-09-08). It used to come after the tile, on the reasoning that the essential

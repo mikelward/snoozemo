@@ -4,18 +4,29 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.view.View
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import app.snoozemo.core.CalendarPermission
 import app.snoozemo.core.LocationPermission
 import app.snoozemo.core.NotificationPermission
@@ -729,6 +740,109 @@ class PermissionsScreenScreenshotTest {
         assertEquals(1, shared)
     }
 
+    @Test
+    fun `the access-help dialog is recorded`() {
+        // Tapping Allow on the access row opens this before the system access
+        // list; its content is what says to scroll to Snoozemo and turn it on,
+        // which is otherwise invisible in a diff. Recorded through the content
+        // composable rather than the real dialog, because a dialog is its own
+        // window and captureSnapshot draws the activity's decorView — a snapshot
+        // with the real dialog open records the screen behind it (Codex, PR
+        // #288). The frame centers the content at a dialog-like size, since
+        // capture's own Surface would otherwise stretch it to the whole screen.
+        capture("access-help-dialog.png", heightPx = ACCESS_DIALOG_FRAME_HEIGHT_PX) {
+            AccessHelpFrame {
+                AccessHelpDialogContent(onConfirm = {}, onDismiss = {})
+            }
+        }
+    }
+
+    @Test
+    fun `the access-help dialog is recorded in dark`() {
+        RuntimeEnvironment.setQualifiers("+night")
+
+        capture("access-help-dialog-dark.png", heightPx = ACCESS_DIALOG_FRAME_HEIGHT_PX) {
+            AccessHelpFrame {
+                AccessHelpDialogContent(onConfirm = {}, onDismiss = {})
+            }
+        }
+    }
+
+    @Test
+    @Config(qualifiers = "w280dp-h640dp-420dpi")
+    fun `the access-help dialog keeps both actions at a large font on a narrow pane`() {
+        // A fixed action Row measures the leading Cancel first and leaves the
+        // affirmative Open settings the remainder, so at the system font
+        // enlarged and the app's own scale near 160% on a compact multi-window
+        // pane the only route on was squeezed to a sliver (Codex, PR #288). The
+        // FlowRow wraps it to its own line at full width instead; both actions
+        // stay displayed. Asserted rather than snapshotted: a PNG cannot fail
+        // on a clipped button, and re-recording is what an agent does to a red
+        // image.
+        composeRule.setContent {
+            SnoozemoTheme {
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    val base = LocalDensity.current
+                    CompositionLocalProvider(
+                        LocalDensity provides Density(density = base.density, fontScale = 1.6f),
+                    ) {
+                        AccessHelpFrame {
+                            AccessHelpDialogContent(onConfirm = {}, onDismiss = {})
+                        }
+                    }
+                }
+            }
+        }
+
+        composeRule.onNodeWithText("Cancel").assertIsDisplayed()
+        composeRule.onNodeWithText("Open settings").assertIsDisplayed()
+    }
+
+    @Test
+    fun `the access-help dialog's title is a heading`() {
+        // A modal's one title is what TalkBack's heading navigation is for, and
+        // BasicAlertDialog restores the container's semantics, not a slot's, so
+        // the content states the heading itself — the same discipline the
+        // end-help card keeps.
+        composeRule.setContent {
+            SnoozemoTheme {
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    AccessHelpFrame {
+                        AccessHelpDialogContent(onConfirm = {}, onDismiss = {})
+                    }
+                }
+            }
+        }
+
+        composeRule
+            .onNodeWithText("Allow Do Not Disturb access")
+            .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
+    }
+
+    /**
+     * How tall a frame the access-help dialog is recorded in. Its body is short
+     * and fixed, so this only has to leave room for the title, the one-line body
+     * and the button row centered in a padded frame — see [AccessHelpFrame].
+     */
+    private val ACCESS_DIALOG_FRAME_HEIGHT_PX = 900
+
+    /**
+     * Draws the access-help content at its own size, the way its dialog window
+     * would. [capture]'s own `Surface` propagates its minimum constraints, so
+     * content handed to it directly is stretched to the whole frame; centering
+     * it in a padded box is the closest this gets to a dialog's own sizing
+     * without the dialog window the capture cannot reach.
+     */
+    @Composable
+    private fun AccessHelpFrame(content: @Composable () -> Unit) {
+        Box(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            content()
+        }
+    }
+
     /**
      * Renders [content] the way `MainActivity` does and records it under
      * [name] when a name is given.
@@ -738,14 +852,18 @@ class PermissionsScreenScreenshotTest {
      * renders identically in both variants, so a dark snapshot would look
      * like a theming bug in the app rather than a missing wrapper in the test.
      */
-    private fun capture(name: String? = null, content: @Composable () -> Unit) {
+    private fun capture(
+        name: String? = null,
+        heightPx: Int = 2400,
+        content: @Composable () -> Unit,
+    ) {
         composeRule.setContent {
             SnoozemoTheme {
                 Surface(modifier = Modifier.fillMaxSize()) { content() }
             }
         }
         composeRule.waitForIdle()
-        name?.let { captureSnapshot(it) }
+        name?.let { captureSnapshot(it, heightPx = heightPx) }
     }
 
     /**

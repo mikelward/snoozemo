@@ -151,6 +151,7 @@ private const val KEY_PENDING_LOCATION_FOR = "pending_location_for"
 private const val KEY_PENDING_LOCATION_ARM_COUNT = "pending_location_arm_count"
 private const val KEY_IDLE_OFFER_ARM_COUNT = "idle_offer_arm_count"
 private const val KEY_BACKGROUND_RATIONALE = "background_location_rationale"
+private const val KEY_ACCESS_HELP = "accessHelp"
 private const val KEY_CHOOSER_ASK_OWED = "chooserNotificationAskOwed"
 private const val KEY_PERMISSIONS_ORIGIN = "permissionsOrigin"
 private const val KEY_ROUTED_TO_PERMISSIONS_ONCE = "routedToPermissionsOnce"
@@ -714,6 +715,18 @@ class MainActivity : ComponentActivity() {
      * since dismissing just means re-tapping the row.
      */
     internal var showBackgroundLocationRationale by mutableStateOf(false)
+
+    /**
+     * Whether the "how to grant Do Not Disturb access" help dialog is on screen
+     * (maintainer, 2026-09-14). Tapping the access row opens it rather than the
+     * system settings directly: that settings page is a list of apps the user
+     * must find Snoozemo in and toggle on, a step the button alone does not
+     * explain. Confirming it launches the settings; dismissing re-shows the row.
+     *
+     * Internal like [showBackgroundLocationRationale] so a test can drive it, and
+     * saved/restored for the same reason — a rotation with it up must not lose it.
+     */
+    internal var showAccessHelp by mutableStateOf(false)
 
     /**
      * Whether the tile is known to be in Quick Settings.
@@ -1415,6 +1428,7 @@ class MainActivity : ComponentActivity() {
             // callback left to resume or reject it, silently unapplied
             // (Codex, PR #252).
             showBackgroundLocationRationale = it.getBoolean(KEY_BACKGROUND_RATIONALE, false)
+            showAccessHelp = it.getBoolean(KEY_ACCESS_HELP, false)
             // Through `WelcomeCardMemory`, exactly as the `WelcomeStore`
             // breadcrumb is (Codex, PR #226): this bundle is held by the system
             // rather than by the process, so it survives an app update too, and
@@ -1618,7 +1632,7 @@ class MainActivity : ComponentActivity() {
                                 shareFailed = shareFailed,
                                 dismissFailed = dismissFailed,
                                 sharing = sharing,
-                                onAccessRow = ::openPolicyAccessSettings,
+                                onAccessRow = ::askDoNotDisturbAccess,
                                 onRuleRow = ::openFilters,
                                 onShareDebugLog = ::shareDebugLog,
                                 onDismissCrash = ::dismissCrash,
@@ -1842,7 +1856,7 @@ class MainActivity : ComponentActivity() {
                                 shareFailed = shareFailed,
                                 dismissFailed = dismissFailed,
                                 sharing = sharing,
-                                onAccessRow = ::openPolicyAccessSettings,
+                                onAccessRow = ::askDoNotDisturbAccess,
                                 onRuleRow = ::openFilters,
                                 onNotificationsRow = ::fixNotifications,
                                 onLocationRow = ::fixLocation,
@@ -1955,6 +1969,17 @@ class MainActivity : ComponentActivity() {
                             },
                         )
                     }
+                    // Shown when the user taps Allow on the Do Not Disturb access
+                    // row, before the system access list opens (maintainer,
+                    // 2026-09-14). Its own composable so the content can be
+                    // screenshot-tested without the popup window this capture
+                    // can't reach (Codex, PR #288); see AccessHelpDialog.
+                    if (showAccessHelp) {
+                        AccessHelpDialog(
+                            onConfirm = ::confirmDoNotDisturbAccess,
+                            onDismiss = ::dismissAccessHelp,
+                        )
+                    }
                 }
             }
         }
@@ -1979,6 +2004,7 @@ class MainActivity : ComponentActivity() {
         outState.putLong(KEY_PENDING_LOCATION_ARM_COUNT, pendingLocationArmCount)
         outState.putLong(KEY_IDLE_OFFER_ARM_COUNT, idleOfferArmCount)
         outState.putBoolean(KEY_BACKGROUND_RATIONALE, showBackgroundLocationRationale)
+        outState.putBoolean(KEY_ACCESS_HELP, showAccessHelp)
         // Only the current key — the legacy one is read, never written, which
         // is what spends the rewind after the first save.
         outState.putString(WelcomeCardMemory.KEY, welcomeCard.name)
@@ -4502,8 +4528,9 @@ class MainActivity : ComponentActivity() {
      * Do Not Disturb access, whichever way it is currently set.
      *
      * Not a runtime permission, which is half of why the old shape was
-     * confusing: there is no in-app dialog and no result callback, so the user
-     * leaves for Settings, flips a toggle, and comes back (SPEC.md §5.2). What
+     * confusing: `Allow` shows an in-app help dialog ([AccessHelpDialog]), but
+     * the grant itself is a Settings toggle with no result callback, so the
+     * user leaves for Settings, flips it, and comes back (SPEC.md §5.2). What
      * this screen owns is noticing the return — `accessReceiver` and the
      * `onStart` refresh both do — so nothing here waits for an answer.
      */
@@ -4716,6 +4743,26 @@ class MainActivity : ComponentActivity() {
     private fun openPermissions(origin: Screen) {
         permissionsOrigin = origin
         screen = Screen.PERMISSIONS
+    }
+
+    /**
+     * Opens the "how to grant Do Not Disturb access" help dialog rather than the
+     * settings list directly (maintainer, 2026-09-14) — the user still has to
+     * find Snoozemo in that list and toggle it on, which the dialog explains.
+     */
+    internal fun askDoNotDisturbAccess() {
+        showAccessHelp = true
+    }
+
+    /** The help dialog's confirm: dismiss it, then open the settings list. */
+    internal fun confirmDoNotDisturbAccess() {
+        showAccessHelp = false
+        openPolicyAccessSettings()
+    }
+
+    /** The help dialog's dismiss: close it, leaving the access row to try again. */
+    internal fun dismissAccessHelp() {
+        showAccessHelp = false
     }
 
     private fun openPolicyAccessSettings() {

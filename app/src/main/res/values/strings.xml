@@ -758,6 +758,19 @@
     <string name="welcome_rule_title" tools:ignore="MissingTranslation">One rule, yours</string>
     <!-- TODO: translate -->
     <string name="welcome_rule_body" tools:ignore="MissingTranslation">Snoozemo adds one Do Not Disturb rule and only ever switches that one on and off. Choose what still gets through in Settings › Filters.</string>
+    <!-- Shown before the system Do Not Disturb access list opens, because that
+         list is a page of apps the user has to find Snoozemo in and toggle on —
+         a step the button alone does not explain (maintainer, 2026-09-14). The
+         exact next screen varies by manufacturer, so the wording says what to do
+         rather than what it will look like. -->
+    <!-- TODO: translate -->
+    <string name="welcome_access_help_title" tools:ignore="MissingTranslation">Allow Do Not Disturb access</string>
+    <!-- TODO: translate -->
+    <string name="welcome_access_help_body" tools:ignore="MissingTranslation">On the next screen, scroll to Snoozemo and turn it on.</string>
+    <!-- TODO: translate -->
+    <string name="welcome_access_help_continue" tools:ignore="MissingTranslation">Open settings</string>
+    <!-- TODO: translate -->
+    <string name="welcome_access_help_dismiss" tools:ignore="MissingTranslation">Cancel</string>
     <!-- Card 4. The tile is the arm affordance and the one path that works with
          the phone locked. -->
     <!-- TODO: translate -->
