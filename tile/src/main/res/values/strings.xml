@@ -3,7 +3,9 @@
     <!-- The tile's name in the "add tile" picker: people scan that list for an
          app name, not a verb. -->
     <string name="tile_name">Snoozemo</string>
-    <string name="tile_snooze_here">Snooze here</string>
+    <!-- The tile's idle label, shown in the shade and in the welcome preview
+         (maintainer, 2026-09-14: "Snooze now" over "Snooze here"). -->
+    <string name="tile_snooze_here">Snooze now</string>
     <string name="tile_snoozing">Snoozing</string>
     <string name="tile_state_off">Off</string>
 

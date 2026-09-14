@@ -398,7 +398,7 @@ fun WelcomeScreen(
                 )
             }
             when (card) {
-                WelcomeCard.WHAT -> WhatCard(tracksDeparture)
+                WelcomeCard.WHAT -> WhatCard()
                 WelcomeCard.ENDS -> EndsCard(
                     tracksDeparture = tracksDeparture,
                     notifications = notifications,
@@ -470,19 +470,23 @@ fun WelcomeScreen(
     }
 }
 
-/** Card 1: the product in one line, and the promise the rest of the app keeps. */
+/**
+ * Card 1: the product in two lines (maintainer, 2026-09-14) — one tap to
+ * silence, and that it ends on its own or when you choose — under a mock Quick
+ * Settings panel with Snoozemo's tile ringed among the others.
+ *
+ * Build-neutral copy: neither line names departure, so both hold on a
+ * duration-only build too, where "automatically" is the cap rather than a walk
+ * away. The shade rather than the app icon: what the app *is* is a tile you tap,
+ * and a user who has never seen it has no idea what a Quick Settings tile is
+ * called or where it lives; the panel is drawn rather than screenshotted, so it
+ * follows the app's theme and text size, and the ring marks Snoozemo's tile
+ * rather than a different tile style the shade will never show.
+ */
 @Composable
-private fun WhatCard(tracksDeparture: Boolean) {
-    // The shade rather than the app icon (maintainer, 2026-09-07): card 1 says
-    // what Snoozemo is, and what it is is a tile you tap. A logo says only that
-    // the app has one; the panel shows the user the thing they are about to go
-    // looking for, next to three tiles they already know.
+private fun WhatCard() {
     QuickSettingsMock()
-    CardBody(
-        stringResource(
-            if (tracksDeparture) R.string.welcome_what_body else R.string.welcome_what_body_timer_only,
-        ),
-    )
+    CardBody(stringResource(R.string.welcome_what_body))
     CardBody(stringResource(R.string.welcome_what_promise))
 }
 

@@ -723,15 +723,12 @@
     <!-- TODO: translate -->
     <string name="welcome_quick_settings_mock_description" tools:ignore="MissingTranslation">Quick Settings, with Snoozemo\'s tile ringed among the others</string>
     <string name="welcome_what_title" tools:ignore="MissingTranslation">Snoozemo</string>
+    <!-- Card 1's two lines (maintainer, 2026-09-14). Build-neutral: neither
+         names departure, so both hold on a duration-only build too. -->
     <!-- TODO: translate -->
-    <string name="welcome_what_body" tools:ignore="MissingTranslation">Silence your phone until you leave.</string>
-    <!-- A build that cannot track departure is duration-only, so promising
-         departure there would set up the silence-until-the-cap this app exists
-         to prevent. -->
+    <string name="welcome_what_body" tools:ignore="MissingTranslation">Silence your phone with one tap.</string>
     <!-- TODO: translate -->
-    <string name="welcome_what_body_timer_only" tools:ignore="MissingTranslation">Silence your phone.</string>
-    <!-- TODO: translate -->
-    <string name="welcome_what_promise" tools:ignore="MissingTranslation">One tap.</string>
+    <string name="welcome_what_promise" tools:ignore="MissingTranslation">Ends automatically, when you choose.</string>
     <!-- Card 2. The first line is what happens with nobody touching the phone;
          the second is the taps. Kept apart because the calendar is never a
          trigger — it only seeds an action the user still has to press. -->

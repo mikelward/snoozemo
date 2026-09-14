@@ -610,7 +610,10 @@ what the app *does*.
   the system — a clock-with-zzz has too much detail to read at that size and would turn to mush once
   flattened to one color. A bold two-character `Zz` mark, or a crescent moon with a single `z`, is
   the most legible option that still says "snooze".
-- **Inactive:** label `Snooze here`, no subtitle.
+- **Inactive:** label `Snooze now`, no subtitle (maintainer, 2026-09-14: `Snooze now` over
+  `Snooze here`). The tile arms a snooze wherever the phone is, so `now` names the action; `here`
+  read as a place the snooze was tied to, which is the *end* condition's job, not the label's. The
+  welcome preview reuses this label, so the two stay in step by sharing one string.
 - **Active:** label `Snoozing`; the subtitle names **how the snooze ends** — the end time itself for
   a timer (`Until 10:30`, the phone's own 12/24-hour format), or the exit for a watched snooze
   (`Until you leave` / `Until you move`) (`Tile.setSubtitle`, API 29+), plus `Tile.setStateDescription`
