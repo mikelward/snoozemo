@@ -10,7 +10,9 @@ import app.snoozemo.ui.EXTRA_OPEN_PERMISSIONS
 import app.snoozemo.ui.MainActivity
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -63,6 +65,30 @@ class TileTrampolineSetupTest {
     fun tearDown() {
         controller?.destroy()
         controller = null
+    }
+
+    @Test
+    fun `the trampoline is declared showWhenLocked so a locked tap arms`() {
+        // Both taps reach the trampoline through startActivityAndCollapse, and a
+        // secured keyguard otherwise holds an ordinary activity launch behind the
+        // unlock prompt — so without this flag the tile lit up but nothing
+        // silenced until the user authenticated (SPEC.md §4.2's instant locked
+        // arm not landing, confirmed on a Pixel). The behavior it buys can only
+        // be seen on a device, so this guards the source declaration itself:
+        // `android:showWhenLocked` maps to a hidden ActivityInfo flag, so read
+        // the manifest rather than the parsed flags. Gradle runs unit tests with
+        // the module dir as the working directory.
+        val manifest = java.io.File("src/main/AndroidManifest.xml")
+        assertTrue("manifest not found at ${manifest.absolutePath}", manifest.exists())
+        val trampoline = Regex(
+            """<activity\b[^>]*\.snooze\.TileTrampolineActivity[^>]*/>""",
+            RegexOption.DOT_MATCHES_ALL,
+        ).find(manifest.readText())?.value
+        assertNotNull("TileTrampolineActivity <activity> block not found", trampoline)
+        assertTrue(
+            "TileTrampolineActivity must declare android:showWhenLocked=\"true\"",
+            trampoline!!.contains("android:showWhenLocked=\"true\""),
+        )
     }
 
     private fun setPolicyAccess(granted: Boolean) {

@@ -143,8 +143,10 @@ the point is that every other line of the app is worthless if it isn't true.
 
 - [x] `SnoozeTileService`: `Zz` icon, `Snooze here` / `Snoozing` labels, subtitle countdown,
       `setStateDescription` for TalkBack, arm-on-tap and end-on-tap, long-press to settings
-      via `QS_TILE_PREFERENCES` (`SPEC.md` §4.2). Arming works with the device locked — no
-      `unlockAndRun()`.
+      via `QS_TILE_PREFERENCES` (`SPEC.md` §4.2). Arming with the device locked needed
+      `showWhenLocked` on the trampoline (PR #290) — without it a secured keyguard held the
+      `startActivityAndCollapse` launch behind unlock, so the tile lit up but nothing armed;
+      pending the on-device confirmation in hardware item 18.
 - [x] **Tile latency on the tap itself**: `onClick` now paints `qsTile` optimistically —
       state, label and content description flip to the new value immediately, before
       `startActivityAndCollapse` — rather than waiting on `SnoozeTileBridge.refresh()`'s round
@@ -4328,6 +4330,14 @@ that can only be settled on a real device, ordered by risk.
         be a snooze that never ends), and open the Licenses screen (its JSON parse is the app's
         one reflective read). Once is enough; after that every pull request exercises the
         pipeline.
+18. [ ] **A locked tap actually arms without unlocking** (`SPEC.md` §4.2, Phase 2). The
+        trampoline is now `showWhenLocked` (PR #290), but whether the OEM lets a
+        QS-tile-launched `showWhenLocked` activity bypass a *secured* keyguard is
+        device- and version-dependent. Confirmed *broken before the flag* on a Pixel 10 Pro
+        (API 37): the tile lit up, the fingerprint prompt appeared, and backing out armed
+        nothing. Re-check with the flag — lock the phone, pull the shade, tap the tile; it
+        must silence with no fingerprint. The unit test guards only the manifest
+        declaration, not the platform behavior.
 
 ### Pinch to resize text
 

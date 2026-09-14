@@ -39,6 +39,21 @@ private const val TAG = "TileTrampoline"
  * activity cannot; most taps draw nothing at all and finish as soon as the
  * service start is queued.
  *
+ * **Declared `showWhenLocked`** (the manifest) so a locked tap actually arms.
+ * Both taps reach here through `startActivityAndCollapse`, and a *secured*
+ * keyguard holds an ordinary activity launch behind unlock — so without the flag
+ * the tile lit up but nothing silenced until the user authenticated, which is
+ * §4.2's instant locked arm not landing (confirmed on a Pixel). Showing over the
+ * keyguard lets the arm run at once. It does not weaken the lock: the guardrail is
+ * sensitivity, not the verb (SPEC.md §4.2). Anything sensitive — the debug log,
+ * system settings, meeting/place details, rule config — lives on a screen reached
+ * through `MainActivity` (not this), which does not inherit the flag and still waits
+ * for unlock; the notification prompt is likewise skipped while locked
+ * ([shouldAskForNotifications]). Starting, stopping and modifying a snooze are not
+ * sensitive, so the ongoing notification's `End now`, `+30 min` and `Until <time>`
+ * reach here over the lock too — each only flips the zen rule or the cap and shows
+ * nothing, the same latitude the volume keys and the shade's DND toggle already have.
+ *
  * The one arm tap that does not start the service is the chooser: with
  * "ask when to unsnooze" on ([EndSheetStore]), an arm opens the main screen as
  * the end-condition chooser instead, and the user's row tap there is what arms
