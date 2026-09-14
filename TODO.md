@@ -5525,21 +5525,31 @@ are simply what the one build ships.
       `setEnabled`'s `before` is now a raw read so it no longer re-publishes the stale disk
       value over the optimistic one.
 
-- [ ] **Delete the arm-then-refine sheet; the main screen serves both flows** (next milestone;
-      maintainer, 2026-09-14: "My goal was to delete the bottom sheet entirely if possible …
-      keep the main screen for both use cases, possibly with different when-to-close behavior").
-      The tile side already landed in PR #284 (tile opens the chooser; trampoline sheet retired).
-      What remains: make the app's own `Snooze`-button flow use the main-screen chooser rows
-      instead of the arm-then-refine bottom sheet, then remove the sheet, then rewrite SPEC §4.4
-      around the chooser (the v1 mockup, the "trampoline reads a post-arm record" arithmetic,
-      "`until I leave` commits by changing nothing on a snooze the tile just armed", and the
-      "sheet is the only refinement a tile user ever sees" rationale — now inverted, since the
-      tile user gets the chooser). The when-to-close split already exists: a tile-opened chooser
-      finishes on arm (`openedAsTileChooser`), an app-opened one stays open and flips to running
-      in place.
-  - **Open question (maintainer, 2026-09-14):** should the *app-opened* main view also finish
-    after a row arms an end condition, rather than staying open? Today only the tile-opened
-    chooser closes. Decide before rewriting §4.4's when-to-close text.
+- [x] **Delete the arm-then-refine sheet; the main screen serves both flows** (maintainer,
+      2026-09-14: "delete the bottom sheet entirely if possible … keep the main screen for both
+      use cases … close after any choice, not the plus and minus buttons"). Done: the
+      `EndConditionSheet` composable, the `sheet` `EndChoiceController`, `offerSheetForThisArm`,
+      the `KEY_SHEET_*` state, `DepartureRowAction`, and the sheet's tests/snapshots are gone; the
+      main-screen chooser rows are the one surface, opened from the tile or the app. **Close after
+      an end-condition row choice, both cases:** a row's `APPLIED` outcome finishes the activity
+      (`GONE`/`PARTIAL`/`REFUSED` keep the screen up), riding the row's confirmed `EndChoiceOutcome`
+      rather than the bare service start. The plain `Snooze` and `End now` carry no outcome — the
+      arm can be refused after acceptance, the release is async — so they have no confirmed signal
+      to close on and stay on the screen (Codex, PR #286, restoring PR #284's reasoning); the store
+      observer refreshes them in place. The `−`/`+` steppers never close either. `openedAsTileChooser`
+      stays only for the up-front notification ask. Because a row now closes on `APPLIED`,
+      `applyMotionEndChoice` reports `PARTIAL` (not `APPLIED`) when the motion exit arms but the
+      cap-restore to the failsafe fails — the exit is kept, but the chooser stays up as the retry
+      surface rather than closing and taking the failure card with it (Codex, PR #286; maintainer,
+      2026-09-14, "report PARTIAL there"). SPEC §4.4 rewritten around the chooser.
+
+- [ ] **Rename the `Sheet`-suffixed helpers now that the sheet is gone** (follow-up). Deleting
+      the sheet left `formatSheetTime` / `rememberSheetTimeFormatter` (in `EndConditionTime.kt`,
+      used by the notifications and the chooser rows) and the `sheet_earlier` / `sheet_later`
+      string names (the `−`/`+` stepper descriptions) carrying a "sheet" that no longer exists.
+      Pure renames (`formatEndTime`, `rememberEndTimeFormatter`, `stepper_earlier`/`_later`);
+      deferred from the deletion PR because they touch ~8 call sites incl. notification code and
+      tests, and are cosmetic — the sheet is functionally gone regardless.
 
 - [x] **The idle rows' steppers adjust rather than arm** (maintainer, 2026-09-12: "I
       agree they should be consistent and for now that means requiring tapping the until
