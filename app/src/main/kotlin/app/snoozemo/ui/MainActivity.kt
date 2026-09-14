@@ -160,17 +160,7 @@ private const val KEY_LAST_TAP_ID = "lastBlockedTapId"
 
 /** Stands in for an intent carrying no id — an older build's. */
 private const val NO_TAP_ID = ""
-private const val KEY_SHEET_COMMITTING = "sheetCommitting"
-private const val KEY_SHEET_REQUEST_ID = "sheetRequestId"
-private const val KEY_SHEET_OFFERED_FOR = "sheetOfferedFor"
-private const val KEY_SHEET_FAILED = "sheetFailed"
-private const val KEY_SHEET_ENDS_AT = "sheetEndsAt"
-private const val KEY_SHEET_FLOOR = "sheetFloor"
-private const val KEY_SHEET_CEILING = "sheetCeiling"
 
-// The main screen's own rows keep their own set: the two offers are separate
-// choices about the same snooze and can be stepped to different times, so one
-// set of keys would restore whichever was saved last onto both.
 private const val KEY_ROWS_COMMITTING = "rowsCommitting"
 private const val KEY_ROWS_REQUEST_ID = "rowsRequestId"
 private const val KEY_ROWS_OFFERED_FOR = "rowsOfferedFor"
@@ -190,24 +180,6 @@ private const val TICK_INTERVAL_MS = 60_000L
  * constructs one in production.
  */
 internal enum class Screen { WELCOME, MAIN, PERMISSIONS, SETTINGS, LICENSES }
-
-/**
- * What the sheet's `Until I leave` row does, decided from the running record
- * rather than a saved flag (SPEC.md §4.4):
- *
- * - **[RESTORE]** over a snooze the user narrowed to its timer with an exit
- *   still armed ([ActiveSnooze.isPartialTimer]) — the row is the way back and
- *   does the real restore.
- * - **[DISMISS]** otherwise — the snooze already runs to its ceiling, so the
- *   row is "the snooze as it stands" and the sheet just closes.
- * - **[HOLD]** while the record read has not landed. After a recreation the
- *   sheet is restored synchronously but `refreshSnoozing` loads the record on a
- *   worker; dismissing in that window would throw away a departure restore the
- *   user asked for, and the synchronous read that would close the window is
- *   disk in front of the first frame (Codex, PR #272). So the row is inert
- *   until the record is known — a beat, not a wait.
- */
-internal enum class DepartureRowAction { RESTORE, DISMISS, HOLD }
 
 /**
  * Hosts the four screens the app is split into (`TODO.md` Phase 4): [MainScreen],
@@ -334,105 +306,19 @@ class MainActivity : ComponentActivity() {
     private lateinit var store: ActiveSnoozeStore
 
     /**
-     * Generation guard for [offerSheetForThisArm], the same shape
-     * [refreshSnoozing] uses and for the same reason: two arms in quick
-     * succession finish their reads in whatever order the disk returns them,
-     * and the older answer must not open a sheet over the newer arm.
-     */
-    private var latestSheetOffer = 0
-
-    /**
-     * Bumped whenever a sheet goes up, so a record read that started *before*
-     * it cannot tear it back down. `refreshSnoozing`'s reads finish in
-     * whatever order the disk returns them, and one that began before an arm
-     * carries a record from before that arm — a `null` that would otherwise
-     * read as "the snooze this sheet is refining is gone".
-     */
-    private var sheetGeneration = 0
-
-    /** Read-only view of [sheetGeneration], so a test can pin a read to an arm. */
-    @androidx.annotation.VisibleForTesting
-    internal val sheetGenerationForTest: Int
-        get() = sheetGeneration
-
-    /**
-     * Where [offerSheetForThisArm]'s disk reads run. A seam only so a test can
-     * make them synchronous — production always hands them to a thread, since
-     * neither the setting file nor the record belongs in front of a frame.
+     * Where this screen's background disk and IPC reads run — [refreshSnoozing]'s
+     * record load, the motion-sensor probe, the post-grant service poke. A seam
+     * only so a test can make them synchronous; production always hands them to a
+     * thread, since none of them belongs in front of a frame.
      */
     @androidx.annotation.VisibleForTesting
     internal var runOffMainThread: (() -> Unit) -> Unit = { work -> Thread(work).start() }
 
     /**
-     * The end-condition sheet, driven by the same controller the tile uses
-     * (SPEC.md §4.4). Arming from this screen used to skip it entirely, so the
-     * same action asked when it came from the shade and silently took the
-     * default cap when it came from the button.
-     *
-     * The ceiling comes from [activeSnooze], the copy this screen already keeps
-     * warm — no disk read in front of the sheet.
-     */
-    @androidx.annotation.VisibleForTesting
-    internal val sheet = EndChoiceController(
-        surface = "the sheet in the app",
-        // The warm copy, which may be stale or null — the controller checks
-        // its identity against the offer's before trusting it.
-        currentRecord = { activeSnooze },
-        chooseEnd = { endsAt, requestId, forSnooze ->
-            SnoozeService.chooseEnd(this, endsAt, requestId, forSnooze)
-        },
-        // Wired but unreached: this sheet's departure row dismisses, because
-        // the snooze it is offered over was armed seconds ago and is already
-        // running to its ceiling. Supplied rather than made optional so there
-        // is no null branch to reason about in the controller.
-        restoreDeparture = { requestId, forSnooze ->
-            SnoozeService.restoreEnd(this, requestId, forSnooze)
-        },
-        // Wired but unreached, like the departure restore: the sheet offers no
-        // `Until I move` row.
-        chooseMotionEnd = { requestId, forSnooze ->
-            SnoozeService.setMotionEnd(this, true, requestId, forSnooze)
-        },
-        // Hold the departure row inert until the commit's record has landed,
-        // then let a full refresh land it — rather than reading the one field
-        // the row needs synchronously and leaving the rest of the screen
-        // stale. The partial line and the departure row read the running
-        // record, so an `Until I leave` tapped right after a partial choice
-        // must see the post-choice record or it dismisses instead of
-        // restoring departure; but a targeted read of just that record left a
-        // snooze that *ended* on the commit showing "Snoozing" with a null
-        // record, because it never touched `snoozing` (Codex, PR #272). So the
-        // outcome marks the record stale ([awaitingOutcomeRecord]) and kicks
-        // the full [refreshSnoozing], which reads `snoozing`, `activeSnooze`
-        // and the rest together; [departureRowAction] holds the row until it
-        // lands. The sheet's `onDismiss` is empty, so this refresh supersedes
-        // nothing (unlike the rows, whose arm already refreshes).
-        watchOutcome = { requestId, onOutcome ->
-            EndChoiceOutcome.watch(requestId) { result ->
-                onOutcome(result)
-                awaitingOutcomeRecord = true
-                refreshSnoozing()
-            }
-        },
-        // Nothing to finish: clearing the offer is what closes this sheet,
-        // unlike the trampoline where the activity *is* the sheet.
-        onDismiss = {},
-    )
-
-    /**
-     * The same choices as [sheet], on the screen itself rather than over it
-     * (SPEC.md §4.4) — so a snooze can be refined at any point during it, not
-     * only in the seconds after arming (maintainer, 2026-09-08).
-     *
-     * **A second controller rather than a second use of the first**, because
-     * the two have opposite lifetimes: the sheet is one-shot and is *supposed*
-     * to disappear once it has been answered, while these rows stand for as
-     * long as a snooze does. Sharing one instance would mean either a sheet
-     * that never closes or rows that vanish on the first tap. Everything that
-     * made the controller worth sharing still applies — the commit lifecycle,
-     * the refusal handling, the identity check — and both are answered by
-     * request id, so an outcome settles the offer that asked for it and leaves
-     * the other alone.
+     * The end-condition choices, on the screen itself (SPEC.md §4.4) — so a
+     * snooze can be refined at any point during it, not only in the seconds
+     * after arming (maintainer, 2026-09-08), and so the idle screen can offer
+     * the same choices as a way to *start* one.
      *
      * **Settling a commit re-reads the record rather than doing nothing**, and
      * that is what keeps the rows on screen. `dismiss` is how the controller
@@ -478,39 +364,39 @@ class MainActivity : ComponentActivity() {
             if (forSnooze == null) SnoozeService.armUntilMotion(this, requestId, idleOfferArmCount)
             else SnoozeService.setMotionEnd(this, true, requestId, forSnooze)
         },
-        // No outcome-driven refresh here, unlike the sheet: these rows can
-        // *arm* a snooze (`offersToStart`), and that arm's `onDismiss` already
-        // starts the full `refreshSnoozing` that flips `snoozing` true. Kicking
-        // a second refresh from the outcome would bump the refresh generation
-        // and race the arm's own, for no gain (Codex, PR #272). The full
-        // refresh below is what these rows read from.
+        // No outcome-driven refresh here: these rows can *arm* a snooze
+        // (`offersToStart`), and that arm's `onDismiss` already starts the full
+        // `refreshSnoozing` that flips `snoozing` true. Kicking a second refresh
+        // from the outcome would bump the refresh generation and race the arm's
+        // own, for no gain (Codex, PR #272). The full refresh below is what these
+        // rows read from.
         watchOutcome = EndChoiceOutcome::watch,
         onDismiss = { refreshSnoozing() },
-        // Opened from the tile as the chooser, a row that cleanly arms finishes
-        // the activity, collapsing back to where the user was the way the tile
-        // tap would have (SPEC.md §4.4). On the service's outcome, not the record
-        // write: an arm publishes a provisional `ARMING` record before it is
-        // confirmed or known to be partial (Codex, PR #284).
+        // Any committed choice finishes the activity, collapsing back to where
+        // the user was (SPEC.md §4.4) — the tile chooser and the app screen
+        // alike, whether the choice started a snooze from idle or refined a
+        // running one. On the service's outcome, not the record write: an arm
+        // publishes a provisional `ARMING` record before it is confirmed or
+        // known to be partial (Codex, PR #284).
         //
-        // **`APPLIED` only, not `GONE`.** For these idle-start rows the service
+        // **`APPLIED` only, not `GONE`.** For the idle-start rows the service
         // returns `GONE` when the chosen end was *not* applied — a snooze is
         // already running (a rapid plain `Snooze` before the row tap) or the arm
         // count moved under the offer (`armAsAsked`). Finishing on that would
-        // collapse the chooser over a snooze whose deadline is the default cap,
+        // collapse the screen over a snooze whose deadline is the default cap,
         // not the time the user picked — reading as accepted when it wasn't. On
         // `GONE` the controller's `dismiss` re-reads the record instead, so the
         // screen shows the running snooze's own rows. `PARTIAL` and `REFUSED`
         // never reach this hook and keep the rows up.
         onArmOutcome = { result ->
-            if (openedAsTileChooser && result == EndChoiceResult.APPLIED) finish()
+            if (result == EndChoiceResult.APPLIED) finish()
         },
         offersToStart = true,
         // Over a running snooze whose *time* is what ends it — a chosen timer,
         // or a backstop promoted because departure lost its fix — open the top
         // row on that end rather than an hour out (SPEC.md §4.4). A snooze still
         // ending on departure or motion keeps the hour-out seed: its cap is a
-        // passive backstop, not a time to front. The arm-time sheets leave this
-        // false.
+        // passive backstop, not a time to front.
         seedsFromRunningEnd = true,
     )
 
@@ -1468,7 +1354,7 @@ class MainActivity : ComponentActivity() {
         // actual persisting.
         // **Whether this is a rotation or a relaunch after a process death**,
         // which `savedInstanceState` cannot answer — it is non-null either way
-        // — and which the sheet's restore needs opposite answers for.
+        // — and which the rows' restore needs opposite answers for.
         // `RecreationMarker` is a retained `ViewModel`: Android hands one to
         // the replacement activity down the configuration-relaunch path and
         // clears the store on any other destroy, so finding one that has
@@ -1556,7 +1442,6 @@ class MainActivity : ComponentActivity() {
             // Restored so a configuration recreation before the first-frame ask
             // fires still owes it (see [chooserNotificationAskOwed]).
             chooserNotificationAskOwed = it.getBoolean(KEY_CHOOSER_ASK_OWED, false)
-            restoreSheet(it, configurationChange = wasRecreatedByConfiguration)
             restoreRows(it, configurationChange = wasRecreatedByConfiguration)
         }
         // **A genuinely new tile-chooser launch — not a rotation.** The one
@@ -1947,8 +1832,8 @@ class MainActivity : ComponentActivity() {
                                 notificationsReachTheUser = notificationsReachTheUser,
                                 location = location,
                                 calendar = calendar,
-                                // The flavor seam, read at the call site like
-                                // EndConditionSheet's (SPEC.md §3.4).
+                                // The flavor seam, read at the call site so a
+                                // screenshot test can render both builds (SPEC.md §3.4).
                                 tracksDeparture = app.snoozemo.presence.PRESENCE_TRACKS_DEPARTURE,
                                 ruleState = renderableRuleState,
                                 settingsFailure = settingsFailure,
@@ -2023,46 +1908,6 @@ class MainActivity : ComponentActivity() {
                             BackHandler { screen = Screen.SETTINGS }
                             LicensesScreen(onBack = { screen = Screen.SETTINGS })
                         }
-                    }
-                    // The end-condition sheet (SPEC.md §4.4), when the arm
-                    // came from this screen's `Snooze` button rather than the
-                    // tile. A `ModalBottomSheet` rather than the trampoline's
-                    // hand-built scrim: that one is drawn over a transparent
-                    // activity with nothing behind it, while here there is a
-                    // real screen to sit on and the platform's own sheet is
-                    // what a user expects over one.
-                    //
-                    // Dismissing leaves the user correctly snoozed — §4.4 —
-                    // and they are: the snooze is already running on its
-                    // default cap, so the sheet only ever refines it.
-                    sheet.endCondition?.let { condition ->
-                        EndConditionBottomSheet(
-                            condition = condition,
-                            formattedTime = formatSheetTime(this@MainActivity, condition.endsAt),
-                            committing = sheet.committing,
-                            failed = sheet.commitFailed,
-                            partial = activeSnooze?.isPartialTimer == true,
-                            onChooseTime = { sheet.commit(condition.endsAt) },
-                            onDismiss = sheet::dismiss,
-                            // A partial choice has already moved the cap, so
-                            // this row is no longer "the snooze as it stands" —
-                            // it is the way back, and has to do the restore.
-                            // Decided from the record rather than a saved flag,
-                            // and inert until the record is known — see
-                            // [departureRowAction].
-                            onChooseDeparture = {
-                                when (departureRowAction()) {
-                                    DepartureRowAction.RESTORE -> sheet.commitDeparture()
-                                    DepartureRowAction.DISMISS -> sheet.dismiss()
-                                    // The record read has not landed yet, so
-                                    // the row holds rather than dismissing a
-                                    // departure restore the user asked for.
-                                    DepartureRowAction.HOLD -> Unit
-                                }
-                            },
-                            onStepDown = sheet::stepDown,
-                            onStepUp = sheet::stepUp,
-                        )
                     }
                     // The one disclosure this app shows: SPEC.md §12 requires it
                     // precede the background-location prompt specifically (Play's
@@ -2143,21 +1988,9 @@ class MainActivity : ComponentActivity() {
             outState.putString(KEY_FIRST_TAP_ID, firstTapId ?: NO_TAP_ID)
             outState.putString(KEY_LAST_TAP_ID, lastTapId ?: NO_TAP_ID)
         }
-        // The sheet survives a rotation, chosen time and all: stepping to a
-        // time is the only work the user has done there, and dropping it would
-        // leave them on the default cap having answered.
-        outState.putBoolean(KEY_SHEET_COMMITTING, sheet.committing)
-        outState.putLong(KEY_SHEET_REQUEST_ID, sheet.committingRequestId)
-        sheet.offerFor?.let { outState.putLong(KEY_SHEET_OFFERED_FOR, it.toEpochMilli()) }
-        outState.putBoolean(KEY_SHEET_FAILED, sheet.commitFailed)
-        sheet.endCondition?.let {
-            outState.putLong(KEY_SHEET_ENDS_AT, it.endsAt.toEpochMilli())
-            outState.putLong(KEY_SHEET_FLOOR, it.floor.toEpochMilli())
-            outState.putLong(KEY_SHEET_CEILING, it.ceiling.toEpochMilli())
-        }
-        // And the screen's own rows, for the same reason: the time on them is
-        // the only work the user has done there, and a rotation would
-        // otherwise reseed it back to an hour from now. Rebuilt from the
+        // The end-condition rows survive a rotation, chosen time and all: the
+        // time on them is the only work the user has done there, and a rotation
+        // would otherwise reseed it back to an hour from now. Rebuilt from the
         // record on the next read either way, but only where the cap has
         // actually moved ([refreshRows]).
         outState.putBoolean(KEY_ROWS_COMMITTING, rows.committing)
@@ -2174,39 +2007,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Puts a sheet that survived a configuration change back as it was. */
-    private fun restoreSheet(state: Bundle, configurationChange: Boolean) {
-        val saved = if (state.containsKey(KEY_SHEET_ENDS_AT)) {
-            EndCondition(
-                endsAt = Instant.ofEpochMilli(state.getLong(KEY_SHEET_ENDS_AT)),
-                floor = Instant.ofEpochMilli(state.getLong(KEY_SHEET_FLOOR)),
-                ceiling = Instant.ofEpochMilli(state.getLong(KEY_SHEET_CEILING)),
-            )
-        } else {
-            null
-        }
-        if (saved != null) sheetGeneration++
-        sheet.restore(
-            condition = saved,
-            wasCommitting = state.getBoolean(KEY_SHEET_COMMITTING),
-            failed = state.getBoolean(KEY_SHEET_FAILED),
-            configurationChange = configurationChange,
-            requestId = state.getLong(KEY_SHEET_REQUEST_ID),
-            offeredFor = if (state.containsKey(KEY_SHEET_OFFERED_FOR)) {
-                Instant.ofEpochMilli(state.getLong(KEY_SHEET_OFFERED_FOR))
-            } else {
-                null
-            },
-        )
-    }
-
     /**
-     * Puts the screen's own rows back where they were.
+     * Puts the screen's own end-condition rows back where they were.
      *
-     * No generation counter, unlike the sheet's: that one exists to stop a
-     * record read older than the *arm* closing a sheet that arm opened, and
-     * these rows are not opened by an arm — every record read is theirs, and
-     * [refreshRows] rebuilds them from whatever it finds.
+     * No generation counter: these rows are not opened by an arm — every record
+     * read is theirs, and [refreshRows] rebuilds them from whatever it finds.
      */
     private fun restoreRows(state: Bundle, configurationChange: Boolean) {
         rows.restore(
@@ -2233,44 +2038,12 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Drops a restored or open sheet the running record can no longer honor.
-     *
-     * `onSaveInstanceState` cannot tell a rotation from a process death, so a
-     * saved sheet comes back either way — and after a process death the snooze
-     * it was refining may be long over, ended by a departure or by its own cap
-     * while nothing of this app was running. Putting that sheet back unchecked
-     * offers times against a snooze that no longer exists; the first tap would
-     * come back `GONE` and dismiss, which is a screen answering a question it
-     * should never have asked (Codex, PR #152).
-     *
-     * The same check covers the live case for free: a snooze that ends *under*
-     * an open sheet now takes the sheet with it rather than waiting for a tap
-     * to discover it. Whatever ended it has posted its own card, so nothing
-     * here is silent (SPEC.md §7).
-     *
-     * Two things it will not do. It never touches a sheet with a commit in
-     * flight — that answer is coming and settles the sheet itself, and a
-     * dismissal underneath it would lose exactly the refusal message §4.2
-     * says must reach a user who denied notifications. And it ignores a record
-     * read that began before the sheet went up, since such a read predates the
-     * arm the sheet belongs to.
-     */
-    @androidx.annotation.VisibleForTesting
-    internal fun reconcileSheet(record: ActiveSnooze?, seenAtGeneration: Int) {
-        // A record read that began before the sheet went up predates the arm
-        // the sheet belongs to, so its answer says nothing about this offer.
-        // The rest of the question is the controller's, and both hosts get it.
-        if (seenAtGeneration != sheetGeneration) return
-        sheet.reconcile(record, Instant.ofEpochMilli(SnoozeClock.read().wallMillis))
-    }
-
-    /**
      * Puts the main screen's end-condition rows onto the record just read.
      *
-     * Unlike [reconcileSheet] this both seeds and reconciles, because the rows
-     * are not offered once and then answered: they stand for as long as a
-     * snooze does, so every record read is either the arrival of a snooze to
-     * refine, a change to one already being refined, or its end.
+     * This both seeds and reconciles, because the rows are not offered once and
+     * then answered: they stand for as long as a snooze does, so every record
+     * read is either the arrival of a snooze to refine, a change to one already
+     * being refined, or its end.
      *
      * **Three cases, and the middle one is the subtle one.**
      *
@@ -2550,23 +2323,6 @@ class MainActivity : ComponentActivity() {
     /** [refreshSnoozing] for a test — the tick's re-read, without the tick. */
     internal fun refreshSnoozingForTest() = refreshSnoozing()
 
-    /**
-     * What the sheet's `Until I leave` row should do right now — see
-     * [DepartureRowAction]. Read at the tap from the running record, held inert
-     * ([DepartureRowAction.HOLD]) until that record is both loaded
-     * ([recordLoaded]) and current for the last commit ([awaitingOutcomeRecord]):
-     * in the window after a recreation before `refreshSnoozing` has first
-     * answered, and in the window after a commit outcome before its refresh has
-     * landed. Reading a stale record there dismisses a snooze that a partial
-     * choice just left restorable (Codex, PR #272).
-     */
-    @VisibleForTesting
-    internal fun departureRowAction(): DepartureRowAction = when {
-        awaitingOutcomeRecord || !recordLoaded -> DepartureRowAction.HOLD
-        activeSnooze?.isPartialTimer == true -> DepartureRowAction.RESTORE
-        else -> DepartureRowAction.DISMISS
-    }
-
     private fun refreshSnoozing() {
         // The same generation guard the access refresh has, for the same
         // reason: `observe` fires one of these per record change, they finish
@@ -2575,7 +2331,6 @@ class MainActivity : ComponentActivity() {
         // already ended — with nothing to correct it until the next record
         // change. Bumped and checked on the main thread only.
         val refresh = ++latestSnoozingRefresh
-        val sheetAt = sheetGeneration
         // Superseded the moment a newer refresh starts, on the main thread
         // where this field lives: its answer would be discarded by the
         // generation guard regardless, so leaving it running is a blocked
@@ -2631,10 +2386,6 @@ class MainActivity : ComponentActivity() {
                 // from `activeSnooze` itself, which reads null both before
                 // this lands and when nothing is running.
                 recordLoaded = true
-                // A commit outcome's refresh has landed, so the departure row
-                // is reading the post-commit record now and can act again.
-                awaitingOutcomeRecord = false
-                reconcileSheet(loaded, sheetAt)
                 refreshRows(loaded)
                 // Reconciling policy access reads whether a snooze is running,
                 // so the pass in onStart ran before this was known. Re-run it
@@ -3458,10 +3209,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         // The outcome channel holds a lambda reaching this activity, so an
-        // unclosed watch outlives the sheet it was answering and leaks the
+        // unclosed watch outlives the offer it was answering and leaks the
         // activity with it. Idempotent, and a no-op on the ordinary session
-        // that never opened a sheet at all.
-        sheet.close()
+        // that never had a commit in flight.
         rows.close()
         // Whatever calendar read is outstanding is one this activity will
         // never use the answer to.
@@ -3846,7 +3596,8 @@ class MainActivity : ComponentActivity() {
      * has nothing running behind it and only needs saying, while a refused end
      * has spent the user's exit on a snooze that is still going.
      */
-    private fun armFromScreen() {
+    @VisibleForTesting
+    internal fun armFromScreen() {
         // Arms are logged for the same reason ends are: a capture of someone
         // toggling quickly needs every tap in it, and an arm the user read as a
         // second tap on something else is exactly the entry that would be
@@ -3871,86 +3622,22 @@ class MainActivity : ComponentActivity() {
             "tap: arm from the app screen" + if (started) "" else " (the service refused to start)",
         )
         if (started) {
-            // Opened as the tile chooser, the rows are the arm-and-close path
-            // (their `onArmOutcome`); the plain `Snooze` button starts the
-            // service with no `EndChoiceOutcome`, so it has no confirmed-arm
-            // signal to close on — it arms and leaves the screen rather than
-            // popping a sheet over the chooser (Codex, PR #284).
-            if (!openedAsTileChooser) offerSheetForThisArm()
+            // The plain `Snooze` is the unqualified one-tap arm, and it carries
+            // no `EndChoiceOutcome` — so it has no confirmed-arm signal to close
+            // on, and must not close on the bare service start (Codex, PR #286):
+            // an arm the platform accepted can still be refused later (a cap
+            // alarm, zen activation, or record write that fails), and closing on
+            // the start boolean would drop the only in-app surface saying so
+            // where notifications are denied. It arms and leaves the screen up;
+            // the store observer flips it to the running snooze when the record
+            // lands. The end-condition rows are the confirmed-close path (their
+            // `onArmOutcome`); this button is not.
             return
         }
         Log.e(TAG, "Starting the service to arm was refused.")
         lastOutcome = getString(R.string.failure_could_not_start)
     }
 
-    /**
-     * Offers the §4.4 sheet for the arm just requested — **one shot, no debt**.
-     *
-     * The trampoline reads the record once after its own service start and
-     * shows no sheet where the arm has not landed; this does the same, which
-     * is the point of the change. An earlier version held a "sheet owed" flag
-     * until a record turned up, and that flag had no way to expire: an arm the
-     * service accepted but failed to complete — no policy access, a zen rule
-     * that would not go on — left it set for the life of the screen, and the
-     * *next* record from anywhere, a tile arm included, opened a sheet nobody
-     * had asked this screen for (Codex, PR #152). A one-shot read cannot go
-     * stale, and where it loses the race it fails exactly as the tile does: no
-     * sheet, over a snooze correctly armed on its cap.
-     *
-     * Both reads are off the main thread — the setting is a disk-backed file
-     * and the record may still be loading, and neither belongs in front of a
-     * frame. After the service start, never before it (SPEC.md §6.9).
-     *
-     * No keyguard test, unlike the tile's: this screen is in front of an
-     * unlocked phone by definition.
-     */
-    @androidx.annotation.VisibleForTesting
-    internal fun offerSheetForThisArm() {
-        val offer = ++latestSheetOffer
-        // **Posted, and the post is load-bearing** — the same ordering the
-        // trampoline's own decision uses. `startService` only enqueues
-        // `onStartCommand`, which runs on this looper and is what writes the
-        // record; reading straight away would race it, and on a fresh arm the
-        // read would win and find nothing, so the sheet would almost never
-        // appear at all. Posting puts this behind that message.
-        window.decorView.post {
-            runOffMainThread {
-                val ask = EndSheetStore(this).isEnabled()
-                val loaded = if (ask) store.load() else null
-                runOnUiThread {
-                    // A newer arm has since been made; this answer is stale.
-                    if (offer != latestSheetOffer) return@runOnUiThread
-                    // No record: this arm did not land, so there is nothing to
-                    // refine and nothing left owed.
-                    if (loaded == null) return@runOnUiThread
-                    // The wall clock, because the record's cap and the times
-                    // the sheet offers are both written in that frame.
-                    val wallNow = Instant.ofEpochMilli(SnoozeClock.read().wallMillis)
-                    if (!EndCondition.offersAChoice(loaded, wallNow)) return@runOnUiThread
-                    sheetGeneration++
-                    sheet.seed(loaded, wallNow)
-                }
-            }
-        }
-    }
-
-    /**
-     * Ends the snooze and reports only what this screen actually knows.
-     *
-     * The service branch reports **nothing**, deliberately. An accepted
-     * `startService` says the request was delivered, not that the rule came
-     * off — the release can still be refused inside the service, which then
-     * keeps the record and posts its own `Couldn't end the snooze` — and a
-     * screen claiming `Snooze ended` beside that notification is the app
-     * contradicting itself about the user's own phone.
-     *
-     * The tap is not left looking inert: the record observer flips [snoozing]
-     * when the release lands, so the buttons change, and the service is the
-     * one surface that knows the outcome and already says it.
-     *
-     * The direct branch does report, because there the outcome is known here:
-     * `releaseDirectly` returns whether the rule is confirmed off.
-     */
     /**
      * The rows' `−` / `+`, and they mean the same thing on both screens:
      * move the time, and leave applying it to the time row.
@@ -4112,21 +3799,6 @@ class MainActivity : ComponentActivity() {
      * apart here rather than conflated (Codex, PR #252).
      */
     private var recordLoaded = false
-
-    /**
-     * Whether a commit outcome's [refreshSnoozing] is still in flight, so the
-     * record on screen predates the commit that just settled.
-     *
-     * Set when a sheet outcome fires and its refresh is kicked; cleared when
-     * that refresh lands. [departureRowAction] holds the departure row inert
-     * while it is set, so a tap in the gap can't read the pre-commit record
-     * and dismiss a snooze a partial choice just left restorable (Codex, PR
-     * #272). A view-state flag, not persisted: a recreation reloads the record
-     * from scratch, and [recordLoaded] covers that window. Read and written on
-     * the main thread only, like [recordLoaded], so a plain field suffices.
-     */
-    @VisibleForTesting
-    internal var awaitingOutcomeRecord = false
 
     /**
      * A tap waiting on a location grant, and the snooze it was made on — or,
@@ -4369,7 +4041,8 @@ class MainActivity : ComponentActivity() {
         rows.commitMotionEnd()
     }
 
-    private fun endFromScreen() {
+    @VisibleForTesting
+    internal fun endFromScreen() {
         // **On the handler, not on the helper underneath it.** That helper is
         // also how revoked Do Not Disturb access ends a snooze, which nobody
         // tapped — logging there recorded an automatic reconciliation as a user
@@ -4378,6 +4051,15 @@ class MainActivity : ComponentActivity() {
         // between them every `MANUAL` ending in the log names the surface that
         // asked for it, and an ending with neither line is the app's own.
         SnoozeDebugLog.event("tap: end from the app screen")
+        // `End now` carries no `EndChoiceOutcome`, and the release is
+        // asynchronous — `endThroughServiceOrDirectly` returns once the service
+        // start is away, not once the zen rule is actually off — so there is no
+        // confirmed-end signal to close on. It stays on the screen (Codex, PR
+        // #286): a refused *start* says why here (§4.2), and a release the
+        // platform later rolls back (the service keeps the snooze alive and
+        // schedules recovery) leaves the screen as the surface that shows it,
+        // even where notifications are denied. Only the end-condition rows,
+        // which hear a confirmed outcome, close.
         if (!endThroughServiceOrDirectly(EndReason.MANUAL)) {
             lastOutcome = getString(R.string.failure_could_not_end)
         }

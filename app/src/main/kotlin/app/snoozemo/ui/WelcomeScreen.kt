@@ -257,7 +257,7 @@ fun WelcomeScreen(
      * card 2 both promise departure, and on a build that cannot deliver it
      * that promise sets up exactly the silence-until-the-cap the app exists to
      * prevent (§3) — so the seam is at the call site, as it is for
-     * [PermissionsScreen] and [EndConditionSheet].
+     * [PermissionsScreen].
      */
     tracksDeparture: Boolean = true,
     tileAdded: Boolean? = null,

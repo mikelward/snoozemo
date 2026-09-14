@@ -2,10 +2,14 @@ package app.snoozemo.ui
 
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
+import app.snoozemo.core.ActiveSnooze
+import app.snoozemo.core.Anchor
+import app.snoozemo.core.TrackingMode
 import app.snoozemo.snooze.ActiveSnoozeStore
 import app.snoozemo.snooze.EndChoiceResult
 import app.snoozemo.snooze.WelcomeStore
 import java.time.Duration
+import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -19,18 +23,25 @@ import org.robolectric.Shadows.shadowOf
 import android.os.Looper.getMainLooper
 
 /**
- * Opened from the tile as the chooser, a row that arms finishes the activity;
- * opened from the launcher, the same arm leaves it open (SPEC.md §4.4;
- * [EXTRA_TILE_CHOOSER], maintainer's tile-vs-launcher UX).
+ * An end-condition **row** choice finishes the activity, collapsing back to
+ * where the user was — the tile chooser and the launcher-opened app alike
+ * (SPEC.md §4.4; maintainer, 2026-09-13: close after choosing an end
+ * condition). `openedAsTileChooser` no longer gates the close; it still gates
+ * the up-front notification ask, which the ask tests below cover.
  *
  * The close rides the service's **commit outcome** ([EndChoiceController]'s
  * `onArmOutcome`), not the record write. An arm publishes a provisional
  * non-partial `ARMING` record before it is confirmed and before a timer-only
  * arm can report `PARTIAL`, so the record transition names neither reliably;
- * only `APPLIED`/`GONE` from the service mean "armed, nothing left to choose"
- * (Codex, PR #284). These tests drive `rows.onOutcome` — the exact seam the
- * service's report lands on — so one covers the plain arm and every
- * end-condition row alike, rather than one per button.
+ * only `APPLIED` from the service means "armed, nothing left to choose", while
+ * `GONE`/`PARTIAL`/`REFUSED` keep the screen up (Codex, PR #284). These tests
+ * drive `rows.onOutcome` — the exact seam the service's report lands on — so one
+ * covers every end-condition row.
+ *
+ * The plain `Snooze` and `End now` buttons are **not** end-condition rows: they
+ * carry no `EndChoiceOutcome`, so they have no confirmed signal to close on and
+ * must stay on the screen rather than close on the bare service start (Codex,
+ * PR #286). Their tests assert exactly that.
  */
 @RunWith(RobolectricTestRunner::class)
 class MainActivityTileChooserCloseTest {
@@ -71,6 +82,19 @@ class MainActivityTileChooserCloseTest {
     // that way.
     private fun settle() = shadowOf(getMainLooper()).idleFor(Duration.ofMillis(50))
 
+    // A plain running snooze on the default cap — enough for `End now` to have
+    // something to end. The duration-only mode and the stock anchor keep it off
+    // any real place (`AGENTS.md` privacy floor).
+    private fun runningSnooze(): ActiveSnooze {
+        val now = Instant.now()
+        return ActiveSnooze(
+            anchor = Anchor(capturedAt = now, ssid = "ExampleWifi"),
+            startedAt = now,
+            capExpiresAt = now.plus(ActiveSnooze.DEFAULT_CAP),
+            mode = TrackingMode.DURATION_ONLY,
+        )
+    }
+
     @Test
     fun `a tile-chooser launch finishes when a row arms`() {
         val activity = screen(fromTile = true)
@@ -82,6 +106,38 @@ class MainActivityTileChooserCloseTest {
         settle()
 
         assertTrue(activity.isFinishing)
+    }
+
+    @Test
+    fun `the plain Snooze button does not finish the activity`() {
+        // The plain `Snooze` carries no `EndChoiceOutcome`, so it has no
+        // confirmed-arm signal to close on: an arm the platform accepts can
+        // still be refused later, and closing on the bare service start would
+        // drop the only surface saying so where notifications are denied. It
+        // arms and leaves the screen up; the store observer flips it to running
+        // when the record lands (Codex, PR #286).
+        val activity = screen(fromTile = false)
+
+        activity.armFromScreen()
+        settle()
+
+        assertFalse("the plain arm has no confirmed close signal, so it stays", activity.isFinishing)
+    }
+
+    @Test
+    fun `End now does not finish the activity`() {
+        // `End now` carries no `EndChoiceOutcome`, and the release is async — the
+        // helper returns once the service start is away, not once the zen rule is
+        // off — so there is no confirmed-end signal to close on. It stays on the
+        // screen as the surface that shows a release the platform later rolls
+        // back, even where notifications are denied (Codex, PR #286).
+        ActiveSnoozeStore(context).arm(runningSnooze())
+        val activity = screen(fromTile = false)
+
+        activity.endFromScreen()
+        settle()
+
+        assertFalse("End now has no confirmed close signal, so it stays", activity.isFinishing)
     }
 
     @Test
@@ -125,13 +181,16 @@ class MainActivityTileChooserCloseTest {
     }
 
     @Test
-    fun `a launcher launch stays open when a row arms`() {
+    fun `a launcher launch finishes when a row arms`() {
+        // The close is no longer gated on the launch surface: a committed choice
+        // collapses the app whether it was opened from the tile or the launcher
+        // (maintainer, 2026-09-13).
         val activity = screen(fromTile = false)
 
         activity.rows.onOutcome(EndChoiceResult.APPLIED)
         settle()
 
-        assertFalse("a launcher-opened app flips to running in place", activity.isFinishing)
+        assertTrue("an applied choice closes the app, launcher-opened or not", activity.isFinishing)
     }
 
     @Test
@@ -193,10 +252,12 @@ class MainActivityTileChooserCloseTest {
     fun `a launcher relaunch of a killed tile-chooser task is not tile-owned`() {
         // Tile-chooser session, process killed, then reopened from the launcher
         // (a plain intent, no EXTRA_TILE_CHOOSER). The restored activity must be
-        // launcher-owned — a row arm flips it to running in place, never finishes
-        // an app the user opened from the launcher. Regression: a saved copy of
-        // the flag let the bundle's `true` override the launcher intent's `false`,
-        // so the launch is now derived from the intent alone (Codex, PR #284).
+        // launcher-owned. Since a committed choice now closes the app whatever
+        // the launch surface, tile-ownership is observable only in the up-front
+        // notification ask — a tile chooser asks, a launcher launch does not.
+        // So this proves the launch is derived from the intent alone: a saved
+        // copy of the flag must not let the bundle's `true` override the
+        // launcher intent's `false` (Codex, PR #284).
         val saved = android.os.Bundle()
         Robolectric.buildActivity(
             MainActivity::class.java,
@@ -208,22 +269,20 @@ class MainActivityTileChooserCloseTest {
 
         // A fresh instance (new ViewModelStore → not a configuration recreation),
         // restored from that tile-chooser bundle but launched by a plain intent.
+        val asked = booleanArrayOf(false)
         val controller = Robolectric.buildActivity(
             MainActivity::class.java,
             Intent(context, MainActivity::class.java),
         ).also {
             it.get().runOffMainThread = { work -> work() }
-            it.get().requestNotifications = {}
+            it.get().requestNotifications = { asked[0] = true }
         }
-        controller.create(saved).start().resume()
-        val activity = controller.get()
-
-        activity.rows.onOutcome(EndChoiceResult.APPLIED)
+        controller.create(saved).start().resume().visible()
         settle()
 
         assertFalse(
-            "a launcher relaunch is not tile-owned, so a row arm stays open",
-            activity.isFinishing,
+            "a launcher relaunch is not tile-owned, so it does not ask up front",
+            asked[0],
         )
     }
 
