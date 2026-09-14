@@ -491,12 +491,14 @@ but the ceiling: the arm gives up at 10 s and degrades with its own reason (4.1)
 principle 2 is actually discharged. During settling the main screen and the ongoing notification now
 front the failsafe countdown: leaving cannot be detected yet, so the backstop is the only end there
 is, and its time is the one concrete thing to show (`Waiting for location · 0h 5m left`, the
-countdown rule below). The Quick Settings tile is the exception — it shows no countdown until the
-anchor resolves, because its subtitle has no room for the qualifier that would mark the time a
-backstop rather than a plan, and a bare countdown there would read as a chosen deadline. (This
-reverses an earlier rule that dropped the settling countdown from *every* surface to make the three
-agree: the rule is now to name the next end everywhere it fits, and while settling the failsafe is
-that end — maintainer, 2026-09-13.)
+countdown rule below). The Quick Settings tile does not front that failsafe time
+at all — it names the **exit** for a watched snooze (`Until you leave` / `Until you move`, §4.2), so
+during settling it already shows `Until you leave`, the exit it is capturing an anchor for, rather
+than a time. That sidesteps what the tile's tight subtitle could not otherwise mark — a bare
+countdown there would read as a chosen deadline — by naming the exit instead of a deadline (this
+line reverses an earlier rule that dropped the settling countdown from *every* surface: the main
+screen and notification name the next end, the failsafe while settling, and the tile names the exit
+— maintainer, 2026-09-13, 2026-09-14).
 
 **The ongoing card carries the distance too, in its top row** (maintainer, 2026-09-08). The main
 screen's readout answers "how is the test doing"; the card answers "how much longer", beside the
@@ -609,8 +611,24 @@ what the app *does*.
   flattened to one color. A bold two-character `Zz` mark, or a crescent moon with a single `z`, is
   the most legible option that still says "snooze".
 - **Inactive:** label `Snooze here`, no subtitle.
-- **Active:** label `Snoozing`, subtitle `Home · 3h 40m left` (`Tile.setSubtitle`, API 29+), plus
-  `Tile.setStateDescription` for TalkBack.
+- **Active:** label `Snoozing`; the subtitle names **how the snooze ends** — the end time itself for
+  a timer (`Until 10:30`, the phone's own 12/24-hour format), or the exit for a watched snooze
+  (`Until you leave` / `Until you move`) (`Tile.setSubtitle`, API 29+), plus `Tile.setStateDescription`
+  for TalkBack. All three read as one `Until …` family (maintainer, 2026-09-14). A timer states an
+  **absolute end time, not a countdown**, so the subtitle never shows a stale figure — the tile
+  recomputes only when the shade reopens and does not tick between opens, and a stated time stays
+  correct where a countdown would not. A watched snooze names its **exit** rather than a time,
+  because its cap is the passive failsafe and fronting it would promise a deadline the snooze does
+  not expect to reach (the countdown rule below). **Active Wi-Fi grace names neither an exit nor a
+  time** — `Ending soon`, checked *first*, ahead of even a chosen time, because grace is a short
+  deadline that ends the snooze on expiry whether or not the phone leaves or moves and before a
+  chosen time further out, so anything else could be disproved minutes later; the screen and
+  notification say `Wi-Fi lost — ending soon` for the same reason. "Active" is `effectiveMode ==
+  WIFI_GRACE` (the mode *and* a departure still armed), not the raw mode: a snooze narrowed to a
+  timer keeps its capability mode, so a residual `WIFI_GRACE` after a successful conversion is a
+  plain timer and shows its time. A distance-to-go readout for the departure exit
+  (`Until you leave · 45 m to go`, the meters the ongoing card already shows) is a planned addition,
+  deferred (`TODO.md`).
 - **Tap while inactive:** arm. **Tap while active:** end the snooze immediately (D6).
 - **Long press:** opens the app, via an activity registered for
   `android.service.quicksettings.action.QS_TILE_PREFERENCES`.

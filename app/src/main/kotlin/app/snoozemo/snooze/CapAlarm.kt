@@ -1165,10 +1165,21 @@ class TimeChangedReceiver : BroadcastReceiver() {
         //
         // A repost is the whole fix: the offer is cached as an `Instant`, which
         // no timezone touches, so rebuilding the card re-formats it in the zone
-        // now in force. Nothing to do when the start is refused — the label is
-        // cosmetic, and the next state change rebuilds it anyway.
+        // now in force.
         if (intent?.action == Intent.ACTION_TIMEZONE_CHANGED) {
-            if (ActiveSnoozeStore(context).load() != null) SnoozeService.refresh(context)
+            if (ActiveSnoozeStore(context).load() != null) {
+                // Repaint the tile in-process first. Its subtitle also formats
+                // the deadline in the device's zone, but unlike the card it
+                // renders straight from the record and needs no service — so it
+                // must not ride a background service start that can be refused,
+                // which is exactly the case where the service's own refresh
+                // never runs and the shade keeps the old-zone time (Codex,
+                // PR #281). A no-op when no tile is listening.
+                SnoozeTileBridge.refresh()
+                // Then the card, via the service. If that start is refused the
+                // label is cosmetic and the next state change rebuilds it.
+                SnoozeService.refresh(context)
+            }
             return
         }
         if (intent?.action != Intent.ACTION_TIME_CHANGED) return

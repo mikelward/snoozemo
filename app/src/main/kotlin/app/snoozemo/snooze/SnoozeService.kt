@@ -1627,6 +1627,14 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                         notifications.showFailure(ZenFailure.NO_POLICY_ACCESS, whileArming = true)
                     else -> Unit
                 }
+                // Repaint the tile alongside the notification. A timezone change
+                // reaches us as ACTION_REFRESH (TimeChangedReceiver), and the
+                // tile subtitle now renders an absolute end time in the device's
+                // zone/format — so a shade left open across the change would keep
+                // claiming the old-zone time until reopened unless we refresh it
+                // here too, not just the card (Codex, PR #281). Only while a
+                // snooze is running: that is the only time the tile shows a time.
+                if (running != null) SnoozeTileBridge.refresh()
             }
             // The record of an already-ended snooze wouldn't erase. Nothing to
             // restore and nothing to release — just finish the cleanup, and
