@@ -1,10 +1,9 @@
 package app.snoozemo.tile
 
 import android.content.Context
-import android.os.SystemClock
-import app.snoozemo.core.ClockReading
+import android.text.format.DateFormat
 import app.snoozemo.core.TrackingMode
-import java.time.Duration
+import java.util.Date
 
 /**
  * What the tile needs to render, read straight from the persisted snooze record.
@@ -23,76 +22,87 @@ internal data class TileSnapshot(
      */
     val timerOnly: Boolean,
     /**
-     * The clock offset the record was written under, or null if it carries
-     * none — see `ActiveSnooze.bootReference`.
-     *
-     * The tile reads the record directly rather than through the store, so it
-     * has to carry this too: without it the countdown is pure wall-clock
-     * arithmetic, and after a backwards clock change the shade would show hours
-     * left on a snooze whose cap is about to fire.
+     * Whether an armed movement exit ends this snooze. When it is watched but
+     * not a timer ([timerOnly] false), this is what tells `Until you move` from
+     * `Until you leave` — the two share the "watched, no fronted deadline" shape
+     * but name different exits. [mode] outranks it: a Wi-Fi grace period ends on
+     * a deadline whether or not the phone moves (see [subtitleKind]).
      */
-    val bootReference: Long? = null,
+    val endsOnMotion: Boolean = false,
+    /**
+     * The persisted tracking mode, parsed, or `null` for a value this build
+     * cannot read. Kept whole rather than reduced to booleans so the shade can
+     * render [TrackingMode.WIFI_GRACE] honestly: grace is not a watched exit
+     * but a five-minute deadline that ends the snooze on expiry, and the two
+     * booleans above cannot tell it from `Until you leave` — the loss that
+     * would have put a disprovable exit over a grace period (Codex, PR #281).
+     * [timerOnly] stays the tile's compression of the *effective* mode (see
+     * [claimsTimerOnly]); this is the raw mode the screen and the notification
+     * also switch on.
+     */
+    val mode: TrackingMode? = null,
 ) {
 
+    /** What the tile's subtitle says how this snooze ends. */
+    internal enum class SubtitleKind { NONE, UNTIL_TIME, UNTIL_LEAVE, UNTIL_MOVE, ENDING_SOON }
+
     /**
-     * Whether the shade shows the cap countdown at all: only when a snooze is
-     * running *and* [timerOnly] — a settled timer with no armed event exit. On a
-     * watched (departure or motion) snooze the cap is a passive eight-hour
-     * failsafe, so the shade carries no time rather than fronting a deadline the
-     * snooze does not expect to reach (SPEC.md §4.2).
+     * Which subtitle the shade says, decided without a `Context` so it is unit-
+     * tested directly; [subtitle] and [stateDescription] map it to strings.
      *
-     * This is the tile's read of `ActiveSnooze.capIsEffectiveEnd`, the same
-     * question the status line and the ongoing notification gate their countdown
-     * on — they agree for a settled record, with [claimsTimerOnly] resolving the
-     * transient settling window here from the persisted record, since the tile
-     * has no live controller to ask.
+     * A running snooze always names how it ends: the chosen end time for a timer,
+     * or the event exit for a watched one. The watched exits carry no *time* —
+     * their cap is the passive eight-hour failsafe, and fronting it would promise
+     * a deadline the snooze does not expect to reach (SPEC.md §4.2) — so they
+     * name the exit instead. [timerOnly] is the tile's read of whether to front
+     * the time — `ActiveSnooze.capCountdownShown` (a chosen time, a shortened
+     * cap, or a settled failsafe), not the narrower `capIsEffectiveEnd`, so a
+     * chosen time still fronts when an exit is left armed (see [claimsTimerOnly]).
+     * A movement exit is `Until you move`, and any other watched snooze is
+     * `Until you leave`.
      *
-     * A pure val so the decision is unit-tested without a `Context`; [subtitle]
-     * and [stateDescription] map it to strings.
+     * **Wi-Fi grace is checked ahead of the exits**, exactly as the screen and
+     * the notification do (`motionOnly = endsOnMotion && mode != WIFI_GRACE`).
+     * A grace period is a five-minute deadline that ends the snooze on expiry
+     * whether or not the phone ever leaves or moves, so naming either exit would
+     * put a claim the user could see disproved minutes later — the screen and
+     * the notification say `Wi-Fi lost — ending soon` for that reason, and the
+     * tile says `Ending soon` (SPEC.md §4.2, Codex PR #281).
      */
-    internal val showsCountdown: Boolean get() = snoozing && timerOnly
+    internal val subtitleKind: SubtitleKind get() = when {
+        !snoozing -> SubtitleKind.NONE
+        timerOnly -> SubtitleKind.UNTIL_TIME
+        mode == TrackingMode.WIFI_GRACE -> SubtitleKind.ENDING_SOON
+        endsOnMotion -> SubtitleKind.UNTIL_MOVE
+        else -> SubtitleKind.UNTIL_LEAVE
+    }
 
-    fun subtitle(context: Context): String? =
-        if (showsCountdown) context.getString(R.string.tile_timer_only, remaining(context)) else null
+    fun subtitle(context: Context): String? = when (subtitleKind) {
+        SubtitleKind.NONE -> null
+        SubtitleKind.UNTIL_TIME -> context.getString(R.string.tile_until_time, endsAtTime(context))
+        SubtitleKind.UNTIL_LEAVE -> context.getString(R.string.tile_until_leave)
+        SubtitleKind.UNTIL_MOVE -> context.getString(R.string.tile_until_move)
+        SubtitleKind.ENDING_SOON -> context.getString(R.string.tile_ending_soon)
+    }
 
-    fun stateDescription(context: Context): String = when {
-        !snoozing -> context.getString(R.string.tile_state_off)
-        showsCountdown -> context.getString(R.string.tile_state_on, remaining(context))
-        // A watched snooze drops the countdown here too; TalkBack gets the plain
-        // on-state, the same rendering the optimistic paint already uses when it
-        // has no countdown to voice.
-        else -> context.getString(R.string.tile_snoozing)
+    fun stateDescription(context: Context): String = when (subtitleKind) {
+        SubtitleKind.NONE -> context.getString(R.string.tile_state_off)
+        SubtitleKind.UNTIL_TIME -> context.getString(R.string.tile_state_until_time, endsAtTime(context))
+        SubtitleKind.UNTIL_LEAVE -> context.getString(R.string.tile_state_leave)
+        SubtitleKind.UNTIL_MOVE -> context.getString(R.string.tile_state_move)
+        SubtitleKind.ENDING_SOON -> context.getString(R.string.tile_state_ending_soon)
     }
 
     /**
-     * The countdown, formatted from resources rather than built here.
-     *
-     * The units, the word order and the `left` suffix are all copy, and copy
-     * assembled in Kotlin is copy the translation PR cannot reach — it would be
-     * English inside every locale.
+     * The cap as a clock time in the phone's own 12/24-hour format. An absolute
+     * time rather than a countdown, so the shade never shows a stale figure it
+     * only recomputes when reopened — the tile does not tick between opens. Wall
+     * clock is exactly what the user reads here; the two-clock flooring the
+     * countdown needed was to keep a *duration* honest across a clock change, and
+     * a stated end time has no duration to keep.
      */
-    private fun remaining(context: Context): String {
-        // The `tile_remaining_hours` resource always, passing the hours field
-        // even at zero — so it renders "0h 45m left" rather than "45m left"
-        // (maintainer, 2026-09-13), the same always-hours form the main screen
-        // uses, so the shade and the app never state the remaining time two ways.
-        val minutes = Duration.ofMillis(remainingMillis()).toMinutes().coerceAtLeast(1)
-        return context.getString(R.string.tile_remaining_hours, minutes / 60, minutes % 60)
-    }
-
-    /**
-     * The smaller of what the two clocks say is left, floored at zero — the same
-     * rule and the same reasoning as `ActiveSnooze.remaining`, which is what the
-     * rest of the app judges the cap by. The tile has no record object to call
-     * it on, so the arithmetic is repeated rather than the answer diverging.
-     */
-    private fun remainingMillis(): Long {
-        val reading = ClockReading(System.currentTimeMillis(), SystemClock.elapsedRealtime())
-        val byWallClock = capExpiresAtMillis - reading.wallMillis
-        val reference = bootReference ?: return byWallClock.coerceAtLeast(0L)
-        val byUptime = (capExpiresAtMillis - reference) - reading.uptimeMillis
-        return minOf(byWallClock, byUptime).coerceAtLeast(0L)
-    }
+    private fun endsAtTime(context: Context): String =
+        DateFormat.getTimeFormat(context).format(Date(capExpiresAtMillis))
 
     companion object {
 
@@ -146,12 +156,31 @@ internal data class TileSnapshot(
             nowMillis: Long,
             endsOnDeparture: Boolean = true,
             endsOnMotion: Boolean = false,
+            timerOnlyRequested: Boolean = false,
+            capBelowCeiling: Boolean = false,
         ): Boolean =
-            if (endsOnMotion) {
+            if (timerOnlyRequested || capBelowCeiling) {
+                // A chosen time always fronts, even with an exit still armed —
+                // it can end the snooze before the exit fires, and naming only
+                // the residual exit would hide a deadline the user set. Two
+                // ways a chosen cap coexists with an armed exit: the durable
+                // PARTIAL state (`timerOnlyRequested` — an exit-removal write
+                // failed, or the process died mid-replacement), and a cap
+                // shortened below its ceiling (`capBelowCeiling`) that repeated
+                // `+30 min` can clamp back up while it is still a time the user
+                // set. These are `ActiveSnooze.capCountdownShown`'s first two
+                // disjuncts; the tile front-loads them ahead of every exit so
+                // it never claims a sole exit over a chosen deadline (Codex,
+                // PR #281). Kept as the tile's own re-derivation rather than the
+                // model property because the tile diverges from it deliberately
+                // on SETTLING below; the shared-decision question is in
+                // `TODO.md`.
+                true
+            } else if (endsOnMotion) {
                 // An armed movement exit ends this snooze on something other
                 // than the clock, whatever the mode says and whatever the
-                // departure choice was. Asked first, because it is the one
-                // answer no other input can override.
+                // departure choice was. Asked after the chosen time, because a
+                // time the user set can still end the snooze before it.
                 false
             } else if (!endsOnDeparture) {
                 // Nothing pending and nothing to wait for: the user answered
@@ -160,11 +189,11 @@ internal data class TileSnapshot(
                 true
             } else when (TrackingMode.entries.firstOrNull { it.name == stored }) {
                 TrackingMode.DURATION_ONLY -> true
-                // Watched, by something, so the countdown stands unqualified.
+                // Watched, by something, so it names the exit rather than a time.
                 TrackingMode.FULL, TrackingMode.WIFI_ONLY, TrackingMode.WIFI_GRACE -> false
                 // The anchor has not landed *yet*, so this is not a settled
-                // `Timer only` claim: `false`, which drops the tile countdown
-                // entirely (`showsCountdown = snoozing && timerOnly`). That is
+                // `Timer only` claim: `false`, which names the exit rather than a
+                // time ([subtitleKind]). That is
                 // the same as every other surface while the cap is the failsafe
                 // rather than the plan — during settling the cap is
                 // `startedAt + DEFAULT_CAP`, the backstop, not a chosen deadline,
@@ -194,21 +223,30 @@ internal data class TileSnapshot(
             // disk, marked. The tile must read that as "not snoozing" like
             // everything else, or it offers `End now` for a snooze that is over.
             val released = prefs.getBoolean("released", false)
+            val storedMode = prefs.getString("mode", null)
+            // The 8-hour backstop this cap may not be pushed past. A record
+            // written before the ceiling was stored carries none (0), which
+            // reads as "not shortened" — the honest default, since without a
+            // ceiling to compare against there is no chosen-time signal here.
+            val capCeilingAt = prefs.getLong("cap_ceiling_at", 0L)
             return TileSnapshot(
                 snoozing = capExpiresAt != 0L && !released,
                 capExpiresAtMillis = capExpiresAt,
                 timerOnly = claimsTimerOnly(
-                    stored = prefs.getString("mode", null),
+                    stored = storedMode,
                     startedAtMillis = prefs.getLong("started_at", 0L),
                     nowMillis = System.currentTimeMillis(),
                     endsOnDeparture = prefs.getBoolean("ends_on_departure", true),
                     endsOnMotion = prefs.getBoolean("ends_on_motion", false),
+                    timerOnlyRequested = prefs.getBoolean("timer_only_requested", false),
+                    capBelowCeiling = capCeilingAt != 0L && capExpiresAt < capCeilingAt,
                 ),
-                bootReference = if (prefs.contains("boot_reference")) {
-                    prefs.getLong("boot_reference", 0L)
-                } else {
-                    null
-                },
+                endsOnMotion = prefs.getBoolean("ends_on_motion", false),
+                // Kept whole for the grace rendering (see [mode]); an
+                // unrecognized value is `null`, which never matches WIFI_GRACE
+                // and so falls through to the exit branches like any other
+                // non-grace mode.
+                mode = TrackingMode.entries.firstOrNull { it.name == storedMode },
             )
         }
     }
