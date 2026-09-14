@@ -895,26 +895,23 @@ class MainActivityEndRowsTest {
     }
 
     @Test
-    fun `a choice the service applied by changing nothing leaves the rows up`() {
+    fun `a choice the service applied by changing nothing closes the screen`() {
         // `Until I leave` on a snooze already running to its ceiling is the
-        // ordinary case, and the service honors it by doing nothing — so no
-        // record change follows and nothing else would put the rows back. They
-        // used to vanish for the rest of the snooze (Codex, PR #234).
+        // ordinary case, and the service honors it by doing nothing. It is still
+        // a committed choice, so it closes the screen (SPEC.md §4.4; maintainer,
+        // 2026-09-13) — the same as every other applied choice.
         ActiveSnoozeStore(context).arm(snooze())
         val activity = screen()
         settle()
-        val offeredFor = activity.rows.offerFor
 
         activity.rows.commitDeparture()
         settle()
         EndChoiceOutcome.report(activity.rows.committingRequestId, EndChoiceResult.APPLIED)
         settle()
 
-        assertNotNull("the snooze is still running, so there is still something to refine", activity.rows.endCondition)
-        assertEquals(offeredFor, activity.rows.offerFor)
-        // And they came back because the choice was *applied*, not because a
-        // refusal left them standing — those are opposite outcomes that would
-        // otherwise satisfy the assertion above the same way.
+        assertTrue(activity.isFinishing)
+        // And it closed because the choice was *applied*, not because a refusal
+        // left the rows standing — a refusal keeps the screen up (SPEC.md §4.2).
         assertFalse(activity.rows.commitFailed)
     }
 
@@ -966,8 +963,11 @@ class MainActivityEndRowsTest {
         val activity = built.create(saved).start().resume().get()
         settle()
 
-        // Reaching here at all is the assertion: `onCreate` used to throw.
-        assertFalse(activity.isFinishing)
+        // `onCreate` used to throw here; reaching this line at all is the
+        // no-crash assertion. The resumed commit is an applied choice, so it
+        // also closes the screen (SPEC.md §4.4) — the same finish every applied
+        // choice takes, riding a rotation rather than a live tap.
+        assertTrue(activity.isFinishing)
     }
 
     @Test

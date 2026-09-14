@@ -516,24 +516,10 @@
     <!-- TODO: translate -->
     <string name="failure_needs_location" tools:ignore="MissingTranslation">Needs location access</string>
 
-    <!--
-      The end-condition sheet (SPEC.md §4.4), shown by the tile's trampoline once
-      the snooze is already armed. The rows read as continuations of the title
-      above them — "Snoozing / until 14:00" — which is why they are lowercase and
-      carry no verb of their own.
-    -->
-    <!-- TODO: translate -->
-    <string name="sheet_title" tools:ignore="MissingTranslation">Snoozing</string>
-    <!-- TODO: translate -->
-    <string name="sheet_until_time" tools:ignore="MissingTranslation">until %1$s</string>
-    <!-- TODO: translate -->
-    <string name="sheet_until_i_leave" tools:ignore="MissingTranslation">until I leave</string>
-    <!-- The same choice as `sheet_until_i_leave`, on the main screen, where the
-         rows stand alone rather than reading under the sheet's "Snoozing"
-         title — so it is capitalized and the others beside it reuse
-         `action_end_at`'s "Until %1$s". First person for the reason the sheet
-         uses it: this is the user saying what they want, not the app
-         describing them (maintainer, 2026-09-08). -->
+    <!-- The chooser's `Until I leave`, on the main screen. Capitalized because
+         the rows stand alone, and the others beside it reuse `action_end_at`'s
+         "Until %1$s". First person because this is the user saying what they
+         want, not the app describing them (maintainer, 2026-09-08). -->
     <!-- TODO: translate -->
     <string name="main_until_i_leave" tools:ignore="MissingTranslation">Until I leave</string>
     <!-- TODO: translate -->
@@ -570,20 +556,6 @@
          drawn as text anywhere. -->
     <!-- TODO: translate -->
     <string name="main_from_your_calendar" tools:ignore="MissingTranslation">From your calendar</string>
-    <!--
-      Not decoration: choosing a time lowers the cap rather than replacing
-      departure tracking, so the two rows are not exclusive modes and the sheet
-      has to say so (SPEC.md §4.4).
-    -->
-    <!-- TODO: translate -->
-    <string name="sheet_footer" tools:ignore="MissingTranslation">Ends when you leave, either way.</string>
-    <!--
-      The sheet's confirm button: closes the sheet and keeps the time as shown.
-      Deliberately not "Done" or "Set time" — it is the ordinary confirm of a
-      sheet whose one adjustable value is right above it.
-    -->
-    <!-- TODO: translate -->
-    <string name="sheet_ok" tools:ignore="MissingTranslation">OK</string>
     <!-- Content descriptions for the − / + steppers, which draw as symbols. -->
     <!-- TODO: translate -->
     <string name="sheet_earlier" tools:ignore="MissingTranslation">Half an hour earlier</string>

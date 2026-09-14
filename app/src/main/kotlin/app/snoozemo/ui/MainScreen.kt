@@ -150,10 +150,10 @@ internal fun MainScreen(
      * there is nothing to refine — no snooze, a cap already inside the floor,
      * or the record not read yet.
      *
-     * The same choices the arm-time sheet offers, on a surface the user can
-     * open at any point during a snooze rather than only in the seconds after
-     * arming it (maintainer, 2026-09-08). Defaulted, so a screenshot test
-     * pinning any other state need not state an opinion about this one.
+     * The end-condition choices, on a surface the user can open at any point
+     * during a snooze rather than only in the seconds after arming it
+     * (maintainer, 2026-09-08). Defaulted, so a screenshot test pinning any
+     * other state need not state an opinion about this one.
      */
     endChoice: EndChoiceUiState? = null,
     /** Whether `Until I move` is offered among the end-condition rows (SPEC.md §4.4). */

@@ -54,9 +54,9 @@ fun PermissionsScreen(
      * promise something the user cannot get — and, worse, invite a location
      * grant that buys them nothing (Codex, PR #171).
      *
-     * A parameter rather than the constant read here, for the same reason
-     * [EndConditionSheet] takes one: a screenshot test has to be able to render
-     * both builds, and the flavor seam belongs at the call site.
+     * A parameter rather than the constant read here: a screenshot test has to
+     * be able to render both builds, and the flavor seam belongs at the call
+     * site.
      *
      * Defaults to true, so the only caller that has to think about it is the
      * one on a build where departure is unavailable.
