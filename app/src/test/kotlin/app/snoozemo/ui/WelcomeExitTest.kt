@@ -1,7 +1,5 @@
 package app.snoozemo.ui
 
-import app.snoozemo.core.CalendarPermission
-import app.snoozemo.core.LocationPermission
 import app.snoozemo.core.NotificationPermission
 import app.snoozemo.core.PolicyAccess
 import org.junit.Assert.assertEquals
@@ -33,11 +31,20 @@ class WelcomeExitTest {
     @Test
     fun `a permission other than access needs the recap too`() {
         // The bug this covers: the exit tested access alone, so a user who
-        // allowed it on card 3 and skipped the rest reached the main screen
-        // able to arm with no notification to show status on (Codex, PR #204).
+        // allowed it and skipped the rest reached the main screen able to arm
+        // with no notification to show status on (Codex, PR #204).
         assertTrue(needsRecap(notifications = NotificationPermission.ASKABLE))
-        assertTrue(needsRecap(location = LocationPermission.ASKABLE))
-        assertTrue(needsRecap(calendar = CalendarPermission.ASKABLE))
+    }
+
+    @Test
+    fun `only access and notifications route the exit now`() {
+        // Location and calendar left the tutorial (maintainer, 2026-09-14): the
+        // cards no longer ask for them, so there is no card "no" to catch, and
+        // `welcomeExitNeedsRecap` no longer takes them — both stay on the
+        // standalone permissions screen. With access and notifications
+        // satisfied, the exit is clear; each of the two that remain still
+        // routes it on its own (asserted above).
+        assertFalse(needsRecap())
     }
 
     @Test
@@ -57,21 +64,6 @@ class WelcomeExitTest {
         // rows themselves follow.
         assertFalse(needsRecap(access = null))
         assertFalse(needsRecap(notifications = null))
-        assertFalse(needsRecap(location = null))
-        assertFalse(needsRecap(calendar = null))
-    }
-
-    @Test
-    fun `location counts for nothing on a build that cannot track departure`() {
-        // Such a build's permissions screen offers no action on the row, so
-        // routing to a recap over it would send the user to a screen with
-        // nothing they can do — and invite a grant that buys them nothing.
-        assertFalse(
-            needsRecap(location = LocationPermission.ASKABLE, tracksDeparture = false),
-        )
-        assertTrue(
-            needsRecap(location = LocationPermission.ASKABLE, tracksDeparture = true),
-        )
     }
 
     @Test
@@ -140,20 +132,52 @@ class WelcomeExitTest {
         assertNull(rememberedWelcomeCard(null, without))
     }
 
+    @Test
+    fun `a current-order breadcrumb resumes in place`() {
+        // A name under the current key is by definition in the current order,
+        // so it is never rewound — even one that sits after the rule card.
+        assertEquals(
+            WelcomeCard.ENDS.name,
+            WelcomeCardMemory.resolve(current = WelcomeCard.ENDS.name, legacy = null),
+        )
+    }
+
+    @Test
+    fun `a pre-reorder breadcrumb never resumes past the rule card`() {
+        // The invariant every reorder protects: a legacy name for any card
+        // after the rule rewinds to the rule, so a mid-flow app update cannot
+        // walk the user past the one grant without which nothing snoozes
+        // (maintainer, 2026-09-14; earlier the tile, 2026-09-08).
+        for (after in listOf(WelcomeCard.ENDS, WelcomeCard.TILE, WelcomeCard.TELEMETRY)) {
+            assertEquals(
+                WelcomeCard.RULE.name,
+                WelcomeCardMemory.resolve(current = null, legacy = after.name),
+            )
+        }
+        // The rule itself, and the card before it, resume in place.
+        assertEquals(
+            WelcomeCard.RULE.name,
+            WelcomeCardMemory.resolve(current = null, legacy = WelcomeCard.RULE.name),
+        )
+        assertEquals(
+            WelcomeCard.WHAT.name,
+            WelcomeCardMemory.resolve(current = null, legacy = WelcomeCard.WHAT.name),
+        )
+    }
+
+    @Test
+    fun `no breadcrumb resolves to nothing`() {
+        assertNull(WelcomeCardMemory.resolve(current = null, legacy = null))
+    }
+
     /** Everything granted and read, so each test names only what it changes. */
     private fun needsRecap(
         access: PolicyAccess? = PolicyAccess.GRANTED,
         notifications: NotificationPermission? = NotificationPermission.GRANTED,
         notificationsReachTheUser: Boolean = true,
-        location: LocationPermission? = LocationPermission.GRANTED,
-        calendar: CalendarPermission? = CalendarPermission.GRANTED,
-        tracksDeparture: Boolean = true,
     ) = welcomeExitNeedsRecap(
         access = access,
         notifications = notifications,
         notificationsReachTheUser = notificationsReachTheUser,
-        location = location,
-        calendar = calendar,
-        tracksDeparture = tracksDeparture,
     )
 }
