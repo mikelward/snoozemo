@@ -165,6 +165,7 @@ private const val KEY_ROWS_COMMITTING = "rowsCommitting"
 private const val KEY_ROWS_REQUEST_ID = "rowsRequestId"
 private const val KEY_ROWS_OFFERED_FOR = "rowsOfferedFor"
 private const val KEY_ROWS_FAILED = "rowsFailed"
+private const val KEY_ROWS_PARTIAL_IS_FAILURE = "rowsPartialIsFailure"
 private const val KEY_ROWS_STEPPED = "rowsStepped"
 private const val KEY_ROWS_ENDS_AT = "rowsEndsAt"
 private const val KEY_ROWS_FLOOR = "rowsFloor"
@@ -1997,6 +1998,7 @@ class MainActivity : ComponentActivity() {
         outState.putLong(KEY_ROWS_REQUEST_ID, rows.committingRequestId)
         rows.offerFor?.let { outState.putLong(KEY_ROWS_OFFERED_FOR, it.toEpochMilli()) }
         outState.putBoolean(KEY_ROWS_FAILED, rows.commitFailed)
+        outState.putBoolean(KEY_ROWS_PARTIAL_IS_FAILURE, rows.committingPartialIsFailure)
         // The offer's time is the user's once they have stepped it, and the
         // first tick after a rotation would otherwise reseed over it.
         outState.putBoolean(KEY_ROWS_STEPPED, rows.steppedByUser)
@@ -2026,6 +2028,7 @@ class MainActivity : ComponentActivity() {
             },
             wasCommitting = state.getBoolean(KEY_ROWS_COMMITTING),
             failed = state.getBoolean(KEY_ROWS_FAILED),
+            partialIsFailure = state.getBoolean(KEY_ROWS_PARTIAL_IS_FAILURE),
             stepped = state.getBoolean(KEY_ROWS_STEPPED),
             configurationChange = configurationChange,
             requestId = state.getLong(KEY_ROWS_REQUEST_ID),
