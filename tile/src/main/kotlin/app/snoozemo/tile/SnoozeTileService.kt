@@ -10,6 +10,7 @@ import android.os.Looper
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import android.util.Log
+import app.snoozemo.core.ChooserMode
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.dnd.PrefsZenRuleIdStore
 
@@ -217,7 +218,11 @@ class SnoozeTileService : TileService() {
         // a preceding listen, which should not happen and must not crash if it
         // does — one blocking read is a worse tap, not a broken one.
         val snapshot = listening ?: TileSnapshot.read(applicationContext)
-        val paint = TileOptimisticPaint.forTap(snapshot.snoozing)
+        // The chooser mode is read from the shared in-memory cache, never disk,
+        // so nothing new sits on the tap path (SPEC.md §6.9). With it on, an arm
+        // tap opens the chooser and arms nothing, so [forTap] paints no change
+        // rather than an optimistic Snoozing the chooser may never make true.
+        val paint = TileOptimisticPaint.forTap(snapshot.snoozing, ChooserMode.isOn())
 
         // Painted here rather than left to `SnoozeTileBridge.refresh`, which
         // cannot answer before the service has decided: arming waits on a
