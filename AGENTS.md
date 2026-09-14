@@ -405,9 +405,9 @@ it in the same commit.
     doesn't list the thing it objects to, or infers a prohibition from a principle. Reply
     on the thread quoting what the rule actually says, decline, and leave the capability
     alone. Do **not** narrow the product to make a reviewer comfortable. Declining doesn't
-    clear the required `codex` status: post the rebuttal, then `@codex review` once — a
-    push does the same if the rebuttal is up first. Escalate if it re-raises, or stays
-    silent.
+    clear the required `codex` status: post the rebuttal, then `@codex review` once — or
+    let the next push do it, if the rebuttal is up first. Escalate if it re-raises, or
+    stays silent.
   - **It's a genuine conflict** — the rule as written really does forbid something the
     product genuinely needs, or two rules point opposite ways. That is the maintainer's
     call and nobody else's: **flag it for review**, in the chat reply and in `TODO.md`,
