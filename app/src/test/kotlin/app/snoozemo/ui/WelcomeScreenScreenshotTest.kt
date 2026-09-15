@@ -258,11 +258,12 @@ class WelcomeScreenScreenshotTest {
         capture("welcome-ends-manual.png") { Flow(WelcomeCard.ENDS_MANUAL) }
 
         composeRule.onNodeWithText("End manually").assertExists()
+        // Three separate paragraphs now, one per way to end a snooze by hand.
         composeRule
-            .onNodeWithText(
-                "Tap the notification buttons to end or extend the snooze. " +
-                    "Tap the notification body for more options.",
-            )
+            .onNodeWithText("Tap the notification buttons to end or extend the snooze.")
+            .assertExists()
+        composeRule
+            .onNodeWithText("Tap the notification body for more options.")
             .assertExists()
         composeRule
             .onNodeWithText("Tapping the tile again also turns it off.")
