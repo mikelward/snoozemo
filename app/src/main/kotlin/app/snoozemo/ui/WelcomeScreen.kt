@@ -598,13 +598,15 @@ private fun EndsManualCard(
     onNotificationsRow: () -> Unit,
 ) {
     NotificationRender(tracksDeparture)
+    // Three short lines, one per way to end a snooze by hand: the notification's
+    // buttons, its body, and the tile. Same font size so they read as one set of
+    // instructions; the tile line stays a shade quieter in color because it is a
+    // second way to do what the two above already cover (SPEC.md §4.2, D6).
     CardBody(stringResource(R.string.welcome_ends_manual_body))
-    // Quieter than the body: a second way to do what the line above covers, not
-    // a new idea. Below the notification grant would bury it; above it, it reads
-    // as part of the same "how you end it" thought.
+    CardBody(stringResource(R.string.welcome_ends_manual_options))
     Text(
         text = stringResource(R.string.welcome_ends_manual_tile_note),
-        style = MaterialTheme.typography.bodyMedium,
+        style = MaterialTheme.typography.bodyLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     PermissionRows.Notifications(

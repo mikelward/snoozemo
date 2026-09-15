@@ -754,15 +754,19 @@
     -->
     <!-- TODO: translate -->
     <string name="welcome_ends_body_timer_only" tools:ignore="MissingTranslation">When your meeting ends, or at the time you choose.</string>
-    <!-- Card 3. How a snooze ends when the user ends it: the notification's own
-         buttons, and the tile. Companion to card 4's "Ends automatically". -->
+    <!-- Card 3. How a snooze ends when the user ends it: three short lines, one
+         per way to end it by hand — the notification's buttons, its body, and the
+         tile. Companion to card 4's "Ends automatically". -->
     <!-- TODO: translate -->
     <string name="welcome_ends_manual_title" tools:ignore="MissingTranslation">End manually</string>
     <!-- TODO: translate -->
-    <string name="welcome_ends_manual_body" tools:ignore="MissingTranslation">Tap the notification buttons to end or extend the snooze. Tap the notification body for more options.</string>
+    <string name="welcome_ends_manual_body" tools:ignore="MissingTranslation">Tap the notification buttons to end or extend the snooze.</string>
+    <!-- TODO: translate -->
+    <string name="welcome_ends_manual_options" tools:ignore="MissingTranslation">Tap the notification body for more options.</string>
     <!-- The other manual exit, stated once: the same tile that armed the snooze
-         turns it off again (SPEC.md §4.2, D6). Set apart as a quieter note
-         because it is a second way to do what the line above already covers. -->
+         turns it off again (SPEC.md §4.2, D6). A second way to do what the two
+         lines above cover, so kept a shade quieter in color — but the same size,
+         so the three read as one set of instructions. -->
     <!-- TODO: translate -->
     <string name="welcome_ends_manual_tile_note" tools:ignore="MissingTranslation">Tapping the tile again also turns it off.</string>
     <!-- Card 2. One rule, created once, and the app switches only that one. -->
