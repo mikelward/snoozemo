@@ -1,5 +1,6 @@
 package app.snoozemo.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -22,6 +24,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -42,19 +47,23 @@ import app.snoozemo.core.ZenRuleState
  * An enum rather than an index so the filtering below has something to
  * name: [TELEMETRY] is absent on a build that ships no crash-reporting SDK, and
  * a bare index would be fragile if the card set ever changed.
+ *
+ * The order here is the order the flow shows and the dots count (maintainer,
+ * 2026-09-15): what the app is and how to add its tile, the rule it silences
+ * with, ending it by hand, ending it by itself, then the one consent question.
  */
 enum class WelcomeCard {
-    /** What the app is. */
+    /** What the app is, and the tile that arms it. */
     WHAT,
 
-    /** How a snooze ends, on a render of the ongoing notification. */
-    ENDS,
-
-    /** The one Do Not Disturb rule, and the ringer ceiling. */
+    /** The one Do Not Disturb rule, its filters and the ringer ceiling. */
     RULE,
 
-    /** How to start one: the tile. */
-    TILE,
+    /** How a snooze ends by hand, on a render of the ongoing notification. */
+    ENDS_MANUAL,
+
+    /** How a snooze ends by itself, on a render of the end-time chooser. */
+    ENDS_AUTO,
 
     /** The crash-report and analytics consent (§12). */
     TELEMETRY,
@@ -65,40 +74,41 @@ enum class WelcomeCard {
  *
  * **Two things persist the card, and both outlive an app update**: the
  * `WelcomeStore` breadcrumb, and `MainActivity`'s saved instance state, which
- * the system holds outside the process. The first version of this migration
- * covered the breadcrumb alone, so a task restored from a bundle written before
- * the reorder still resumed on the tile card (Codex, PR #226). One object
- * rather than a rule written out at each site, so the next reorder cannot fix
- * one path and miss the other.
+ * the system holds outside the process. Both migrate through this one object so
+ * a card-set change cannot fix one path and miss the other (Codex, PR #226).
  *
- * **The key is the version.** [KEY] is new in the build that reordered the
- * cards, so a name found under [LEGACY_KEY] was written by the old order by
- * definition — no counter to seed, and no way to mistake one order's memory for
- * the other's. Writing only ever touches [KEY], so the rewind is spent the
- * first time the flow moves: without that it would repeat forever, sending a
- * user who legitimately reaches the tile card back a step on every restore.
+ * **The key is the version.** [KEY] is new in each build that changes the card
+ * set, so a name found under an older key was written by an older set by
+ * definition. The 2026-09-15 overhaul reshaped the cards entirely — cards were
+ * merged, split and reordered — so no old position maps cleanly onto a new one;
+ * a legacy name therefore resumes the *new* flow from its first card rather than
+ * guessing a correspondence that does not exist. Writing only ever touches
+ * [KEY], so the rewind is spent the first time the flow moves.
  *
- * All three can go once no install can still hold a pre-reorder name.
+ * All keys but [KEY] can go once no install can still hold a pre-overhaul name.
  */
 object WelcomeCardMemory {
 
     /** What this build writes. */
-    const val KEY = "welcomeCard2"
+    const val KEY = "welcomeCard3"
+
+    /** What the 2026-09-08 reorder wrote. Read, never written. */
+    const val LEGACY_KEY = "welcomeCard2"
 
     /** What builds before the 2026-09-08 reorder wrote. Read, never written. */
-    const val LEGACY_KEY = "welcomeCard"
+    const val OLDEST_KEY = "welcomeCard"
 
     /**
-     * The stored name, preferring [KEY] and rewinding a legacy one.
+     * The stored name, preferring [KEY] and restarting a legacy one at card 1.
      *
-     * A flow paused on the tile card by an older build has not seen the rule
-     * card — the tile came first then — so resuming it in place would walk the
-     * user past the only card that offers Do Not Disturb access, and, if they
-     * had already added the tile, into the tile-without-access state the
-     * reorder exists to prevent.
+     * A flow paused by a pre-overhaul build was paused on a card that no longer
+     * exists in the same shape, so resuming it in place would land the user on
+     * the wrong step — past a grant they have not seen, or on a card whose name
+     * this build cannot even place. Restarting the new flow is the honest answer
+     * and costs at most the cards they had already read once.
      */
     fun resolve(current: String?, legacy: String?): String? =
-        current ?: legacy?.let { if (it == WelcomeCard.TILE.name) WelcomeCard.RULE.name else it }
+        current ?: legacy?.let { WelcomeCard.WHAT.name }
 }
 
 /**
@@ -107,32 +117,12 @@ object WelcomeCardMemory {
  * [TELEMETRY][WelcomeCard.TELEMETRY] is dropped where nothing collects — a
  * build with no Firebase config ships neither SDK (§12), and with the debug-log
  * sentence gone (maintainer, 2026-09-05) there is nothing else on that card, so it would be a
- * blank screen and a sixth dot. The list is what the dots count, so dropping it
+ * blank screen and an extra dot. The list is what the dots count, so dropping it
  * here is what keeps them honest.
  */
 fun welcomeCards(collectsTelemetry: Boolean): List<WelcomeCard> =
     WelcomeCard.entries.filter { collectsTelemetry || it != WelcomeCard.TELEMETRY }
 
-/**
- * Whether a launch should open the welcome flow (`SPEC.md` §4.2).
- *
- * **Fresh installs only, and [seen] alone does not say that.** The flag is
- * absent on an install that predates the flow exactly as it is on a new one, so
- * reading it by itself would march every existing user through onboarding on
- * the update that shipped this — people who have been snoozing for months
- * (Codex, PR #204). [freshInstall] is the platform's own answer, and it needs
- * no migration write: nothing has to be seeded, because nothing about an
- * upgraded install is being read wrong.
- *
- * The help icon is unaffected — a replay is deliberate, so it never consults
- * this.
- *
- * **[freshInstall] is a lambda so that it is only asked when it matters.** It
- * is a `PackageManager` binder call, and this runs in front of the first frame;
- * passing it by value made every launch pay for it, [seen] installs included,
- * which is every launch after the first (Codex, PR #204). Short-circuiting is
- * the answer, and a lambda is what makes forgetting it impossible.
- */
 /**
  * The card a remembered name resolves to, or null for no usable memory
  * (Codex, PR #220).
@@ -148,8 +138,8 @@ fun welcomeCards(collectsTelemetry: Boolean): List<WelcomeCard> =
  * One function for both the gate and the seed, so a name that cannot be shown
  * can never be the thing that opens the flow either.
  *
- * The name arrives already migrated for the card order it was written under —
- * `WelcomeStore.lastCard` does that, since which order wrote it is a question
+ * The name arrives already migrated for the card set it was written under —
+ * `WelcomeStore.lastCard` does that, since which set wrote it is a question
  * about storage rather than about cards.
  */
 fun rememberedWelcomeCard(name: String?, cards: List<WelcomeCard>): WelcomeCard? =
@@ -178,7 +168,7 @@ fun shouldOpenWelcome(
  * still ungranted.
  *
  * **Every offered row, not just Do Not Disturb access.** Access alone was the
- * wrong test: a user who allowed it on card 3 and skipped the rest reached the
+ * wrong test: a user who allowed it and skipped the rest reached the
  * main screen able to arm with no notification to show status on, which is the
  * recap's whole job to catch, since each of its rows carries the consequence of
  * the no the user just gave (Codex, PR #204).
@@ -253,18 +243,17 @@ fun WelcomeScreen(
     location: LocationPermission?,
     calendar: CalendarPermission? = null,
     /**
-     * Whether this build can end a snooze because the user left. Card 1 and
-     * card 2 both promise departure, and on a build that cannot deliver it
-     * that promise sets up exactly the silence-until-the-cap the app exists to
-     * prevent (§3) — so the seam is at the call site, as it is for
-     * [PermissionsScreen].
+     * Whether this build can end a snooze because the user left. Card 4
+     * promises departure, and on a build that cannot deliver it that promise
+     * sets up exactly the silence-until-the-cap the app exists to prevent
+     * (§3) — so the seam is at the call site, as it is for [PermissionsScreen].
      */
     tracksDeparture: Boolean = true,
     tileAdded: Boolean? = null,
     snoozeRinger: SnoozeRinger? = null,
     snoozeRingerSaveFailed: Boolean = false,
     /**
-     * The verified state of Snoozemo's own rule, or null while unread. Card 3's
+     * The verified state of Snoozemo's own rule, or null while unread. Card 2's
      * access row needs it for the same reason `PermissionsScreen`'s does: with
      * access granted and this null the row reads as unread and renders nothing,
      * which would hide both a known failure and, for a disabled rule, the
@@ -273,7 +262,7 @@ fun WelcomeScreen(
     ruleState: ZenRuleState? = null,
     /**
      * The rule's id, or null while there is nothing to edit — no access, or
-     * access granted and the rule not created yet. Card 3 offers Filters only
+     * access granted and the rule not created yet. Card 2 offers Filters only
      * when it is non-null, exactly as `SettingsScreen` does.
      */
     filtersRuleId: String? = null,
@@ -286,10 +275,10 @@ fun WelcomeScreen(
      */
     crashPending: Boolean = false,
     /**
-     * Whether a tile tap arrived here because it could not snooze (maintainer,
-     * 2026-09-07). Shown on whichever card the flow is on: the tap produced
-     * nothing and the flow looks unchanged, so saying nothing reads as the tile
-     * being broken (principle 2).
+     * Whether a tile tap arrived here during the flow (maintainer, 2026-09-07,
+     * broadened 2026-09-15). A tap before the flow is finished resumes it rather
+     * than snoozing (§4.2), so the flow looks unchanged and saying nothing reads
+     * as the tile being broken (principle 2).
      */
     tapBlocked: Boolean = false,
     shareFailed: Boolean = false,
@@ -398,17 +387,10 @@ fun WelcomeScreen(
                 )
             }
             when (card) {
-                WelcomeCard.WHAT -> WhatCard()
-                WelcomeCard.ENDS -> EndsCard(
-                    tracksDeparture = tracksDeparture,
-                    notifications = notifications,
-                    notificationsReachTheUser = notificationsReachTheUser,
-                    location = location,
-                    calendar = calendar,
+                WelcomeCard.WHAT -> WhatCard(
+                    tileAdded = tileAdded,
                     settingsFailure = settingsFailure,
-                    onNotificationsRow = onNotificationsRow,
-                    onLocationRow = onLocationRow,
-                    onCalendarRow = onCalendarRow,
+                    onAddTile = onAddTile,
                 )
                 WelcomeCard.RULE -> RuleCard(
                     access = access,
@@ -421,10 +403,20 @@ fun WelcomeScreen(
                     onRuleRow = onRuleRow,
                     onSnoozeRinger = onSnoozeRinger,
                 )
-                WelcomeCard.TILE -> TileCard(
-                    tileAdded = tileAdded,
+                WelcomeCard.ENDS_MANUAL -> EndsManualCard(
+                    tracksDeparture = tracksDeparture,
+                    notifications = notifications,
+                    notificationsReachTheUser = notificationsReachTheUser,
                     settingsFailure = settingsFailure,
-                    onAddTile = onAddTile,
+                    onNotificationsRow = onNotificationsRow,
+                )
+                WelcomeCard.ENDS_AUTO -> EndsAutoCard(
+                    tracksDeparture = tracksDeparture,
+                    location = location,
+                    calendar = calendar,
+                    settingsFailure = settingsFailure,
+                    onLocationRow = onLocationRow,
+                    onCalendarRow = onCalendarRow,
                 )
                 WelcomeCard.TELEMETRY -> TelemetryCard(onAnswerTelemetry)
             }
@@ -471,9 +463,8 @@ fun WelcomeScreen(
 }
 
 /**
- * Card 1: the product in two lines (maintainer, 2026-09-14) — one tap to
- * silence, and that it ends on its own or when you choose — under a mock Quick
- * Settings panel with Snoozemo's tile ringed among the others.
+ * Card 1: the product in two lines under a mock Quick Settings panel with
+ * Snoozemo's tile ringed among the others, and the button that adds it.
  *
  * Build-neutral copy: neither line names departure, so both hold on a
  * duration-only build too, where "automatically" is the cap rather than a walk
@@ -482,89 +473,70 @@ fun WelcomeScreen(
  * called or where it lives; the panel is drawn rather than screenshotted, so it
  * follows the app's theme and text size, and the ring marks Snoozemo's tile
  * rather than a different tile style the shade will never show.
+ *
+ * **The tile row leads the flow now** (maintainer, 2026-09-15): the tile is the
+ * whole product, so the first card both shows it and offers to add it, through
+ * the same [PermissionRows.Tile] the banner and `SettingsScreen` draw. Adding it
+ * before Do Not Disturb access is granted (card 2) is safe here in a way it was
+ * not before: a tile tapped during the unfinished flow resumes the flow rather
+ * than failing to snooze (§4.2), so the "tile without access" tap the old order
+ * guarded against cannot happen while onboarding is still open.
  */
 @Composable
-private fun WhatCard() {
+private fun WhatCard(
+    tileAdded: Boolean?,
+    settingsFailure: SetupRowId?,
+    onAddTile: () -> Unit,
+) {
     QuickSettingsMock()
     CardBody(stringResource(R.string.welcome_what_body))
     CardBody(stringResource(R.string.welcome_what_promise))
-}
-
-/**
- * Card 2: how a snooze ends, read off a render of the ongoing notification.
- *
- * The render is the picture because it is the one surface that shows every way
- * a snooze ends at once (§4.3). The two body lines are the card's own division
- * and it is load-bearing: the first is what happens with nobody touching the
- * phone, the second is the taps. The calendar is never a trigger — it only
- * seeds an `Until <time>` action the user still has to press — so writing them
- * as one list would promise an automatic ending the app never delivers.
- */
-@Composable
-private fun EndsCard(
-    tracksDeparture: Boolean,
-    notifications: NotificationPermission?,
-    notificationsReachTheUser: Boolean,
-    location: LocationPermission?,
-    calendar: CalendarPermission?,
-    settingsFailure: SetupRowId?,
-    onNotificationsRow: () -> Unit,
-    onLocationRow: () -> Unit,
-    onCalendarRow: () -> Unit,
-) {
-    NotificationRender(tracksDeparture)
-    CardBody(
-        stringResource(
-            if (tracksDeparture) R.string.welcome_ends_body else R.string.welcome_ends_body_timer_only,
-        ),
-    )
-    // The location row is absent on a build that cannot track departure, as it
-    // is on the PermissionsScreen: a grant that buys the user nothing
-    // must not be invited.
-    if (tracksDeparture) {
-        PermissionRows.Location(
-            location = location,
+    // The Add-tile row leads card 1, so it is on the very first frame — but the
+    // tile-presence store is read only *after* the first frame, like every
+    // other permission state here, never off disk in front of it (`SPEC.md`
+    // §6.9). So while the state is unknown the row is laid out as an invisible
+    // skeleton that reserves its height, and it fades in when the read lands
+    // (maintainer, 2026-09-15): the affordance pops in without the card
+    // reflowing to make room, and no stale `Add tile` is shown for a tile that
+    // turns out to be already there. `null` renders the not-added row purely
+    // for its height, at alpha 0 and cleared from the semantics tree so a
+    // screen reader is not told of a row it cannot see or reach; once known,
+    // the real row is drawn (and drops out entirely when the tile is present,
+    // exactly as before).
+    when (tileAdded) {
+        null -> Box(modifier = Modifier.alpha(0f).clearAndSetSemantics {}) {
+            PermissionRows.Tile(
+                tileAdded = false,
+                settingsFailure = null,
+                onAction = {},
+                hideWhenSatisfied = true,
+            )
+        }
+        else -> PermissionRows.Tile(
+            tileAdded = tileAdded,
             settingsFailure = settingsFailure,
-            onAction = onLocationRow,
+            onAction = onAddTile,
             hideWhenSatisfied = true,
         )
     }
-    PermissionRows.Calendar(
-        calendar = calendar,
-        settingsFailure = settingsFailure,
-        onAction = onCalendarRow,
-        hideWhenSatisfied = true,
-    )
-    PermissionRows.Notifications(
-        notifications = notifications,
-        reachTheUser = notificationsReachTheUser,
-        settingsFailure = settingsFailure,
-        onAction = onNotificationsRow,
-        hideWhenSatisfied = true,
-    )
 }
 
 /**
- * Card 3: one rule, and the ringer ceiling.
+ * Card 2: one rule, its filters, and the ringer ceiling.
  *
- * Do Not Disturb access is the one grant without which nothing here can snooze
- * at all, so it is asked once the user has seen what it is for — after what the
- * app is and how a snooze ends, and before the tile that will do the arming
- * (maintainer, 2026-09-08). It used to come after the tile, on the reasoning
- * that the essential grant should be last of them; the order is the other way
- * round now because a tile added before the grant is a tile whose first tap
- * fails with `NO_POLICY_ACCESS`, while a grant taken before the tile leaves an
- * app that already snoozes from its own button. Abandoning the flow half way
- * costs less in this order.
+ * Titled *One rule, yours* — Snoozemo touches nothing else of the user's. The
+ * ringer choice sits above the grants (maintainer, 2026-09-15), a live control
+ * the user can set at once. Do Not Disturb access is the one grant without which
+ * nothing here can snooze at all, so it is asked once the user has seen the tile
+ * that will arm it (card 1) and before the two cards that describe how a snooze
+ * ends.
  *
- * Filters is offered rather than only named (maintainer, 2026-09-05), through
- * the same row `SettingsScreen` draws. The objection to a button here was that
- * the rule does not exist until access is granted, so it would open to
- * nothing — but that is what [PermissionRows.Filters]'s null check already
- * answers: the row is absent until there is a rule to edit, and appears in
- * place the moment there is. So the card names the rule as the user's and
- * hands them the way to edit it in the same breath, which is what its title
- * promises.
+ * Filters is offered rather than only named, through the same row
+ * `SettingsScreen` draws. The row is absent until there is a rule to edit —
+ * access granted and the rule created — and appears in place the moment there
+ * is, exactly as [PermissionRows.Filters]'s null check arranges. So the card
+ * names the rule as the user's and hands them the way to edit it in the same
+ * breath.
  */
 @Composable
 private fun RuleCard(
@@ -579,6 +551,10 @@ private fun RuleCard(
     onSnoozeRinger: (SnoozeRinger) -> Unit,
 ) {
     CardBody(stringResource(R.string.welcome_rule_body))
+    // The ringer ceiling (§5.9) above the grants (maintainer, 2026-09-15) — a
+    // live control the user can set straight away, ahead of the Do Not Disturb
+    // access it will apply under; the same setting `SettingsScreen`'s
+    // Ring/vibrate row edits.
     snoozeRinger?.let {
         SnoozeRingerRow(chosen = it, saveFailed = snoozeRingerSaveFailed, onChange = onSnoozeRinger)
     }
@@ -603,26 +579,88 @@ private fun RuleCard(
 }
 
 /**
- * Card 4: the tile, which is the arm affordance and the one locked-phone path.
+ * Card 3: how a snooze ends when the user ends it.
  *
- * After the rule card rather than before it — card 3's KDoc has the reasoning —
- * which also leaves the setup run ending on something to do rather than on
- * something to allow.
+ * The render is the picture because the notification is where every manual exit
+ * lives at once (§4.3): `End now` and `+30 min` are its buttons, and its body
+ * opens the sheet with more options. The tile is the other manual exit and is
+ * named as a quieter note, since it does what the buttons already do. Split from
+ * card 4's automatic endings (maintainer, 2026-09-15) so each card carries one
+ * idea and the notification grant sits with the card that depicts the
+ * notification.
  */
 @Composable
-private fun TileCard(
-    tileAdded: Boolean?,
+private fun EndsManualCard(
+    tracksDeparture: Boolean,
+    notifications: NotificationPermission?,
+    notificationsReachTheUser: Boolean,
     settingsFailure: SetupRowId?,
-    onAddTile: () -> Unit,
+    onNotificationsRow: () -> Unit,
 ) {
-    CardBody(stringResource(R.string.welcome_tile_body))
-    CardBody(stringResource(R.string.welcome_tile_locked))
-    PermissionRows.Tile(
-        tileAdded = tileAdded,
+    NotificationRender(tracksDeparture)
+    CardBody(stringResource(R.string.welcome_ends_manual_body))
+    // Quieter than the body: a second way to do what the line above covers, not
+    // a new idea. Below the notification grant would bury it; above it, it reads
+    // as part of the same "how you end it" thought.
+    Text(
+        text = stringResource(R.string.welcome_ends_manual_tile_note),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    PermissionRows.Notifications(
+        notifications = notifications,
+        reachTheUser = notificationsReachTheUser,
         settingsFailure = settingsFailure,
-        onAction = onAddTile,
+        onAction = onNotificationsRow,
         hideWhenSatisfied = true,
     )
+}
+
+/**
+ * Card 4: how a snooze ends by itself.
+ *
+ * The render is an illustration of the end-time chooser (§4.4) — a fixed
+ * picture of its rows: a clock time with its steppers, the meeting, and the
+ * move and leave exits. The body lists them in words, and the grants below are
+ * for the two the app cannot offer without permission: the calendar seeds the
+ * meeting end, and location the departures.
+ *
+ * The location row is absent on a build that cannot track departure, as it is on
+ * the `PermissionsScreen`: a grant that buys the user nothing must not be
+ * invited. The calendar is offered on every build. The render is a static
+ * illustration, not the live chooser (see [EndConditionRender]).
+ */
+@Composable
+private fun EndsAutoCard(
+    tracksDeparture: Boolean,
+    location: LocationPermission?,
+    calendar: CalendarPermission?,
+    settingsFailure: SetupRowId?,
+    onLocationRow: () -> Unit,
+    onCalendarRow: () -> Unit,
+) {
+    EndConditionRender(tracksDeparture)
+    CardBody(
+        stringResource(
+            if (tracksDeparture) R.string.welcome_ends_body else R.string.welcome_ends_body_timer_only,
+        ),
+    )
+    // Calendar first, then location: the order the render reads top to bottom
+    // once the clock row is passed — the meeting, then the departures.
+    PermissionRows.Calendar(
+        calendar = calendar,
+        settingsFailure = settingsFailure,
+        onAction = onCalendarRow,
+        hideWhenSatisfied = true,
+    )
+    if (tracksDeparture) {
+        PermissionRows.Location(
+            location = location,
+            settingsFailure = settingsFailure,
+            onAction = onLocationRow,
+            hideWhenSatisfied = true,
+        )
+    }
 }
 
 /**
@@ -719,6 +757,128 @@ private fun NotificationRender(tracksDeparture: Boolean) {
     }
 }
 
+/**
+ * An inert picture of the end-time chooser (§4.4), in its fullest shape.
+ *
+ * Drawn flat and read as one node, exactly like [NotificationRender] and for the
+ * same reason: the real chooser's rows commit an end condition, and a picture of
+ * one must never take a tap. The clock row shows its `−`/`+` steppers, the
+ * meeting row its calendar mark, and the two departures follow — dropped
+ * together on a build that cannot track departure, where they would name endings
+ * nothing watches for.
+ *
+ * Its labels are fixed and fictional: a real meeting time has no place in a
+ * screenshot test's baseline (`AGENTS.md`, *Privacy*), and the clock time is a
+ * plainly-illustrative one rather than anything read off the device.
+ */
+@Composable
+private fun EndConditionRender(tracksDeparture: Boolean) {
+    val clock = stringResource(R.string.action_end_at, SAMPLE_CHOOSER_TIME)
+    val meeting = stringResource(R.string.welcome_end_until_meeting)
+    // A fixed, illustrative list of the chooser's rows — a picture, like the
+    // Quick Settings mock on card 1, not the live chooser (maintainer,
+    // 2026-09-15). So it depicts the automatic endings this *build* offers,
+    // gated only on the compile-time `tracksDeparture` flavor flag: whether a
+    // given phone has a significant-motion sensor is the live chooser's check,
+    // not the tutorial's, and the illustration carries no per-device or
+    // asynchronous state that could shift the card after its first frame.
+    val move = stringResource(R.string.main_until_i_move).takeIf { tracksDeparture }
+    val leave = stringResource(R.string.main_until_i_leave).takeIf { tracksDeparture }
+    // One node with one description, but the description names the rows it shows
+    // rather than a bare "a chooser" (Codex, PR #291): the render is inert, so
+    // without this a screen reader learns nothing of the endings it depicts, and
+    // the card body names leaving, the meeting and a chosen time but never the
+    // move exit. Built from the same labels the rows carry, in the order they
+    // appear, so the two channels cannot drift.
+    val rows = listOfNotNull(clock, meeting, move, leave)
+    val description = stringResource(R.string.welcome_end_chooser_render) +
+        ": " + rows.joinToString(", ")
+    Surface(
+        shape = RoundedCornerShape28,
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clearAndSetSemantics { contentDescription = description },
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RenderedChoice(label = clock, modifier = Modifier.weight(1f))
+                RenderedStepper("−")
+                RenderedStepper("+")
+            }
+            RenderedChoice(
+                label = meeting,
+                trailingIcon = R.drawable.ic_calendar,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            // The two automatic exits the departure builds add, shown together
+            // on the same compile-time flag — a fixed list, so nothing here
+            // shifts after the first frame.
+            move?.let { RenderedChoice(label = it, modifier = Modifier.fillMaxWidth()) }
+            leave?.let { RenderedChoice(label = it, modifier = Modifier.fillMaxWidth()) }
+        }
+    }
+}
+
+/** One inert row of the chooser render: styled like a choice card, not clickable. */
+@Composable
+private fun RenderedChoice(
+    label: String,
+    modifier: Modifier = Modifier,
+    trailingIcon: Int? = null,
+) {
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            trailingIcon?.let {
+                Icon(
+                    painter = painterResource(it),
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+    }
+}
+
+/** One inert `−`/`+` stepper of the chooser render, drawn as an outline. */
+@Composable
+private fun RenderedStepper(symbol: String) {
+    Surface(
+        shape = MaterialTheme.shapes.small,
+        color = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
+        Text(
+            text = symbol,
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        )
+    }
+}
+
 /** One of the render's notification actions: styled like a button, inert. */
 @Composable
 private fun RenderedAction(label: String) {
@@ -729,7 +889,7 @@ private fun RenderedAction(label: String) {
     )
 }
 
-/** The five progress dots. */
+/** The progress dots. */
 @Composable
 private fun WelcomeDots(position: Int, count: Int, modifier: Modifier = Modifier) {
     val description = stringResource(R.string.welcome_progress, position + 1, count)
@@ -757,9 +917,9 @@ private fun WelcomeDots(position: Int, count: Int, modifier: Modifier = Modifier
  */
 private fun cardTitle(card: WelcomeCard): Int = when (card) {
     WelcomeCard.WHAT -> R.string.welcome_what_title
-    WelcomeCard.ENDS -> R.string.welcome_ends_title
     WelcomeCard.RULE -> R.string.welcome_rule_title
-    WelcomeCard.TILE -> R.string.welcome_tile_title
+    WelcomeCard.ENDS_MANUAL -> R.string.welcome_ends_manual_title
+    WelcomeCard.ENDS_AUTO -> R.string.welcome_ends_title
     WelcomeCard.TELEMETRY -> R.string.telemetry_invite_title
 }
 
@@ -768,13 +928,17 @@ private fun CardBody(text: String) {
     Text(text = text, style = MaterialTheme.typography.bodyLarge)
 }
 
+/** The chooser render's container corner, matching [QuickSettingsMock]'s panel. */
+private val RoundedCornerShape28 = androidx.compose.foundation.shape.RoundedCornerShape(28.dp)
+
 /**
- * A plainly-fictional countdown and meeting time for the render.
+ * A plainly-fictional countdown, meeting time and chosen time for the renders.
  *
- * Fixed rather than live: the picture is of a snooze that is not running, so a
- * ticking clock in it would be a lie that moves. Fictional rather than derived
+ * Fixed rather than live: the pictures are of a snooze that is not running, so a
+ * ticking clock in them would be a lie that moves. Fictional rather than derived
  * from anything on the device — a render seeded from the user's own next
  * meeting would put their calendar in a screenshot test's baseline.
  */
 private const val SAMPLE_REMAINING = "3:40:12"
 private const val SAMPLE_UNTIL = "Until 17:00"
+private const val SAMPLE_CHOOSER_TIME = "12:00"

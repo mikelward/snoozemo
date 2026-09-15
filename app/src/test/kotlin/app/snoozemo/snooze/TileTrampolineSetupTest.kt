@@ -101,6 +101,12 @@ class TileTrampolineSetupTest {
             .setAction(SnoozeService.ACTION_ARM)
         return Robolectric.buildActivity(TileTrampolineActivity::class.java, intent)
             .also { controller = it }
+            // Post-onboarding: this suite tests the armed-tap routing, not the
+            // welcome-resume path a tap during the unfinished flow takes
+            // (SPEC.md §4.2). Published after the app's warm-up has run in
+            // setUp and before this activity's onCreate reads the gate, so the
+            // fresh-install "flow unfinished" default cannot leak in.
+            .also { WelcomeGate.publish(false) }
             .setup()
             .also { shadowOf(getMainLooper()).idle() }
             .get()

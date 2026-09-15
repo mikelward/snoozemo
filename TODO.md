@@ -3999,27 +3999,36 @@ the point is that every other line of the app is worthless if it isn't true.
       known. The public rollout and discovery work that follows it lives in its
       own section below, since it gates nothing here.
 
-- [x] **Welcome flow before the permissions screen** (maintainer, 2026-09-05). A
-      fresh install lands on `PermissionsScreen` with nothing that says what the app
-      is or how it is used. Five fixed cards — what it is; how a snooze ends, on a
-      render of the ongoing notification, which is the one surface carrying every
-      way it can (2026-09-05, merging what had been two cards); the tile; the one
-      Do Not Disturb rule and the ringer choice; what to do when something goes
-      wrong — each offering the grant it introduced, then the existing permissions
-      screen only when a permission is still missing. The shape is recorded in `SPEC.md` §4.2; the order, the wording
-      and the open questions are in `TUTORIAL.md`. The copy there is proposed, not
-      approved, and is built only once it is signed off. Simmo gets the same shape in
-      its own repository after this one settles.
+- [x] **Welcome flow before the permissions screen** (maintainer, 2026-09-05;
+      **reshaped by the 2026-09-15 overhaul**). A fresh install used to land on
+      `PermissionsScreen` with nothing that said what the app is or how it is used.
+      Four fixed cards (a fifth, the crash/analytics consent, only where crash
+      reporting is configured) — what it is, with the tile to add it; the one Do Not
+      Disturb rule, its filters and the ringer choice; ending a snooze by hand, on a
+      render of the ongoing notification; ending it by itself, on a render of the
+      end-time chooser — each offering the grant it introduced, then the existing
+      permissions screen only when a permission is still missing. The overhaul
+      replaced the earlier five-card order (what it is; how a snooze ends; the tile;
+      the rule; consent): the tile leads now, and the single "how it ends" card is
+      split into by-hand and by-itself. The shape is recorded in `SPEC.md` §4.2; the
+      order, the wording and the open questions are in `TUTORIAL.md`. The
+      composables and string resources are built and ship here; what is still
+      outstanding is the copy — proposed, not approved — which stays behind its
+      `tools:ignore`/`TODO: translate` markers pending an on-device pass before it
+      is translated. Simmo gets the same shape in its own repository after this one
+      settles.
       - **It builds as one PR, with both title-row icons in it** (maintainer,
         2026-09-05). The settings gear and the (?) that replays the flow land
         together, so the title row arrives complete rather than growing an icon per
         PR — and so one CI run covers both. The gear was briefly its own PR (#202,
         closed unmerged) before that was settled; its commit is what this one starts
         from.
-      - Built and approved 2026-09-05. Still owed: the on-device pass the copy was
-        approved subject to, and the largest-font check the *Shape* rule in
-        `TUTORIAL.md` calls for — the body scrolls with the buttons pinned, and
-        whether cards 2 and 4 should split instead is the open question there.
+      - Built. The 2026-09-05 approval covered the *old* copy; the 2026-09-15
+        overhaul rewrote it, so the redesigned copy is proposed again and still
+        owes an on-device pass before it is approved and translated. Also owed:
+        the largest-font check the *Shape* rule in `TUTORIAL.md` calls for — the
+        body scrolls with the buttons pinned, and whether a dense card should
+        split instead is the open question there.
 
 ## Release secrets and docs — needs a maintainer pass
 
@@ -6241,17 +6250,19 @@ are simply what the one build ships.
   `PermissionsScreen`, not a system settings page, so a merged banner changes what is
   said and not where it goes.
 
-- [ ] **Approved, waiting on the rest of the flow to be translated**:
+- [ ] **Waiting on the redesigned flow to be seen on a device, then translated**:
   `welcome_quick_settings_mock_description` ("Quick Settings, with Snoozemo's tile
   ringed among the others" — the panel's accessibility label, read instead of the
-  four tile labels) and `welcome_tile_tap_blocked` ("That tap couldn't snooze yet —
-  finish setup first."), both signed off by the maintainer on 2026-09-07. They keep
-  their `tools:ignore="MissingTranslation"` and `TODO: translate` markers only
-  because the welcome flow's own copy is still unsettled, so fanning out five
-  strings would leave one card in two languages; they go to the locales with the
-  rest of the flow. The three mock tile labels (`welcome_quick_settings_wifi`,
-  `_bluetooth`, `_airplane`) ride along — they are the system's own names for those
-  tiles (`WLAN`, `Bluetooth`, `Flugmodus` in German).
+  four tile labels) and `welcome_tile_tap_blocked`, which the 2026-09-15 overhaul
+  reworded to "Finish setup first — then the tile snoozes." (a tap during the flow
+  now resumes it rather than failing to snooze, `SPEC.md` §4.2). They keep their
+  `tools:ignore="MissingTranslation"` and `TODO: translate` markers because the
+  overhaul left the whole flow's copy unsettled again — the new card titles and
+  bodies want an on-device pass — so all of it fans out to the locales together
+  rather than one card at a time. The three mock tile labels
+  (`welcome_quick_settings_wifi`, `_bluetooth`, `_airplane`) ride along — they are
+  the system's own names for those tiles (`WLAN`, `Bluetooth`, `Flugmodus` in
+  German).
 
 - [ ] **New copy awaiting approval before translation**: `notifications_banner_title`
   ("Notifications needed"), written to match `dnd_banner_title`'s shape. Carries
@@ -6261,12 +6272,16 @@ are simply what the one build ships.
 
 - [x] **Move the tile card after the rule card** (maintainer, 2026-09-06 —
   tried, then set aside as "too much going on here now"; raised again and
-  **done** 2026-09-08). The flow is now `WHAT → ENDS → RULE → TILE →
-  TELEMETRY`, so every grant this flavor offers comes ahead of the tile.
-  Adding the tile first put a control in the shade the user could tap at any
-  moment, including the moment after they added it, when the app may have been
-  granted nothing: no Do Not Disturb access means no rule, so the tap posts
-  `ZenFailure.NO_POLICY_ACCESS`.
+  **done** 2026-09-08). **Reversed by the 2026-09-15 overhaul** (`SPEC.md`
+  §4.2): the tile leads the flow again (card 1), and the order is now
+  `WHAT(+tile) → RULE → ENDS_MANUAL → ENDS_AUTO → TELEMETRY`. Putting the tile
+  first is safe now because a tile tap before the flow is finished resumes it
+  rather than snoozing, so the `NO_POLICY_ACCESS` tap this reorder guarded
+  against cannot happen while onboarding is open. The original reasoning, kept
+  for the record: adding the tile first put a control in the shade the user
+  could tap at any moment, including the moment after they added it, when the
+  app may have been granted nothing — no Do Not Disturb access means no rule, so
+  the tap posts `ZenFailure.NO_POLICY_ACCESS`.
   **Two things the earlier estimate got wrong**, worth keeping for the next
   one. The snapshots *do* re-record — the cards are unchanged but the progress
   dots move with them, so `welcome-rule*`, `welcome-tile` and

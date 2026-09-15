@@ -753,29 +753,45 @@ The trade in the icon itself is that it says less than a word: it carries `Setti
 accessible name rather than a tooltip, since an icon-only control is nameless to a screen reader
 otherwise.
 
-**A welcome flow precedes the permissions screen on a fresh install** (maintainer, 2026-09-05; not
-yet built — `TODO.md` Phase 6, sketched with its copy in `TUTORIAL.md`). The route above — a fresh
-install lands on `PermissionsScreen` — put three permission rows in front of someone who had not
-yet been told what the app is for or how it is used, and the tile, which is the whole product, is
-invisible until someone adds it. So a short run of fixed cards comes first, each one idea: what the
-app is — led by **a mock Quick Settings panel with Snoozemo's tile ringed among Wi-Fi,
-Bluetooth and airplane mode** (maintainer, 2026-09-07), because what the app *is* is a tile you
-tap, and a user who has never seen it has no idea what a Quick Settings tile is called or where
-it lives; the panel is drawn rather than screenshotted, so it follows the app's theme and text
-size instead of rotting with a platform release, and the ring is what marks Snoozemo's tile
-rather than a different tile style, which would teach the user to look for something the shade
-will never show them; how a snooze ends, shown on a render of the ongoing notification (§4.3), the one surface
-that carries every way it can — departure, a chosen time, `End now` — so the end-condition chooser
-(§4.4) needs neither a card nor a switch in the flow (maintainer, 2026-09-05); the one Do Not Disturb
-rule and the ringer choice (§5.9) — plus, since that card calls the rule the user's, the same
-Filters row `SettingsScreen` offers, absent until there is a rule to edit (maintainer,
-2026-09-05); the tile, **after** the rule rather than before it (maintainer, 2026-09-08), because
-a tile added before Do Not Disturb access is granted is a tile whose first tap fails, while the
-grant taken before the tile leaves an app that already snoozes from its own button — the order
-that costs least when someone abandons the flow part way, and it leaves the setup run ending on
-something to do rather than something to allow; and, last, the crash-report and analytics consent (§12) on its
-own — the debug log is not mentioned, since a card whose job is one question about data leaving the
-phone is the wrong place for a sentence about a log that never does (maintainer, 2026-09-05). Each card offers the grant for the thing it just introduced, drawn
+**A welcome flow precedes the permissions screen on a fresh install** (maintainer, 2026-09-05;
+built, reshaped by the 2026-09-15 overhaul — `TODO.md`, copy in `TUTORIAL.md`). The route it
+replaced — a fresh install landing straight on `PermissionsScreen` — put three permission rows in
+front of someone who had not yet been told what the app is for or how it is used, and the tile,
+which is the whole product, was invisible until someone added it. So a short run of fixed cards
+comes first, each one idea (the
+2026-09-15 overhaul reshaped the set the 2026-09-05 sketch settled — cards merged, split and
+reordered, its reasons kept where they still hold and replaced where they do not): **card 1, what
+the app is** — led by a mock Quick Settings panel with Snoozemo's tile ringed among Wi-Fi,
+Bluetooth and airplane mode (maintainer, 2026-09-07), because what the app *is* is a tile you tap,
+and a user who has never seen it has no idea what a Quick Settings tile is called or where it
+lives; the panel is drawn rather than screenshotted, so it follows the app's theme and text size
+instead of rotting with a platform release, and the ring is what marks Snoozemo's tile rather than
+a different tile style, which would teach the user to look for something the shade will never show
+them. **This card also adds the tile** (maintainer, 2026-09-15): the tile is the whole product, so
+the first card both shows it and offers to add it. That leads the flow rather than closing it, a
+reversal of the 2026-09-08 order that put the tile last so a tile could not be added before Do Not
+Disturb access — which mattered because a tile tapped without access fails to snooze. It no longer
+can during onboarding: a tile tap before the flow is finished resumes the flow rather than snoozing
+(below), so the failing tap the old order guarded against cannot happen while the cards are still
+open. **Card 2, the rule it silences with** — *One rule, yours*: the one Do Not Disturb
+rule Snoozemo creates and only ever switches on and off, the ringer choice (§5.9), Do Not Disturb
+access to create the rule, and the same Filters row `SettingsScreen` offers (absent until there is
+a rule to edit). The ringer control sits above the access grant (maintainer, 2026-09-15) — a live
+control the user can set straight away — and the card is placed after the tile it configures and before the two cards that describe how a
+snooze ends. **Card 3, ending it by hand** — a render of the ongoing notification (§4.3), whose
+`End now`, `+30 min` and body-tap-for-more-options are the manual exits, plus the note that the
+tile turns a snooze off as well as on (D6); the notification grant sits here, with the card that
+depicts the notification. **Card 4, ending it by itself** — a render of the end-condition chooser
+(§4.4), the one surface that carries every automatic ending at once (a chosen time and its
+steppers, the meeting, and departure), with the calendar and location grants below it. Splitting
+the manual and automatic endings across two cards (maintainer, 2026-09-15) replaces the single
+"how it ends" card of the 2026-09-05 sketch: the automatic endings now get their own card, shown
+on a render of the chooser rather than the notification, so each card carries one idea. The end
+sheet still earns no card or control of its own — it is off by default (§4.4) and the chosen time
+it would set is the chooser's, which card 4 now shows. **Last, the crash-report and analytics consent (§12) on
+its own**, only on a build that collects it — the debug log is not mentioned, since a card whose
+job is one question about data leaving the phone is the wrong place for a sentence about a log that
+never does (maintainer, 2026-09-05). Each card offers the grant for the thing it just introduced, drawn
 as the same tri-state rows `PermissionsScreen` uses (§5.2), and `Next` never waits on one — the
 rows' own fail-open rule. **Tapping `Allow` on the Do Not Disturb access row opens a short help
 dialog first** (maintainer, 2026-09-14): the system access screen it then launches is a list the
@@ -794,15 +810,20 @@ through the flow sit either side of the thing that says where in it you are. `Ba
 same decision the system gesture does, and still exits card 1, so D7's way out is there
 whether or not it is advertised. Once the flow is left, `MainScreen`
 carries a dismissible hint pointing at the (?) icon, because a replay behind an icon is
-discoverable only by someone who already knows it is there. **A tile tap that cannot snooze resumes the flow rather than restarting it**
-(maintainer, 2026-09-07). Such a tap opens the app (§4.1), and inside the flow that used to mean a
-second activity whose own gate reopened the cards at the first one, over the half-finished copy —
-the user got no snooze and lost everything they had answered. The running instance takes the tap
-now, and a tap arriving after the process is gone rebuilds the flow at the card it was left on,
-which is remembered until the flow is left — **including a replay**, which is neither unseen nor a
-fresh install, so the remembered card is what reopens it rather than the first-run gate. The tap is not silent either (principle 2): the card it
-lands back on carries a line saying it could not snooze yet. Outside the flow the tap still lands
-on the recap, which is where the repair is. **The cross-process half is kept deliberately**
+discoverable only by someone who already knows it is there. **A tile tap before the first-run flow
+is finished resumes it rather than snoozing** (maintainer, 2026-09-07; broadened 2026-09-15).
+Originally only a tap that *could not* snooze redirected; now every arm tap during the unfinished
+flow does, **even one that could arm** — Do Not Disturb access already granted on an earlier card —
+so a user part-way through the cards is taken back to where they were rather than starting a snooze
+mid-setup. The decision costs no disk read on the arm path, so it never slows arming (§6.9); where
+it cannot be reached in time — a cold tap that outruns setup — it falls open toward arming, which on
+a fresh install the first-run gate below then recovers by opening the cards regardless. The
+tap opens the app (§4.1): the running instance takes it, and a tap arriving after the process is
+gone rebuilds the flow at the card it was left on, which is remembered until the flow is left —
+**including a replay**, which is neither unseen nor a fresh install, so the remembered card is what
+reopens it rather than the first-run gate. The tap is not silent either (principle 2): the card it
+lands back on carries a line saying to finish setup first. Outside the flow — once it is finished —
+a tap that still cannot snooze lands on the recap, which is where the repair is. **The cross-process half is kept deliberately**
 (maintainer, 2026-09-07), after review found edge after edge in it: resuming across process death
 means reconstructing, from a breadcrumb and the ids of the two intents Android can redeliver, state
 the platform itself owns. The alternative is to resume only while the process is alive — the launch
@@ -810,10 +831,9 @@ mode and the new-intent hand-off, none of the persistence — which deletes that
 with the case it exists for: a user whose process died mid-tutorial would be sent to the recap
 instead. Kept for now, revisit if the mechanism keeps producing them. The flow is shown once, on
 a persisted flag, and replayable from a **(?) icon in `MainScreen`'s title row** — the person who
-needs it again is on the home screen wondering what to do, not in Settings. The shape is decided; the words
-are not: nothing is a string resource until the maintainer has seen the copy (`AGENTS.md`,
-*Translations*; approved 2026-09-05, and still to be seen on a device before any of it is
-translated).
+needs it again is on the home screen wondering what to do, not in Settings. The shape is decided;
+the exact words are proposed — the 2026-09-05 copy was reworked by the 2026-09-15 overhaul, so it
+is to be seen on a device before any of it is translated (`AGENTS.md`, *Translations*).
 
 **The flow runs once per install, and the flag is written when it is left rather than when it is
 entered.** A flag spent on arrival would be lost to a process death mid-flow, and the user would

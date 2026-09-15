@@ -61,6 +61,11 @@ class TileTrampolineChooserTest {
         val intent = Intent(appContext, TileTrampolineActivity::class.java).setAction(action)
         return Robolectric.buildActivity(TileTrampolineActivity::class.java, intent)
             .also { controller = it }
+            // Post-onboarding: an arm tap during the unfinished welcome flow
+            // resumes it rather than reaching the chooser (SPEC.md §4.2), so the
+            // flow is finished here. Published after setUp's warm-up and before
+            // this activity's onCreate reads the gate.
+            .also { WelcomeGate.publish(false) }
             .setup()
             .also { shadowOf(getMainLooper()).idle() }
             .get()
