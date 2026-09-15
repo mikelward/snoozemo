@@ -70,14 +70,14 @@ class MainActivityWelcomeRouteTest {
     @Test
     fun `a rotation mid-flow keeps its card`() {
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
-        controller.get().welcomeCard = WelcomeCard.TILE
+        controller.get().welcomeCard = WelcomeCard.ENDS_AUTO
 
         val recreated = controller.recreate().get()
 
         // Restarting the flow from card 1 on every rotation would be its own
         // small trap: the user has to walk back through what they just read.
         assertEquals(Screen.WELCOME, recreated.screen)
-        assertEquals(WelcomeCard.TILE, recreated.welcomeCard)
+        assertEquals(WelcomeCard.ENDS_AUTO, recreated.welcomeCard)
     }
 
     @Test

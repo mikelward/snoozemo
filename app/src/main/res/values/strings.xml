@@ -684,8 +684,9 @@
 
     <!--
       The welcome flow (SPEC.md §4.2, wording and reasoning in TUTORIAL.md).
-      Five cards before the permissions screen on a fresh install, replayable
-      from the title row's help icon. Approved by the maintainer 2026-09-05;
+      Four cards before the permissions screen on a fresh install (a fifth, the
+      crash/analytics consent, only on a build that collects it), replayable from
+      the title row's help icon. Overhauled by the maintainer 2026-09-15;
       untranslated until it has been seen on a device, per AGENTS.md.
     -->
     <!-- TODO: translate -->
@@ -705,9 +706,12 @@
     <!-- Card 1. The product in one line, then the promise the rest keeps: a
          snooze always ends. -->
     <!-- TODO: translate -->
-    <!-- Shown on whatever card the flow is on when a tile tap could not snooze. -->
+    <!-- Shown on whatever card the flow is on when a tile tap arrived during the
+         tutorial. A tap before the flow is finished resumes it rather than
+         snoozing (SPEC.md §4.2), so this says why the tap did not snooze without
+         claiming it failed — it did not run, on purpose. -->
     <!-- TODO: translate -->
-    <string name="welcome_tile_tap_blocked" tools:ignore="MissingTranslation">That tap couldn\'t snooze yet — finish setup first.</string>
+    <string name="welcome_tile_tap_blocked" tools:ignore="MissingTranslation">Finish setup first — then the tile snoozes.</string>
     <!--
       The mock Quick Settings panel on card 1 (SPEC.md §4.2). The three
       familiar tiles are named as the system names them, so the picture reads
@@ -728,16 +732,16 @@
     <!-- TODO: translate -->
     <string name="welcome_what_body" tools:ignore="MissingTranslation">Silence your phone with one tap.</string>
     <!-- TODO: translate -->
-    <string name="welcome_what_promise" tools:ignore="MissingTranslation">Ends automatically, when you choose.</string>
+    <string name="welcome_what_promise" tools:ignore="MissingTranslation">Ends automatically, so you don\'t forget.</string>
     <!-- Card 2. The first line is what happens with nobody touching the phone;
          the second is the taps. Kept apart because the calendar is never a
          trigger — it only seeds an action the user still has to press. -->
     <!-- TODO: translate -->
     <!--
-      The title is build-neutral on purpose: a build that cannot track departure
-      would find a title naming departure a promise it can never keep
+      Card 4. The title is build-neutral on purpose: a build that cannot track
+      departure would find a title naming departure a promise it can never keep
       (SPEC.md §3), but "automatically" is true either way — the body is where the
-      endings differ.
+      endings differ. Companion to card 3's "End manually" (maintainer, 2026-09-15).
     -->
     <string name="welcome_ends_title" tools:ignore="MissingTranslation">Ends automatically</string>
     <!-- TODO: translate -->
@@ -750,11 +754,22 @@
     -->
     <!-- TODO: translate -->
     <string name="welcome_ends_body_timer_only" tools:ignore="MissingTranslation">When your meeting ends, or at the time you choose.</string>
-    <!-- Card 3. One rule, created once, and the app switches only that one. -->
+    <!-- Card 3. How a snooze ends when the user ends it: the notification's own
+         buttons, and the tile. Companion to card 4's "Ends automatically". -->
+    <!-- TODO: translate -->
+    <string name="welcome_ends_manual_title" tools:ignore="MissingTranslation">End manually</string>
+    <!-- TODO: translate -->
+    <string name="welcome_ends_manual_body" tools:ignore="MissingTranslation">Tap the notification buttons to end or extend the snooze. Tap the notification body for more options.</string>
+    <!-- The other manual exit, stated once: the same tile that armed the snooze
+         turns it off again (SPEC.md §4.2, D6). Set apart as a quieter note
+         because it is a second way to do what the line above already covers. -->
+    <!-- TODO: translate -->
+    <string name="welcome_ends_manual_tile_note" tools:ignore="MissingTranslation">Tapping the tile again also turns it off.</string>
+    <!-- Card 2. One rule, created once, and the app switches only that one. -->
     <!-- TODO: translate -->
     <string name="welcome_rule_title" tools:ignore="MissingTranslation">One rule, yours</string>
     <!-- TODO: translate -->
-    <string name="welcome_rule_body" tools:ignore="MissingTranslation">Snoozemo adds one Do Not Disturb rule and only ever switches that one on and off. Choose what still gets through in Settings › Filters.</string>
+    <string name="welcome_rule_body" tools:ignore="MissingTranslation">Creates a new Do Not Disturb mode that you configure.</string>
     <!-- Shown before the system Do Not Disturb access list opens, because that
          list is a page of apps the user has to find Snoozemo in and toggle on —
          a step the button alone does not explain (maintainer, 2026-09-14). The
@@ -768,19 +783,22 @@
     <string name="welcome_access_help_continue" tools:ignore="MissingTranslation">Open settings</string>
     <!-- TODO: translate -->
     <string name="welcome_access_help_dismiss" tools:ignore="MissingTranslation">Cancel</string>
-    <!-- Card 4. The tile is the arm affordance and the one path that works with
-         the phone locked. -->
-    <!-- TODO: translate -->
-    <string name="welcome_tile_title" tools:ignore="MissingTranslation">Snooze from Quick Settings</string>
-    <!-- TODO: translate -->
-    <string name="welcome_tile_body" tools:ignore="MissingTranslation">Swipe down and tap the Zzz tile.</string>
-    <!-- TODO: translate -->
-    <string name="welcome_tile_locked" tools:ignore="MissingTranslation">Works with the phone locked.</string>
-    <!-- The render of the ongoing notification on card 2, which is a picture
+    <!-- The render of the ongoing notification on card 3, which is a picture
          rather than a live card. Named so a screen reader reaches it as one
          thing instead of reading a fake notification's controls as tappable. -->
     <!-- TODO: translate -->
     <string name="welcome_notification_render" tools:ignore="MissingTranslation">Example of Snoozemo\'s notification while a snooze is running</string>
+    <!-- The render of the end-time chooser on card 4, likewise a picture rather
+         than the live control. Named so a screen reader reaches it as one thing
+         instead of reading the fake rows as tappable. -->
+    <!-- TODO: translate -->
+    <string name="welcome_end_chooser_render" tools:ignore="MissingTranslation">Example of Snoozemo\'s end-time chooser</string>
+    <!-- One illustrative row in that render. A fixed label rather than a real
+         meeting time: the picture teaches the shape of the choice and a real
+         calendar entry has no place in a screenshot test's baseline
+         (AGENTS.md, Privacy). -->
+    <!-- TODO: translate -->
+    <string name="welcome_end_until_meeting" tools:ignore="MissingTranslation">Until meeting end</string>
     <!-- The progress dots. Five dots say enough on screen, but a screen reader
          needs the position said out loud. -->
     <!-- TODO: translate -->

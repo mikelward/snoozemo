@@ -122,8 +122,8 @@ class WelcomeExitTest {
         val without = welcomeCards(collectsTelemetry = false)
 
         assertEquals(
-            WelcomeCard.TILE,
-            rememberedWelcomeCard(WelcomeCard.TILE.name, without),
+            WelcomeCard.ENDS_AUTO,
+            rememberedWelcomeCard(WelcomeCard.ENDS_AUTO.name, without),
         )
         // Codex, PR #220: a build with no crash reporter configured drops the
         // telemetry card — a breadcrumb naming it used to come back as a card

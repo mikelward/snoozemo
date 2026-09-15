@@ -313,6 +313,31 @@ class TileTrampolineActivity : ComponentActivity() {
         // Whichever tap sent us here.
         val action = serviceActionFor(intent)
         val arming = action == SnoozeService.ACTION_ARM
+        // **A tile tap during the unfinished welcome flow resumes it, rather
+        // than arming** (SPEC.md §4.2). Even a tap that could arm — Do Not
+        // Disturb access already granted on an earlier card — is taken back to
+        // the card the user was on, so onboarding is never interrupted by a
+        // snooze started mid-setup. Read from [WelcomeGate]'s warmed cache,
+        // never disk, so this stays off the arm path exactly as the chooser
+        // check below does: a tap that overtakes the warm-up reads `false` and
+        // arms, and `MainActivity`'s own welcome gate still lands it in the
+        // flow (openApp routes through `EXTRA_OPEN_PERMISSIONS`, which the flow
+        // shows as the resume banner). Only ARM: an `End now` on the rare snooze
+        // running during onboarding must still end it.
+        if (arming && WelcomeGate.unfinished()) {
+            SnoozeDebugLog.event("tap: arm during the welcome flow, resuming the tutorial")
+            // Unlike the other `openApp` callers, this branch has *not* started
+            // the service — so if the app cannot open, the tap has done nothing
+            // and said nothing (principle 2). Fall back to the instant arm with
+            // its refusal recovery, the same fail-open choice `openChooser`
+            // makes when it cannot show the app to ask (Codex, PR #291).
+            if (!launchSetupApp()) {
+                SnoozeDebugLog.event("tap: could not open the app to resume the flow; arming instead")
+                armFromTileWithRecovery()
+            }
+            finish()
+            return
+        }
         // **Choose-then-arm: with the chooser on, an arm tap opens the main
         // screen instead of arming** (SPEC.md §4.4). Nothing is armed here —
         // the user's row tap on that screen is what starts the snooze, and
@@ -543,7 +568,9 @@ class TileTrampolineActivity : ComponentActivity() {
 
     /**
      * Opens the setup screen, which carries the rows that repair whatever
-     * [tapNeedsSetup] found, and gets this transparent window out of the way.
+     * [tapNeedsSetup] found — or, during the unfinished welcome flow, resumes it
+     * on the card the user was on — and gets this transparent window out of the
+     * way.
      *
      * The destination is explicit rather than left to the app to work out
      * (Codex, PR #215). `MainActivity` routes to it on its own only for missing
@@ -553,31 +580,59 @@ class TileTrampolineActivity : ComponentActivity() {
      * gate exists to end.
      */
     private fun openApp() {
-        runCatching {
-            startActivity(
-                Intent(this, MainActivity::class.java)
-                    .putExtra(EXTRA_OPEN_PERMISSIONS, true)
-                    // An identity for *this* tap (Codex, PR #220). The extra
-                    // sticks to the activity's launch intent, so Android
-                    // re-delivers it verbatim when it rebuilds a task whose
-                    // process it killed — and the app, inferring "is this a new
-                    // tap?" from whether it had a saved bundle or a live
-                    // `ViewModel`, kept getting that question wrong in one
-                    // direction or the other. A tap that says which tap it is
-                    // can be consumed exactly once, whatever the platform does
-                    // with the intent afterwards.
-                    .putExtra(EXTRA_BLOCKED_TAP_ID, UUID.randomUUID().toString())
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
-            )
-        }.onFailure {
-            // Nothing else to try: the snooze has already been attempted and
-            // the report it would have made is exactly what is missing. Logged
-            // so a user who does have the debug log can see the tap was not
-            // ignored.
-            Log.e(TAG, "Could not open the app to repair a tile tap.", it)
-            SnoozeDebugLog.failure(it, "tile tap needed setup and the app would not open")
-        }
+        // The setup callers reach here only after a snooze was already
+        // attempted, so a failed launch has nothing left to try but the log
+        // (the resume branch, which starts no service, arms as its own
+        // fallback — see [dispatch]).
+        launchSetupApp()
         finish()
+    }
+
+    /**
+     * Starts `MainActivity` on the setup/resume route, returning whether the
+     * launch was accepted (so a caller that started no service can fall back).
+     *
+     * Does not [finish] — the caller does, once it has decided whether a failed
+     * launch needs a fallback.
+     */
+    private fun launchSetupApp(): Boolean = runCatching {
+        startActivity(
+            Intent(this, MainActivity::class.java)
+                .putExtra(EXTRA_OPEN_PERMISSIONS, true)
+                // An identity for *this* tap (Codex, PR #220). The extra
+                // sticks to the activity's launch intent, so Android
+                // re-delivers it verbatim when it rebuilds a task whose
+                // process it killed — and the app, inferring "is this a new
+                // tap?" from whether it had a saved bundle or a live
+                // `ViewModel`, kept getting that question wrong in one
+                // direction or the other. A tap that says which tap it is
+                // can be consumed exactly once, whatever the platform does
+                // with the intent afterwards.
+                .putExtra(EXTRA_BLOCKED_TAP_ID, UUID.randomUUID().toString())
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        )
+    }.onFailure {
+        Log.e(TAG, "Could not open the app to repair or resume a tile tap.", it)
+        SnoozeDebugLog.failure(it, "tile tap needed the app and it would not open")
+    }.isSuccess
+
+    /**
+     * The Ask-off instant arm with its refusal recovery, used as the fallback
+     * when the app cannot be shown to resume the flow or ask (SPEC.md §4.1,
+     * principle 2). Not a bare `startService`: a refused fallback arm must
+     * remember the failure and show "could not arm" — the notification a later
+     * grant can still explain — rather than only logging (Codex, PR #284, #291).
+     */
+    private fun armFromTileWithRecovery() {
+        val started = runCatching {
+            startService(
+                Intent(this, SnoozeService::class.java).setAction(SnoozeService.ACTION_ARM),
+            )
+        }.onFailure { armFailure ->
+            Log.e(TAG, "Falling back to an instant arm after the app would not open also failed.", armFailure)
+            SnoozeDebugLog.failure(armFailure, "tile tap fell back to an instant arm and the service would not start")
+        }.getOrNull() != null
+        if (!started) recoverFromRefusedStart(SnoozeService.ACTION_ARM)
     }
 
     /**
@@ -609,22 +664,11 @@ class TileTrampolineActivity : ComponentActivity() {
             // is itself refused there is genuinely nothing left to try.
             Log.e(TAG, "Could not open the app as the end-condition chooser; arming instead.", it)
             SnoozeDebugLog.failure(it, "tile tap opening the chooser and the app would not open; arming instead")
-            // Through the same start-and-recover the Ask-off instant arm uses,
-            // not a bare `startService`: a refused fallback arm must remember the
-            // failure and show "could not arm" — the notification a later grant
-            // can still explain — rather than only logging, principle 2 (Codex,
-            // PR #284). The notification-permission *ask* is not part of the
-            // fallback: the app window just failed to open, so there is nowhere
-            // to host that dialog; the refusal recovery is what matters here.
-            val started = runCatching {
-                startService(
-                    Intent(this, SnoozeService::class.java).setAction(SnoozeService.ACTION_ARM),
-                )
-            }.onFailure { armFailure ->
-                Log.e(TAG, "Falling back to an instant arm after the chooser would not open also failed.", armFailure)
-                SnoozeDebugLog.failure(armFailure, "tile tap fell back to an instant arm and the service would not start")
-            }.getOrNull() != null
-            if (!started) recoverFromRefusedStart(SnoozeService.ACTION_ARM)
+            // The same start-and-recover the Ask-off instant arm uses. The
+            // notification-permission *ask* is not part of the fallback: the
+            // app window just failed to open, so there is nowhere to host that
+            // dialog; the refusal recovery is what matters here.
+            armFromTileWithRecovery()
         }
         finish()
     }

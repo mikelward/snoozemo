@@ -731,10 +731,14 @@ class MainActivity : ComponentActivity() {
     /**
      * Whether the tile is known to be in Quick Settings.
      *
-     * Defaults to **true** so the row does not flash on every launch before the
-     * store has been read: the tile is normally there, and offering to add
-     * something the user already has is the one wrong answer that costs them a
-     * dialog. Read alongside everything else after the first frame.
+     * Null (unknown) until read after the first frame, like every other
+     * permission state here — no store read belongs in front of the first
+     * frame. Null renders no row on the main screen (offering to add a tile the
+     * user already has is the one wrong answer that costs them a dialog); the
+     * welcome flow's card 1, which leads with the Add-tile row, reserves its
+     * space with an invisible skeleton while this is null and fades the row in
+     * when the read lands (see [WelcomeScreen]), so nothing there depends on
+     * this being read early.
      */
     private var tileAdded by mutableStateOf<Boolean?>(null)
 
@@ -1436,7 +1440,8 @@ class MainActivity : ComponentActivity() {
             // whichever of the two carried it.
             val restoredCard = WelcomeCardMemory.resolve(
                 current = it.getString(WelcomeCardMemory.KEY),
-                legacy = it.getString(WelcomeCardMemory.LEGACY_KEY),
+                legacy = it.getString(WelcomeCardMemory.LEGACY_KEY)
+                    ?: it.getString(WelcomeCardMemory.OLDEST_KEY),
             )
             welcomeCard = WelcomeCard.entries
                 .firstOrNull { c -> c.name == restoredCard } ?: welcomeCard

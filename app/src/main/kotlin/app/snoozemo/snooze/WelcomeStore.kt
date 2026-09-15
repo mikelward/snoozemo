@@ -2,7 +2,9 @@ package app.snoozemo.snooze
 
 import android.content.Context
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import app.snoozemo.ui.WelcomeCardMemory
+import app.snoozemo.ui.shouldOpenWelcome
 
 /**
  * Remembers that the welcome flow has been shown (`SPEC.md` §4.2).
@@ -53,11 +55,71 @@ class WelcomeStore(context: Context) {
         Thread {
             seen()
             freshInstall()
+            // Off this thread too, since it reads the same warmed values: the
+            // arm path asks [WelcomeGate] rather than this store, so the answer
+            // has to be in memory before the first tile tap (SPEC.md §4.2).
+            publishGateFromWarm()
         }.start()
     }
 
     /** Whether the flow has been seen through to its exit. */
     fun seen(): Boolean = prefs.getBoolean(KEY_SEEN, false)
+
+    /**
+     * Whether the welcome flow is open and a tile tap should resume it rather
+     * than arm.
+     *
+     * **This is exactly [shouldOpenWelcome]'s question, so it calls it** rather
+     * than restating the expression (Codex, PR #291): a replay is `seen` and
+     * not fresh but still in progress, so `!seen && …` answered `false` for it
+     * and a mid-replay tap armed past the card the user was on. The gate must
+     * open wherever `MainActivity` would open or resume the flow, and one
+     * function is what keeps the two from disagreeing.
+     */
+    private fun computeUnfinished(): Boolean = shouldOpenWelcome(
+        seen = seen(),
+        freshInstall = ::freshInstall,
+        inProgress = rawCard() != null,
+    )
+
+    /**
+     * Publishes the gate after a write on this thread — authoritative, so it
+     * bumps the generation and cannot be overwritten by an in-flight warm-up
+     * read ([WelcomeGate.publish]).
+     */
+    private fun publishGateAfterWrite() = WelcomeGate.publish(computeUnfinished())
+
+    /**
+     * Publishes the gate from the warm-up worker, yielding to any write that
+     * landed while it read (Codex, PR #291). [WelcomeGate.beginRead] is captured
+     * *before* the preference reads and [WelcomeGate.publishIfUnchanged] declines
+     * if a write has bumped the generation since — the same guard `EndSheetStore`
+     * uses, so a slow read cannot clobber a `rememberCard`/`forgetCard`.
+     */
+    private fun publishGateFromWarm() {
+        val generation = WelcomeGate.beginRead()
+        val value = computeUnfinished()
+        afterWarmReadBeforePublishForTest?.invoke()
+        WelcomeGate.publishIfUnchanged(value, generation)
+    }
+
+    /**
+     * Fires between the warm-up read and its publish, so a test can drive the
+     * exact write-during-read interleaving the generation guard exists for —
+     * the same seam `EndSheetStore` exposes.
+     */
+    @VisibleForTesting
+    var afterWarmReadBeforePublishForTest: (() -> Unit)? = null
+
+    /** Runs [publishGateFromWarm] synchronously, so a test need not race the worker. */
+    @VisibleForTesting
+    fun publishGateFromWarmForTest() = publishGateFromWarm()
+
+    /** The stored card name under any key, unmigrated — the "in progress" bit. */
+    private fun rawCard(): String? =
+        prefs.getString(WelcomeCardMemory.KEY, null)
+            ?: prefs.getString(WelcomeCardMemory.LEGACY_KEY, null)
+            ?: prefs.getString(WelcomeCardMemory.OLDEST_KEY, null)
 
     /**
      * The card the flow was left on, so a tile tap part-way through it comes
@@ -78,7 +140,8 @@ class WelcomeStore(context: Context) {
      */
     fun lastCard(): String? = WelcomeCardMemory.resolve(
         current = prefs.getString(WelcomeCardMemory.KEY, null),
-        legacy = prefs.getString(WelcomeCardMemory.LEGACY_KEY, null),
+        legacy = prefs.getString(WelcomeCardMemory.LEGACY_KEY, null)
+            ?: prefs.getString(WelcomeCardMemory.OLDEST_KEY, null),
     )
 
     /** Remembers [card] as the one the flow is on. */
@@ -87,23 +150,29 @@ class WelcomeStore(context: Context) {
         // the last one to a kill is starting the flow one card earlier — worth
         // less than a disk write in front of the card's own frame.
         //
-        // The legacy key goes in the same edit, so the migration fires at most
+        // The older keys go in the same edit, so the migration fires at most
         // once per install: after this there is a new-key breadcrumb, and it
         // wins.
         prefs.edit()
             .putString(WelcomeCardMemory.KEY, card)
             .remove(WelcomeCardMemory.LEGACY_KEY)
+            .remove(WelcomeCardMemory.OLDEST_KEY)
             .apply()
+        // A card was just remembered, so the flow is in progress — republish so
+        // a tile tap resumes it rather than arming (SPEC.md §4.2).
+        publishGateAfterWrite()
     }
 
     /** Forgets it, once the flow has been left. */
     fun forgetCard() {
-        // Both keys: leaving the legacy one behind would resume a flow the user
+        // All keys: leaving an older one behind would resume a flow the user
         // has finished with.
         prefs.edit()
             .remove(WelcomeCardMemory.KEY)
             .remove(WelcomeCardMemory.LEGACY_KEY)
+            .remove(WelcomeCardMemory.OLDEST_KEY)
             .apply()
+        publishGateAfterWrite()
     }
 
     /**
@@ -127,6 +196,8 @@ class WelcomeStore(context: Context) {
         // Losing it to a process death in that window costs one extra showing
         // of the flow, which is the cheap direction to fail.
         prefs.edit().putBoolean(KEY_SEEN, true).apply()
+        // The flow is finished, so a tile tap arms again from here on.
+        publishGateAfterWrite()
     }
 
     /**

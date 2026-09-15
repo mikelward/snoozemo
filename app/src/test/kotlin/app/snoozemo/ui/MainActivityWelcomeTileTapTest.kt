@@ -16,15 +16,18 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * A tile tap that could not snooze, arriving while the welcome flow is still
- * open (maintainer, 2026-09-07).
+ * A tile tap arriving while the welcome flow is still open (maintainer,
+ * 2026-09-07; broadened 2026-09-15).
  *
  * Before this, the tap built a second `MainActivity`, whose own welcome gate
  * reopened the flow at card 1 over the half-finished one: a user part-way
  * through the cards tapped the tile, got no snooze, and was sent back to the
  * beginning with nothing saying why. The flow resumes now — the running
  * instance keeps its card, and a cold one is rebuilt from the card the store
- * remembers — and the tap says so on whichever card that is.
+ * remembers — and the tap says so on whichever card that is. That a tap which
+ * *could* arm is redirected too is the trampoline's decision (`WelcomeGate`),
+ * covered in `TileTrampolineWelcomeTest`; here the tap has already been routed
+ * to the app as a blocked one.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
@@ -49,7 +52,7 @@ class MainActivityWelcomeTileTapTest {
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         val activity = controller.get()
         activity.screen = Screen.WELCOME
-        activity.welcomeCard = WelcomeCard.TILE
+        activity.welcomeCard = WelcomeCard.ENDS_AUTO
 
         // Through the controller, since `onNewIntent` is the framework's to
         // call — which is also what a tile tap does to a running instance.
@@ -57,7 +60,7 @@ class MainActivityWelcomeTileTapTest {
 
         // Where they were, not the recap and not card 1.
         assertEquals(Screen.WELCOME, activity.screen)
-        assertEquals(WelcomeCard.TILE, activity.welcomeCard)
+        assertEquals(WelcomeCard.ENDS_AUTO, activity.welcomeCard)
         // And not silent: the tap produced no snooze and the flow looks
         // unchanged, which on its own reads as the tile being broken.
         assertTrue(activity.welcomeTapBlocked)
@@ -72,13 +75,13 @@ class MainActivityWelcomeTileTapTest {
         // whole change exists to end.
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         controller.get().screen = Screen.WELCOME
-        controller.get().welcomeCard = WelcomeCard.TILE
+        controller.get().welcomeCard = WelcomeCard.ENDS_AUTO
         controller.newIntent(blockedTap())
 
         val rotated = controller.recreate().get()
 
         assertEquals(Screen.WELCOME, rotated.screen)
-        assertEquals(WelcomeCard.TILE, rotated.welcomeCard)
+        assertEquals(WelcomeCard.ENDS_AUTO, rotated.welcomeCard)
         assertTrue(rotated.welcomeTapBlocked)
     }
 
@@ -91,7 +94,7 @@ class MainActivityWelcomeTileTapTest {
         // recreation marker, which a new process does not have.
         val restored = Bundle().apply {
             putString("screen", Screen.WELCOME.name)
-            putString(WelcomeCardMemory.KEY, WelcomeCard.TILE.name)
+            putString(WelcomeCardMemory.KEY, WelcomeCard.ENDS_AUTO.name)
         }
 
         val activity = Robolectric.buildActivity(MainActivity::class.java, blockedTap(id = "tap-2"))
@@ -101,21 +104,22 @@ class MainActivityWelcomeTileTapTest {
             .get()
 
         assertEquals(Screen.WELCOME, activity.screen)
-        assertEquals(WelcomeCard.TILE, activity.welcomeCard)
+        assertEquals(WelcomeCard.ENDS_AUTO, activity.welcomeCard)
         assertTrue(activity.welcomeTapBlocked)
     }
 
     @Test
-    fun `a bundle written before the reorder resumes at the rule card too`() {
+    fun `a bundle written before the overhaul restarts the flow at card one`() {
         // Codex, PR #226, after the breadcrumb migration landed: the saved
         // instance state is held by the system rather than by the process, so
         // it survives an app update as well — and `onCreate` restores from it
-        // *instead of* the breadcrumb, so migrating only the breadcrumb left
-        // this path resuming on the tile card. Written under the legacy key by
-        // hand, because that is the only thing an older build could have saved.
+        // *instead of* the breadcrumb, so a card set change must migrate this
+        // path too. The 2026-09-15 overhaul reshaped the cards, so a legacy name
+        // restarts the flow at card 1 rather than resuming a card that no longer
+        // maps. Written under the pre-overhaul key with a name that build used.
         val restored = Bundle().apply {
             putString("screen", Screen.WELCOME.name)
-            putString(WelcomeCardMemory.LEGACY_KEY, WelcomeCard.TILE.name)
+            putString(WelcomeCardMemory.LEGACY_KEY, "TILE")
         }
 
         val activity = Robolectric.buildActivity(MainActivity::class.java, blockedTap(id = "tap-3"))
@@ -125,7 +129,7 @@ class MainActivityWelcomeTileTapTest {
             .get()
 
         assertEquals(Screen.WELCOME, activity.screen)
-        assertEquals(WelcomeCard.RULE, activity.welcomeCard)
+        assertEquals(WelcomeCard.WHAT, activity.welcomeCard)
     }
 
     @Test
@@ -228,17 +232,16 @@ class MainActivityWelcomeTileTapTest {
     }
 
     @Test
-    fun `a flow paused on the tile before the reorder resumes at the rule card`() {
-        // Codex, PR #226. The tile card used to precede the rule card, so a
-        // breadcrumb written by an older build names a card that now sits after
-        // the one it had not reached. Resuming in place would walk the user
-        // past the only card offering Do Not Disturb access — and, if they had
-        // already added the tile, straight into the tile-without-access state
-        // the reorder exists to prevent. Written under the legacy key by hand,
-        // because that is the only thing an older build could have left.
+    fun `a flow paused before the overhaul restarts at card one`() {
+        // Codex, PR #226, regeneralized for the 2026-09-15 overhaul. A
+        // breadcrumb written by a pre-overhaul build names a card that no longer
+        // sits where it did — merged, split or removed — so resuming in place
+        // would land the user on the wrong step. Restarting the new flow is the
+        // honest answer. Written under the pre-overhaul key by hand, because
+        // that is the only thing an older build could have left.
         context.getSharedPreferences("welcome", Context.MODE_PRIVATE)
             .edit()
-            .putString(WelcomeCardMemory.LEGACY_KEY, WelcomeCard.TILE.name)
+            .putString(WelcomeCardMemory.LEGACY_KEY, "TILE")
             .commit()
 
         val activity = Robolectric.buildActivity(MainActivity::class.java, blockedTap())
@@ -246,25 +249,25 @@ class MainActivityWelcomeTileTapTest {
             .get()
 
         assertEquals(Screen.WELCOME, activity.screen)
-        assertEquals(WelcomeCard.RULE, activity.welcomeCard)
+        assertEquals(WelcomeCard.WHAT, activity.welcomeCard)
     }
 
     @Test
-    fun `the rewind is spent once, so the tile card can be resumed after it`() {
+    fun `the rewind is spent once, so a card can be resumed after it`() {
         // The other half: without this the rewind repeats forever, and a user
-        // who legitimately reaches the tile card is sent back to the rule card
-        // every time the process dies. Resuming writes the new key, which then
-        // wins over the legacy one.
+        // who legitimately reaches a later card is sent back to card 1 every
+        // time the process dies. Resuming writes the new key, which then wins
+        // over the legacy one.
         val store = WelcomeStore(context)
         context.getSharedPreferences("welcome", Context.MODE_PRIVATE)
             .edit()
-            .putString(WelcomeCardMemory.LEGACY_KEY, WelcomeCard.TILE.name)
+            .putString(WelcomeCardMemory.LEGACY_KEY, "TILE")
             .commit()
-        assertEquals(WelcomeCard.RULE.name, store.lastCard())
+        assertEquals(WelcomeCard.WHAT.name, store.lastCard())
 
-        store.rememberCard(WelcomeCard.TILE.name)
+        store.rememberCard(WelcomeCard.ENDS_AUTO.name)
 
-        assertEquals(WelcomeCard.TILE.name, store.lastCard())
+        assertEquals(WelcomeCard.ENDS_AUTO.name, store.lastCard())
     }
 
     @Test
@@ -274,14 +277,14 @@ class MainActivityWelcomeTileTapTest {
         // a blocked tap would land on the recap — the resume kept in every case
         // except the one where the user asked for the flow deliberately.
         WelcomeStore(context).markSeen()
-        WelcomeStore(context).rememberCard(WelcomeCard.ENDS.name)
+        WelcomeStore(context).rememberCard(WelcomeCard.ENDS_AUTO.name)
 
         val activity = Robolectric.buildActivity(MainActivity::class.java, blockedTap())
             .setup()
             .get()
 
         assertEquals(Screen.WELCOME, activity.screen)
-        assertEquals(WelcomeCard.ENDS, activity.welcomeCard)
+        assertEquals(WelcomeCard.ENDS_AUTO, activity.welcomeCard)
         assertTrue(activity.welcomeTapBlocked)
     }
 
@@ -290,7 +293,7 @@ class MainActivityWelcomeTileTapTest {
         // Codex, PR #220: the telemetry card is dropped where nothing collects,
         // and a breadcrumb naming it used to come back as a card the flow does
         // not contain — `Next` did nothing and the dots read card 1 while a
-        // fifth card was on screen. Robolectric has no Firebase, so this build
+        // later card was on screen. Robolectric has no Firebase, so this build
         // is exactly that case.
         WelcomeStore(context).rememberCard(WelcomeCard.TELEMETRY.name)
 
@@ -334,7 +337,7 @@ class MainActivityWelcomeTileTapTest {
     @Test
     fun `leaving the flow forgets the card`() {
         val store = WelcomeStore(context)
-        store.rememberCard(WelcomeCard.TILE.name)
+        store.rememberCard(WelcomeCard.RULE.name)
         val activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
         activity.screen = Screen.WELCOME
         activity.welcomeTapBlocked = true
