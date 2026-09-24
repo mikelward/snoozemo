@@ -264,7 +264,7 @@ it in the same commit.
   failures. It cannot deliver CI *success*, a push, the merge, Codex's clean
   verdict (a reaction), or Codex never answering at all — so keep exactly one
   check armed for as long as the PR is open (each event and each check costs
-  a model turn). Under drive, arm auto-merge at PR open too — but only where
+  a model turn). Under drive (but never under merge in order), arm auto-merge at PR open too — but only where
   the ruleset makes the Codex verdict a required check AND requires
   conversations resolved: where CI is the only requirement it merges before
   Codex has answered, and an open review comment holds nothing back on its own.
@@ -344,6 +344,15 @@ it in the same commit.
   wait for the automatic Codex review, address every review comment — fix it if you agree,
   reply on the thread saying why if you don't — and merge once CI is green and Codex's
   verdict for the current head is in.
+- **"Merge in order"** (or "drive in order") is *drive to merge* for PRs in flight
+  together, each merged only once every lower-numbered active PR has. Waiting holds only
+  the merge: keep driving a queued PR — review comments, CI, rebases — so it is green with
+  Codex's `+1` the moment it is the lowest. Merge by hand, never auto-merge (disarm any
+  already armed), rechecking the lower PRs just before. Each merge moves the base, so
+  rebase the next one per the `dirty`/`behind` rule even where the ruleset allows `behind`,
+  and merge on its new verdict. Active means open, not a draft, and either green with a
+  `+1` and only waiting its turn, or opened, reopened, pushed to, reviewed or commented on
+  in the last 30 minutes; say which lower PRs you skipped as stale.
 - **Merge when green and Codex has passed the current head.** Once a PR's CI is green and
   Codex has finished its pass with no unaddressed suggestions (its "no suggestions" outcome
   is a 👍 reaction, and `get_reviews` names the commit it read; suggestion threads count as
