@@ -205,10 +205,11 @@ it in the same commit.
   clones shallow, so `git rev-list --count`, `git log` past the shallow boundary, blame,
   and any "how many commits / what versionCode is this" question return wrong answers
   without warning. If `git rev-parse --is-shallow-repository` says `true`, run
-  `git fetch --unshallow origin main` first — do it once at the start of any session that
-  will report a versionCode — then re-check. It exits 0 even when it deepened nothing, so
-  if `--is-shallow-repository` is still `true`, say the history is truncated instead of
-  quoting a versionCode.
+  `git fetch --unshallow origin +refs/heads/main:refs/remotes/origin/main` first (by
+  refspec, so `origin/main` itself moves in a single-branch clone) — do it once at the
+  start of any session that will report a versionCode — then re-check. It exits 0 even
+  when it deepened nothing, so if `--is-shallow-repository` is still `true`, say the
+  history is truncated instead of quoting a versionCode.
 
 ## Commit messages
 
@@ -449,12 +450,12 @@ it in the same commit.
   `TODO.md` entry, not the thread, is the durable place a finding lives. What is not
   allowed is resolving without both halves: no entry, or no comment naming it, is the
   silent dismissal the rule above forbids.
-- **Report the Android `versionCode` after every merge to `main`.** Fetch `main` and run
-  `git rev-list --count origin/main` (`app/build.gradle.kts` derives the versionCode from
-  this count, once Phase 0 lands it). Report it as e.g. `Need versionCode 72 (b81c23d) or
-  higher to test PR #52's fix` — number, short SHA, and a one-clause summary of what the
-  change gates. The user needs this to know which Play internal-track / locally-built APK contains
-  their fix.
+- **Report the Android `versionCode` after every merge to `main`.** Fetch `main` by
+  refspec (see *Sync before you start*) and run `git rev-list --count origin/main`
+  (`app/build.gradle.kts` derives the versionCode from this count, once Phase 0 lands it).
+  Report it as e.g. `Need versionCode 72 (b81c23d) or higher to test PR #52's fix` —
+  number, short SHA, and a one-clause summary of what the change gates. The user needs
+  this to know which Play internal-track / locally-built APK contains their fix.
 - Link every open PR in the stack (one URL per line — the "View PR" chip sticks to the
   first link and hides the rest, anthropics/claude-code#46625) whenever you push, summarize
   CI, or invite review.
