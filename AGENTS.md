@@ -144,11 +144,13 @@ it in the same commit.
   One topic per branch; never commit to `main`. The placeholder `<agent>` stands in for
   whichever prefix you use — don't hard-code `claude/` unless you *are* Claude Code.
 - **Merge cue (`merged` / `I merged` / `landed` / merge webhook) runs hygiene *before*
-  engaging with the rest of the message:** `git fetch origin main`, cut a fresh
-  `<agent>/<short-topic>` branch off `origin/main`, announce the switch. Where the sandbox
-  has no remote, the cue can't be honored as written — a fresh branch needs a base that
-  contains the merge, and an offline checkout can't fetch one; say so and ask for a synced
-  checkout rather than branching off a stale `main`.
+  engaging with the rest of the message:** fetch main if the sandbox can (`git fetch origin
+  +refs/heads/main:refs/remotes/origin/main`; `git fetch origin main` alone leaves
+  `origin/main` stale in a single-branch clone), cut a fresh `<agent>/<short-topic>` branch
+  off `origin/main`, announce the switch. Where the sandbox has no remote, the cue can't be
+  honored as written — a fresh branch needs a base that contains the merge, and an offline
+  checkout can't fetch one; say so and ask for a synced checkout rather than branching off
+  a stale `main`.
 - **After a merge, take a fresh `<agent>/<short-topic>`** — don't reset the merged name
   onto the new base. Its remote ref still points at the pre-merge tip, so
   `origin/<branch>..HEAD` keeps spanning the merged commits and unpushed-work checks
