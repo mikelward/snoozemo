@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The same `Zzz` mark as the tile (ic_tile_snooze), scaled into the adaptive
+  The same `Zzz` mark as the tile (ic_snooze_mark), scaled into the adaptive
   icon's 66dp safe zone and centered in the 108dp viewport, so the launcher and
   the shade show one app rather than two.
 

@@ -9,7 +9,7 @@
         <service
             android:name="app.snoozemo.tile.SnoozeTileService"
             android:exported="true"
-            android:icon="@drawable/ic_tile_snooze"
+            android:icon="@drawable/ic_snooze_mark"
             android:label="@string/tile_name"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>

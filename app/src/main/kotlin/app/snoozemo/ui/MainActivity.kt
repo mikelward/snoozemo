@@ -91,6 +91,7 @@ import app.snoozemo.snooze.SnoozeService
 import app.snoozemo.snooze.releaseDirectly
 import app.snoozemo.tile.SnoozeTileService
 import app.snoozemo.tile.TilePresenceStore
+import app.snoozemo.dnd.R as DndR
 import app.snoozemo.tile.R as TileR
 
 private const val TAG = "MainActivity"
@@ -4574,7 +4575,7 @@ class MainActivity : ComponentActivity() {
             manager.requestAddTileService(
                 ComponentName(this, SnoozeTileService::class.java),
                 getString(TileR.string.tile_snooze_here),
-                Icon.createWithResource(this, TileR.drawable.ic_tile_snooze),
+                Icon.createWithResource(this, DndR.drawable.ic_snooze_mark),
                 mainExecutor,
             ) { result ->
                 val added = result == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED ||

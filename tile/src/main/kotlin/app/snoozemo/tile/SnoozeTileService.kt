@@ -13,6 +13,7 @@ import android.util.Log
 import app.snoozemo.core.ChooserMode
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.dnd.PrefsZenRuleIdStore
+import app.snoozemo.dnd.R as DndR
 
 /**
  * The product's real entry point (SPEC.md §4.2): one tap from the shade, phone
@@ -188,7 +189,7 @@ class SnoozeTileService : TileService() {
     private fun paint(snapshot: TileSnapshot) {
         qsTile?.apply {
             state = if (snapshot.snoozing) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
-            icon = Icon.createWithResource(applicationContext, R.drawable.ic_tile_snooze)
+            icon = Icon.createWithResource(applicationContext, DndR.drawable.ic_snooze_mark)
             label = getString(if (snapshot.snoozing) R.string.tile_snoozing else R.string.tile_snooze_here)
             subtitle = snapshot.subtitle(applicationContext)
             contentDescription = label
