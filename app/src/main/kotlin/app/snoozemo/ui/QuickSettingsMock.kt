@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.Image
 import app.snoozemo.R
+import app.snoozemo.dnd.R as DndR
 import app.snoozemo.tile.R as TileR
 
 /**
@@ -199,7 +200,7 @@ private fun QuickSettingsTile(
 private fun QuickSettingsMark(glyph: QuickSettingsGlyph, tint: Color) {
     if (glyph == QuickSettingsGlyph.SNOOZEMO) {
         Image(
-            painter = painterResource(TileR.drawable.ic_tile_snooze),
+            painter = painterResource(DndR.drawable.ic_snooze_mark),
             contentDescription = null,
             colorFilter = ColorFilter.tint(tint),
             contentScale = ContentScale.Fit,

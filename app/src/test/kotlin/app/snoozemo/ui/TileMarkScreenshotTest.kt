@@ -47,7 +47,7 @@ class TileMarkScreenshotTest {
     private fun capture(name: String, glyph: Int, ground: Int) {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val mark: Drawable = requireNotNull(
-            context.getDrawable(app.snoozemo.tile.R.drawable.ic_tile_snooze),
+            context.getDrawable(app.snoozemo.dnd.R.drawable.ic_snooze_mark),
         ) { "The tile mark is missing from the merged resources." }
         assertNotNull(mark)
 

@@ -2,6 +2,11 @@
 <!--
   The `Zzz` mark, drawn for a 24dp tile.
 
+  One asset for every place the system draws Snoozemo as a monochrome glyph:
+  the tile, and the ongoing notification's small icon in the status bar. It
+  lives in `:dnd` rather than `:tile` because that is the lowest module every
+  one of its users depends on.
+
   Quick Settings tints tile icons by state, so only the alpha channel survives:
   this is a silhouette by necessity, not by style. It also has to carry the
   meaning alone, because the maintainer runs the tile 1x1 and some panels show

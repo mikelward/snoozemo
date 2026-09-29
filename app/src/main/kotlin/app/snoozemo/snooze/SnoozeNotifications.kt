@@ -15,7 +15,7 @@ import app.snoozemo.distanceText
 import app.snoozemo.distanceUnitFor
 import app.snoozemo.dnd.AudioRingerController
 import app.snoozemo.dnd.RingerShortfall
-import app.snoozemo.tile.R as TileR
+import app.snoozemo.dnd.R as DndR
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.identity
 import app.snoozemo.core.DegradationCause
@@ -704,7 +704,7 @@ class SnoozeNotifications(private val context: Context) {
             !snooze.endsOnMotion &&
             withMotion == body
         val notification = android.app.Notification.Builder(context, CHANNEL_ACTIVE)
-            .setSmallIcon(TileR.drawable.ic_tile_snooze)
+            .setSmallIcon(DndR.drawable.ic_snooze_mark)
             .setContentTitle(
                 if (plainTimerOnly) {
                     context.getString(
@@ -1134,7 +1134,7 @@ class SnoozeNotifications(private val context: Context) {
         post(
             ID_ENDED,
             android.app.Notification.Builder(context, CHANNEL_ENDED)
-                .setSmallIcon(TileR.drawable.ic_tile_snooze)
+                .setSmallIcon(DndR.drawable.ic_snooze_mark)
                 .setContentTitle(context.getString(text))
                 .setAutoCancel(true)
                 .build(),
@@ -1180,7 +1180,7 @@ class SnoozeNotifications(private val context: Context) {
                 else -> return post(
                     ID_END_FAILURE,
                     android.app.Notification.Builder(context, CHANNEL_ENDED)
-                        .setSmallIcon(TileR.drawable.ic_tile_snooze)
+                        .setSmallIcon(DndR.drawable.ic_snooze_mark)
                         .setContentTitle(context.getString(R.string.failure_could_not_end))
                         .setAutoCancel(true)
                         .build(),
@@ -1229,7 +1229,7 @@ class SnoozeNotifications(private val context: Context) {
     fun showRingerStuck(): Boolean = post(
         ID_RINGER,
         android.app.Notification.Builder(context, CHANNEL_ENDED)
-            .setSmallIcon(TileR.drawable.ic_tile_snooze)
+            .setSmallIcon(DndR.drawable.ic_snooze_mark)
             .setContentTitle(context.getString(R.string.failure_ringer_stuck))
             .setContentText(context.getString(R.string.failure_ringer_stuck_body))
             .setAutoCancel(true)
@@ -1277,7 +1277,7 @@ class SnoozeNotifications(private val context: Context) {
         return post(
             ID_STUCK,
             android.app.Notification.Builder(context, CHANNEL_URGENT)
-                .setSmallIcon(TileR.drawable.ic_tile_snooze)
+                .setSmallIcon(DndR.drawable.ic_snooze_mark)
                 .setContentTitle(context.getString(R.string.failure_rule_stuck))
                 .setContentText(context.getString(R.string.failure_rule_stuck_body))
                 // Ongoing, not auto-cancelling, and the reasoning is worth
@@ -1384,7 +1384,7 @@ class SnoozeNotifications(private val context: Context) {
         post(
             ID_FAILURE,
             android.app.Notification.Builder(context, CHANNEL_ENDED)
-                .setSmallIcon(TileR.drawable.ic_tile_snooze)
+                .setSmallIcon(DndR.drawable.ic_snooze_mark)
                 .setContentTitle(context.getString(text))
                 .setAutoCancel(true)
                 .build(),
