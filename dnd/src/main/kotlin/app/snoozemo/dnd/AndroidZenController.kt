@@ -23,6 +23,8 @@ import app.snoozemo.core.confirmsNothingSilencing
 import app.snoozemo.core.ZenRuleState
 import app.snoozemo.core.SnoozeIdentity
 import app.snoozemo.core.ZenTrigger
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * The only place in the app that touches `NotificationManager` or
@@ -170,6 +172,9 @@ class AndroidZenController(
         // the first arm after a deletion fails with the id looking fine.
         store.ruleId()?.let { existing ->
             val lookup = runCatching { notificationManager.getAutomaticZenRule(existing) }
+            // Disabled included: a switched-off mode still sits in the Modes
+            // list, and the icon is how it is recognized there.
+            lookup.getOrNull()?.let { giveIconIfMissing(existing, it) }
             when {
                 // Confirmed gone. Drop the id and make a new rule.
                 lookup.isSuccess && lookup.getOrNull() == null -> store.clear()
@@ -232,6 +237,105 @@ class AndroidZenController(
                     ZenRuleState.FAILED
                 },
             )
+    }
+
+    /**
+     * Gives a rule an earlier build made — before the rule carried an icon —
+     * the `Zzz` mark, so the Modes UI stops drawing the platform's stand-in for
+     * `TYPE_OTHER` beside it (SPEC.md §5.3). New rules get the icon from
+     * [buildRule]; this is for the ones already on a phone.
+     *
+     * **Only while the rule is off.** The platform drops a rule's condition on
+     * any app update that changes a field (AOSP `ZenModeHelper.populateZenRule`),
+     * so writing the icon onto a running snooze's rule would turn its Do Not
+     * Disturb off under it — the phone ringing while the tile says `Snoozing`.
+     * On a rule that is already off, the dropped condition reads back as
+     * `STATE_FALSE` exactly as before, and nothing moves.
+     *
+     * An arm can still land between the check and the update, and it is **not**
+     * made to wait for them: this runs as the shade opens, just ahead of the tap,
+     * and two binder calls in front of `STATE_TRUE` are exactly what the arm path
+     * forbids (Codex, PR #301). The arm repairs it afterwards instead — see
+     * [reassertAfterIcon] — which is allowed, being past `STATE_TRUE`.
+     *
+     * Best effort: a failure leaves the default icon, which is cosmetic, and
+     * never changes what [ensureRule] reports.
+     */
+    private fun giveIconIfMissing(ruleId: String, rule: AutomaticZenRule) {
+        // Non-zero is ours, or one the user chose in the Modes UI, which is
+        // not ours to overwrite.
+        if (rule.iconResId != 0 || iconSettled) return
+        synchronized(ICON_BACKFILL) {
+            iconInFlight = true
+            try {
+                val state = runCatching { notificationManager.getAutomaticZenRuleState(ruleId) }
+                    .getOrElse {
+                        Log.w(TAG, "Reading the zen rule's state failed; giving it its icon later.", it)
+                        return
+                    }
+                // On, or the platform will not say: either way, not now. A later
+                // `ensureRule` with the rule off will do it.
+                if (state != Condition.STATE_FALSE) return
+                // Settled whatever the outcome, so a rule the platform will not
+                // update — newer platforms keep a user-customized rule from app
+                // updates — costs one attempt per process rather than two binder
+                // calls every time the shade opens.
+                iconSettled = true
+                try {
+                    val accepted = notificationManager.updateAutomaticZenRule(
+                        ruleId,
+                        AutomaticZenRule.Builder(rule).setIconResId(RULE_ICON).build(),
+                    )
+                    if (accepted) {
+                        SnoozeDebugLog.event("zen rule given its icon")
+                    } else {
+                        Log.w(TAG, "The platform declined the zen rule's icon; it keeps the default.")
+                    }
+                } catch (e: RuntimeException) {
+                    Log.w(TAG, "Giving the zen rule its icon failed; it keeps the default.", e)
+                } finally {
+                    // Counted even when it threw: a binder call can fail on the
+                    // way back after the platform applied it, and an arm that
+                    // re-asserts needlessly costs one call, where one that
+                    // trusted a failure could be left dropped.
+                    iconUpdates.incrementAndGet()
+                }
+            } finally {
+                iconInFlight = false
+            }
+        }
+    }
+
+    /**
+     * The other half of [giveIconIfMissing]: an arm whose `STATE_TRUE` may have
+     * been dropped by an icon update that overlapped it puts it back.
+     *
+     * Nearly always a volatile read and nothing more. Only when an update ran,
+     * or was running, since just before this write does it wait for that update
+     * to finish and write `STATE_TRUE` again — at most once per process, since
+     * only one update ever runs. The Do Not Disturb that blinks off in between
+     * should not end the snooze: the service reads the rule back before a
+     * deactivation broadcast ends anything (`ZenRuleStatusChange.resolve`), and
+     * this re-assert follows the update directly, well ahead of that
+     * broadcast's delivery. If the broadcast ever won, the snooze would end and
+     * say so, which fails open (SPEC.md D7).
+     *
+     * Not if anything else has written the rule since: a release that landed
+     * in between is the newer intent, and re-asserting over it would leave the
+     * phone quiet with nothing running.
+     */
+    private fun reassertAfterIcon(ruleId: String, condition: Condition, updatesBefore: Int, write: Long) {
+        if (!iconInFlight && iconUpdates.get() == updatesBefore) return
+        synchronized(ICON_BACKFILL) {
+            if (iconUpdates.get() == updatesBefore || stateWrites.get() != write) return
+            runCatching { notificationManager.setAutomaticZenRuleState(ruleId, condition) }
+                .onSuccess { SnoozeDebugLog.event("zen rule re-armed after its icon update") }
+                .onFailure {
+                    // The arm's own confirmation reads the rule back next; a
+                    // rule left off by this shows there as a refused arm.
+                    Log.e(TAG, "Re-arming the zen rule after its icon update failed.", it)
+                }
+        }
     }
 
     /**
@@ -814,9 +918,16 @@ class AndroidZenController(
         val summary = if (snoozed) "Snoozing at $placeName" else "Left $placeName"
         val condition = Condition(CONDITION_URI, summary, state, trigger.toConditionSource())
 
+        // Read before the write, with nothing that can wait: this sits between
+        // the tap and `STATE_TRUE`.
+        val updatesBefore = iconUpdates.get()
+        val write = stateWrites.incrementAndGet()
         return runCatching { notificationManager.setAutomaticZenRuleState(ruleId, condition) }
             .fold(
-                onSuccess = { ZenOutcome.Applied(ruleId) },
+                onSuccess = {
+                    if (snoozed) reassertAfterIcon(ruleId, condition, updatesBefore, write)
+                    ZenOutcome.Applied(ruleId)
+                },
                 onFailure = { error ->
                     // The release path's worst case: if this throws while ending a
                     // snooze, the phone stays silent. Report it so the caller can
@@ -837,6 +948,7 @@ class AndroidZenController(
             .setConfigurationActivity(configurationActivity)
             .setTriggerDescription(TRIGGER_DESCRIPTION)
             .setManualInvocationAllowed(true)
+            .setIconResId(RULE_ICON)
             .setEnabled(true)
             .build()
 
@@ -865,6 +977,61 @@ class AndroidZenController(
          * places construct a controller and they all target the same one rule.
          */
         private val RULE_CREATION = Any()
+
+        /**
+         * Held by [giveIconIfMissing] across its check and update, and by an arm
+         * re-asserting after one. Never taken *before* a state write. Always
+         * taken after [RULE_CREATION] when both are held, never before, so the
+         * two cannot deadlock.
+         */
+        private val ICON_BACKFILL = Any()
+
+        /** Whether this process has already tried [giveIconIfMissing]'s update. */
+        @Volatile
+        private var iconSettled = false
+
+        /** True while [giveIconIfMissing] is between its check and its update. */
+        @Volatile
+        private var iconInFlight = false
+
+        /** Icon updates attempted in this process: zero, or one. */
+        private val iconUpdates = AtomicInteger()
+
+        /** Every state write in this process, so a re-assert can tell it is still the latest. */
+        private val stateWrites = AtomicLong()
+
+        /**
+         * The rule's icon in Settings and the Modes UI. The platform stores it
+         * by resource *name*, not id, so renaming the drawable drops every
+         * installed rule back to the default icon until [giveIconIfMissing]
+         * next runs on it.
+         */
+        private val RULE_ICON = R.drawable.ic_snooze_mark
+
+        /**
+         * Test seams for the icon backfill. Public rather than `internal`
+         * because the tests live in `:app`, the same reason as
+         * `SnoozeRingerStore.holdWritesForTest`. [resetIconForTest] exists
+         * because this state is process-wide and would otherwise carry from one
+         * test into the next. [iconUpdateForTest] stands in for an update in
+         * flight: it holds the backfill's place while [block] runs, then counts
+         * an update, so a test can put an arm inside that window.
+         */
+        fun resetIconForTest() {
+            iconSettled = false
+            iconInFlight = false
+            iconUpdates.set(0)
+        }
+
+        fun iconUpdateForTest(block: () -> Unit) = synchronized(ICON_BACKFILL) {
+            iconInFlight = true
+            try {
+                block()
+            } finally {
+                iconUpdates.incrementAndGet()
+                iconInFlight = false
+            }
+        }
 
         /** Bounds [resetCondition]; small, because it is undoing a call that just worked. */
         private const val CONDITION_RESET_ATTEMPTS = 3

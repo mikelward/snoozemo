@@ -2547,7 +2547,7 @@ val rule = AutomaticZenRule.Builder("Snoozemo", CONDITION_ID)
     .setConfigurationActivity(ComponentName(ctx, SettingsActivity::class.java))
     .setTriggerDescription("While you're at a place you snoozed")
     .setManualInvocationAllowed(true)
-    .setIconResId(R.drawable.ic_zz)
+    .setIconResId(R.drawable.ic_snooze_mark)
     .setEnabled(true)
     .build()
 val ruleId = nm.addAutomaticZenRule(rule)   // requires ACCESS_NOTIFICATION_POLICY
@@ -2556,6 +2556,14 @@ val ruleId = nm.addAutomaticZenRule(rule)   // requires ACCESS_NOTIFICATION_POLI
 `CONDITION_ID` is a stable app-owned URI, e.g. `Uri.parse("snoozemo://snooze")`. This `Builder` is
 API 35+ only; minSdk is 35 (raised from 34, PR #88 — §11), so there is no older-constructor fallback
 to carry.
+
+**The icon is the `Zzz` mark** (§4.2), so the Modes list and the mode's own screen show Snoozemo's
+glyph rather than the platform's generic default for `TYPE_OTHER`. The rule is long-lived, so a phone
+that made its rule before the rule carried an icon is given it the next time the app prepares the
+rule, and **only while the rule is off**: the platform drops the condition of any rule an app
+updates, so updating a running snooze's rule would switch its Do Not Disturb off under it — the
+phone ringing while the tile says `Snoozing` (principle 1). An icon the user picked in the Modes UI
+is theirs, and is kept.
 
 ### 5.4 Turning the rule on and off
 

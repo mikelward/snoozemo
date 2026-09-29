@@ -4347,6 +4347,15 @@ that can only be settled on a real device, ordered by risk.
         nothing. Re-check with the flag — lock the phone, pull the shade, tap the tile; it
         must silence with no fingerprint. The unit test guards only the manifest
         declaration, not the platform behavior.
+19. [ ] **The Snoozemo mode shows the `Zzz` mark, not the default star** (`SPEC.md` §5.3), in
+        Settings → Modes and in the Modes tile. Check both paths: a fresh install, and a phone
+        upgraded from a build whose rule had no icon — that one is given the mark the next time
+        the app prepares the rule *with no snooze running*, so open the app idle and look again.
+        Also check it reads at Modes-list size in light and dark, and — on Android 16, where the
+        status bar shows the active mode's icon — whether a snooze now puts the mark there twice,
+        once for the mode and once for the ongoing notification. Robolectric cannot answer any of
+        it: it stores the icon id but renders no Modes UI, and does not model the condition drop
+        that makes the upgrade path wait.
 
 ### Pinch to resize text
 
