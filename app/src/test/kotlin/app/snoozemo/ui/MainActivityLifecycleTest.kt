@@ -70,7 +70,7 @@ class MainActivityLifecycleTest {
             payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
             clipboardWrite = { _, _ -> false },
             chooserLaunch = { _, _ -> false },
-            consumeCrashPin = { _, _ -> },
+            consumeCrashPin = { _ -> },
         )
 
         controller.start()

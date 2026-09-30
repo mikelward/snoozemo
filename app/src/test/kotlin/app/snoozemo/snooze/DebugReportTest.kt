@@ -164,39 +164,16 @@ class DebugReportTest {
     }
 
     @Test
-    fun `says a crash was too large to include, and how to clear the banner`() {
-        // The guard that refuses to consume the pin when the render dropped
-        // part of what was read never lifts for a crash bigger than the
-        // section's bound -- the same runs truncate the same way every retry,
-        // so sharing can never lower the banner and Dismiss is the only route.
-        // Saying so beats leaving the user tapping Share (maintainer,
-        // 2026-08-31; the proper fix needs per-run visibility the library does
-        // not expose, and is tracked in TODO.md).
-        val truncated = payload(
-            previousRun = "state=ARMED",
-            previousRunCrashed = true,
-            previousRunCrashTooLarge = true,
-        )
+    fun `the earlier runs say older lines may have been left out, ahead of the text`() {
+        // The section keeps the newest of what is on disk, so a crash older
+        // than that is on the phone but not in the report; the reader is told
+        // before the text rather than after 25,000 characters of it.
+        val payload = payload(previousRun = "state=ARMED", previousRunCrashed = true)
 
-        assertTrue(
-            truncated.contains("(crash details too large to include - dismiss the banner to clear)"),
-        )
-        // Ahead of the text, since a line after 25,000 characters is one
-        // nobody reaches.
-        assertTrue(
-            truncated.indexOf("too large to include") < truncated.indexOf("state=ARMED"),
-        )
-    }
-
-    @Test
-    fun `an earlier run that fit says nothing about being too large`() {
-        val whole = payload(
-            previousRun = "state=ARMED",
-            previousRunCrashed = true,
-            previousRunCrashTooLarge = false,
-        )
-
-        assertFalse(whole.contains("too large to include"))
+        val note = "(newest last; older lines are dropped to keep the report shareable)"
+        assertTrue(payload.contains(note))
+        assertTrue(payload.indexOf(note) < payload.indexOf("state=ARMED"))
+        assertFalse(payload.contains("dismiss the banner"))
     }
 
     @Test
@@ -382,7 +359,6 @@ class DebugReportTest {
         previousRun: String? = null,
         previousRunCrashed: Boolean = false,
         previousRunOmitted: Boolean = false,
-        previousRunCrashTooLarge: Boolean = false,
         recentLog: List<String> = emptyList(),
     ): String = buildDebugReportPayload(
         nowMillis = 0L,
@@ -409,7 +385,6 @@ class DebugReportTest {
         previousRun = previousRun,
         previousRunCrashed = previousRunCrashed,
         previousRunOmitted = previousRunOmitted,
-        previousRunCrashTooLarge = previousRunCrashTooLarge,
         recentLog = recentLog,
     )
 }

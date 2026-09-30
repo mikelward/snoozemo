@@ -729,27 +729,15 @@ internal object DebugLogging {
     }
 
     /**
-     * The unshared prior runs, with the handle that consumes exactly them.
+     * The prior runs still on disk, newest-bounded for a report.
      *
-     * The handle is passed to the caller rather than held here: it is what lets
-     * a report delete the files it was actually built from, so two overlapping
-     * share flows cannot have the first destroy a run only the second had read.
-     *
-     * A null [PreviousRun] means there is nothing to send. It no longer
-     * distinguishes that from a read that failed — the library reports a failed
+     * A null [PreviousRun] means there is nothing to send. It does not
+     * distinguish that from a read that failed — the library reports a failed
      * read into the log itself rather than to the caller — so `readSucceeded`
-     * now answers the narrower question the caller can still be told: whether
-     * the read ran at all, as against no sink installed or a worker that
-     * refused the task.
-     *
-     * That narrowing does not reopen what the wider answer protected against,
-     * but only because the handle now says so itself. A crash arriving with no
-     * text is caught by `DebugReport`'s own check; a crash *skipped* by a read
-     * that could not open it is caught by `PreviousRun.complete`, which is the
-     * library reporting that its handle does not cover every run still on
-     * disk. Leaving the file in place is not enough on its own — the file
-     * survives, but acknowledging the banner on a report that never carried it
-     * retires the only offer to send it (Codex, PR #153).
+     * answers the narrower question the caller can still be told: whether the
+     * read ran at all, as against no sink installed or a worker that refused
+     * the task. A run the read could not open is named in the text by the
+     * library's own notice.
      */
     fun readPreviousOrCrash(
         onResult: (run: PreviousRun?, wasCrash: Boolean, readSucceeded: Boolean) -> Unit,
@@ -804,7 +792,7 @@ internal object DebugLogging {
      * stalled read must not be what makes the next one time out.
      */
     private fun readPreviousRunBounded(installed: DebugFileSink): PreviousRun? =
-        awaitBounded { installed.readPreviousRun() }
+        awaitBounded { readPreviousRunForReport(installed) }
 
     /**
      * Runs [read] on [blockingReads] and waits [timeoutSeconds] for it.
@@ -863,24 +851,22 @@ internal object DebugLogging {
     private var onCrashPinOutcome: (() -> Unit)? = null
 
     /**
-     * Consumes [run] — the files a delivered report was built from — and lowers
-     * the crash banner. Reported as success before [install] has run: there is
-     * nothing to consume.
+     * Lowers the crash banner after a delivered report. Reported as success
+     * before [install] has run: there is nothing to lower.
+     *
+     * Deletes nothing (maintainer, 2026-09-30). It used to delete the runs the
+     * report was built from, which cost the logs whenever the share failed
+     * after the clipboard copy or the user changed their mind about where to
+     * send it — and, to avoid deleting a crash the report had not carried, it
+     * refused to lower the banner for any crash too old to fit, so the banner
+     * for that crash never came down. The runs now stay, still shareable, and
+     * age out under the logger's retention count like any other.
      */
-    fun consumeCrashPin(run: PreviousRun?, onResult: (Boolean) -> Unit) {
+    fun consumeCrashPin(onResult: (Boolean) -> Unit) {
         runCatching {
             worker.execute {
                 val installed = sink
                 if (installed != null) {
-                    // The banner is acknowledged whether or not the clear
-                    // succeeded, deliberately: the report landed, so the user
-                    // has the crash, and the library holds any file it could
-                    // not discard for the next share to retry. What a failure
-                    // here loses is the diagnostic, not the evidence.
-                    if (run != null) {
-                        runCatching { installed.clearPreviousRun(run) }
-                            .onFailure { logFailure(it, "a shared run could not be cleared") }
-                    }
                     runCatching { installed.acknowledgeCrashBanner() }
                         .onFailure { logFailure(it, "a crash banner could not be acknowledged after a share") }
                 }

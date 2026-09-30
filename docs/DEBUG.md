@@ -39,7 +39,8 @@ grants, a full settings/rules dump, the in-memory log, the previous run's log if
 exit cleanly), copies it to the clipboard, and fires `Intent.ACTION_SEND` through a chooser.
 Both routes are best-effort and independent; a failure notifies the user only if *neither*
 landed. The previous run's file is deleted only after the clipboard copy is confirmed —
-never on the chooser's say-so, since `ACTION_SEND` has no delivery callback. Injectable seams
+never on the chooser's say-so, since `ACTION_SEND` has no delivery callback. (Snoozemo keeps
+that confirmation gate but, since 2026-09-30, deletes nothing on a share — see §5.) Injectable seams
 (`payloadCollect`, `clipboardWrite`, `chooserLaunch`) make every combination unit-testable
 without a real `Activity` or `ClipboardManager`.
 
@@ -73,7 +74,7 @@ ClothesCast, but differs in two ways forced by its own architecture and SPEC:
 
 Methods on **`DebugLogging`**, the app's wrapper — not on the sink. When this was planned the
 sink was this app's own; it is `mikelward/androidlog`'s now, and the split fell out as: the
-library owns the files (`readPreviousRun`, `clearPreviousRun`, `acknowledgeCrashBanner`,
+library owns the files (`readPreviousRun`, `acknowledgeCrashBanner`,
 `requestCrashRecompute`, `addCrashListener`), and `DebugLogging` owns the app-shaped question
 each of these asks of it. All are enqueued on `DebugLogging`'s own FIFO worker (never blocking
 the caller) and answer through a callback, the same shape `DebugLogging.setEnabled` uses:
@@ -81,16 +82,15 @@ the caller) and answer through a callback, the same shape `DebugLogging.setEnabl
 - `hasPinnedCrash(onResult: (pinned: Boolean, checkSucceeded: Boolean) -> Unit)` — whether an
   unacknowledged crash run is still on disk, and whether the check could be made at all.
 - `readPreviousOrCrash(onResult: (run: PreviousRun?, wasCrash: Boolean, readSucceeded: Boolean) -> Unit)`
-  — the unshared prior runs, oldest first, as the shared logger's handle. Several are kept side
-  by side (SPEC.md §4.6), so a crashed run does not displace an ordinary one; a crashed run
-  carries its own suffix rather than occupying a single `previous` slot. **The handle is passed
-  to the caller and never held here**: it is what lets a delivered report consume exactly the
-  files it was built from, so two overlapping shares cannot have the first destroy a run only
-  the second had read.
-- `consumeCrashPin(run: PreviousRun?, onResult: (Boolean) -> Unit)` — what a landed Share
-  performs: `clearPreviousRun(run)` for exactly the files behind `run`, then
-  `acknowledgeCrashBanner()`. A null handle consumes nothing, which is the safe direction for a
-  caller that was given nothing.
+  — the prior runs, oldest first, read to fit the report's earlier-runs section with the newest
+  kept. Several are kept side by side (SPEC.md §4.6), so a crashed run does not displace an
+  ordinary one; a crashed run carries its own suffix rather than occupying a single `previous`
+  slot. Only the text reaches the report; nothing is deleted on its behalf, so no handle has to
+  travel with it.
+- `consumeCrashPin(onResult: (Boolean) -> Unit)` — what a landed Share performs:
+  `acknowledgeCrashBanner()` alone, which lowers the banner and deletes nothing (maintainer,
+  2026-09-30). The runs age out under the library's run cap like any other. A Share whose read
+  timed out or failed carried nothing from those runs, so it leaves the banner up instead.
 - `dismissCrashPin()` — Dismiss without sending, over the library's
   `acknowledgeCrashBanner()`. Takes the run off its crash-suffixed name, after which it is an
   ordinary prior run: still shareable, pruned by age like any other. A refusal leaves the
@@ -173,7 +173,8 @@ the one piece of crash evidence that explains a stuck or early-ended snooze).
   while `hasPinnedCrash()` is true — modeled on ClothesCast's `LastCrashBannerCard`: title,
   body, `Dismiss` (text button, consumes the pin without sharing) and `Share` (filled button,
   shares — which itself consumes the pin only on a landed clipboard copy, so a failed share
-  leaves the banner up for a retry rather than silently dropping the crash). `MainScreen`
+  leaves the banner up for a retry rather than silently dropping the crash). Neither deletes
+  the log (maintainer, 2026-09-30): consuming the pin lowers the banner, and the runs age out. `MainScreen`
   rather than `SettingsScreen`, refined during implementation (maintainer): it is the screen
   the user actually lands on, and a crash is exactly the thing that should not wait for a
   navigation to Settings to be seen. The `Share debug logs` row's own home is unaffected.
@@ -189,7 +190,7 @@ the one piece of crash evidence that explains a stuck or early-ended snooze).
 
 ### 6. Tests
 
-- The file-level read/consume behavior — rename semantics, the copy+delete fallback
+- The file-level read/acknowledge behavior — rename semantics, the copy+delete fallback
   (crucially reading `crash.delete()`'s own return, not `runCatching{}.isSuccess`, which reads
   true on a refused delete that threw nothing — Codex, PR #89), idempotency when the file is
   already gone. **Owned by `mikelward/androidlog`'s own `DebugFileSinkTest` now**, not this
