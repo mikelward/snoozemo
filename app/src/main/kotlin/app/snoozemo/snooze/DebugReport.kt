@@ -23,6 +23,7 @@ import app.snoozemo.dnd.SnoozeRingerStore
 import app.snoozemo.tile.TilePresenceStore
 import app.snoozemo.ui.locationTrackingNeedsBackgroundPermission
 import com.mikelward.androidlog.android.PreviousRun
+import com.mikelward.androidlog.android.ProcessExits
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -383,7 +384,7 @@ internal object DebugReport {
             previousRunOmitted = previousRunOmitted,
             previousRunCrashTooLarge =
                 previousRunRead.wasCrash && previousRunRead.renderDroppedPartOfPreviousRun,
-            recentLog = SnoozeDebugLog.snapshot(),
+            recentLog = recentLogForReport(),
         )
         // Only safe when the read actually completed, actually succeeded,
         // *and* the crash it was reading actually has content: a timeout
@@ -453,7 +454,7 @@ internal object DebugReport {
         appendLine("Report collection failed: ${failure.javaClass.name}")
         appendLine("Android: ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
         appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
-        append(renderRecentLog(SnoozeDebugLog.snapshot(), MAX_LOG_PAYLOAD_CHARS))
+        append(renderRecentLog(recentLogForReport(), MAX_LOG_PAYLOAD_CHARS))
     }
 
     /**
@@ -757,16 +758,39 @@ internal fun buildDebugReportPayload(
     return boundedHead + previousSection + renderRecentLog(recentLog, MAX_LOG_PAYLOAD_CHARS)
 }
 
-/** The "Recent log" section — the in-memory ring buffer, newest last, bounded to [budgetChars]. */
+/**
+ * The current run's log for a report: the ring's newest lines, with the pinned
+ * lines it has since evicted put back ahead of them, in one read.
+ *
+ * Pinned lines (why the previous processes ended) are written once at startup,
+ * so on a busy run the ring has dropped them by the time a report is shared.
+ * [SnoozeDebugLog.snapshot] is the ring alone and would leave them out (Codex,
+ * PR #302). The pinned lines get their own reserve inside the section's budget,
+ * so the recent lines can't crowd them out of it either.
+ */
+internal fun recentLogForReport(): List<String> = SnoozeDebugLog.boundedSnapshot(
+    pinnedBudgetChars = MAX_PINNED_LOG_CHARS,
+    recentBudgetChars = MAX_LOG_PAYLOAD_CHARS - MAX_PINNED_LOG_CHARS,
+)
+
+/**
+ * The "Recent log" section — newest last, bounded to [budgetChars].
+ *
+ * The heading counts what is here and claims nothing about what isn't. It used
+ * to read "N of M shown", with M the size of the list handed in, which was the
+ * whole ring when this function did the only trimming. [recentLogForReport]
+ * trims first, so M would equal N and the heading would call a report complete
+ * exactly when lines had been dropped (the same fix as typelauncher's #706).
+ */
 private fun renderRecentLog(recentLog: List<String>, budgetChars: Int): String = buildString {
     appendLine()
     val kept = boundedLogTail(recentLog, budgetChars)
-    val dropped = recentLog.size - kept.size
-    appendLine("--- Recent log (newest last, ${kept.size} of ${recentLog.size} shown) ---")
-    if (recentLog.isEmpty()) {
+    appendLine(
+        "--- Recent log (${kept.size} lines, newest last; older lines are dropped to keep the report shareable) ---",
+    )
+    if (kept.isEmpty()) {
         appendLine("(no captured log lines — has a snooze run since the app started?)")
     } else {
-        if (dropped > 0) appendLine("($dropped older line(s) omitted to keep the report shareable)")
         kept.forEach { appendLine(it) }
     }
 }
@@ -850,5 +874,13 @@ private const val MAX_STRUCTURED_CHARS = 4_000
 /** Ceiling for the previous (or crashed) run's section. */
 private const val MAX_PREVIOUS_RUN_CHARS = 25_000
 
-/** Ceiling for the current run's recent-log section. */
+/** Ceiling for the current run's recent-log section, pinned lines included. */
 private const val MAX_LOG_PAYLOAD_CHARS = 30_000
+
+/**
+ * The part of [MAX_LOG_PAYLOAD_CHARS] held back for pinned lines: the most a
+ * startup batch of process-exit records can take, which is every line this app
+ * pins. Anything smaller drops the batch from its front, and the batch is
+ * written newest exit first (Codex, PR #302).
+ */
+private val MAX_PINNED_LOG_CHARS = ProcessExits.maxBatchChars()

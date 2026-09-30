@@ -4,7 +4,10 @@ import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.SnoozeRinger
+import com.mikelward.androidlog.DebugLog
+import com.mikelward.androidlog.safe
 import org.junit.Test
 
 /**
@@ -211,12 +214,43 @@ class DebugReportTest {
     }
 
     @Test
-    fun `the recent log section says how many lines are shown`() {
+    fun `the recent log section says how many lines are shown and that older ones may be dropped`() {
         val payload = payload(recentLog = listOf("line one", "line two"))
 
-        assertTrue(payload.contains("--- Recent log (newest last, 2 of 2 shown) ---"))
+        // No "of M": the log arrives already trimmed, so a total would claim
+        // the report is complete precisely when it isn't.
+        assertTrue(
+            payload.contains(
+                "--- Recent log (2 lines, newest last; older lines are dropped to keep the report shareable) ---",
+            ),
+        )
         assertTrue(payload.contains("line one"))
         assertTrue(payload.contains("line two"))
+    }
+
+    @Test
+    fun `a pinned line the ring has evicted still reaches the report`() {
+        SnoozeDebugLog.resetForTest()
+        SnoozeDebugLog.setRecording(true)
+        try {
+            SnoozeDebugLog.pinnedEvent("processExit reason=%s", safe("crash"))
+            // Well past the ring's capacity, as a busy run would be.
+            repeat(DebugLog.DEFAULT_MAX_ENTRIES + 50) { SnoozeDebugLog.event("busy %s", it) }
+            // Precondition: the ring alone has lost it, so the report can only
+            // be carrying it from the pinned copy.
+            assertFalse(SnoozeDebugLog.snapshot().any { "processExit reason=crash" in it })
+
+            val payload = payload(recentLog = recentLogForReport())
+
+            val section = payload.substringAfter("--- Recent log")
+            assertTrue(section, section.contains("processExit reason=crash"))
+            // Ahead of the recent lines, as it happened before them, and those
+            // are still there.
+            assertTrue(section.indexOf("processExit reason=crash") < section.indexOf("busy 349"))
+        } finally {
+            SnoozeDebugLog.resetForTest()
+            SnoozeDebugLog.setRecording(true)
+        }
     }
 
     @Test
@@ -261,7 +295,7 @@ class DebugReportTest {
 
         assertTrue(payload.length < MAX_SHARE_PAYLOAD_CHARS)
         assertTrue(payload.contains("entry 10000"))
-        assertTrue(payload.contains("older line(s) omitted"))
+        assertFalse(payload.contains("entry 1\n"))
     }
 
     @Test
