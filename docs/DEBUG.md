@@ -120,8 +120,10 @@ Sections, in order:
    one of them: `(one ended in an uncaught exception)` when it is true, otherwise
    unlabeled. Naming *which* run crashed would need per-run metadata the handle does not
    carry.
-6. **Recent log** — `SnoozeDebugLog.snapshot()`, newest-last, the same shape Simmo's
-   "Recent log" section uses.
+6. **Recent log** — `SnoozeDebugLog.boundedSnapshot(...)`, newest-last: the ring's newest
+   lines, with any pinned lines the ring has since evicted (why the previous processes
+   ended) put back ahead of them. The heading counts the lines shown and says older ones
+   may be dropped, rather than claiming a total the trimmed list can't know.
 
 No settings/rules section — see above.
 
@@ -139,7 +141,7 @@ header than to Simmo's rule dump:
 | Total (`MAX_SHARE_PAYLOAD_CHARS`) | 60,000 |
 | Structured header (build/device/state) | 4,000 |
 | Previous/crashed run | 25,000 |
-| Recent log | 30,000 |
+| Recent log (of which `ProcessExits.maxBatchChars()`, about 2,850, is held for pinned lines) | 30,000 |
 
 Numbers are a starting point for the implementation PR, not a commitment — they get pinned
 by that PR's own bounds test (mirroring `DebugReportBoundsTest` / `BugReportBoundsTest`),
