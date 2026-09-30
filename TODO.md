@@ -4921,48 +4921,26 @@ question.
   published `optOutPurgeFailed = false` over surviving files. The library fix
   makes it unnecessary.
 
-- **An oversized crash log can never be consumed by sharing** (Codex, PR #153;
-  route 3 landed, the real fix still open). `DebugReport.omitted` refuses to consume the
-  crash pin whenever the report's own 25,000-character bound dropped any of
-  what was read — a guard added earlier on that same PR, because a pinned
-  crash can be an older run that newer ordinary ones push out of the tail, and
-  consuming it there would lower the banner over a report that never carried
-  the crash. For a crash whose runs exceed that bound, the same input truncates
-  the same way every time, so the refusal is **permanent**: sharing can never
-  lower the banner, and the user has to dismiss it by hand. Not a strand — the
-  report still lands, the evidence still exists, and Dismiss still works — but
-  it is a control that visibly never does what it says.
-  **No fix is available to this app alone.** The question the guard would need
-  to ask is "did the *crash's* portion survive", and the concatenated text
-  carries no marker saying where each run begins; `PreviousRun` exposes `text`
-  and `complete`, with `files` internal and no way to request the crashed run
-  on its own. So all three options change `mikelward/androidlog`, which four
-  apps compile:
-  1. **Per-run boundaries in the handle** — the report could then ask about the
-     crash specifically. Biggest, and every consumer re-renders.
-  2. **A read for the crashed run alone**, given its own section and its own
-     budget, so it is never the thing truncated away. Smaller, but adds a
-     second read and a second section to the report format.
-  3. **Leave it, and say so in the UI** — tell the user the report could not
-     carry the whole crash and that Dismiss is the way to clear it. Cheapest;
-     needs approved English copy, so it is not autopilot's to write.
-  **Decided (maintainer, 2026-08-31): route 3 for now, with 1 or 2 still to
-  do.** The report says `(crash details too large to include - dismiss the
-  banner to clear)` when a pinned crash was among what the bound cut off, so
-  the user is told rather than left tapping Share. The deadlock itself
-  remains — this explains it, it does not fix it.
-  **Constraint for whoever takes 1 or 2 (maintainer, 2026-08-31): if there
-  are multiple sections they all need limits.** That is already how the report
-  works — `MAX_STRUCTURED_CHARS` 4,000 + `MAX_PREVIOUS_RUN_CHARS` 25,000 +
-  `MAX_LOG_PAYLOAD_CHARS` 30,000 = 59,000, under `MAX_SHARE_PAYLOAD_CHARS`
-  60,000 — so a separate crash section cannot be *added*: its budget has to be
-  carved out of the existing 25,000, or the total raised, and 60,000 is there
-  because share targets choke past it. That makes route 2 dearer than it first
-  looks.
-  Note also that no budget scheme removes the deadlock on its own: a single
-  crash run larger than its own section still cannot be carried whole. Route 2
-  only closes it if a *truncated but present* crash is then treated as
-  consumable — which looks right, since the user did send the crash's tail.
+- [x] **An oversized crash log can never be consumed by sharing** (Codex, PR #153;
+  resolved 2026-09-30). `DebugReport.omitted` refused to lower the banner whenever the
+  report's budget dropped part of what was read, because a share then *deleted* the runs it
+  carried and could have deleted a crash it never sent. For a crash too old to fit, the same
+  input truncated the same way every time, so the banner never came down by sharing; the
+  interim answer (maintainer, 2026-08-31) was a report line saying to dismiss it.
+  **Resolved by the maintainer (2026-09-30): sharing stops deleting.** It lowers the banner
+  exactly as Dismiss does, and the runs age out under the logger's retention count. That
+  also covers a share that fails after the clipboard copy, or one the user abandons, neither
+  of which should cost the log. With nothing deleted there is no crash to protect, so the
+  banner is held up only by a read that timed out or failed, which pass; the budget and
+  unreadable-run clauses went, and the "dismiss the banner" line with them. The report now
+  says above the earlier runs that older lines are dropped.
+  **The gap accepted with it:** a crash followed by enough uneventful runs falls out of the
+  report's newest-first budget, so it is on the phone but not in what was sent, and ages
+  out. Routes 1 and 2 (per-run boundaries, or reading the crashed run first) would close it;
+  both change `mikelward/androidlog`, and neither is planned.
+  **The other apps still delete on share** (clothescast, stopdash and typelauncher through
+  the library's `DebugReport.deliver`, simmo through its own sink). Snoozemo is the pilot;
+  carrying it to them is the maintainer's call once it has settled here.
 
 - **A skipped ordinary run is never announced in the report** (Codex, PR #153;
   same family as the entry above). When the library cannot read one retained
@@ -6536,7 +6514,8 @@ are simply what the one build ships.
   here: `lastDisableCleanupFailed` (now the union of the sink's purge and
   this app's own legacy-directory migration, which the sink cannot answer
   for), `lastDismissFailed`, and `omitted`. So the window this entry
-  guessed its way into never shipped.
+  guessed its way into never shipped. (`omitted`'s `complete` clause went on
+  2026-09-30, when sharing stopped deleting; see *An oversized crash log*.)
 
   Two more P1s on the same review needed no library change and are fixed
   with tests: the legacy `cacheDir/debuglog` migration never retried on the

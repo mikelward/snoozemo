@@ -2284,9 +2284,14 @@ deaths.
 shared logger's retention count, so a crash and the uneventful restarts after it coexist and a
 report carries them oldest-first. That replaces an earlier single-slot design in which an ordinary
 run was *discarded* while a crash was pinned, to hold a two-run bound; nothing needs discarding
-once there is more than one slot. Sharing consumes the runs the report was built from; Dismiss
-takes a run off the crash-suffixed name, after which it is an ordinary prior run, shareable from
-settings and pruned by age like any other. A later crash marks again.
+once there is more than one slot. **Sharing and Dismiss both lower the banner, and neither deletes
+anything** (maintainer, 2026-09-30): the run comes off the crash-suffixed name and is an ordinary
+prior run, shareable from settings and pruned by age like any other. A later crash marks again.
+Sharing used to delete the runs its report carried, which cost the logs whenever the share failed
+after the clipboard copy or the user changed their mind about where to send it, and — to avoid
+deleting a crash the report had not carried — left the banner up for good over any crash too old to
+fit the report. The cost of not deleting is a narrow one: a crash followed by enough uneventful runs
+falls out of the report's newest-first budget, and is on the phone but not in what was sent.
 
 **An empty crash log raises no banner.** A crash marker can land without the run's own content ever
 reaching disk — process death between the two writes — and a banner offering a report with nothing

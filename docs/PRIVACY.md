@@ -377,9 +377,10 @@ services and battery saver are on, whether the Quick Settings tile has been adde
 of ring, vibrate or silent your phone is set to right now alongside the setting you chose for
 snoozing — all
 facts that commonly explain why a snooze misbehaved, none of them anything you typed. If the
-app's previous run ended in a crash, that run's log is included too, labeled as a crash, and
-sharing it deletes exactly the runs that report carried. Dismissing the banner instead
-deletes nothing: it stops the crash being announced, and the log ages out like any other.
+app's previous run ended in a crash, that run's log is included too, labeled as a crash, up to
+the size that keeps the report shareable (the newest lines are kept). Neither sharing the
+report nor dismissing the banner deletes anything: both stop the crash being announced, and
+the log ages out like any other.
 
 **The crash banner appears only after a crash** — an ordinary close, a force-stop, or an app
 update never raises it — and only until you share the report or dismiss the banner. The floor

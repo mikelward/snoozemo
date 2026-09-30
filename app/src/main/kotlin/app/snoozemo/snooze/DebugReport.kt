@@ -22,6 +22,7 @@ import app.snoozemo.dnd.PrefsRingerLoanStore
 import app.snoozemo.dnd.SnoozeRingerStore
 import app.snoozemo.tile.TilePresenceStore
 import app.snoozemo.ui.locationTrackingNeedsBackgroundPermission
+import com.mikelward.androidlog.android.DebugFileSink
 import com.mikelward.androidlog.android.PreviousRun
 import com.mikelward.androidlog.android.ProcessExits
 import java.text.SimpleDateFormat
@@ -58,32 +59,17 @@ internal object DebugReport {
     /**
      * What [collectPayload] (or a test's own seam) produced.
      *
-     * [pinConsumeSafe] is false whenever the text might not actually carry a
-     * pinned crash that exists — the previous-run read timed out, or the
-     * fallback path ran — so [share] must not treat a landed copy as proof
-     * the crash was shared (Codex, PR #89): consuming the pin on a report
-     * that silently omitted the crash would lose the only evidence a banner
-     * exists to protect, for a share that never actually carried it.
+     * [pinConsumeSafe] is false when the earlier runs could not be read at all
+     * — the read timed out or failed, or the fallback path ran — so the text
+     * carries none of them, a pinned crash included. [share] then leaves the
+     * banner up rather than lowering it over a report that says the runs
+     * could not be included (Codex, PR #89). Those failures pass, so the next
+     * share reads them; a condition that would repeat on every share must not
+     * gate the banner, or it never comes down.
      */
     data class Payload(
         val text: String,
         val pinConsumeSafe: Boolean,
-        /**
-         * The files [text] was actually built from, or null when it was built
-         * from none — a fallback payload, or a read that found nothing.
-         *
-         * Carried through rather than remembered anywhere: [share] hands it
-         * straight back to [DebugLogging.consumeCrashPin], so a delivered
-         * report deletes exactly what it contained. A single remembered slot
-         * is what let two overlapping shares have the earlier one destroy a
-         * run only the later had read, whose own delivery might still fail.
-         *
-         * Defaults to null so a caller that has no handle — a fallback
-         * payload, a test's own seam — says nothing rather than saying
-         * something wrong. Null means "consume nothing", which is the
-         * direction that loses no evidence.
-         */
-        val previousRun: PreviousRun? = null,
     )
 
     /** How long [share] waits for [consumeCrashPin] before giving up on it for this attempt. */
@@ -236,15 +222,14 @@ internal object DebugReport {
      * share sheet has no delivery callback, so [Result.clipboardCopied] is
      * the only outcome this can safely gate anything on.
      *
-     * On a landed clipboard copy, also consumes the crash pin if one was
-     * pinned — SPEC.md §4.6, "sharing consumes the pin" — never on the
-     * chooser merely opening, which is not proof the user completed
-     * anything, and never when [Payload.pinConsumeSafe] is false, which
-     * means the text this landed copy carries might not actually include a
-     * pinned crash that exists (Codex, PR #89). A share whose clipboard
-     * copy failed leaves the pin in place for a retry, so the evidence a
-     * crash banner exists for is never lost to a share that didn't actually
-     * land. The pin's own consumer already
+     * On a landed clipboard copy, also lowers the crash banner if one is up —
+     * SPEC.md §4.6, "sharing consumes the pin" — never on the chooser merely
+     * opening, which is not proof the user completed anything, and never when
+     * [Payload.pinConsumeSafe] is false, which means the text could not
+     * include the earlier runs at all (Codex, PR #89). It deletes nothing: the
+     * runs stay on disk, still shareable, and age out under the logger's
+     * retention count (maintainer, 2026-09-30), so a share that fails after
+     * the copy, or one the user abandons, costs no log. The pin's own consumer already
      * notifies its own watch ([DebugLogging.watchCrashPinOutcome]) with the
      * *real* outcome, so a caller must not infer the pin is gone from
      * [Result.clipboardCopied] alone — a landed copy only means consuming was
@@ -273,12 +258,11 @@ internal object DebugReport {
         payloadCollect: (Context) -> Payload = ::collectPayload,
         clipboardWrite: (Context, String) -> Boolean = ::copyToClipboard,
         chooserLaunch: (Context, String) -> Boolean = ::startShare,
-        consumeCrashPin: (run: PreviousRun?, onResult: (Boolean) -> Unit) -> Unit =
-            DebugLogging::consumeCrashPin,
+        consumeCrashPin: (onResult: (Boolean) -> Unit) -> Unit = DebugLogging::consumeCrashPin,
     ): Result {
         val payload = runCatching { payloadCollect(context) }
             .onFailure { Log.e(TAG, "Building the debug report failed; sharing a minimal fallback.", it) }
-            .getOrElse { Payload(fallbackPayload(it), pinConsumeSafe = false, previousRun = null) }
+            .getOrElse { Payload(fallbackPayload(it), pinConsumeSafe = false) }
         val text = payload.text
         // Delivery is serialized on deliveryLock, not just the outcome it
         // produces: two concurrent calls would otherwise both write the
@@ -342,7 +326,7 @@ internal object DebugReport {
         val (delivered, shouldConsumePin) = result
         if (shouldConsumePin) {
             val latch = CountDownLatch(1)
-            runCatching { consumeCrashPin(payload.previousRun) { latch.countDown() } }
+            runCatching { consumeCrashPin { latch.countDown() } }
                 .onFailure { Log.e(TAG, "Consuming the crash pin failed.", it) }
             if (!latch.await(CONSUME_PIN_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
                 Log.w(TAG, "Consuming the crash pin timed out.")
@@ -356,7 +340,7 @@ internal object DebugReport {
 
     private fun collectPayload(context: Context): Payload {
         val previousRunRead = blockingReadPreviousOrCrash()
-        val previousRunOmitted = previousRunRead.omitted
+        val previousRunOmitted = previousRunRead.failed
         val text = buildDebugReportPayload(
             nowMillis = System.currentTimeMillis(),
             versionName = appVersionName(context),
@@ -382,65 +366,27 @@ internal object DebugReport {
             previousRun = previousRunRead.text,
             previousRunCrashed = previousRunRead.wasCrash,
             previousRunOmitted = previousRunOmitted,
-            previousRunCrashTooLarge =
-                previousRunRead.wasCrash && previousRunRead.renderDroppedPartOfPreviousRun,
             recentLog = recentLogForReport(),
         )
-        // Only safe when the read actually completed, actually succeeded,
-        // *and* the crash it was reading actually has content: a timeout
-        // can't tell "nothing was pinned" from "something was pinned and we
-        // didn't wait long enough to find out", a thrown `readText()` can't
-        // tell it from "the crash file couldn't be read" either (Codex,
-        // PR #89, two rounds), and a pinned crash whose file exists but
-        // reads back blank — process death mid-write, between the marker
-        // landing and the content itself — can't tell it from a genuinely
-        // empty previous run (Codex, PR #89, third round). Confusing any of
-        // these with a clean, complete report is exactly what would consume
-        // a pin the shared text never actually carried.
-        return Payload(
-            text,
-            pinConsumeSafe = !previousRunOmitted,
-            previousRun = previousRunRead.run,
-        )
+        return Payload(text, pinConsumeSafe = !previousRunOmitted)
     }
 
     /**
-     * Whether [collectPayload]'s read couldn't confirm the pin's content actually reached the report.
+     * Whether the read of the earlier runs did not happen: it timed out, so it
+     * cannot tell "nothing was pinned" from "something was, and the worker
+     * was slow", or it failed outright (Codex, PR #89, two rounds). Only these
+     * keep the banner up after a share, because only these pass.
      *
-     * The last clause is about this app's *own* rendering rather than the read:
-     * a report keeps only the newest [MAX_PREVIOUS_RUN_CHARS] of the prior runs,
-     * and a pinned crash can be an older one of several. Newer ordinary runs can
-     * then push it out of the tail entirely — read perfectly, then dropped here —
-     * and consuming the pin on that share would lower the banner over a report
-     * that never carried the crash (Codex, PR #153). The text is opaque, so the
-     * question asked is the one that can be answered: did the render drop *any*
-     * of what was read? If it did, and a crash is pinned, the crash may be what
-     * went, and the safe direction is to leave the banner up for a later share.
+     * The report used to keep the banner up for more: a pinned crash whose
+     * file read back blank, a crash the report's budget cut off behind newer
+     * runs, a crash the read could not open (Codex, PR #89 and #153). Each was
+     * there to stop a share *deleting* a crash it never carried. A share
+     * deletes nothing now, and each of those repeats on every share, so
+     * guarding the banner on them left it up for good, with Dismiss the only
+     * way down (maintainer, 2026-09-30). The runs stay on disk either way.
      */
-    private val PreviousRunRead.omitted: Boolean
-        get() = timedOut || !readSucceeded || (wasCrash && text.isNullOrBlank()) ||
-            (wasCrash && renderDroppedPartOfPreviousRun) ||
-            (wasCrash && run?.complete == false)
-
-    // The last clause is the library saying its handle does not cover every run
-    // still on disk -- one it could not read was skipped and left in place, or
-    // the directory would not list at all. The skipped run is in neither the
-    // handle's files nor its text, so a handle missing an unreadable crash
-    // reads exactly like the ordinary run beside it: text non-blank, nothing
-    // truncated, and every other clause here false. Consuming the pin on that
-    // report would lower the banner over a share that never carried the crash,
-    // while the crash file itself stays on disk with nothing left to offer it
-    // (Codex, PR #153). Conservative in the same direction as the truncation
-    // clause: a skipped *ordinary* run also refuses, which costs a banner
-    // staying up for a later share.
-
-    /** Whether the report's own bound cut anything off what [text] carried. */
-    private val PreviousRunRead.renderDroppedPartOfPreviousRun: Boolean
-        get() {
-            val full = text?.trimEnd() ?: return false
-            val rendered = boundedLogTail(full.split("\n"), MAX_PREVIOUS_RUN_CHARS).joinToString("\n")
-            return rendered != full
-        }
+    private val PreviousRunRead.failed: Boolean
+        get() = timedOut || !readSucceeded
 
     /**
      * A minimal payload for when [collectPayload] itself throws — the one
@@ -463,7 +409,7 @@ internal object DebugReport {
      * a real, still-pinned file that couldn't be read).
      */
     private data class PreviousRunRead(
-        /** The handle, kept so a delivered report can consume exactly these files. */
+        /** What the read returned; only its text reaches the report. */
         val run: PreviousRun?,
         val wasCrash: Boolean,
         val timedOut: Boolean,
@@ -661,15 +607,6 @@ internal fun buildDebugReportPayload(
     previousRun: String?,
     previousRunCrashed: Boolean,
     previousRunOmitted: Boolean = false,
-    /**
-     * Whether a pinned crash was among what this report's own bound cut off.
-     *
-     * Says so in the section rather than leaving the reader to wonder, and
-     * points at the way out: sharing cannot clear the banner in this state —
-     * the same runs truncate the same way every retry — so Dismiss is the only
-     * route (maintainer, 2026-08-31; `TODO.md` carries the proper fix).
-     */
-    previousRunCrashTooLarge: Boolean = false,
     recentLog: List<String>,
 ): String {
     val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(Date(nowMillis))
@@ -711,15 +648,13 @@ internal fun buildDebugReportPayload(
     }
     val previousSection = if (previousRun.isNullOrBlank()) {
         // A blank previousRun is ambiguous on its own — genuinely nothing to
-        // report, or a read that timed out, failed, or (for a pinned crash
-        // specifically) came back empty and silently dropped whatever it
-        // would have shown. Say so explicitly rather than rendering the
-        // same as "nothing to show", since a share that landed while
-        // quietly omitting the one thing the crash banner exists to
+        // report, or a read that timed out or failed and silently dropped
+        // whatever it would have shown. Say so explicitly rather than
+        // rendering the same as "nothing to show", since a share that landed
+        // while quietly omitting the one thing the crash banner exists to
         // deliver is otherwise indistinguishable from a clean one (Codex,
-        // PR #89, two rounds — the wording deliberately names no specific
-        // cause, since a timeout and a genuinely blank pinned crash file
-        // land here the same way).
+        // PR #89, two rounds — the wording names no specific cause, since a
+        // timeout and a failed read land here the same way).
         if (previousRunOmitted) {
             "\n--- Earlier runs ---\n(could not be included in this report — try Share again)\n"
         } else {
@@ -744,10 +679,10 @@ internal fun buildDebugReportPayload(
             appendLine(label)
             // Before the text, not after: the reader needs to know what is
             // missing before they read what is there, and a line at the end of
-            // 25,000 characters is a line nobody reaches.
-            if (previousRunCrashTooLarge) {
-                appendLine("(crash details too large to include - dismiss the banner to clear)")
-            }
+            // 25,000 characters is a line nobody reaches. Unconditional, like
+            // the recent log's heading: the section keeps the newest of what
+            // is on disk, and a crash older than that is on the phone, unsent.
+            appendLine("(newest last; older lines are dropped to keep the report shareable)")
             // Keep the newest lines: the file is oldest-first, so a crash
             // entry or the last decisions are at the end.
             appendLine(
@@ -873,6 +808,19 @@ private const val MAX_STRUCTURED_CHARS = 4_000
 
 /** Ceiling for the previous (or crashed) run's section. */
 private const val MAX_PREVIOUS_RUN_CHARS = 25_000
+
+/**
+ * The earlier runs for a report, bounded to [MAX_PREVIOUS_RUN_CHARS] as they
+ * are read, so the section carries exactly the text the read returned rather
+ * than up to 150,000 characters trimmed again afterwards. The render still
+ * bounds the section, so a report stays inside its ceiling whatever text it
+ * is handed.
+ */
+internal fun readPreviousRunForReport(sink: DebugFileSink): PreviousRun? =
+    // One under the section's bound: the section's own trim charges each line
+    // a newline, the last included, so a text read to the full bound would
+    // lose its oldest line there for no reason.
+    sink.readPreviousRun(MAX_PREVIOUS_RUN_CHARS - 1)
 
 /** Ceiling for the current run's recent-log section, pinned lines included. */
 private const val MAX_LOG_PAYLOAD_CHARS = 30_000

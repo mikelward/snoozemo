@@ -214,7 +214,7 @@ class DebugLoggingTest {
     @Test
     fun `consumeCrashPin reports success before install — nothing to consume`() {
         var consumed: Boolean? = null
-        DebugLogging.consumeCrashPin(null) { consumed = it }
+        DebugLogging.consumeCrashPin { consumed = it }
         DebugLogging.awaitIdleForTest()
 
         assertEquals(true, consumed)
@@ -226,7 +226,7 @@ class DebugLoggingTest {
         DebugLogging.awaitIdleForTest()
 
         var consumed: Boolean? = null
-        DebugLogging.consumeCrashPin(null) { consumed = it }
+        DebugLogging.consumeCrashPin { consumed = it }
         DebugLogging.awaitIdleForTest()
 
         // No crash pinned in this run — a real sink answers the same
@@ -246,7 +246,7 @@ class DebugLoggingTest {
         val watch = DebugLogging.watchCrashPinOutcome { fired++ }
 
         try {
-            DebugLogging.consumeCrashPin(null) {}
+            DebugLogging.consumeCrashPin {}
             DebugLogging.awaitIdleForTest()
         } finally {
             watch.close()
@@ -269,7 +269,7 @@ class DebugLoggingTest {
         val watch = DebugLogging.watchCrashPinOutcome { fired++ }
 
         try {
-            DebugLogging.consumeCrashPin(null) {}
+            DebugLogging.consumeCrashPin {}
             DebugLogging.awaitIdleForTest()
         } finally {
             watch.close()
@@ -283,7 +283,7 @@ class DebugLoggingTest {
         var fired = 0
         DebugLogging.watchCrashPinOutcome { fired++ }.close()
 
-        DebugLogging.consumeCrashPin(null) {}
+        DebugLogging.consumeCrashPin {}
         DebugLogging.awaitIdleForTest()
 
         assertEquals(0, fired)
@@ -299,7 +299,7 @@ class DebugLoggingTest {
         val second = DebugLogging.watchCrashPinOutcome { secondHeard++ }
         first.close()
 
-        DebugLogging.consumeCrashPin(null) {}
+        DebugLogging.consumeCrashPin {}
         DebugLogging.awaitIdleForTest()
         second.close()
 
