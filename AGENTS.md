@@ -457,7 +457,7 @@ it in the same commit.
   number, short SHA, and a one-clause summary of what the change gates. The user needs
   this to know which Play internal-track / locally-built APK contains their fix.
 - **"Release notes since N" means the top user-visible changes after versionCode N** —
-  the build the user already has. Read the commits after the Nth commit on `main`
+  the build the user already has. Read the commits after the Nth commit on `origin/main`
   (history is linear, so the Nth is versionCode N) through its tip, bodies included where
   a subject alone doesn't say what the user sees. Fetch `main` by refspec first,
   unshallowing a shallow clone (see *Git workflow*). Offline, use local `main` only if its
