@@ -456,6 +456,24 @@ it in the same commit.
   Report it as e.g. `Need versionCode 72 (b81c23d) or higher to test PR #52's fix` —
   number, short SHA, and a one-clause summary of what the change gates. The user needs
   this to know which Play internal-track / locally-built APK contains their fix.
+- **"Release notes since N" means the top user-visible changes after versionCode N** —
+  the build the user already has. Read the commits after the Nth commit on `main`
+  (history is linear, so the Nth is versionCode N) through its tip, bodies included where
+  a subject alone doesn't say what the user sees. Fetch `main` by refspec first,
+  unshallowing a shallow clone (see *Git workflow*). Offline, use local `main` only if its
+  history is complete, saying the notes may be behind; a shallow one miscounts, so say the
+  notes can't be derived instead.
+  - Skip what isn't user visible: the filtered prefixes, docs and CI. Skip dependency
+    bumps too, unless they are the range's only changes — then one bullet says the app's
+    libraries were updated.
+  - Skip what didn't survive the range: a change added then removed or reverted, a fix
+    for a bug the range itself introduced. A feature reworked within the range is
+    described by its final state.
+  - At most five, ranked by what a user would notice most. Commits to the same feature
+    share a bullet; unrelated changes never do, even to fit more in.
+  - Write each as end-user copy (the *Commit messages* rules) with the release notes'
+    `• ` bullet, all in one code block for copying. Above it say the range (N+1 to the
+    tip's count); below it, one line naming what was left out.
 - Link every open PR in the stack (one URL per line — the "View PR" chip sticks to the
   first link and hides the rest, anthropics/claude-code#46625) whenever you push, summarize
   CI, or invite review.
