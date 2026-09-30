@@ -1,5 +1,5 @@
 [versions]
-androidlog = "2.3.72"
+androidlog = "3.0.73"
 agp = "9.4.1"
 activity = "1.13.0"
 composeBom = "2026.09.00"
