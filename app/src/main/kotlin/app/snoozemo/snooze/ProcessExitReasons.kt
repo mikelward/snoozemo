@@ -1,21 +1,13 @@
 package app.snoozemo.snooze
 
-import android.app.ActivityManager
-import android.app.ApplicationExitInfo
 import android.content.Context
-import android.content.pm.PackageManager
-import androidx.core.content.getSystemService
 import app.snoozemo.core.SnoozeDebugLog
+import com.mikelward.androidlog.android.ProcessExits
 import kotlinx.coroutines.CancellationException
 
 /**
- * How many prior process exits to read. Enough to cover "what happened around
- * the time the snooze misbehaved" without turning startup into a log dump.
- */
-private const val MAX_EXIT_RECORDS = 5
-
-/**
- * Records why this app's recent processes ended.
+ * Records why this app's recent processes ended, through the shared
+ * [ProcessExits] in androidlog.
  *
  * An uncaught exception is the only process death the app observes from the
  * inside, and the crash pin already records it. Every other way a process ends
@@ -41,75 +33,11 @@ private const val MAX_EXIT_RECORDS = 5
  * are collected by default, the fields are disclosed in `docs/PRIVACY.md`
  * alongside the rest of the log's contents.
  *
- * Ported from the sibling Type Launcher repo deliberately unchanged in shape —
- * same names, same line format — so the logs read alike. See `TODO.md` on
- * aligning the repos' loggers properly.
+ * The platform's description is included (`SPEC.md` §4.6 lists it): it is
+ * system-composed and stays in the device's own copy of the log.
  */
 internal fun logRecentProcessExits(context: Context) {
-    val activityManager = context.getSystemService<ActivityManager>() ?: run {
-        SnoozeDebugLog.event("processExits unavailable reason=noActivityManager")
-        return
-    }
-    val exits = try {
-        // pid 0 means "any process of this package" — asking by pid would miss
-        // exactly the abrupt deaths this is here for.
-        activityManager.getHistoricalProcessExitReasons(context.packageName, 0, MAX_EXIT_RECORDS)
-    } catch (e: RuntimeException) {
-        // A denial or a dead system_server leaves us no worse off than before
-        // this existed, so report and return rather than letting the failure
-        // escape into startup — which on this app is the arm path's neighbour.
-        SnoozeDebugLog.failure(e, "processExits query failed")
-        return
-    }
-    if (exits.isEmpty()) {
-        SnoozeDebugLog.event("processExits none")
-    } else {
-        logExitRecords(exits)
-    }
-    // Last, deliberately. The exit records are what this exists to capture and
-    // are already in hand by now, so anything that can fail runs only after
-    // they are safely in the log, never ahead of them.
-    logOwnPackageTimestamps(context)
-}
-
-/** See [logRecentProcessExits]; split out so a later failure cannot preempt it. */
-private fun logExitRecords(exits: List<ApplicationExitInfo>) {
-    // Newest first, which is how the platform returns them and the order a
-    // reader wants: the most recent exit is the one that explains this start.
-    exits.forEach { info ->
-        SnoozeDebugLog.event(
-            "processExit reason=${exitReasonName(info.reason)} " +
-                "importance=${processImportanceName(info.importance)} " +
-                "status=${info.status} timestamp=${info.timestamp} " +
-                "description=${info.description}",
-        )
-    }
-}
-
-/**
- * Records when this package was last updated, next to the exit records above.
- *
- * An exit whose timestamp sits alongside the package's own update time means
- * the installer replaced the APK rather than anything going wrong — worth
- * ruling out before treating a snooze that ended early as a bug.
- */
-private fun logOwnPackageTimestamps(context: Context) {
-    try {
-        val info = context.packageManager.getPackageInfo(context.packageName, 0)
-        SnoozeDebugLog.event(
-            "ownPackage lastUpdateTime=${info.lastUpdateTime} " +
-                "firstInstallTime=${info.firstInstallTime}",
-        )
-    } catch (e: PackageManager.NameNotFoundException) {
-        SnoozeDebugLog.failure(e, "ownPackage query failed")
-    } catch (e: RuntimeException) {
-        // The lookup is a binder call, so it can also fail as a RuntimeException
-        // — a dead system_server mid-restart being the realistic case, which is
-        // exactly the sort of moment this diagnostic is read about. Caught for
-        // the same reason as above: this is the optional half and must not take
-        // the exit records down with it.
-        SnoozeDebugLog.failure(e, "ownPackage query failed")
-    }
+    ProcessExits.logRecent(context, SnoozeDebugLog, includeDescription = true)
 }
 
 /**
@@ -158,59 +86,4 @@ internal fun logRecentProcessExitsInBackground(context: Context) {
             runCatching { SnoozeDebugLog.failure(e, "processExits worker failed") }
         }
     }
-}
-
-/**
- * Maps an [ApplicationExitInfo] reason to a stable, readable name.
- *
- * Named rather than numeric because a shared debug log is read by whoever it
- * reaches, not only by someone with the SDK constants to hand. An unrecognized
- * reason keeps its number so a future platform addition degrades to something
- * still diagnosable instead of collapsing into "unknown".
- */
-internal fun exitReasonName(reason: Int): String = when (reason) {
-    ApplicationExitInfo.REASON_ANR -> "anr"
-    ApplicationExitInfo.REASON_CRASH -> "crash"
-    ApplicationExitInfo.REASON_CRASH_NATIVE -> "crashNative"
-    ApplicationExitInfo.REASON_DEPENDENCY_DIED -> "dependencyDied"
-    ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "excessiveResourceUsage"
-    ApplicationExitInfo.REASON_EXIT_SELF -> "exitSelf"
-    ApplicationExitInfo.REASON_FREEZER -> "freezer"
-    ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "initializationFailure"
-    ApplicationExitInfo.REASON_LOW_MEMORY -> "lowMemory"
-    ApplicationExitInfo.REASON_OTHER -> "other"
-    ApplicationExitInfo.REASON_PACKAGE_STATE_CHANGE -> "packageStateChange"
-    ApplicationExitInfo.REASON_PACKAGE_UPDATED -> "packageUpdated"
-    ApplicationExitInfo.REASON_PERMISSION_CHANGE -> "permissionChange"
-    ApplicationExitInfo.REASON_SIGNALED -> "signaled"
-    ApplicationExitInfo.REASON_UNKNOWN -> "unknown"
-    ApplicationExitInfo.REASON_USER_REQUESTED -> "userRequested"
-    ApplicationExitInfo.REASON_USER_STOPPED -> "userStopped"
-    else -> "unrecognized($reason)"
-}
-
-/**
- * Maps an [ApplicationExitInfo.importance] to a stable, readable name.
- *
- * Importance is the priority Android had assigned the process when it died. It
- * separates a routine background reclaim from a death the system counted as
- * user-aware work — for a snooze, the difference between the ordinary state
- * this app lives in and one where something was actually running.
- *
- * It is **not** proof an Activity was on screen: a broadcast receiver handling
- * a geofence exit, or the foreground service that holds a snooze, both reach
- * foreground importance with nothing visible (Codex, PR #125). This app has
- * several such receivers, so reading `foreground` as "the user was looking at
- * it" would misread most of its records.
- */
-internal fun processImportanceName(importance: Int): String = when (importance) {
-    ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND -> "foreground"
-    ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE -> "foregroundService"
-    ActivityManager.RunningAppProcessInfo.IMPORTANCE_TOP_SLEEPING -> "topSleeping"
-    ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE -> "visible"
-    ActivityManager.RunningAppProcessInfo.IMPORTANCE_PERCEPTIBLE -> "perceptible"
-    ActivityManager.RunningAppProcessInfo.IMPORTANCE_SERVICE -> "service"
-    ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED -> "cached"
-    ActivityManager.RunningAppProcessInfo.IMPORTANCE_GONE -> "gone"
-    else -> "unrecognized($importance)"
 }

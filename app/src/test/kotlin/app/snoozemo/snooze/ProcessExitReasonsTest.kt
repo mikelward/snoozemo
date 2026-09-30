@@ -5,6 +5,8 @@ import android.app.ApplicationExitInfo
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import app.snoozemo.core.SnoozeDebugLog
+import com.mikelward.androidlog.DebugLog
+import com.mikelward.androidlog.android.ProcessExits
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -84,63 +86,16 @@ class ProcessExitReasonsTest {
     private fun seedExit(
         reason: Int,
         importance: Int = ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND,
+        description: String = "stopped by the installer",
     ) {
         val exitInfo = ShadowActivityManager.ApplicationExitInfoBuilder.newBuilder()
             .setReason(reason)
             .setImportance(importance)
             .setTimestamp(1_700_000_000_000L)
-            .setDescription("stopped by the installer")
+            .setDescription(description)
             .build()
         shadowOf(context.getSystemService(ActivityManager::class.java))
             .addApplicationExitInfo(exitInfo)
-    }
-
-    @Test
-    fun namesTheReasonsThatSeparateOurFailuresFromThePlatformKillingUs() {
-        // Ours to fix.
-        assertEquals("crash", exitReasonName(ApplicationExitInfo.REASON_CRASH))
-        assertEquals("crashNative", exitReasonName(ApplicationExitInfo.REASON_CRASH_NATIVE))
-        assertEquals("anr", exitReasonName(ApplicationExitInfo.REASON_ANR))
-        // Not ours — the system reclaiming or replacing the process. These are
-        // the ones no in-process signal can see, which is why this exists, and
-        // the ones that explain a snooze nothing was left alive to end.
-        assertEquals("lowMemory", exitReasonName(ApplicationExitInfo.REASON_LOW_MEMORY))
-        assertEquals("packageUpdated", exitReasonName(ApplicationExitInfo.REASON_PACKAGE_UPDATED))
-        assertEquals(
-            "packageStateChange",
-            exitReasonName(ApplicationExitInfo.REASON_PACKAGE_STATE_CHANGE),
-        )
-        assertEquals("userRequested", exitReasonName(ApplicationExitInfo.REASON_USER_REQUESTED))
-    }
-
-    @Test
-    fun keepsTheNumberOfAReasonItDoesNotRecognize() {
-        // A platform addition should degrade to something still diagnosable
-        // rather than collapsing into an indistinguishable "unknown", which the
-        // platform already uses for a reason of its own.
-        assertEquals("unrecognized(9999)", exitReasonName(9999))
-        assertEquals("unknown", exitReasonName(ApplicationExitInfo.REASON_UNKNOWN))
-    }
-
-    @Test
-    fun namesThePriorityAndroidAssignedTheProcess() {
-        // The priority Android assigned the process, separating a routine
-        // background reclaim from a death the system counted as user-aware
-        // work. Not proof of a visible screen — a receiver or the snooze's own
-        // foreground service reaches foreground importance too.
-        assertEquals(
-            "foreground",
-            processImportanceName(ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND),
-        )
-        assertEquals(
-            "cached",
-            processImportanceName(ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED),
-        )
-        assertEquals(
-            "gone",
-            processImportanceName(ActivityManager.RunningAppProcessInfo.IMPORTANCE_GONE),
-        )
-        assertEquals("unrecognized(7)", processImportanceName(7))
     }
 
     @Test
@@ -154,11 +109,40 @@ class ProcessExitReasonsTest {
 
         logRecentProcessExits(context)
 
-        val lines = SnoozeDebugLog.snapshot().filter { it.contains("processExit ") }
+        // Pinned, so the ring can't evict them before a report is shared.
+        val lines = SnoozeDebugLog.pinnedSnapshot().filter { it.contains("processExit ") }
         assertEquals(2, lines.size)
         assertTrue(lines.toString(), lines.any { it.contains("reason=crash") })
         assertTrue(lines.toString(), lines.any { it.contains("reason=packageUpdated") })
         assertTrue(lines.toString(), lines.all { it.contains("importance=foreground") })
+        // SPEC.md §4.6 lists the platform's description among the fields.
+        assertTrue(lines.toString(), lines.all { it.contains("description=stopped by the installer") })
+        assertTrue(
+            SnoozeDebugLog.pinnedSnapshot().toString(),
+            SnoozeDebugLog.pinnedSnapshot().any { it.contains("ownPackage lastUpdateTime=") },
+        )
+    }
+
+    @Test
+    fun aFullBatchOfLongExitsReachesTheReportAfterTheRingHasDroppedIt() {
+        // The shape the report's reserve has to hold: every record the
+        // collector keeps, each with a description far past its bound, pushed
+        // out of the ring by a busy run before anyone shares a report.
+        repeat(ProcessExits.DEFAULT_MAX_RECORDS) {
+            seedExit(ApplicationExitInfo.REASON_ANR, description = "Input dispatching timed out ".repeat(100))
+        }
+        logRecentProcessExits(context)
+        repeat(DebugLog.DEFAULT_MAX_ENTRIES + 50) { SnoozeDebugLog.event("busy %s", it) }
+        // Precondition: only the pinned copy can carry them now.
+        assertTrue(SnoozeDebugLog.snapshot().none { it.contains("processExit ") })
+
+        val report = recentLogForReport()
+
+        val exits = report.filter { it.contains("processExit reason=anr") }
+        assertEquals(report.toString(), ProcessExits.DEFAULT_MAX_RECORDS, exits.size)
+        assertTrue(report.toString(), report.any { it.contains("ownPackage lastUpdateTime=") })
+        // And the recent lines still follow them.
+        assertTrue(report.toString(), report.last().endsWith("busy ${DebugLog.DEFAULT_MAX_ENTRIES + 49}"))
     }
 
     @Test
