@@ -1,12 +1,12 @@
 [versions]
-androidlog = "3.0.73"
+androidlog = "3.1.74"
 agp = "9.4.1"
 activity = "1.13.0"
 composeBom = "2026.09.00"
-coreKtx = "1.19.0"
+coreKtx = "1.19.1"
 crashlyticsPlugin = "3.0.8"
 firebaseBom = "34.19.0"
-fragment = "1.9.0"
+fragment = "1.9.1"
 googleServices = "4.5.0"
 junit = "4.13.2"
 kotlin = "2.4.20"
@@ -23,7 +23,7 @@ roborazzi = "1.75.0"
 # the export is committed to res/raw, and why there is one per flavor.
 aboutlibraries = "12.2.4"
 androidxTestCore = "1.7.0"
-androidxWork = "2.11.2"
+androidxWork = "2.12.0"
 
 [libraries]
 androidlog-logging-core = { group = "com.mikelward.androidlog", name = "logging-core", version.ref = "androidlog" }
