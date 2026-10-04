@@ -1,3 +1,9 @@
+---
+trigger: always_on
+alwaysApply: true
+last_modified: 2026-10-04
+---
+
 # Snoozemo
 
 Android app that puts the phone into Do Not Disturb **until you leave where you are right
@@ -6,6 +12,10 @@ Gradle multi-module). Product and architecture decisions live in `SPEC.md`; the 
 lives in `TODO.md`. This repo mirrors the engineering conventions of the sibling Type
 Launcher (`mikelward/typelauncher`) and Simmo (`mikelward/simmo`) repos; when a convention
 is underspecified here, Simmo's `AGENTS.md` is the tiebreaker.
+
+**At the start of every session, print the path of the `AGENTS.md` you loaded and its
+`last_modified` date** (front matter), so a stale or wrong copy is caught before it steers
+the work. Bump `last_modified` whenever you edit this file.
 
 **Status: both halves are built; presence has never run on a handset.** The Gradle build,
 the module split, the `play` build and CI are green, and so is the DND half: the tile arms
