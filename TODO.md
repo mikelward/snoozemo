@@ -542,7 +542,7 @@ the point is that every other line of the app is worthless if it isn't true.
         **the wait preceding each
         request, recorded where the request is scheduled or issued** — `CheckingFixes.settle`
         calls `cadence.onFixDelivered()` before `scheduleNext()`, so a spacing read at
-        delivery always says 30 s and erases the five-minute backoff it exists to show.
+        delivery always says 30 s and erases the backoff it exists to show.
         All of it is inside the §4.6 floor already, so no policy question and no widening
         of `docs/PRIVACY.md`. See the departure-latency entry for what each number
         diagnoses.
@@ -574,8 +574,8 @@ the point is that every other line of the app is worthless if it isn't true.
         `DurationOnlyPresenceMonitor` behind the same `defaultPresenceMonitor` seam.
         **Second slice landed** (2026-08-22): the confirming fixes — `CheckingFixes` one-shot
         `getCurrentLocation` requests, started and stopped by the engine's own duty, paced by
-        `CheckingCadence` (30 s per §6.6's gap, backing off to 5 min after three unanswered
-        requests). One-shots rather than §6.5's continuous request, deliberately: that request
+        `CheckingCadence` (30 s per §6.6's gap, backing off after three unanswered requests —
+        5 min then, 2.5 min since 2026-10-05). One-shots rather than §6.5's continuous request, deliberately: that request
         belongs to the `direct` flavor's Phase 7 foreground service, and a background app gets
         continuous location throttled to nothing — §6.10's design takes one fix per
         confirmation step instead. `SANITY` duty mapped to nothing when this slice landed; the
@@ -621,7 +621,7 @@ the point is that every other line of the app is worthless if it isn't true.
         it. Plus plus an immediate retry of a *running* burst, which the
         resting probe cannot cover (Codex, PR #139): an outage that begins during a
         departure check leaves the duty `ACTIVE`, where the probe is a declared no-op and
-        three `ServicesOff` answers have already dropped the cadence to five minutes, so
+        three `ServicesOff` answers have already dropped the cadence to the backoff, so
         without it the one snooze that most needs answering would get nothing from the
         broadcast at all. `CheckingCadence.onPlatformRecovered` forgives a backoff the
         outage earned — the bound still applies from the recovery on, if the provider goes
@@ -1344,9 +1344,10 @@ the point is that every other line of the app is worthless if it isn't true.
       capture error, the wake-up latency before a check starts, and the ground covered during the
       confirmation gap. Which of them actually dominates is what the traces are for. A check is the phase where the phone is already
       awake doing active location work and someone is waiting on the answer — but **do not read
-      that as a bound on the cost**: `CheckingCadence.onFixDelivered` resets the backoff, so fixes
-      that keep arriving and keep coming back inconclusive hold the 30 s cadence with no decay,
-      and `CHECKING` persists until something resolves it or the duration cap fires hours later. A
+      that as a bound on the cost**: `CheckingCadence.onFixDelivered` resets the backoff on any fix
+      the engine accepts as evidence. Vague fixes count toward the backoff instead (2026-10-05), and
+      edge readings stand the check down after three (PR #311), but fixes that keep arriving usable
+      and keep failing to resolve still hold the 30 s cadence with no decay, and `CHECKING` persists until something resolves it or the duration cap fires hours later. A
       higher-accuracy request would therefore need an attempt or time bound of its own, and what
       it costs over a long check is part of what the traces have to establish rather than
       something to assume. **How big a lever it is, is equally unknown**, and it now depends on
@@ -5462,6 +5463,12 @@ are simply what the one build ships.
 
 ## Decisions needing review
 
+- [ ] **The checking burst's backoff is half the grace window, 2.5 minutes** (autopilot,
+      2026-10-05, Codex on PR #313). It was five minutes, the grace window exactly, which
+      left no room for a recovery fix before grace ended the snooze. **The trade**: a backed-off
+      burst asks every 2.5 minutes instead of every five, now for vague fixes as well as for no
+      answer. **The alternative** is to keep five minutes and instead pull the next request
+      forward when grace arms. Reversible: one expression in `CheckingCadence`.
 - [x] **What the card says when the backstop's service start is refused** (autopilot call,
       2026-10-05; **decided by the maintainer the same day**: every such wake marks the card).
       A probe whose requests reported the grant gone or location off records that cause and
@@ -5878,9 +5885,10 @@ are simply what the one build ships.
      `direct`'s Phase 7 shape). At bus speed half an hour is kilometers, which
      fits the observation almost exactly.
   5. **The check itself dragged.** Escalation prompt, confirmation slow:
-     `CheckingCadence` drops to `BACKOFF_SPACING_MS` — **five minutes** — after
+     `CheckingCadence` drops to `BACKOFF_SPACING_MS` — **five minutes** then, 2.5 since
+     2026-10-05 — after
      `BACKOFF_AFTER` (3) consecutive requests that answer nothing, so a departure
-     can sit unconfirmed at five-minute intervals while the phone is awake and
+     can sit unconfirmed at backoff intervals while the phone is awake and
      trying. The confirming burst also asks for no better a fix than the resting
      probe does; the open Phase 3 item on spending a higher-accuracy fix tracks
      that. **How big a lever that is depends on the anchor as well as the fix**
@@ -6015,14 +6023,14 @@ are simply what the one build ships.
     genuinely costs battery (`SPEC.md` §9), and the reason it was excluded from
     the approved list.
   - **(5) the checking path** — shorten the normal 30 s request spacing, bound or
-    shorten the five-minute backoff, and the open higher-accuracy-fix item. The
+    shorten the backoff (2.5 minutes since 2026-10-05), and the open higher-accuracy-fix item. The
     spacing is a real option and not a confirmation-weakening one, for the reason
     given in verification item 2 above. Cheap-looking and **not actually bounded**
     (Codex, PR #232, correcting an earlier draft of this bullet that called it
     bounded by a check's own length). A check is not a short burst by
-    construction: `CheckingCadence.onFixDelivered` resets the backoff, so fixes
-    that keep arriving and keep coming back inconclusive hold the 30 s cadence
-    with no decay, and `CHECKING` persists until something resolves it or the
+    construction: `CheckingCadence.onFixDelivered` resets the backoff on any fix
+    the engine accepts, so usable fixes that keep failing to resolve hold the 30 s
+    cadence with no decay (vague ones back off since 2026-10-05), and `CHECKING` persists until something resolves it or the
     duration cap fires hours later. **So anything here that asks more often or
     asks for more needs an attempt or time bound of its own** — the Phase 3
     higher-accuracy item already says exactly that, and it is the safeguard this
@@ -8979,7 +8987,9 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
       edge is health, and three in a row stand the check down instead of degrading
       (`Presence.EDGE_READINGS_BEFORE_STANDING_DOWN`, `SPEC.md` §6.6). Reversible: one constant
       and one predicate.
-- [ ] **A genuinely vague check still polls at the checking rate indefinitely.** A run of
+- [x] **A genuinely vague check still polls at the checking rate indefinitely** (fixed
+      2026-10-05: `CheckingFixes` now paces a vague delivered fix like no answer, so three of
+      them drop the burst to the backoff, now half the grace window; the fixes still reach the engine). A run of
       vague fixes degrades but leaves the engine `CHECKING`, so a fix is asked for every 30 s
       until something settles it. That was mostly hidden while the degraded service died;
       with the foreground service now held through a fix-quality degradation (PR #309) it is a
