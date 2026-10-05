@@ -44,6 +44,14 @@ object BackstopProbe {
         data object NotTestable : Outcome
 
         /**
+         * No fix, for a reason the platform stated outright — the grant gone,
+         * or location switched off — rather than a reading that simply did not
+         * come. Decided by the platform side from what its requests reported;
+         * [run] itself only ever says [NoFix].
+         */
+        data class Unavailable(val cause: DegradationCause) : Outcome
+
+        /**
          * On the anchor's own network, before or during the probe: D4's
          * suppressor holds here as it does in the monitor (SPEC.md §6.10),
          * because the single-fix shortcut could otherwise end a snooze on a

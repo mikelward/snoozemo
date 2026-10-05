@@ -13,7 +13,9 @@ import java.time.Instant
 import java.util.concurrent.Executor
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.BackstopProbe
+import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.DepartureRule
+import app.snoozemo.core.TrackingMode
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -251,5 +253,75 @@ class SnoozeBackstopTest {
 
         assertTrue("the service's own monitor takes the resting fix", probed.isEmpty())
         assertNotNull(ActiveSnoozeStore(appContext).load())
+    }
+
+    @Test
+    fun `a probe that finds location switched off says so on the card`() {
+        // Codex, PR #310, deferred there: the service that would say it cannot
+        // start, so the worker that found out has to.
+        probeAnswers(BackstopProbe.Outcome.Unavailable(DegradationCause.LOCATION_SERVICES_OFF))
+        val snooze = snoozeFixture(now)
+        ActiveSnoozeStore(appContext).arm(snooze)
+        // The card a running snooze already has up.
+        SnoozeNotifications(appContext).showOngoing(snooze)
+
+        runWorker(refusing)
+
+        val record = ActiveSnoozeStore(appContext).load()
+        assertEquals(TrackingMode.DURATION_ONLY, record?.mode)
+        assertEquals(DegradationCause.LOCATION_SERVICES_OFF, record?.degradation)
+        assertTrue(
+            "the card is reposted with the reason",
+            shadeText().contains(stringOf(app.snoozemo.R.string.ongoing_cause_services_off)),
+        )
+    }
+
+    @Test
+    fun `a later probe's fix does not claim the watch is back`() {
+        // Codex, PR #312: a fix proves location answers, not that the fence or
+        // the Wi-Fi watch was rebuilt — the service never started. Only a
+        // restore whose watch comes back may lift the card again.
+        probeAnswers(BackstopProbe.Outcome.StillHere)
+        ActiveSnoozeStore(appContext).arm(
+            snoozeFixture(now).copy(
+                mode = TrackingMode.DURATION_ONLY,
+                degradation = DegradationCause.LOCATION_PERMISSION_GONE,
+            ),
+        )
+
+        runWorker(refusing)
+
+        val record = ActiveSnoozeStore(appContext).load()
+        assertEquals(TrackingMode.DURATION_ONLY, record?.mode)
+        assertEquals(DegradationCause.LOCATION_PERMISSION_GONE, record?.degradation)
+    }
+
+    @Test
+    fun `a plain miss changes nothing on the card`() {
+        // One throttled wake is not evidence location is broken.
+        probeAnswers(BackstopProbe.Outcome.NoFix)
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
+
+        runWorker(refusing)
+
+        val record = ActiveSnoozeStore(appContext).load()
+        assertEquals(TrackingMode.FULL, record?.mode)
+        assertNull(record?.degradation)
+    }
+
+    @Test
+    fun `a snooze ended while the probe ran gets no card back`() {
+        // Codex, PR #312: the teardown took the card down; an unguarded
+        // repost would put `Snoozing` back beside `Snooze ended`.
+        probeAnswers(BackstopProbe.Outcome.Unavailable(DegradationCause.LOCATION_SERVICES_OFF)) {
+            SnoozeNotifications(appContext).cancelOngoing()
+        }
+        val snooze = snoozeFixture(now)
+        ActiveSnoozeStore(appContext).arm(snooze)
+        SnoozeNotifications(appContext).showOngoing(snooze)
+
+        runWorker(refusing)
+
+        assertNull("the card stays down", ongoingTitle())
     }
 }

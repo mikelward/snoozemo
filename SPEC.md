@@ -4058,7 +4058,13 @@ under the worker's release. D4's suppressor holds here too:
 an SSID anchor's association is watched for the whole probe, and only a positive report suppresses
 it — association at any fix stops the probe as present, and a change in association restarts the
 two-fix window, so no confirmation spans one. Background location limits may throttle these fixes; `TODO.md` carries what to try if
-the field says they do. The backstop is never load-bearing — the cap alarm is the
+the field says they do. **What the probe learns about location itself goes on the card**, since
+the service that would say it is the thing that could not start: a request that reports the grant
+gone or location off records that cause as the snooze's degradation (duration-only, as the
+controller maps it) and reposts the card. It only ever lowers the card: a later probe's fix proves location answers,
+not that the fence or Wi-Fi watch was rebuilt, so lifting it again is left to a restore whose watch
+actually comes back. A plain miss changes nothing — one throttled wake is not evidence location is
+broken. The backstop is never load-bearing — the cap alarm is the
 floor and is armed independently — and it retires itself on a wake that finds no snooze, so a
 cancel lost to process death costs one empty wake, not a standing drain.
 

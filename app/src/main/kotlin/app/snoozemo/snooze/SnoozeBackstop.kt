@@ -11,6 +11,7 @@ import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.BackstopProbe
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.SnoozeDebugLog
+import app.snoozemo.core.TrackingMode
 import app.snoozemo.presence.pokePresenceSanity
 import app.snoozemo.presence.probeDepartureWithoutService
 import com.mikelward.androidlog.safe
@@ -305,6 +306,7 @@ internal class BackstopWorker(
                 return false
             }
         SnoozeDebugLog.event("backstop probe: %s", safe(outcome.toString()))
+        reflectOnCard(snooze, outcome)
         if (outcome !is BackstopProbe.Outcome.Departed) return false
         // Only the snooze that was probed, and only while it still ends on
         // departure. The probe takes up to a few minutes: a snooze the user
@@ -321,5 +323,68 @@ internal class BackstopWorker(
                 current.endsOnDeparture &&
                 current.anchor == snooze.anchor
         }
+    }
+
+    /**
+     * Says on the card what the probe found out about location itself, when
+     * the service that would normally say it cannot start (Codex, PR #310,
+     * deferred there).
+     *
+     * A probe that learned the grant is gone or location is off records that
+     * as the snooze's degradation and reposts the card, so it stops claiming a
+     * departure watch the backstop has just found cannot run (principle 2).
+     * Anything else changes nothing.
+     *
+     * **Lowering only, never raising** (Codex, PR #312). A later probe's fix
+     * proves location answers, not that a departure watch is running: the
+     * service never started, so neither the fence nor the Wi-Fi watch was
+     * rebuilt, and `FULL` would claim a watch that exists only as the next
+     * backstop wake. The service clears this the way it clears its own — on
+     * a restore whose watch actually comes back.
+     *
+     * Duration-only for all three causes, for the controller's reason: each
+     * withholds the SSID as well as the fix, so `Wi-Fi only` would claim a
+     * watch that cannot see the network either.
+     *
+     * Only the snooze probed, and only while it still ends on departure — the
+     * same identity the release checks. The write races nothing that matters:
+     * this path runs because the service would not start, and a service that
+     * does start later restores from this record and corrects it on its own
+     * first usable fix.
+     */
+    private fun reflectOnCard(probed: ActiveSnooze, outcome: BackstopProbe.Outcome) {
+        val store = ActiveSnoozeStore(applicationContext)
+        val current = store.load() ?: return
+        if (current.startedAt != probed.startedAt || !current.endsOnDeparture) return
+        val updated = when (outcome) {
+            is BackstopProbe.Outcome.Unavailable ->
+                current.copy(mode = TrackingMode.DURATION_ONLY, degradation = outcome.cause)
+                    .takeIf { current.degradation != outcome.cause || current.mode != TrackingMode.DURATION_ONLY }
+            else -> null
+        } ?: return
+        SnoozeDebugLog.event(
+            "tracking → %s (%s) from the backstop probe",
+            safe(updated.mode.toString()),
+            safe(updated.degradation.toString()),
+        )
+        // Only onto the record this loaded, still live: the probe takes
+        // minutes, and an ending that cleared the record meanwhile must not be
+        // undone by writing it back (Codex, PR #312) — that would be a snooze
+        // the next restore re-arms.
+        when (store.updateIfLive(updated)) {
+            null -> {
+                SnoozeDebugLog.event("backstop tracking change dropped: the snooze ended meanwhile")
+                return
+            }
+            false -> SnoozeDebugLog.warning("recording the backstop's tracking change failed; the card says it anyway")
+            true -> Unit
+        }
+        // Guarded like the calendar worker's repost (Codex, PR #312): a snooze
+        // the user ended while this ran has had its card taken down, and an
+        // unguarded post would put `Snoozing` back beside `Snooze ended`.
+        SnoozeNotifications(applicationContext).repostIfStillShowing(updated) {
+            store.load()?.startedAt == updated.startedAt
+        }
+        SnoozeTileBridge.refresh()
     }
 }
