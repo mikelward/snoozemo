@@ -9001,3 +9001,32 @@ for the maintainer:
 
 `SPEC.md` §6.6 already warns that its list of contributing terms is not closed
 and does not rank them; this is a case where two of them multiply.
+
+## A snooze that outlived a 300 m walk (field log, 2026-10-05)
+
+A `play` build on a Pixel stayed silent after the user walked well clear of the anchor. The
+log showed three faults in a row; the first is fixed, the other two are open.
+
+- [x] **A fix-quality degradation gave the foreground service back.** Three inconclusive
+      fixes near the fence edge degraded a fenced, no-SSID snooze to duration-only
+      (`FIXES_TOO_VAGUE`), the service demoted, Android reclaimed it about three minutes later,
+      and the motion trigger died with it. The fence then woke a restore that recovered to
+      `FULL`, but its `startForeground` came a minute after the wake and was refused. Fixed:
+      `ActiveSnooze.watchesInProcess` keeps the service through `NO_LOCATION_FIX`,
+      `FIXES_TOO_VAGUE` and `LOCATION_SERVICES_OFF` on a fenced anchor (`SPEC.md` §3.4).
+- [ ] **The backstop cannot restore anything from the background.** Every `BackstopWorker`
+      wake and every `ACTION_RESTORE` retry alarm was refused (`startService` from a
+      background `WorkManager` worker, and from an inexact `setAndAllowWhileIdle` alarm), three
+      backstop wakes in a row, so the ladder ended on "the cap bounds the snooze" each time.
+      `SPEC.md` §6.10 says each wake restores the service, and on this device none did. Options
+      for the maintainer: run the resting probe and §6.6 test **inside the worker** (background
+      location is granted, so `getCurrentLocation` works without the service) and end via the
+      no-service release path; or an exact alarm, which costs `SCHEDULE_EXACT_ALARM` (a Play
+      policy question, `SPEC.md` §3). The first needs no new permission.
+- [ ] **A rejected geofence exit leaves the fence spent.** The exit fired, one fix put the user
+      inside (`STILL_HERE`), and the fence was re-registered with no initial trigger. Play
+      Services already believed the device was outside, and it fires an exit only on an
+      inside-to-outside crossing, so the real departure that followed never fired one. Options:
+      re-register with `INITIAL_TRIGGER_EXIT` after a rejected exit (bounded against a
+      re-fire loop, since each re-fire costs a checking burst), or lean on the motion trigger
+      and the backstop and accept it. Needs a handset check either way.
