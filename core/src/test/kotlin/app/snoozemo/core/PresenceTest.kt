@@ -1665,4 +1665,71 @@ class PresenceTest {
 
         assertNull(after.degradation)
     }
+
+    // --- What a fix is worth to the checking burst's pacing (Codex, PR #313) ---
+
+    /** Feeds [signal] and answers what the transition made of it. */
+    private fun use(state: PresenceState, signal: PresenceSignal.FixArrived, anchor: Anchor):
+        Pair<Presence.FixUse, PresenceState> {
+        val after = Presence.advance(state, signal, anchor).state
+        return Presence.fixUse(state, after) to after
+    }
+
+    @Test
+    fun `fixUse reads the vague count off the transition`() {
+        // The burst backs off on `VAGUE` and ignores `IGNORED`: a reading from
+        // before the check began and a cached repeat are dropped, not counted.
+        var state = Presence.advance(PresenceState(atAnchorWifi = false), geofenceExit(100), tracked).state
+        val uses = listOf(vague(50), vague(110), vague(110), vague(140), atHome(200)).map { signal ->
+            val (use, after) = use(state, signal, tracked)
+            state = after
+            use
+        }
+
+        assertEquals(
+            listOf(
+                Presence.FixUse.IGNORED,
+                Presence.FixUse.VAGUE,
+                Presence.FixUse.IGNORED,
+                Presence.FixUse.VAGUE,
+                Presence.FixUse.INFORMATIVE,
+            ),
+            uses,
+        )
+    }
+
+    @Test
+    fun `fixUse counts nothing without an anchor to measure from`() {
+        assertEquals(Presence.FixUse.IGNORED, use(PresenceState(), vague(10), wifiOnly).first)
+    }
+
+    @Test
+    fun `fixUse calls an edge reading informative`() {
+        // It stands the check down rather than degrading (PR #311), so it
+        // must not back the burst off either.
+        val state = Presence.advance(PresenceState(atAnchorWifi = false), geofenceExit(0), fenceOnly).state
+
+        assertEquals(
+            Presence.FixUse.INFORMATIVE,
+            use(state, nearEdge(1, northM = 69.0, accuracyM = 34.4f), fenceOnly).first,
+        )
+    }
+
+    @Test
+    fun `fixUse calls a stale fix that proves recovery informative`() {
+        // Codex, PR #313: stale for presence, but newer than the failures, so
+        // it clears the degradation — and a burst still backed off from those
+        // failures would wait out the backoff after the engine had recovered.
+        val (_, degraded) = replay(
+            tracked,
+            from = PresenceState(atAnchorWifi = false),
+            signals = arrayOf(geofenceExit(0), vague(10), vague(20), vague(30), associated(40)),
+        )
+        assertNotNull("degraded before the stale fix", degraded.degradation)
+
+        val (fixUse, after) = use(degraded, atHome(35), tracked)
+
+        assertNull("the stale fix proved health", after.degradation)
+        assertEquals(Presence.FixUse.INFORMATIVE, fixUse)
+    }
 }

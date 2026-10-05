@@ -2,6 +2,7 @@ package app.snoozemo.presence.geofence
 
 import app.snoozemo.core.Departure
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CheckingCadenceTest {
@@ -67,7 +68,7 @@ class CheckingCadenceTest {
     @Test
     fun `a platform recovery forgives a backoff the outage earned`() {
         // Location switched back on: the reason the provider was answering
-        // nothing is provably over, so serving out five more minutes of
+        // nothing is provably over, so serving out the rest of the
         // backoff would leave the snooze reporting degraded tracking long
         // after the outage ended.
         val cadence = CheckingCadence()
@@ -98,5 +99,12 @@ class CheckingCadenceTest {
             app.snoozemo.core.Presence.DEGRADED_AFTER_USELESS_OBSERVATIONS,
             CheckingCadence.BACKOFF_AFTER,
         )
+    }
+
+    @Test
+    fun `the backoff leaves room for a request inside the grace window`() {
+        // Codex, PR #313: at the grace window exactly, a signal that recovered
+        // at once could never call the deadline off before it came due.
+        assertTrue(CheckingCadence.BACKOFF_SPACING_MS < app.snoozemo.core.Presence.WIFI_GRACE.toMillis())
     }
 }

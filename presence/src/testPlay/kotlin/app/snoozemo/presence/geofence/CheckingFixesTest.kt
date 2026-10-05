@@ -1,6 +1,7 @@
 package app.snoozemo.presence.geofence
 
 import app.snoozemo.core.Fix
+import app.snoozemo.core.Presence
 import app.snoozemo.core.PresenceSignal
 import app.snoozemo.core.SnoozeDebugLog
 import org.junit.Assert.assertEquals
@@ -105,7 +106,7 @@ class CheckingFixesTest {
      * before `scheduleNext()`, so the cadence a delivered fix is scheduled from
      * has already forgiven the backoff — a spacing read at delivery says 30 s
      * however long the burst has actually been backing off. Here it says
-     * 5 minutes while it is backing off, and 30 s again once a fix lands.
+     * the backoff spacing while it is backing off, and 30 s again once a fix lands.
      *
      * The number is therefore *captured* where it is decided and *written*
      * when the wait ends, so each line is a request that actually started —
@@ -189,6 +190,152 @@ class CheckingFixesTest {
 
         assertEquals(listOf<PresenceSignal>(PresenceSignal.FixArrived(fix(101_000))), signals)
         assertTrue(scheduler.delayed.any { it.first == CheckingCadence.CONFIRM_SPACING_MS })
+    }
+
+    @Test
+    fun `vague fixes back the burst off like no answer`() {
+        // Field log, 2026-10-05: every delivered fix used to forgive the
+        // backoff, so a spot where every reading was vague asked every 30 s
+        // for as long as the check ran. The fixes still reach the engine.
+        val vague = CheckingFixes(
+            scheduler,
+            requester,
+            readElapsedRealtimeMs = { elapsedMs },
+            onSignal = { signals += it },
+            onPermissionLost = { permissionLost++ },
+            onServicesOff = { servicesOff++ },
+            confirmationGapMs = CheckingCadence.CONFIRM_SPACING_MS,
+            feedFix = { signals += PresenceSignal.FixArrived(it); Presence.FixUse.VAGUE },
+        )
+        vague.start()
+
+        repeat(CheckingCadence.BACKOFF_AFTER) { round ->
+            requester.answer(FixOutcome.Delivered(fix(atMs = 1_000L + round)))
+            if (round < CheckingCadence.BACKOFF_AFTER - 1) {
+                scheduler.fire(CheckingCadence.CONFIRM_SPACING_MS)
+            }
+        }
+
+        assertEquals(CheckingCadence.BACKOFF_AFTER, signals.count { it is PresenceSignal.FixArrived })
+        assertTrue(scheduler.delayed.any { it.first == CheckingCadence.BACKOFF_SPACING_MS })
+        vague.close()
+    }
+
+    @Test
+    fun `a new check does not inherit the last one's vague run`() {
+        // Codex, PR #313: two vague readings, then Wi-Fi settles the check (the
+        // engine resets its own count and pauses the burst). A later check
+        // must not back off on its first vague reading.
+        val vague = CheckingFixes(
+            scheduler,
+            requester,
+            readElapsedRealtimeMs = { elapsedMs },
+            onSignal = { signals += it },
+            onPermissionLost = { permissionLost++ },
+            onServicesOff = { servicesOff++ },
+            confirmationGapMs = CheckingCadence.CONFIRM_SPACING_MS,
+            feedFix = { signals += PresenceSignal.FixArrived(it); Presence.FixUse.VAGUE },
+        )
+        vague.start()
+        requester.answer(FixOutcome.Delivered(fix(atMs = 1_000L)))
+        scheduler.fire(CheckingCadence.CONFIRM_SPACING_MS)
+        requester.answer(FixOutcome.Delivered(fix(atMs = 2_000L)))
+        vague.pause()
+
+        vague.start()
+        requester.answer(FixOutcome.Delivered(fix(atMs = 3_000L)))
+
+        assertTrue(scheduler.delayed.none { it.first == CheckingCadence.BACKOFF_SPACING_MS })
+        vague.close()
+    }
+
+    @Test
+    fun `a check resumed after a lost grant keeps its backoff`() {
+        // Codex, PR #313: a suspension is not the engine settling the check,
+        // so the same check picks up where it was rather than asking a failing
+        // provider three more times at the confirmation gap.
+        val vague = CheckingFixes(
+            scheduler,
+            requester,
+            readElapsedRealtimeMs = { elapsedMs },
+            onSignal = { signals += it },
+            onPermissionLost = { permissionLost++ },
+            onServicesOff = { servicesOff++ },
+            confirmationGapMs = CheckingCadence.CONFIRM_SPACING_MS,
+            feedFix = { signals += PresenceSignal.FixArrived(it); Presence.FixUse.VAGUE },
+        )
+        vague.start()
+        repeat(CheckingCadence.BACKOFF_AFTER) { round ->
+            requester.answer(FixOutcome.Delivered(fix(atMs = 1_000L + round)))
+            if (round < CheckingCadence.BACKOFF_AFTER - 1) scheduler.fire(CheckingCadence.CONFIRM_SPACING_MS)
+        }
+        scheduler.fire(CheckingCadence.BACKOFF_SPACING_MS)
+        requester.answer(FixOutcome.PermissionLost)
+        assertEquals(1, permissionLost)
+
+        vague.resume()
+        vague.start()
+        requester.answer(FixOutcome.Delivered(fix(atMs = 9_000L)))
+
+        assertTrue(scheduler.delayed.any { it.first == CheckingCadence.BACKOFF_SPACING_MS })
+        vague.close()
+    }
+
+    @Test
+    fun `no backoff while a grace period runs`() {
+        // Codex, PR #313: grace's deadline is dated from a fix's capture, the
+        // backoff from its callback, so none is safe while grace runs.
+        var grace = false
+        val vague = CheckingFixes(
+            scheduler,
+            requester,
+            readElapsedRealtimeMs = { elapsedMs },
+            onSignal = { signals += it },
+            onPermissionLost = { permissionLost++ },
+            onServicesOff = { servicesOff++ },
+            confirmationGapMs = CheckingCadence.CONFIRM_SPACING_MS,
+            feedFix = { signals += PresenceSignal.FixArrived(it); Presence.FixUse.VAGUE },
+            graceRunning = { grace },
+        )
+        vague.start()
+        repeat(CheckingCadence.BACKOFF_AFTER) { round ->
+            // The third vague reading is the one that arms grace in the engine.
+            if (round == CheckingCadence.BACKOFF_AFTER - 1) grace = true
+            requester.answer(FixOutcome.Delivered(fix(atMs = 1_000L + round)))
+            if (round < CheckingCadence.BACKOFF_AFTER - 1) scheduler.fire(CheckingCadence.CONFIRM_SPACING_MS)
+        }
+
+        assertTrue(scheduler.delayed.none { it.first == CheckingCadence.BACKOFF_SPACING_MS })
+        assertTrue(scheduler.delayed.any { it.first == CheckingCadence.CONFIRM_SPACING_MS })
+        vague.close()
+    }
+
+    @Test
+    fun `a fix the engine would drop does not back the burst off`() {
+        // Codex, PR #313, twice: a cached repeat, or a reading from before the
+        // check began, is one the engine does not count, so neither may the
+        // cadence. Which fixes those are is the engine's call (`Presence.fixUse`).
+        val vague = CheckingFixes(
+            scheduler,
+            requester,
+            readElapsedRealtimeMs = { elapsedMs },
+            onSignal = { signals += it },
+            onPermissionLost = { permissionLost++ },
+            onServicesOff = { servicesOff++ },
+            confirmationGapMs = CheckingCadence.CONFIRM_SPACING_MS,
+            feedFix = { signals += PresenceSignal.FixArrived(it); Presence.FixUse.IGNORED },
+        )
+        vague.start()
+
+        repeat(CheckingCadence.BACKOFF_AFTER) { round ->
+            requester.answer(FixOutcome.Delivered(fix(atMs = 1_000L)))
+            if (round < CheckingCadence.BACKOFF_AFTER - 1) {
+                scheduler.fire(CheckingCadence.CONFIRM_SPACING_MS)
+            }
+        }
+
+        assertTrue(scheduler.delayed.none { it.first == CheckingCadence.BACKOFF_SPACING_MS })
+        vague.close()
     }
 
     @Test

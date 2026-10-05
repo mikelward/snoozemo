@@ -1,6 +1,7 @@
 package app.snoozemo.presence.geofence
 
 import app.snoozemo.core.Fix
+import app.snoozemo.core.Presence
 import app.snoozemo.core.PresenceSignal
 import app.snoozemo.core.SnoozeDebugLog
 
@@ -96,7 +97,35 @@ internal class CheckingFixes(
      * is built per snooze, which is also where a gap that later varies by
      * anchor would arrive.
      */
-    confirmationGapMs: Long,
+    private val confirmationGapMs: Long,
+    /**
+     * Feeds a delivered fix to the engine and answers what it made of it
+     * ([Presence.fixUse]) — one call, read off the transition itself, so
+     * nothing can move the engine between the two (Codex, PR #313). Null feeds it
+     * through [onSignal] and paces it as informative, the old behavior.
+     *
+     * A vague one is paced like no answer at all (field log, 2026-10-05;
+     * `TODO.md`). Every delivered fix used to forgive the backoff, so a check
+     * in a spot where every reading was vague asked for one every 30 s for as
+     * long as it ran: hidden while the degraded service died, a real battery
+     * cost once the foreground service was held through a fix-quality
+     * degradation. One the engine would drop — a cached repeat, a reading
+     * from before the check began — moves nothing (Codex, PR #313, twice):
+     * backing off on those would slow the burst without the degradation, or
+     * the grace period, that backing off assumes. The fix still reaches the
+     * engine either way; only the spacing of the next request changes.
+     * Defaulted to "every fix informs", the old pacing.
+     */
+    private val feedFix: ((Fix) -> Presence.FixUse)? = null,
+    /**
+     * Whether a §6.6 grace period is running. **No backoff while one is**
+     * (Codex, PR #313): grace ends the snooze at a deadline the engine dates
+     * from a fix's capture time, while a backoff counts from the callback, so
+     * no fixed backoff can be sure to leave room for a recovery fix before
+     * that deadline. Asking at the confirmation gap until grace resolves —
+     * at most its five minutes — removes the question rather than tuning it.
+     */
+    private val graceRunning: () -> Boolean = { false },
 ) : AutoCloseable {
 
     private val cadence = CheckingCadence(confirmationGapMs)
@@ -153,6 +182,14 @@ internal class CheckingFixes(
     private var suspended = false
 
     /**
+     * Whether the engine settled the last check — the duty left ACTIVE, which
+     * is what [pause] means — so the next [start] begins a new one and its
+     * backoff starts over. False across a suspension: [resume] picks the same
+     * check back up, and its backoff history still holds (Codex, PR #313).
+     */
+    private var checkSettled = true
+
+    /**
      * Revives fix checking after the grant that suspended it comes back.
      *
      * Cannot resurrect a closed instance — [dead] is checked alongside this
@@ -179,6 +216,10 @@ internal class CheckingFixes(
             // the other way around.
             stopSanity()
             running = true
+            if (checkSettled) {
+                cadence.onBurstStarted()
+                checkSettled = false
+            }
             SnoozeDebugLog.event("checking: taking confirming fixes")
             requestOnce()
         }
@@ -196,6 +237,7 @@ internal class CheckingFixes(
             // requests or over, which is the ambiguity moving the spacing
             // line above would otherwise have left behind.
             if (running) SnoozeDebugLog.event("checking: confirming fixes stopped")
+            checkSettled = true
             stopWork()
         }
     }
@@ -209,7 +251,7 @@ internal class CheckingFixes(
      * resting probe cannot cover it (Codex, PR #139): an outage that starts
      * *during* a departure check leaves the duty `ACTIVE`, where
      * [sanityCheck] is a declared no-op, and three `ServicesOff` answers have
-     * by then dropped the cadence to five minutes. Without this, the moment
+     * by then dropped the cadence to the backoff spacing. Without this, the moment
      * the user switches location back on would do nothing at all for a
      * snooze mid-check — the one state where confirming a departure is most
      * urgent.
@@ -373,8 +415,15 @@ internal class CheckingFixes(
     private fun settle(outcome: FixOutcome) {
         when (outcome) {
             is FixOutcome.Delivered -> {
-                cadence.onFixDelivered()
-                onSignal(PresenceSignal.FixArrived(outcome.fix))
+                val use = feedFix?.invoke(outcome.fix) ?: run {
+                    onSignal(PresenceSignal.FixArrived(outcome.fix))
+                    Presence.FixUse.INFORMATIVE
+                }
+                when (use) {
+                    Presence.FixUse.INFORMATIVE -> cadence.onFixDelivered()
+                    Presence.FixUse.VAGUE -> cadence.onNothing()
+                    Presence.FixUse.IGNORED -> Unit
+                }
                 scheduleNext()
             }
             FixOutcome.NothingRecoverable -> nothing()
@@ -413,7 +462,7 @@ internal class CheckingFixes(
         // spacing at all — a provider answering nothing must not be asked
         // twice a minute for eight hours, and the backoff is invisible at
         // delivery: `settle` calls `cadence.onFixDelivered()` before it gets
-        // here, so a fix that arrives after five minutes of backoff is
+        // here, so a fix that arrives after a backed-off wait is
         // scheduled from a cadence that has already forgiven it, and every
         // reading taken there says 30 s. So the number is captured now and
         // the line is written when the wait actually elapses, which makes it
@@ -421,7 +470,7 @@ internal class CheckingFixes(
         // inside the fix callback above, and the production scheduler only
         // *queues* that stop, so writing here recorded a spacing for a
         // request the queued stop then cancelled (Codex, PR #245).
-        val waitMs = cadence.nextDelayMs
+        val waitMs = if (graceRunning()) confirmationGapMs else cadence.nextDelayMs
         nextRequest = scheduler.postDelayed(waitMs) {
             SnoozeDebugLog.event("next checking fix in %s ms", waitMs)
             requestOnce()

@@ -1,6 +1,7 @@
 package app.snoozemo.presence.geofence
 
 import app.snoozemo.core.Departure
+import app.snoozemo.core.Presence
 
 /**
  * How the checking burst paces its one-shot fixes (SPEC.md §6.6, §6.10).
@@ -16,8 +17,9 @@ import app.snoozemo.core.Departure
  * The backoff is the battery bound (SPEC.md §9): a provider that answers
  * nothing must not be asked twice a minute for the rest of a snooze the
  * engine cannot resolve. After [BACKOFF_AFTER] consecutive requests with no
- * fix — the same threshold at which the engine calls tracking degraded — the
- * cadence drops to [BACKOFF_SPACING_MS], and one delivered fix restores it.
+ * fix, or with one too vague to place anyone — the same threshold at which
+ * the engine calls tracking degraded — the cadence drops to
+ * [BACKOFF_SPACING_MS], and one fix that can say something restores it.
  *
  * Pure, so the pacing rules are JVM-tested; the platform half just asks
  * [nextDelayMs] after each outcome.
@@ -39,7 +41,7 @@ internal class CheckingCadence(
 
     private var consecutiveUnanswered = 0
 
-    /** A fix was delivered — whatever the engine makes of it. */
+    /** A fix the engine accepted as evidence, or that proved location healthy. */
     fun onFixDelivered() {
         consecutiveUnanswered = 0
     }
@@ -57,13 +59,27 @@ internal class CheckingCadence(
      * effect is the same: no fix has arrived, and the reason the backoff is
      * being forgiven is what the next reader needs. A backoff is a bound on
      * asking a provider that is not answering; once the *reason* it was not
-     * answering is provably over, serving out five more minutes of it means
+     * answering is provably over, serving out the rest of it means
      * a snooze reports degraded tracking long after the outage ended, which
      * is the very latency this recovery path exists to remove. The bound
      * still holds if the provider goes on failing — the count simply starts
      * again from the recovery.
      */
     fun onPlatformRecovered() {
+        consecutiveUnanswered = 0
+    }
+
+    /**
+     * A new check began: the run counted toward the backoff belongs to the
+     * check that ended, which something else settled — the anchor's Wi-Fi
+     * coming back, say, which resets the engine's own count too (Codex,
+     * PR #313). Carried over, it would back a new check off after one or two
+     * vague readings the engine has not counted as a degradation, delaying
+     * the confirming fix with no grace period armed to bound it. Starting
+     * over costs at most [BACKOFF_AFTER] requests at the confirmation gap
+     * when the provider really is still failing.
+     */
+    fun onBurstStarted() {
         consecutiveUnanswered = 0
     }
 
@@ -94,6 +110,16 @@ internal class CheckingCadence(
          */
         const val BACKOFF_AFTER: Int = 3
 
-        const val BACKOFF_SPACING_MS: Long = 5 * 60_000L
+        /**
+         * Half the §6.6 grace window, derived rather than restated (Codex, PR
+         * #313). The backoff starts on the very observation that degrades
+         * tracking, and with the anchor's Wi-Fi gone that observation also
+         * arms grace. At the old five minutes — the grace window exactly — no
+         * request could start, let alone answer, before the deadline came due,
+         * so a signal that recovered at once could never call grace off. Half
+         * leaves room for a request and its callback inside the window. Costs
+         * a fix every 2.5 minutes instead of every five while backed off.
+         */
+        val BACKOFF_SPACING_MS: Long = Presence.WIFI_GRACE.toMillis() / 2
     }
 }

@@ -3687,7 +3687,16 @@ It is not the only *decision* in the total, and saying so would hide the others:
 the confirmation gap and the request cadence are all chosen numbers with their own reasons, and
 each of them is tunable. Two of those three are now **one** number: on `play` the burst asks at
 the confirmation gap rather than at a rate of its own, so shortening the gap shortens the wait
-between fixes instead of leaving the shorter gap inert. What separates them from the rest of the list is what they answer to —
+between fixes instead of leaving the shorter gap inert. **The burst backs off when its answers stop
+being useful** (2026-10-05): three requests in a row that came back with nothing, or with a fix too
+vague to place anyone (§8.1's `weak location signal`), counted as the engine counts them so a cached
+repeat moves nothing, drop it from the confirmation gap to half the
+grace window, until a fix that can say something, or that proves location recovered, restores the gap. A vague spot used to be asked
+twice a minute for as long as the check ran, which the foreground service now held through a
+degraded snooze would have paid for all day; half the grace window, not the whole of it, so that a
+signal recovering at once can still answer before a running grace period ends the snooze — and
+no backoff at all while a grace period runs, since its deadline is dated from a fix's capture and a
+backoff from its delivery, so no fixed spacing is certain to fit inside it. What separates them from the rest of the list is what they answer to —
 a product judgment, rather than how good a reading the platform happened to return. **The
 measurement half is unmeasured**, which is why nothing here ranks the levers against each other:
 that ordering is what the handset traces in `TODO.md` are for.

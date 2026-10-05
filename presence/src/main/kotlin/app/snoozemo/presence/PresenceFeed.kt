@@ -1,6 +1,7 @@
 package app.snoozemo.presence
 
 import app.snoozemo.core.Anchor
+import app.snoozemo.core.Fix
 import app.snoozemo.core.LocationDuty
 import app.snoozemo.core.Presence
 import app.snoozemo.core.PresenceSignal
@@ -146,6 +147,13 @@ internal class PresenceFeed(
             0
         },
     )
+
+    /** [accept] for a fix, also answering what the engine made of it ([Presence.fixUse]). */
+    fun acceptFix(fix: Fix): Pair<PresenceUpdate, Presence.FixUse> {
+        val before = state
+        val update = accept(PresenceSignal.FixArrived(fix))
+        return update to Presence.fixUse(before, state)
+    }
 
     /** What the engine currently wants from location (SPEC.md §6.7). */
     val duty: LocationDuty

@@ -483,6 +483,42 @@ object Presence {
      */
     val WIFI_CONFIRM: Duration = Duration.ofSeconds(30)
 
+    /** What feeding one fix made of it, for pacing the next request ([fixUse]). */
+    enum class FixUse {
+        /** Accepted as evidence — here, gone, or near the edge — or proved health. */
+        INFORMATIVE,
+
+        /** Counted as a useless observation: too vague to place anyone. */
+        VAGUE,
+
+        /** Moved nothing: stale with nothing to prove, a resolved engine, no anchor. */
+        IGNORED,
+    }
+
+    /**
+     * What feeding one fix made of it, read off the transition itself:
+     * [before] is the state it was fed to, [after] the state [advance]
+     * returned. The checking burst paces on this.
+     *
+     * Read from the result rather than predicted ahead of it (Codex, PR #313,
+     * the fourth finding in this mechanism): every prediction had to copy a
+     * branch of the fix path and kept missing one — the freshness boundary
+     * twice, then a stale fix that still proves location recovered. The
+     * transition already says what was counted, so nothing is copied.
+     *
+     * - [FixUse.VAGUE]: counted as a useless observation.
+     * - [FixUse.INFORMATIVE]: accepted as evidence, or proved health — a
+     *   standing degradation cleared, or a run of failures reset.
+     * - [FixUse.IGNORED]: changed none of that.
+     */
+    fun fixUse(before: PresenceState, after: PresenceState): FixUse = when {
+        after.uselessObservations > before.uselessObservations -> FixUse.VAGUE
+        after.latestEvidenceMs != before.latestEvidenceMs ||
+            after.uselessObservations < before.uselessObservations ||
+            (before.degradation != null && after.degradation == null) -> FixUse.INFORMATIVE
+        else -> FixUse.IGNORED
+    }
+
     /** What the caller should currently be asking of location (SPEC.md §6.7). */
     fun duty(state: PresenceState, anchor: Anchor): LocationDuty = when {
         state.resolved -> LocationDuty.NONE
