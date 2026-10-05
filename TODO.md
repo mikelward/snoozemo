@@ -8954,6 +8954,20 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
       by the walk, then dropping the old one — the same staged-rename shape
       used for the `gate` → `lanes` check. Caught by Codex on PR #133.
 
+## Precise readings near the fence edge degraded a snooze (field log, 2026-10-05)
+
+- [x] **An inconclusive reading counts as a weak signal only when it is vague.**
+      `Departure.couldSettle` splits inconclusive fixes by precision. A precise one near the
+      edge is health, and three in a row stand the check down instead of degrading
+      (`Presence.EDGE_READINGS_BEFORE_STANDING_DOWN`, `SPEC.md` §6.6). Reversible: one constant
+      and one predicate.
+- [ ] **A genuinely vague check still polls at the checking rate indefinitely.** A run of
+      vague fixes degrades but leaves the engine `CHECKING`, so a fix is asked for every 30 s
+      until something settles it. That was mostly hidden while the degraded service died;
+      with the foreground service now held through a fix-quality degradation (PR #309) it is a
+      real battery cost. Candidate: stand a degraded check down too, or back off its cadence
+      the way `CheckingCadence` already backs off for unanswered requests.
+
 ## The backstop tests departure when it cannot start the service (field log, 2026-10-05)
 
 - [x] **A refused backstop wake runs §6.6 itself** (maintainer chose this over exact alarms,
