@@ -50,6 +50,9 @@ fun degradationReasonRes(cause: DegradationCause?): Int? = when (cause) {
     // Names the grant rather than the symptom, like the line above it.
     DegradationCause.LOCATION_PERMISSION_GONE -> R.string.ongoing_cause_permission_gone
     DegradationCause.NOTHING_WATCHING,
+    // Carried by the mode line itself (`Checking less often`), not joined to
+    // one: it is not a lowered mode, so there is no mode for it to explain.
+    DegradationCause.BACKGROUND_CHECKS_ONLY,
     null,
     -> null
 }

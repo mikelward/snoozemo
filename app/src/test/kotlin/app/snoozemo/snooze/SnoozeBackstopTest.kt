@@ -297,16 +297,46 @@ class SnoozeBackstopTest {
     }
 
     @Test
-    fun `a plain miss changes nothing on the card`() {
-        // One throttled wake is not evidence location is broken.
+    fun `a refused start says the card is checking less often`() {
+        // Maintainer, 2026-10-05: with the service refused, only this worker
+        // watches, so the card says so on every such wake — not as a location
+        // fault (one throttled wake is not evidence location is broken) and
+        // not as a lowered mode, since the departure test still runs.
         probeAnswers(BackstopProbe.Outcome.NoFix)
-        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
+        val snooze = snoozeFixture(now)
+        ActiveSnoozeStore(appContext).arm(snooze)
+        SnoozeNotifications(appContext).showOngoing(snooze)
 
         runWorker(refusing)
 
         val record = ActiveSnoozeStore(appContext).load()
-        assertEquals(TrackingMode.FULL, record?.mode)
-        assertNull(record?.degradation)
+        assertEquals("not a lowered mode", TrackingMode.FULL, record?.mode)
+        assertEquals(DegradationCause.BACKGROUND_CHECKS_ONLY, record?.degradation)
+        assertTrue(shadeText().contains(stringOf(app.snoozemo.R.string.ongoing_checking_less_often)))
+    }
+
+    @Test
+    fun `a probe with nothing to measure from claims no checking`() {
+        probeAnswers(BackstopProbe.Outcome.NotTestable)
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
+
+        runWorker(refusing)
+
+        assertNull(ActiveSnoozeStore(appContext).load()?.degradation)
+    }
+
+    @Test
+    fun `a stated cause outranks checking less often`() {
+        probeAnswers(BackstopProbe.Outcome.Unavailable(DegradationCause.LOCATION_SERVICES_OFF))
+        ActiveSnoozeStore(appContext).arm(
+            snoozeFixture(now).copy(degradation = DegradationCause.BACKGROUND_CHECKS_ONLY),
+        )
+
+        runWorker(refusing)
+
+        val record = ActiveSnoozeStore(appContext).load()
+        assertEquals(TrackingMode.DURATION_ONLY, record?.mode)
+        assertEquals(DegradationCause.LOCATION_SERVICES_OFF, record?.degradation)
     }
 
     @Test

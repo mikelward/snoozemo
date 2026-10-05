@@ -362,26 +362,31 @@ open class ActiveSnoozeStore(
     open fun update(snooze: ActiveSnooze): Boolean = write(snooze, allowLookup = true, newArm = false)
 
     /**
-     * [update], from outside the service, **only while [snooze]'s own record
-     * is still live**: there, unreleased and not on its way out. Null when it
-     * is not, and nothing was written.
+     * [update], from outside the service, **only while the snooze started at
+     * [startedAt] is still live**: there, unreleased and not on its way out.
+     * [change] is applied to the record as read *here*, not to a copy the
+     * caller loaded earlier, and may return null to write nothing. Null when
+     * nothing was written; otherwise whether the write landed.
      *
      * A plain [update] writes whatever it is given, so a worker that loaded
      * the record, then wrote it back after the user's ending had cleared it,
      * would put an ended snooze back on disk for the next restore to re-arm
-     * (Codex, PR #312). The check and the write share [RECORD_LOCK] with
-     * [clear] and [setState], so no ending lands between them; every caller
-     * in the process takes the same lock, and the store has one process.
-     * The service's own writes go on without it — its controller already
-     * orders them against its own ending.
+     * (Codex, PR #312). And a worker writing back its own earlier copy would
+     * undo whatever changed meanwhile — an extension, a new end condition —
+     * so the change is built from the fresh read instead (Codex, PR #312).
+     * The read and the write share [RECORD_LOCK] with every other write
+     * here — [arm], [update], [clear], [setState] — so neither an ending nor
+     * a service rewrite lands between them (Codex, PR #312).
      */
-    fun updateIfLive(snooze: ActiveSnooze): Boolean? = synchronized(RECORD_LOCK) {
-        val live = read()
-        if (live == null || live.startedAt != snooze.startedAt || state().lifecycle >= SnoozeLifecycle.RELEASING) {
-            return null
+    fun updateIfLive(startedAt: Instant, change: (ActiveSnooze) -> ActiveSnooze?): Boolean? =
+        synchronized(RECORD_LOCK) {
+            val live = read()
+            if (live == null || live.startedAt != startedAt || state().lifecycle >= SnoozeLifecycle.RELEASING) {
+                return null
+            }
+            val changed = change(live) ?: return null
+            update(changed)
         }
-        update(snooze)
-    }
 
     /**
      * The durable write behind [arm] and [update]: the record, and the arm
@@ -399,7 +404,16 @@ open class ActiveSnoozeStore(
      * separate write for exactly the failure this rolls back, so the
      * rollback is the design's own cost rather than a reason to move it).
      */
-    private fun write(snooze: ActiveSnooze, allowLookup: Boolean, newArm: Boolean): Boolean {
+    // Under [RECORD_LOCK] (Codex, PR #312): an [updateIfLive] that read the
+    // record must not have a service write land between its read and its
+    // own write, or it writes back what that write changed. Uncontended
+    // except by that rare worker write, and never ahead of the rule going on:
+    // the arm path's write is handed to a background thread ([armAsync]) or
+    // made after the rule is on ([arm]).
+    private fun write(snooze: ActiveSnooze, allowLookup: Boolean, newArm: Boolean): Boolean =
+        synchronized(RECORD_LOCK) { writeLocked(snooze, allowLookup, newArm) }
+
+    private fun writeLocked(snooze: ActiveSnooze, allowLookup: Boolean, newArm: Boolean): Boolean {
         val stored = state().lifecycle
         val before = armCount()
         if (persist(prefs.edit().putAll(snooze, allowLookup, newArm, stored))) return true
@@ -732,9 +746,10 @@ open class ActiveSnoozeStore(
 
     private companion object {
         /**
-         * Orders [updateIfLive] against the endings: [clear] and [setState].
-         * Held for one commit at most, and contended only by that one rare
-         * worker write, so an ending never waits on more than its own disk.
+         * Orders [updateIfLive]'s read-and-write against every other record
+         * write in the process. Held for one commit at most, and contended
+         * only by that one rare worker write, so no writer waits on more than
+         * one other disk write.
          */
         val RECORD_LOCK = Any()
 

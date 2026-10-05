@@ -9,6 +9,7 @@ import androidx.work.Worker
 import androidx.work.WorkerParameters
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.BackstopProbe
+import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.EndReason
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.TrackingMode
@@ -333,7 +334,16 @@ internal class BackstopWorker(
      * A probe that learned the grant is gone or location is off records that
      * as the snooze's degradation and reposts the card, so it stops claiming a
      * departure watch the backstop has just found cannot run (principle 2).
-     * Anything else changes nothing.
+     *
+     * Any other probe that could run the test says the service is not running
+     * either ([DegradationCause.BACKGROUND_CHECKS_ONLY], `Checking less
+     * often`; maintainer, 2026-10-05): this wake exists because Android
+     * refused the start, so no fence or Wi-Fi watch is up, and a departure is
+     * caught only at this worker's pace. Not a lowered mode — the test still
+     * runs — and only over a snooze with no cause already: a stated one says
+     * more. A probe that could not run the test (no fix to measure from)
+     * writes nothing, since `Checking` would claim a check that is not made.
+     * A confirmed departure writes nothing either; it is about to end.
      *
      * **Lowering only, never raising** (Codex, PR #312). A later probe's fix
      * proves location answers, not that a departure watch is running: the
@@ -354,37 +364,49 @@ internal class BackstopWorker(
      */
     private fun reflectOnCard(probed: ActiveSnooze, outcome: BackstopProbe.Outcome) {
         val store = ActiveSnoozeStore(applicationContext)
-        val current = store.load() ?: return
-        if (current.startedAt != probed.startedAt || !current.endsOnDeparture) return
-        val updated = when (outcome) {
-            is BackstopProbe.Outcome.Unavailable ->
-                current.copy(mode = TrackingMode.DURATION_ONLY, degradation = outcome.cause)
-                    .takeIf { current.degradation != outcome.cause || current.mode != TrackingMode.DURATION_ONLY }
-            else -> null
-        } ?: return
-        SnoozeDebugLog.event(
-            "tracking → %s (%s) from the backstop probe",
-            safe(updated.mode.toString()),
-            safe(updated.degradation.toString()),
-        )
-        // Only onto the record this loaded, still live: the probe takes
-        // minutes, and an ending that cleared the record meanwhile must not be
-        // undone by writing it back (Codex, PR #312) — that would be a snooze
-        // the next restore re-arms.
-        when (store.updateIfLive(updated)) {
+        var updated: ActiveSnooze? = null
+        // Built from the record as it is now, not from the one probed, and
+        // written only while that snooze is still live (Codex, PR #312): the
+        // probe takes minutes, an ending meanwhile must not be undone by
+        // writing it back — that would be a snooze the next restore re-arms —
+        // and an extension or a new end condition meanwhile must not be
+        // undone by writing back the copy the probe started from.
+        val written = store.updateIfLive(probed.startedAt) { current ->
+            lowered(current, outcome)?.also { updated = it }
+        }
+        val change = updated ?: return
+        when (written) {
             null -> {
-                SnoozeDebugLog.event("backstop tracking change dropped: the snooze ended meanwhile")
+                SnoozeDebugLog.event("backstop tracking change dropped: nothing to change, or the snooze ended")
                 return
             }
             false -> SnoozeDebugLog.warning("recording the backstop's tracking change failed; the card says it anyway")
             true -> Unit
         }
+        SnoozeDebugLog.event(
+            "tracking → %s (%s) from the backstop probe",
+            safe(change.mode.toString()),
+            safe(change.degradation.toString()),
+        )
         // Guarded like the calendar worker's repost (Codex, PR #312): a snooze
         // the user ended while this ran has had its card taken down, and an
         // unguarded post would put `Snoozing` back beside `Snooze ended`.
-        SnoozeNotifications(applicationContext).repostIfStillShowing(updated) {
-            store.load()?.startedAt == updated.startedAt
+        SnoozeNotifications(applicationContext).repostIfStillShowing(change) {
+            store.load()?.startedAt == change.startedAt
         }
         SnoozeTileBridge.refresh()
+    }
+
+    /** [current] as [outcome] lowers it, or null where it says nothing new. */
+    private fun lowered(current: ActiveSnooze, outcome: BackstopProbe.Outcome): ActiveSnooze? {
+        if (!current.endsOnDeparture) return null
+        return when (outcome) {
+            is BackstopProbe.Outcome.Unavailable ->
+                current.copy(mode = TrackingMode.DURATION_ONLY, degradation = outcome.cause)
+                    .takeIf { current.degradation != outcome.cause || current.mode != TrackingMode.DURATION_ONLY }
+            is BackstopProbe.Outcome.Departed, BackstopProbe.Outcome.NotTestable -> null
+            else -> current.copy(degradation = DegradationCause.BACKGROUND_CHECKS_ONLY)
+                .takeIf { current.degradation == null }
+        }
     }
 }

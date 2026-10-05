@@ -503,6 +503,10 @@ class SnoozeNotifications(private val context: Context) {
         // clears the last reading too, so this is the second of two — the
         // reading cannot be stale here, and the line cannot appear at all.
         if (snooze.effectiveMode != TrackingMode.FULL) return null
+        // Nor while only the backstop watches (SPEC.md §6.10; Codex, PR #312):
+        // the worker that wrote that never clears the last reading, so one from
+        // the service that has since gone could still read as fresh.
+        if (snooze.effectiveDegradation == DegradationCause.BACKGROUND_CHECKS_ONLY) return null
         val reading = departure?.takeIf { it.isFresh(SnoozeClock.read().uptimeMillis) }
         // Ahead of the network, and only this case is (Codex, PR #229). A
         // geofence exit escalates to `CHECKING` *without* clearing the
@@ -577,8 +581,15 @@ class SnoozeNotifications(private val context: Context) {
         // on its timer whatever the machinery could still watch for, and a card
         // promising `Ends when you leave` over one is an exit the user cannot
         // predict (principle 2).
+        // Only the backstop is watching (SPEC.md §6.10): still a departure
+        // exit, so not `Timer only`, but not the watch `Ends when you leave`
+        // promises either. It names no lowered mode, so no reason is joined.
+        val backgroundChecksOnly =
+            snooze.effectiveDegradation == DegradationCause.BACKGROUND_CHECKS_ONLY
         val body = if (motionIsTheOnlyNamedExit) {
             context.getString(R.string.ongoing_ends_when_you_move)
+        } else if (backgroundChecksOnly) {
+            context.getString(R.string.ongoing_checking_less_often)
         } else when (snooze.effectiveMode) {
             TrackingMode.FULL -> context.getString(R.string.ongoing_ends_when_you_leave)
             // Says what it can actually do, not what it wishes it could.
@@ -700,8 +711,12 @@ class SnoozeNotifications(private val context: Context) {
         // shortfall, an unprotected watch or a movement exit has something the
         // headline can't carry, so it keeps the "Snoozing" title and its
         // condition line. The end time is the cap, formatted like the sheet's.
+        // Never over `Checking less often` (Codex, PR #312): a timer-mode
+        // record can carry it, and folding would hide the line it replaced
+        // the mode with.
         val plainTimerOnly = snooze.effectiveMode == TrackingMode.DURATION_ONLY &&
             !snooze.endsOnMotion &&
+            !backgroundChecksOnly &&
             withMotion == body
         val notification = android.app.Notification.Builder(context, CHANNEL_ACTIVE)
             .setSmallIcon(DndR.drawable.ic_snooze_mark)

@@ -686,6 +686,10 @@ private fun SnoozeStatus(
     // snooze about to end in minutes for a reason the user could not
     // reconstruct afterwards.
     val motionOnly = endsOnMotion && mode != TrackingMode.WIFI_GRACE
+    // Only the backstop is watching (SPEC.md §6.10): the mode line says so in
+    // place of the mode, the one-row sentence would claim the watch it lacks,
+    // and no watch is measuring a distance to show.
+    val backgroundChecksOnly = degradation == DegradationCause.BACKGROUND_CHECKS_ONLY
     val body = when {
         // **The exit that was tapped, in the fallback too.** `StatusBlock`
         // drops the one-sentence form and renders this line instead wherever
@@ -703,6 +707,8 @@ private fun SnoozeStatus(
         // underneath today, so its degradation stops being reported here until
         // tapping a row replaces the other exits rather than adding to them.
         motionOnly -> stringResource(R.string.ongoing_ends_when_you_move)
+        backgroundChecksOnly ->
+            stringResource(R.string.ongoing_checking_less_often)
         else -> when (mode) {
             TrackingMode.FULL -> stringResource(R.string.ongoing_ends_when_you_leave)
             TrackingMode.WIFI_ONLY -> stringResource(R.string.ongoing_wifi_only)
@@ -738,7 +744,7 @@ private fun SnoozeStatus(
     // narrow fallback would read "Until 4:30 PM" and hide the movement exit the
     // sentence names — the exit is the one thing that snooze reports (Codex).
     val plainTimerEndTime: String? =
-        if (!motionOnly && mode == TrackingMode.DURATION_ONLY && reason == null) {
+        if (!motionOnly && !backgroundChecksOnly && mode == TrackingMode.DURATION_ONLY && reason == null) {
             endsAtLabel
         } else {
             null
@@ -767,7 +773,7 @@ private fun SnoozeStatus(
         // an exit this snooze was not started to end on.
         oneRow = when {
             motionOnly -> stringResource(R.string.main_snoozing_until_you_move)
-            mode == TrackingMode.FULL ->
+            mode == TrackingMode.FULL && !backgroundChecksOnly ->
                 stringResource(R.string.main_snoozing_until_you_leave)
             // A plain timer-only snooze folds its "Snoozing" headline and
             // "Timer only" line into one naming the end time (maintainer,
@@ -795,7 +801,7 @@ private fun SnoozeStatus(
         // `200 m away · 23 m to go` would name one exit and then quietly put a
         // number on a different one.
         readout = departure
-            ?.takeIf { mode == TrackingMode.FULL && !motionOnly && it.isReportable }
+            ?.takeIf { mode == TrackingMode.FULL && !motionOnly && !backgroundChecksOnly && it.isReportable }
             ?.let { departureText(it) },
     )
 }

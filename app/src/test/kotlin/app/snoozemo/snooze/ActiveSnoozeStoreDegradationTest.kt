@@ -101,7 +101,7 @@ class ActiveSnoozeStoreDegradationTest {
         store.arm(snooze)
         store.clear()
 
-        assertNull(store.updateIfLive(snooze.copy(degradation = DegradationCause.LOCATION_SERVICES_OFF)))
+        assertNull(store.updateIfLive(snooze.startedAt) { it.copy(degradation = DegradationCause.LOCATION_SERVICES_OFF) })
         assertNull("the ended snooze stays ended", ActiveSnoozeStore(context).load())
     }
 
@@ -112,7 +112,7 @@ class ActiveSnoozeStoreDegradationTest {
         store.arm(snooze)
         store.markReleasing(EndReason.DEPARTURE)
 
-        assertNull(store.updateIfLive(snooze.copy(degradation = DegradationCause.LOCATION_SERVICES_OFF)))
+        assertNull(store.updateIfLive(snooze.startedAt) { it.copy(degradation = DegradationCause.LOCATION_SERVICES_OFF) })
         assertEquals(SnoozeLifecycle.RELEASING, store.state().lifecycle)
     }
 
@@ -122,7 +122,7 @@ class ActiveSnoozeStoreDegradationTest {
         val older = aSnooze(degradation = null)
         store.arm(aSnooze(degradation = null, startedAt = older.startedAt.plusSeconds(60)))
 
-        assertNull(store.updateIfLive(older.copy(degradation = DegradationCause.LOCATION_SERVICES_OFF)))
+        assertNull(store.updateIfLive(older.startedAt) { it.copy(degradation = DegradationCause.LOCATION_SERVICES_OFF) })
         assertNull(ActiveSnoozeStore(context).load()?.degradation)
     }
 
@@ -132,7 +132,24 @@ class ActiveSnoozeStoreDegradationTest {
         val snooze = aSnooze(degradation = null)
         store.arm(snooze)
 
-        assertEquals(true, store.updateIfLive(snooze.copy(degradation = DegradationCause.LOCATION_SERVICES_OFF)))
+        assertEquals(true, store.updateIfLive(snooze.startedAt) { it.copy(degradation = DegradationCause.LOCATION_SERVICES_OFF) })
         assertEquals(DegradationCause.LOCATION_SERVICES_OFF, ActiveSnoozeStore(context).load()?.degradation)
+    }
+
+    @Test
+    fun `a write from outside the service keeps what changed meanwhile`() {
+        // Codex, PR #312: the change is built from the record as read under
+        // the lock, so an extension made after the caller's own load stands.
+        val store = ActiveSnoozeStore(context)
+        val snooze = aSnooze(degradation = null)
+        store.arm(snooze)
+        val extended = snooze.copy(capExpiresAt = snooze.capExpiresAt.plus(Duration.ofHours(1)))
+        store.update(extended)
+
+        store.updateIfLive(snooze.startedAt) { it.copy(degradation = DegradationCause.LOCATION_SERVICES_OFF) }
+
+        val record = ActiveSnoozeStore(context).load()
+        assertEquals(extended.capExpiresAt, record?.capExpiresAt)
+        assertEquals(DegradationCause.LOCATION_SERVICES_OFF, record?.degradation)
     }
 }

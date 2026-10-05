@@ -238,6 +238,30 @@ class SnoozeControllerTest {
     }
 
     @Test
+    fun `a restore drops the backstop's background-checks claim and keeps a real cause`() {
+        // A running service is what `Checking less often` says is missing, so
+        // a restore refutes it (SPEC.md §6.10) — but not a cause it cannot.
+        val running = ActiveSnooze(
+            anchor = anchor,
+            startedAt = now,
+            capExpiresAt = ActiveSnooze.capExpiryFor(now),
+            mode = TrackingMode.FULL,
+            degradation = DegradationCause.BACKGROUND_CHECKS_ONLY,
+            lifecycle = SnoozeLifecycle.ARMED,
+        )
+
+        controller.restore(running)
+        assertNull(controller.active?.degradation)
+        assertEquals(TrackingMode.FULL, controller.active?.mode)
+
+        controller.end(EndReason.MANUAL)
+        controller.restore(
+            running.copy(mode = TrackingMode.DURATION_ONLY, degradation = DegradationCause.LOCATION_SERVICES_OFF),
+        )
+        assertEquals(DegradationCause.LOCATION_SERVICES_OFF, controller.active?.degradation)
+    }
+
+    @Test
     fun `the rule goes on at the tap, before any anchor exists`() {
         // The phone must be quiet from the tap, not from the fix (SPEC.md §4.1):
         // anchor capture takes up to 10 s and DND cannot wait for it.
