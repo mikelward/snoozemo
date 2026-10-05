@@ -237,6 +237,15 @@ data class PresenceState(
      */
     val uselessObservations: Int = 0,
     /**
+     * How many precise-but-inconclusive fixes this check has seen in a row —
+     * the user near the edge of "here" ([Departure.couldSettle]). What
+     * [Presence.EDGE_READINGS_BEFORE_STANDING_DOWN] compares against.
+     *
+     * In memory only: a restart resets it, which costs at most a few more
+     * checking fixes and never a degradation.
+     */
+    val edgeObservations: Int = 0,
+    /**
      * The degradation already reported, so it is reported **once** rather than
      * per failed fix. A notification rewritten every 90 seconds to say the same
      * thing is noise, and noise is how a user learns to ignore the line that
@@ -429,6 +438,20 @@ object Presence {
      * nothing, which is worth a line in the notification.
      */
     const val DEGRADED_AFTER_USELESS_OBSERVATIONS: Int = 3
+
+    /**
+     * How many near-the-edge readings in a row before a check stands down.
+     *
+     * Such a reading proves location works and settles nothing, so it is not
+     * a failure — but a check that never settles keeps asking for a fix at the
+     * checking rate for as long as the user stays put, which is a battery cost
+     * paid for no answer (SPEC.md §9). Three, matching the degradation count:
+     * after that the engine rests, and the wake-up sources that started the
+     * check — motion, the fence, the backstop — start a fresh one if the user
+     * moves on. Resting is not a verdict of presence; the cap still bounds the
+     * snooze, and the next check starts from nothing.
+     */
+    const val EDGE_READINGS_BEFORE_STANDING_DOWN: Int = 3
 
     /**
      * How long the anchor's Wi-Fi may stay away before an unverifiable snooze
@@ -633,6 +656,7 @@ object Presence {
             atAnchorWifi = true,
             progress = DepartureProgress.NONE,
             uselessObservations = 0,
+            edgeObservations = 0,
             // The degradation deliberately survives this (Codex, PR #33). Every
             // cause is a *location* cause, and rejoining the anchor's network
             // says nothing about whether location started working — so clearing
@@ -777,6 +801,7 @@ object Presence {
                     phase = PresencePhase.CHECKING,
                     progress = outcome.progress,
                     uselessObservations = uselessAfter,
+                    edgeObservations = 0,
                     // Location answered, so the engine no longer believes it is
                     // broken — and that travels as a level, so nothing has to be
                     // said about it here. This reading proves the capability
@@ -809,6 +834,7 @@ object Presence {
                     phase = PresencePhase.RESTING,
                     progress = DepartureProgress.NONE,
                     uselessObservations = uselessAfter,
+                    edgeObservations = 0,
                     // Same withholding as above: presence is confirmed, but a
                     // reading older than the failures does not retract them.
                     degradation = healthAfter,
@@ -824,12 +850,16 @@ object Presence {
                 step(next, if (settlesACheck) PresenceEvent.StillHere else null, anchor)
             }
 
-            DepartureVerdict.INCONCLUSIVE -> useless(
-                accepted.copy(progress = outcome.progress),
-                DegradationCause.FIXES_TOO_VAGUE,
-                fix.elapsedRealtimeMs,
-                anchor,
-            )
+            DepartureVerdict.INCONCLUSIVE -> if (Departure.couldSettle(fix, anchor)) {
+                nearTheEdge(accepted, provesHealth, uselessAfter, healthAfter, anchor)
+            } else {
+                useless(
+                    accepted.copy(progress = outcome.progress),
+                    DegradationCause.FIXES_TOO_VAGUE,
+                    fix.elapsedRealtimeMs,
+                    anchor,
+                )
+            }
         }
         return considered.copy(observation = observation)
     }
@@ -869,8 +899,11 @@ object Presence {
         // Only this reading's precision is being read. The verdict is computed
         // against a fresh [DepartureProgress] and then thrown away, so a stale
         // fix cannot advance the confirmation window it was never part of.
+        // A precise reading near the edge proves the capability too (Codex,
+        // PR #311): the same split `fixArrived` makes, or a late one could
+        // never clear the level that a timely one would.
         val couldPlaceAnyone = Departure.consider(fix, anchor, DepartureProgress.NONE).verdict !=
-            DepartureVerdict.INCONCLUSIVE
+            DepartureVerdict.INCONCLUSIVE || Departure.couldSettle(fix, anchor)
         if (!couldPlaceAnyone) return step(state, null, anchor)
 
         val next = state.copy(
@@ -882,6 +915,59 @@ object Presence {
         )
         // No event: the recovery is the level, and the level is on every update.
         return step(next, null, anchor)
+    }
+
+    /**
+     * A precise fix that still could not decide: the user near the edge of
+     * "here" ([Departure.couldSettle]).
+     *
+     * Treated as what it proves — location is working — rather than as a
+     * useless observation: it clears a standing degradation the way any usable
+     * fix does, calls off a grace period whose premise was that nothing could
+     * confirm (both only when newer than the failures), and closes the
+     * confirmation window, since it is not a
+     * qualifying fix. A running check carries on, so a user walking out is
+     * confirmed by the next fixes; but [EDGE_READINGS_BEFORE_STANDING_DOWN] of
+     * them in a row rest the engine, with [PresenceEvent.StillHere] as the
+     * signal that the check is over. Not a claim of presence beyond that: the
+     * next wake-up starts a new check from nothing.
+     */
+    private fun nearTheEdge(
+        state: PresenceState,
+        provesHealth: Boolean,
+        uselessAfter: Int,
+        healthAfter: DegradationCause?,
+        anchor: Anchor,
+    ): PresenceStep {
+        val common = state.copy(
+            progress = DepartureProgress.NONE,
+            uselessObservations = uselessAfter,
+            degradation = healthAfter,
+            // Only a reading newer than the failures may call grace off (Codex,
+            // PR #311). One banked before a restart says nothing about whether
+            // location can confirm *now*, and the deadline it would cancel is
+            // the fail-open ending of a snooze nothing else is watching.
+            graceDeadlineMs = if (provesHealth) null else state.graceDeadlineMs,
+            confirmationDeferralUsed = if (provesHealth) false else state.confirmationDeferralUsed,
+        )
+        // While resting — a sanity probe, the backstop's resting fix — it
+        // starts nothing, as an inconclusive reading never has: someone in the
+        // garden would otherwise turn every probe into a three-fix check. It
+        // only says location works.
+        if (state.phase != PresencePhase.CHECKING) return step(common, null, anchor)
+        val edges = state.edgeObservations + 1
+        if (edges >= EDGE_READINGS_BEFORE_STANDING_DOWN) {
+            SnoozeDebugLog.event("near the edge on %s fixes in a row; standing the check down", edges)
+            val rested = common.copy(
+                phase = PresencePhase.RESTING,
+                edgeObservations = 0,
+                checkingSinceMs = null,
+                awaitingAssociationConfirmation = false,
+            )
+            return step(rested, PresenceEvent.StillHere, anchor)
+        }
+        val checking = common.copy(edgeObservations = edges)
+        return step(checking, null, anchor)
     }
 
     /**
@@ -946,6 +1032,9 @@ object Presence {
         val namesThisRun = atMs > (state.lastUnusableAtMs ?: Long.MIN_VALUE)
         val next = state.copy(
             uselessObservations = count,
+            // A failure breaks a run of edge readings (Codex, PR #311): the
+            // stand-down is for three in a row, not three in any order.
+            edgeObservations = 0,
             latestEvidenceMs = maxOfNullable(state.latestEvidenceMs, atMs),
             // Moves forward only, so a re-delivered failure cannot pull the
             // boundary back and let an older reading through.

@@ -3589,10 +3589,22 @@ moving its inner edge in — ~95 m against a 20 m anchor, and wider still agains
 phone parked 120 m from where it armed produces inconclusive readings where it used to produce
 confident ones, and a bigger span of distances now resolves neither way.
 
-Three inconclusive readings in a row degrade tracking to Wi-Fi-only (§8.1), which lands on exactly
-the large-venue case this app is aimed at: a different floor, the far end of a site. That is the bill
-for measuring against an origin the app never actually knew to the old precision — the way to a
-narrow band is a sharp anchor, not a smaller subtraction. `DefaultRadiusTest` asserts both halves so
+Three inconclusive readings in a row used to degrade tracking (§8.1), which landed on exactly the
+large-venue case this app is aimed at: a different floor, the far end of a site. **Since 2026-10-05
+only a *vague* inconclusive reading counts** (field log). An inconclusive reading is one of two
+opposite things: a fix whose uncertainty is as wide as the fence could place nobody anywhere, and
+location is failing; a fix precise enough to fit inside the fence that still could not decide is a
+user standing in the band, and location is working fine. The log showed the second kind — three
+readings about 70 m out on 34–82 m fixes — reported as `weak location signal`, degrading the snooze
+and, with the foreground service it then released, ending all watching. So a precise
+in-the-band reading now counts as health: it clears a standing degradation, keeps a running check
+going so a user walking out is still confirmed, and after three in a row stands the check down to
+resting rather than asking for a fix at the checking rate for as long as the user stays put. Resting
+is not a verdict of presence: motion, the fence and the backstop start the next check, and the cap
+still bounds the snooze. A precise reading taken while resting starts nothing, as an inconclusive one
+never has. The bill for a wide band is still paid in *answers* — someone 120 m away gets no verdict
+until they move further — and the way to a narrow band is still a sharp anchor, not a smaller
+subtraction. `DefaultRadiusTest` asserts both halves so
 the next person to move either number sees it as well as the benefit.
 
 Anchor with no location fix at all (arming indoors with no signal): Wi-Fi-only mode. Losing the

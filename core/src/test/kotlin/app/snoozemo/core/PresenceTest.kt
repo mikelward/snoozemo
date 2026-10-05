@@ -1527,4 +1527,142 @@ class PresenceTest {
 
         assertTrue(departureLinesSince("nothing-to-measure").isEmpty())
     }
+
+    // --- Near the edge of "here" (field log, 2026-10-05) ---
+
+    /** The field log's anchor shape: no SSID, a ~30 m fix. */
+    private val fenceOnly = Anchor(lat = 0.0, lon = 0.0, fixAccuracyM = 30f, capturedAt = t0)
+
+    /** Precise, but between "confidently in" and "confidently out". */
+    private fun nearEdge(atSeconds: Long, northM: Double = 70.0, accuracyM: Float = 35f) =
+        arrived(northM, accuracyM, atSeconds)
+
+    @Test
+    fun `the field log's edge fixes stand the check down instead of degrading`() {
+        // Three readings 49–71 m out on 34–82 m fixes were reported as a weak
+        // signal and dropped the snooze to its timer. Location was fine; the
+        // user was near the edge of "here".
+        val (events, state) = replay(
+            fenceOnly,
+            from = PresenceState(atAnchorWifi = false),
+            signals = arrayOf(
+                geofenceExit(0),
+                nearEdge(1, northM = 49.0, accuracyM = 82.5f),
+                nearEdge(31, northM = 71.0, accuracyM = 48.9f),
+                nearEdge(61, northM = 69.0, accuracyM = 34.4f),
+            ),
+        )
+
+        assertEquals(listOf(PresenceEvent.ProbablyLeft, null, null, PresenceEvent.StillHere), events)
+        assertNull("location works, so nothing is degraded", state.degradation)
+        assertEquals(PresencePhase.RESTING, state.phase)
+        assertEquals(0, state.edgeObservations)
+    }
+
+    @Test
+    fun `walking out past the edge is still confirmed`() {
+        val (events, state) = replay(
+            fenceOnly,
+            from = PresenceState(atAnchorWifi = false),
+            signals = arrayOf(
+                geofenceExit(0),
+                nearEdge(1),
+                nearEdge(31, northM = 90.0),
+                arrived(northM = 300.0, accuracyM = 20f, atSeconds = 61),
+                arrived(northM = 340.0, accuracyM = 20f, atSeconds = 91),
+            ),
+        )
+
+        assertEquals(PresenceEvent.Departed, events.last())
+        assertTrue(state.resolved)
+    }
+
+    @Test
+    fun `an edge reading clears a weak-signal degradation`() {
+        // It proves location can measure, the one thing the cause denies.
+        val degraded = replay(
+            fenceOnly,
+            from = PresenceState(atAnchorWifi = false),
+            signals = arrayOf(geofenceExit(0), vague(1), vague(31), vague(61)),
+        ).second
+        assertEquals(DegradationCause.FIXES_TOO_VAGUE, degraded.degradation)
+
+        val after = Presence.advance(degraded, nearEdge(91), fenceOnly).state
+
+        assertNull(after.degradation)
+        assertEquals(0, after.uselessObservations)
+    }
+
+    @Test
+    fun `an edge reading while resting starts nothing`() {
+        // A sanity probe from someone in the garden must not become a check.
+        val step = Presence.advance(PresenceState(atAnchorWifi = false), nearEdge(0), fenceOnly)
+
+        assertNull(step.event)
+        assertEquals(PresencePhase.RESTING, step.state.phase)
+    }
+
+    @Test
+    fun `a vague fix is still a weak signal`() {
+        // The split is by precision: a 500 m reading could place nobody.
+        assertEquals(
+            listOf(null, null, null, DegradationCause.FIXES_TOO_VAGUE),
+            levels(
+                fenceOnly,
+                from = PresenceState(atAnchorWifi = false),
+                signals = arrayOf(geofenceExit(0), vague(1), vague(31), vague(61)),
+            ),
+        )
+    }
+
+    @Test
+    fun `a failure breaks the edge streak`() {
+        // Codex, PR #311: three in a row, not three in any order.
+        val (events, state) = replay(
+            fenceOnly,
+            from = PresenceState(atAnchorWifi = false),
+            signals = arrayOf(geofenceExit(0), nearEdge(1), noFix(31), nearEdge(61), vague(91), nearEdge(121)),
+        )
+
+        assertTrue("no stand-down", events.none { it == PresenceEvent.StillHere })
+        assertEquals(PresencePhase.CHECKING, state.phase)
+        assertEquals(1, state.edgeObservations)
+    }
+
+    @Test
+    fun `an edge fix older than the failures keeps the grace deadline`() {
+        // Codex, PR #311: a restored degradation's floor is the restart, and a
+        // reading banked before it cannot call off the fail-open ending.
+        val restored = PresenceState(
+            atAnchorWifi = false,
+            latestEvidenceMs = 0L,
+            degradation = DegradationCause.FIXES_TOO_VAGUE,
+            lastUnusableAtMs = 100_000L,
+            uselessObservations = Presence.DEGRADED_AFTER_USELESS_OBSERVATIONS,
+            graceDeadlineMs = 400_000L,
+        )
+
+        val after = Presence.advance(restored, nearEdge(50), fenceOnly).state
+
+        assertEquals(400_000L, after.graceDeadlineMs)
+        assertEquals(DegradationCause.FIXES_TOO_VAGUE, after.degradation)
+    }
+
+    @Test
+    fun `a late edge fix still proves location works`() {
+        // Codex, PR #311: delivered after an association made it stale, a
+        // precise edge reading newer than the failures clears the level the
+        // way a timely one would.
+        val degraded = PresenceState(
+            atAnchorWifi = true,
+            latestEvidenceMs = 200_000L,
+            degradation = DegradationCause.FIXES_TOO_VAGUE,
+            lastUnusableAtMs = 100_000L,
+            uselessObservations = Presence.DEGRADED_AFTER_USELESS_OBSERVATIONS,
+        )
+
+        val after = Presence.advance(degraded, nearEdge(150), fenceOnly).state
+
+        assertNull(after.degradation)
+    }
 }

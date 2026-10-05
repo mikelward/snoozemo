@@ -397,6 +397,30 @@ object Departure {
     }
 
     /**
+     * Whether this fix was precise enough to settle the question either way,
+     * had the user been standing somewhere else.
+     *
+     * An [DepartureVerdict.INCONCLUSIVE] reading is one of two different
+     * things, and they mean opposite things about location (field log,
+     * 2026-10-05). A *vague* one — its uncertainty as wide as the fence —
+     * could place nobody anywhere: location is failing here. A *precise* one
+     * that still could not decide is a user standing near the edge of "here",
+     * with location working fine; three of those 70 m out on 34–82 m fixes
+     * were reported as a weak signal and degraded a snooze to its timer. The
+     * line is whether the uncertainty fits inside the radius, which is exactly
+     * when [confirmsPresence] could ever succeed for this reading.
+     */
+    fun couldSettle(fix: Fix, anchor: Anchor): Boolean {
+        // A distance first, and a real one: a fix with a NaN coordinate has a
+        // perfectly finite accuracy, and calling it "near the edge" would stop
+        // a broken provider ever counting toward degradation (PR #233's guard).
+        val distance = distanceM(fix, anchor) ?: return false
+        if (distance.isNaN()) return false
+        val uncertainty = uncertaintyM(fix, anchor) ?: return false
+        return uncertainty < anchor.radiusM
+    }
+
+    /**
      * Whether this fix is positive evidence of being *at* the anchor.
      *
      * The mirror of [qualifies], and deliberately not its negation: accuracy is
