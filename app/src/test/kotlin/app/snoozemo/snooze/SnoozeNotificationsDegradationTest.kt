@@ -321,6 +321,29 @@ class SnoozeNotificationsDegradationTest {
     }
 
     /**
+     * Only the backstop is watching (SPEC.md §6.10): the line says so in place
+     * of the mode, with no reason joined, and never as `Ends when you leave`
+     * (maintainer, 2026-10-05).
+     */
+    @Test
+    fun `background checks only replaces the mode line`() {
+        val checking = appContext.getString(R.string.ongoing_checking_less_often)
+        assertEquals(checking, postedOngoing(TrackingMode.FULL, DegradationCause.BACKGROUND_CHECKS_ONLY))
+        assertEquals(checking, postedOngoing(TrackingMode.WIFI_ONLY, DegradationCause.BACKGROUND_CHECKS_ONLY))
+    }
+
+    /** Codex, PR #312: a timer-mode record carrying it must not fold the line away. */
+    @Test
+    fun `background checks only is not folded into a timer headline`() {
+        val card = ongoingCard(TrackingMode.DURATION_ONLY, DegradationCause.BACKGROUND_CHECKS_ONLY)
+        assertEquals(appContext.getString(R.string.ongoing_title), shadowOf(card).contentTitle.toString())
+        assertEquals(
+            appContext.getString(R.string.ongoing_checking_less_often),
+            shadowOf(card).contentText?.toString(),
+        )
+    }
+
+    /**
      * The app's own wiring carries no reason line of its own, so a
      * NOTHING_WATCHING snooze is a plain timer-only card and folds into the
      * `Snoozing until …` headline like any other (maintainer, 2026-09-12).

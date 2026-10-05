@@ -333,6 +333,17 @@ enum class DegradationCause {
      */
     NOTHING_WATCHING,
 
+    /**
+     * Android refused to start the service, so no fence or Wi-Fi watch is
+     * running and only the periodic backstop's departure test is watching
+     * (SPEC.md §6.10). Not a lowered mode: a departure is still caught, just
+     * at the backstop's pace, which is what the card says (`Checking less
+     * often`; maintainer, 2026-10-05). Written only by the backstop worker,
+     * only over a snooze with no other cause, and dropped by any restore —
+     * a running service is the thing it says is missing.
+     */
+    BACKGROUND_CHECKS_ONLY,
+
     ;
 
     /**

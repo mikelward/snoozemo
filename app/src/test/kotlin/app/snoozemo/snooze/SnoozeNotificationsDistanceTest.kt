@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.media.AudioManager
 import android.os.SystemClock
 import app.snoozemo.R
+import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.DepartureObservation
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.dnd.PrefsRingerLoanStore
@@ -72,6 +73,16 @@ class SnoozeNotificationsDistanceTest {
             appContext.getString(R.string.distance_meters, 100),
             subText(TrackingMode.FULL),
         )
+    }
+
+    @Test
+    @Config(qualifiers = "en-rGB")
+    fun `no distance while only the backstop watches`() {
+        // Codex, PR #312: the worker that writes `Checking less often` never
+        // clears the last reading, which came from a service now gone.
+        publish(distanceM = 60.0)
+
+        assertNull(subTextOf(TrackingMode.FULL, host(false), DegradationCause.BACKGROUND_CHECKS_ONLY))
     }
 
     @Test
@@ -243,10 +254,11 @@ class SnoozeNotificationsDistanceTest {
     private fun subTextOf(
         mode: TrackingMode,
         host: SnoozeNotifications.OngoingForegroundHost?,
+        degradation: DegradationCause? = null,
     ): String? {
         SnoozeNotifications(appContext)
             .apply { ongoingForegroundHost = host }
-            .showOngoing(snoozeFixture(now).copy(mode = mode))
+            .showOngoing(snoozeFixture(now).copy(mode = mode, degradation = degradation))
         val manager = appContext.getSystemService(NotificationManager::class.java)
         // By id, not by title: a plain timer-only card (which DURATION_ONLY here
         // is — no cause, no exit) folds its title into `Snoozing until …`

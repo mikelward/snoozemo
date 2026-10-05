@@ -2,7 +2,9 @@ package app.snoozemo.presence.geofence
 
 import app.snoozemo.core.PresenceSignal
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** The backstop probe's reading of one Wi-Fi report (SPEC.md §6.10, D4). */
@@ -43,5 +45,15 @@ class BackstopProbePlatformTest {
         assertEquals(app.snoozemo.core.DegradationCause.LOCATION_PERMISSION_GONE, cause(true, false, false))
         assertEquals(app.snoozemo.core.DegradationCause.LOCATION_SERVICES_OFF, cause(false, true, true))
         assertNull("a plain miss says nothing", cause(false, false, true))
+    }
+
+    @Test
+    fun `an inconclusive probe can still name an outage`() {
+        // Codex, PR #312: a vague fix, then `location off`, is an outage.
+        val names = BackstopProbePlatform.Companion::mayNameAnOutage
+        assertTrue(names(app.snoozemo.core.BackstopProbe.Outcome.NoFix))
+        assertTrue(names(app.snoozemo.core.BackstopProbe.Outcome.Inconclusive))
+        assertFalse(names(app.snoozemo.core.BackstopProbe.Outcome.StillHere))
+        assertTrue("Wi-Fi back mid-probe leaves an earlier outage standing", names(app.snoozemo.core.BackstopProbe.Outcome.AtAnchorWifi))
     }
 }

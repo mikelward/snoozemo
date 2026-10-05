@@ -439,6 +439,13 @@
     <string name="ongoing_wifi_only">Wi-Fi only</string>
     <string name="ongoing_wifi_grace">Wi-Fi lost — ending soon</string>
     <string name="ongoing_timer_only">Timer only</string>
+    <!--
+      In place of the mode line while Android will not let the app run its
+      watch, so only the periodic background check looks for a departure
+      (SPEC.md §6.10). Approved by the maintainer, 2026-10-05.
+    -->
+    <!-- TODO: translate -->
+    <string name="ongoing_checking_less_often" tools:ignore="MissingTranslation">Checking less often</string>
     <!-- The reason behind a degraded mode, joined to it. Approved 2026-08-30. -->
     <!-- TODO: translate -->
     <string name="ongoing_degraded_reason" tools:ignore="MissingTranslation">%1$s — %2$s</string>

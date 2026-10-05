@@ -886,6 +886,11 @@ class SnoozeController(
         // capability that really is gone refuses there rather than here.
         val restored = snooze.copy(
             mode = if (snooze.endsOnDeparture) honest(settled) else settled,
+            // A running service is what the backstop's cause says is missing,
+            // so a restore refutes it — and it must not seed the monitor
+            // either, which would read it as a failure only a fix can clear.
+            degradation = snooze.degradation
+                .takeUnless { it == DegradationCause.BACKGROUND_CHECKS_ONLY },
         )
         active = restored
 

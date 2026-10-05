@@ -62,7 +62,7 @@ internal class BackstopProbePlatform(context: Context) {
 
     private fun runTest(snooze: ActiveSnooze, wifi: BackstopProbe.AnchorWifi): BackstopProbe.Outcome {
         val outcome = runFixes(snooze, wifi)
-        if (outcome != BackstopProbe.Outcome.NoFix) return outcome
+        if (!mayNameAnOutage(outcome)) return outcome
         // What the requests reported, confirmed against now (Codex, PR #312):
         // a switch turned back on, or a grant given back, during the probe's
         // minutes must not be named on the card as if it still held.
@@ -170,6 +170,21 @@ internal class BackstopProbePlatform(context: Context) {
             is PresenceSignal.AnchorWifiLost -> false.takeIf { signal.observed }
             else -> null
         }
+
+        /**
+         * Whether [outcome] leaves room for an outage the requests reported.
+         * An inconclusive probe too, not only one with no fix (Codex, PR
+         * #312): a vague fix followed by `location off` would otherwise read
+         * as merely `Checking less often` over a phone that cannot locate at
+         * all. Nor only a probe that read no answer: the anchor's Wi-Fi
+         * returning mid-probe stops it short, and an outage an earlier request
+         * reported still stands (Codex, PR #312). A settled location answer —
+         * here or gone — says what it found and needs no cause.
+         */
+        fun mayNameAnOutage(outcome: BackstopProbe.Outcome): Boolean =
+            outcome == BackstopProbe.Outcome.NoFix ||
+                outcome == BackstopProbe.Outcome.Inconclusive ||
+                outcome == BackstopProbe.Outcome.AtAnchorWifi
 
         /**
          * Why a probe that got no fix got none, when the platform said so

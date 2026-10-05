@@ -2078,6 +2078,45 @@ class MainScreenScreenshotTest {
     }
 
     /**
+     * Only the backstop is watching (SPEC.md §6.10; maintainer, 2026-10-05):
+     * the condition reads `Checking less often`, and the full-tracking
+     * one-row sentence, which would claim the watch that is missing, is not
+     * offered.
+     */
+    @Test
+    fun `background checks only says checking less often`() {
+        val context = RuntimeEnvironment.getApplication()
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.FULL,
+                remaining = Duration.ofHours(8),
+                capCountdownShown = false,
+                endsAtLabel = null,
+                degradation = DegradationCause.BACKGROUND_CHECKS_ONLY,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText(context.getString(R.string.ongoing_checking_less_often)).assertExists()
+        composeRule.onNodeWithText(context.getString(R.string.main_snoozing_until_you_leave)).assertDoesNotExist()
+    }
+
+    /**
      * A cause that earns no line leaves the mode exactly as it was — which,
      * with an end time in hand, is the folded headline.
      *
