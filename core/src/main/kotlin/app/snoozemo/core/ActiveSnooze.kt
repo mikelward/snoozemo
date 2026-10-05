@@ -341,6 +341,33 @@ data class ActiveSnooze(
         get() = if (endsOnDeparture) mode else TrackingMode.DURATION_ONLY
 
     /**
+     * Whether something in the process is still watching for a departure —
+     * [effectiveMode]'s answer, widened by one case it gets wrong.
+     *
+     * A fenced anchor degraded only by its *fixes* (`NO_LOCATION_FIX`,
+     * `FIXES_TOO_VAGUE`) reads `DURATION_ONLY`, but nothing has stopped: the
+     * fence is still registered, the motion trigger still escalates, and the
+     * next good fix promotes the snooze back to `FULL`. Releasing the
+     * process's protection there is not recoverable, because a background app
+     * cannot take a foreground service back — a field log (2026-10-05) showed
+     * a walk past the fence edge degrade the snooze, the watch die with the
+     * demoted service, the recovery's re-promotion refused, and the phone stay
+     * silent 300 m away with the cap as its only exit.
+     *
+     * Services off counts too, for two reasons (Codex, PR #309). A stale
+     * `GEOFENCE_NOT_AVAILABLE` report can record it after the switch is back
+     * on, with the fence and recovery still live — and the record carries the
+     * cause, not the engine's live suppression. And even a real outage is
+     * repaired in process: the location-mode watch that re-registers the fence
+     * the moment the setting comes back on lives only as long as the process.
+     * A grant gone is left out: the platform's own prerequisite for a
+     * `location` foreground service, and nothing in process can repair it.
+     */
+    val watchesInProcess: Boolean
+        get() = effectiveMode.keepsProcessResident ||
+            (endsOnDeparture && anchor.hasUsableFix && degradation in RECOVERABLE_IN_PROCESS)
+
+    /**
      * [degradation] narrowed the same way [effectiveMode] is: no cause at all
      * once the user has chosen a timer, because there is nothing left for a
      * cause to explain.
@@ -668,6 +695,13 @@ data class ActiveSnooze(
     }
 
     companion object {
+        /** Degradations the running watch can still recover from in process. */
+        private val RECOVERABLE_IN_PROCESS = setOf(
+            DegradationCause.NO_LOCATION_FIX,
+            DegradationCause.FIXES_TOO_VAGUE,
+            DegradationCause.LOCATION_SERVICES_OFF,
+        )
+
         /** Shown until saved places land and the anchor can be named. */
         const val DEFAULT_PLACE_NAME: String = "Here"
 

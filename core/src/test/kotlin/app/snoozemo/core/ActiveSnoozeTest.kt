@@ -636,6 +636,53 @@ class ActiveSnoozeTest {
         )
     }
 
+    /**
+     * A field log (2026-10-05): a walk past the fence edge produced three
+     * inconclusive fixes, the snooze degraded to duration-only, the service
+     * gave up its foreground status, and with it went the only process that
+     * could hear the departure. The fence and the engine were still running —
+     * the next good fix promoted the snooze straight back to `FULL` — so the
+     * degraded snooze is still watching, and has to say so.
+     */
+    @Test
+    fun `a fenced snooze degraded by its fixes is still watching in process`() {
+        val fenced = snooze().copy(anchor = anchorWithFix.copy(ssid = null))
+        listOf(
+            DegradationCause.FIXES_TOO_VAGUE,
+            DegradationCause.NO_LOCATION_FIX,
+            // Possibly stale, and repaired in process when real (Codex, PR #309).
+            DegradationCause.LOCATION_SERVICES_OFF,
+        ).forEach { cause ->
+            val degraded = fenced.copy(mode = TrackingMode.DURATION_ONLY, degradation = cause)
+            assertTrue("$cause leaves the fence watching", degraded.watchesInProcess)
+            assertFalse(
+                "$cause on a timer the user chose has nothing to watch for",
+                degraded.copy(endsOnDeparture = false).watchesInProcess,
+            )
+        }
+    }
+
+    @Test
+    fun `a duration-only snooze with nothing left watching keeps no process`() {
+        val fenced = snooze().copy(anchor = anchorWithFix.copy(ssid = null))
+        listOf(
+            DegradationCause.LOCATION_PERMISSION_GONE,
+            DegradationCause.NO_LOCATION_IN_BACKGROUND,
+            null,
+        ).forEach { cause ->
+            assertFalse(
+                "$cause leaves nothing in process to recover it",
+                fenced.copy(mode = TrackingMode.DURATION_ONLY, degradation = cause).watchesInProcess,
+            )
+        }
+        val noFence = snooze().copy(
+            anchor = anchorWithFix.copy(ssid = null, lat = null, lon = null),
+            mode = TrackingMode.DURATION_ONLY,
+            degradation = DegradationCause.NO_LOCATION_FIX,
+        )
+        assertFalse("an anchor with no fix has no fence to watch", noFence.watchesInProcess)
+    }
+
     @Test
     fun `reconciling an undisturbed clock changes nothing`() {
         // The common case: TIME_SET fires for a trivial correction and both
