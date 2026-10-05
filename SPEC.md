@@ -187,6 +187,16 @@ retirement note after it records why the second, `direct`, was dropped.
   > takes the service; a duration-only one takes none, because its only exit is the cap alarm and
   > that is durable without a process. So the app never holds a *location* foreground service for
   > a snooze doing no location work — the honest position, and the defensible one in review.
+  > **"Watching" is not the same as the mode** (2026-10-05, field log): a fenced anchor degraded
+  > only by its fixes (no fix, or fixes too vague to place the user) reads duration-only while its
+  > fence stays registered, its motion trigger keeps escalating, and the next good fix restores
+  > full tracking. That snooze is still doing location work, so it keeps the service. Giving it
+  > back is not recoverable: a background app cannot take a foreground service again, and the log
+  > showed exactly that — a walk past the fence edge degraded the snooze, the watch died with the
+  > demoted service, the recovery's re-promotion was refused, and the phone stayed silent 300 m
+  > away. Services off keeps it too: the report can be stale, and a real outage is repaired by the
+  > in-process location-mode watch. Only a lost location grant gives it back — the platform's own
+  > prerequisite for the service, which nothing in process can repair.
   > §3.5's risk is unchanged in kind and larger in degree: the Console now owes a
   > foreground-service declaration beside the background-location one.
   >

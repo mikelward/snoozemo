@@ -4005,7 +4005,9 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * arming window — the anchor capture is in flight and about to become one
      * of the others — and grace is a live watch racing a deadline, where being
      * killed is precisely how the phone stays quiet. Both are principle 1
-     * cases; only [TrackingMode.DURATION_ONLY] genuinely has nothing running.
+     * cases. [TrackingMode.DURATION_ONLY] has nothing running *except* on a
+     * fenced anchor degraded by a cause the watch recovers from in process
+     * ([ActiveSnooze.watchesInProcess]).
      */
     private fun wantsForeground(): Boolean {
         val snooze = controller.active ?: return false
@@ -4042,7 +4044,13 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // gone for the life of that snooze — the capture kept, and its whole
         // point lost anyway (Codex, PR #267). So the window it needs is held,
         // and the demotion happens on the repost after it lands.
-        return snooze.effectiveMode.keepsProcessResident ||
+        //
+        // `watchesInProcess` rather than the mode alone: a fenced snooze
+        // degraded by its fixes or a services-off report reads duration-only
+        // while its watch is still running and can recover — and a background
+        // app cannot take the service back once it is given up (field log,
+        // 2026-10-05).
+        return snooze.watchesInProcess ||
             snooze.endsOnMotion ||
             capturePending
     }

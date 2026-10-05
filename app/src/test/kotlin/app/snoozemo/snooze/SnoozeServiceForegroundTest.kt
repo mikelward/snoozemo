@@ -118,6 +118,52 @@ class SnoozeServiceForegroundTest {
     }
 
     @Test
+    fun `a fenced snooze degraded by its fixes keeps the foreground service`() {
+        // Field log, 2026-10-05: a walk past the fence edge gave three
+        // inconclusive fixes, the snooze fell to duration-only, the service
+        // gave the foreground back, Android reclaimed the watch, and the
+        // recovery's re-promotion was refused from the background — the phone
+        // stayed silent 300 m away. The fence and the engine were still
+        // running, so the process they report to has to stay.
+        val controller = armWith(fixOnly)
+        assertNotNull(shadowOf(controller.get()).lastForegroundNotification)
+        TestSnoozeService.presence.canTrackDeparture = false
+
+        emit(PresenceUpdate(event = null, degradation = DegradationCause.FIXES_TOO_VAGUE))
+
+        assertEquals(TrackingMode.DURATION_ONLY, ActiveSnoozeStore(appContext).load()?.mode)
+        assertEquals("nothing given back", 0, TestSnoozeService.foregroundExits)
+        assertFalse(shadowOf(controller.get()).isForegroundStopped)
+    }
+
+    @Test
+    fun `a stale services-off report keeps the foreground service`() {
+        // Codex, PR #309: a late `GEOFENCE_NOT_AVAILABLE` can record services
+        // off after the switch is back on, with the fence still live. And a
+        // real outage is repaired in process, by the location-mode watch.
+        val controller = armWith(fixOnly)
+        TestSnoozeService.presence.canTrackDeparture = false
+
+        emit(PresenceUpdate(event = null, degradation = DegradationCause.LOCATION_SERVICES_OFF))
+
+        assertEquals(TrackingMode.DURATION_ONLY, ActiveSnoozeStore(appContext).load()?.mode)
+        assertFalse(shadowOf(controller.get()).isForegroundStopped)
+    }
+
+    @Test
+    fun `a fenced snooze whose location grant is gone gives the foreground service back`() {
+        // The other side: the grant is the platform's own prerequisite for a
+        // location service, and nothing in process can bring it back.
+        val controller = armWith(fixOnly)
+        TestSnoozeService.presence.canTrackDeparture = false
+
+        emit(PresenceUpdate(event = null, degradation = DegradationCause.LOCATION_PERMISSION_GONE))
+
+        assertEquals(TrackingMode.DURATION_ONLY, ActiveSnoozeStore(appContext).load()?.mode)
+        assertTrue(shadowOf(controller.get()).isForegroundStopped)
+    }
+
+    @Test
     fun `a refused foreground service is said on the card, not only in the log`() {
         // Codex, PR #230. Without this the card goes on claiming a snooze that
         // ends when you leave while the process it needs can be reclaimed, and
@@ -321,7 +367,10 @@ class SnoozeServiceForegroundTest {
         TestSnoozeService.presence.canTrackDeparture = false
         TestSnoozeService.refuseForegroundExit = true
 
-        emit(PresenceUpdate(event = null, degradation = DegradationCause.NO_LOCATION_FIX))
+        // A lost grant rather than a missing fix: a degradation the watch can
+        // recover from in process keeps the service (field log, 2026-10-05),
+        // and this needs one that gives it back.
+        emit(PresenceUpdate(event = null, degradation = DegradationCause.LOCATION_PERMISSION_GONE))
 
         assertEquals(TrackingMode.DURATION_ONLY, ActiveSnoozeStore(appContext).load()?.mode)
         assertEquals("it tried to give it back", 1, TestSnoozeService.foregroundExits)
