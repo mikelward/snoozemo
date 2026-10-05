@@ -1,9 +1,13 @@
 package app.snoozemo.presence.geofence
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.os.SystemClock
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.BackstopProbe
+import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.Fix
 import app.snoozemo.core.PresenceSignal
 import app.snoozemo.core.SnoozeDebugLog
@@ -52,7 +56,30 @@ internal class BackstopProbePlatform(context: Context) {
         }
     }
 
-    private fun runTest(snooze: ActiveSnooze, wifi: BackstopProbe.AnchorWifi): BackstopProbe.Outcome =
+    /** Set by [takeFix] when a request reports the grant or the switch, not a miss. */
+    private val permissionLost = AtomicBoolean(false)
+    private val servicesOff = AtomicBoolean(false)
+
+    private fun runTest(snooze: ActiveSnooze, wifi: BackstopProbe.AnchorWifi): BackstopProbe.Outcome {
+        val outcome = runFixes(snooze, wifi)
+        if (outcome != BackstopProbe.Outcome.NoFix) return outcome
+        // What the requests reported, confirmed against now (Codex, PR #312):
+        // a switch turned back on, or a grant given back, during the probe's
+        // minutes must not be named on the card as if it still held.
+        val fineGranted = granted(Manifest.permission.ACCESS_FINE_LOCATION)
+        val stillLost = permissionLost.get() &&
+            !(fineGranted && granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION))
+        val stillOff = servicesOff.get() &&
+            appContext.getSystemService(LocationManager::class.java)?.isLocationEnabled != true
+        return unavailableCause(stillLost, stillOff, fineGranted)
+            ?.let { BackstopProbe.Outcome.Unavailable(it) }
+            ?: outcome
+    }
+
+    private fun granted(permission: String): Boolean =
+        appContext.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+
+    private fun runFixes(snooze: ActiveSnooze, wifi: BackstopProbe.AnchorWifi): BackstopProbe.Outcome =
         BackstopProbe.run(
             snooze,
             takeFix = ::takeFix,
@@ -66,14 +93,20 @@ internal class BackstopProbePlatform(context: Context) {
 
     /**
      * One fix, or null. The requester's own outcomes are logged where they
-     * happen; a grant gone or services off is simply no fix here — the probe
-     * ends nothing on a reading it never had, and the cap still holds.
+     * happen; a grant gone or services off is no fix here too — the probe
+     * ends nothing on a reading it never had — but is remembered, so the
+     * snooze can say why ([unavailableCause]).
      */
     private fun takeFix(): Fix? {
         val done = CountDownLatch(1)
         val result = AtomicReference<Fix?>(null)
         val handle = PlatformFixRequester(appContext).request { outcome ->
-            if (outcome is FixOutcome.Delivered) result.set(outcome.fix)
+            when (outcome) {
+                is FixOutcome.Delivered -> result.set(outcome.fix)
+                FixOutcome.PermissionLost -> permissionLost.set(true)
+                FixOutcome.ServicesOff -> servicesOff.set(true)
+                FixOutcome.NothingRecoverable -> Unit
+            }
             done.countDown()
         }
         try {
@@ -135,6 +168,27 @@ internal class BackstopProbePlatform(context: Context) {
         fun settlesAssociation(signal: PresenceSignal): Boolean? = when (signal) {
             is PresenceSignal.AnchorWifiAssociated -> true
             is PresenceSignal.AnchorWifiLost -> false.takeIf { signal.observed }
+            else -> null
+        }
+
+        /**
+         * Why a probe that got no fix got none, when the platform said so
+         * outright; null for a plain miss.
+         *
+         * Only stated causes, never a timeout or a run of nothing: one wake
+         * whose background fixes were throttled is not evidence location is
+         * broken, and the card says what is wrong only when it knows. A lost
+         * grant splits by what is left — fine location still held means only
+         * the background half went, which the user fixes differently.
+         */
+        fun unavailableCause(
+            permissionLost: Boolean,
+            servicesOff: Boolean,
+            fineGranted: Boolean,
+        ): DegradationCause? = when {
+            permissionLost && fineGranted -> DegradationCause.NO_LOCATION_IN_BACKGROUND
+            permissionLost -> DegradationCause.LOCATION_PERMISSION_GONE
+            servicesOff -> DegradationCause.LOCATION_SERVICES_OFF
             else -> null
         }
 

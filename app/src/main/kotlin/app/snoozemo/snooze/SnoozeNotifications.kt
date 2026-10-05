@@ -1067,6 +1067,41 @@ class SnoozeNotifications(private val context: Context) {
     fun cancelOngoing() = dropOngoing()
 
     /**
+     * Reposts the card from outside the service — the backstop worker — the
+     * way the calendar worker does, so a teardown landing while the worker
+     * decided cannot be overwritten (Codex, PR #312).
+     *
+     * Under [ongoingLock], the card has to still be showing and [stillLive]
+     * has to hold; the generation read there is named in the post, so anything
+     * that lands between this check and the post — a takedown or a newer card —
+     * abandons it. "Showing" asks the platform too, because a worker can run
+     * in a fresh process whose in-memory [ongoingUp] has never been set although
+     * an earlier process's card is still in the shade.
+     *
+     * @return whether the repost went ahead.
+     */
+    fun repostIfStillShowing(snooze: ActiveSnooze, stillLive: () -> Boolean): Boolean {
+        val generation = synchronized(ongoingLock) {
+            if ((ongoingUp || isOngoingShowing()) && stillLive()) ongoingGeneration else null
+        }
+        if (generation == null) {
+            SnoozeDebugLog.event("worker repost skipped: the card is down or the snooze changed")
+            return false
+        }
+        showOngoing(snooze, onlyIfGeneration = generation)
+        return true
+    }
+
+    private fun isOngoingShowing(): Boolean =
+        runCatching { manager?.activeNotifications?.any { it.id == ID_ONGOING } == true }
+            .getOrElse {
+                // Unreadable: treat as down, which skips a repost rather than
+                // risking one over a card that was taken down.
+                SnoozeDebugLog.failure(it, "reading active notifications failed; not reposting")
+                false
+            }
+
+    /**
      * Takes the ongoing card down, and is the **only** way it comes down.
      *
      * Bumped and dropped under the same lock the calendar worker posts under,

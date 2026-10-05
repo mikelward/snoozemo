@@ -5,6 +5,8 @@ import androidx.test.core.app.ApplicationProvider
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.Anchor
 import app.snoozemo.core.DegradationCause
+import app.snoozemo.core.EndReason
+import app.snoozemo.core.SnoozeLifecycle
 import app.snoozemo.core.TrackingMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -88,5 +90,49 @@ class ActiveSnoozeStoreDegradationTest {
         val restored = ActiveSnoozeStore(context).load()
         assertEquals(TrackingMode.DURATION_ONLY, restored?.mode)
         assertNull(restored?.degradation)
+    }
+
+    @Test
+    fun `a write from outside the service never brings an ended snooze back`() {
+        // Codex, PR #312: the backstop worker loads the record, and the user's
+        // ending can clear it before the worker writes it back.
+        val store = ActiveSnoozeStore(context)
+        val snooze = aSnooze(degradation = null)
+        store.arm(snooze)
+        store.clear()
+
+        assertNull(store.updateIfLive(snooze.copy(degradation = DegradationCause.LOCATION_SERVICES_OFF)))
+        assertNull("the ended snooze stays ended", ActiveSnoozeStore(context).load())
+    }
+
+    @Test
+    fun `a write from outside the service skips a snooze on its way out`() {
+        val store = ActiveSnoozeStore(context)
+        val snooze = aSnooze(degradation = null)
+        store.arm(snooze)
+        store.markReleasing(EndReason.DEPARTURE)
+
+        assertNull(store.updateIfLive(snooze.copy(degradation = DegradationCause.LOCATION_SERVICES_OFF)))
+        assertEquals(SnoozeLifecycle.RELEASING, store.state().lifecycle)
+    }
+
+    @Test
+    fun `a write from outside the service skips a newer snooze`() {
+        val store = ActiveSnoozeStore(context)
+        val older = aSnooze(degradation = null)
+        store.arm(aSnooze(degradation = null, startedAt = older.startedAt.plusSeconds(60)))
+
+        assertNull(store.updateIfLive(older.copy(degradation = DegradationCause.LOCATION_SERVICES_OFF)))
+        assertNull(ActiveSnoozeStore(context).load()?.degradation)
+    }
+
+    @Test
+    fun `a write from outside the service lands on its own live snooze`() {
+        val store = ActiveSnoozeStore(context)
+        val snooze = aSnooze(degradation = null)
+        store.arm(snooze)
+
+        assertEquals(true, store.updateIfLive(snooze.copy(degradation = DegradationCause.LOCATION_SERVICES_OFF)))
+        assertEquals(DegradationCause.LOCATION_SERVICES_OFF, ActiveSnoozeStore(context).load()?.degradation)
     }
 }

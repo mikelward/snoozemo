@@ -31,4 +31,17 @@ class BackstopProbePlatformTest {
     fun `Wi-Fi present but unnamed waits`() {
         assertNull(settles(PresenceSignal.AnchorWifiPresentUnconfirmed(0L)))
     }
+
+    @Test
+    fun `only a stated reason becomes a degradation`() {
+        val cause = BackstopProbePlatform.Companion::unavailableCause
+        assertEquals(
+            "fine location still held: only the background half went",
+            app.snoozemo.core.DegradationCause.NO_LOCATION_IN_BACKGROUND,
+            cause(true, false, true),
+        )
+        assertEquals(app.snoozemo.core.DegradationCause.LOCATION_PERMISSION_GONE, cause(true, false, false))
+        assertEquals(app.snoozemo.core.DegradationCause.LOCATION_SERVICES_OFF, cause(false, true, true))
+        assertNull("a plain miss says nothing", cause(false, false, true))
+    }
 }

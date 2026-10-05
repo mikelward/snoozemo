@@ -362,6 +362,28 @@ open class ActiveSnoozeStore(
     open fun update(snooze: ActiveSnooze): Boolean = write(snooze, allowLookup = true, newArm = false)
 
     /**
+     * [update], from outside the service, **only while [snooze]'s own record
+     * is still live**: there, unreleased and not on its way out. Null when it
+     * is not, and nothing was written.
+     *
+     * A plain [update] writes whatever it is given, so a worker that loaded
+     * the record, then wrote it back after the user's ending had cleared it,
+     * would put an ended snooze back on disk for the next restore to re-arm
+     * (Codex, PR #312). The check and the write share [RECORD_LOCK] with
+     * [clear] and [setState], so no ending lands between them; every caller
+     * in the process takes the same lock, and the store has one process.
+     * The service's own writes go on without it — its controller already
+     * orders them against its own ending.
+     */
+    fun updateIfLive(snooze: ActiveSnooze): Boolean? = synchronized(RECORD_LOCK) {
+        val live = read()
+        if (live == null || live.startedAt != snooze.startedAt || state().lifecycle >= SnoozeLifecycle.RELEASING) {
+            return null
+        }
+        update(snooze)
+    }
+
+    /**
      * The durable write behind [arm] and [update]: the record, and the arm
      * count where this write confirms a snooze — put back if the write did
      * not land.
@@ -623,9 +645,9 @@ open class ActiveSnoozeStore(
      * finding rather than one bug. [arm] is the one write that starts over,
      * and [supersedeRelease] the one step back, both by going around this.
      */
-    fun setState(state: SnoozeRecordState): Boolean {
+    fun setState(state: SnoozeRecordState): Boolean = synchronized(RECORD_LOCK) {
         if (state.lifecycle < state().lifecycle) return true
-        return prefs.edit().putState(state).commit()
+        prefs.edit().putState(state).commit()
     }
 
     private fun SharedPreferences.Editor.putState(state: SnoozeRecordState): SharedPreferences.Editor =
@@ -681,7 +703,9 @@ open class ActiveSnoozeStore(
      */
     fun armCount(): Long = prefs.getLong(KEY_ARM_COUNT, 0L)
 
-    fun clear(): Boolean = prefs.edit().clear().putLong(KEY_ARM_COUNT, armCount()).commit()
+    fun clear(): Boolean = synchronized(RECORD_LOCK) {
+        prefs.edit().clear().putLong(KEY_ARM_COUNT, armCount()).commit()
+    }
 
     /**
      * Calls [onChange] whenever the record changes, until the returned handle is
@@ -707,6 +731,13 @@ open class ActiveSnoozeStore(
         if (contains(key)) getFloat(key, 0f) else null
 
     private companion object {
+        /**
+         * Orders [updateIfLive] against the endings: [clear] and [setState].
+         * Held for one commit at most, and contended only by that one rare
+         * worker write, so an ending never waits on more than its own disk.
+         */
+        val RECORD_LOCK = Any()
+
         const val TAG = "ActiveSnoozeStore"
         const val FILE_NAME = "active_snooze"
         const val KEY_STARTED_AT = "started_at"
