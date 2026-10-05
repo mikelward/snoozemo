@@ -8954,6 +8954,54 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
       by the walk, then dropping the old one — the same staged-rename shape
       used for the `gate` → `lanes` check. Caught by Codex on PR #133.
 
+## The backstop tests departure when it cannot start the service (field log, 2026-10-05)
+
+- [x] **A refused backstop wake runs §6.6 itself** (maintainer chose this over exact alarms,
+      2026-10-05). `BackstopProbe` in `:core`, the platform half in `BackstopProbePlatform`, ending
+      through `releaseDirectly(DEPARTURE)` (`SPEC.md` §6.10).
+- [ ] **Verify on a handset, and follow up if it is not reliable** (maintainer, 2026-10-05).
+      What to read in the debug log after a walk away: `backstop probe:` lines, and whether their
+      fixes arrive fresh. Background Location Limits allow a background app a few fixes an hour and
+      `getCurrentLocation` may answer from cache (`BackstopProbe.isFresh` rejects anything older
+      than the confirmation gap), so a probe that keeps logging `NoFix` is the sign. Follow-ups to
+      weigh then, cheapest first:
+      - take the probe from the `ACTION_RESTORE` retry alarm's receiver too (`goAsync`), since an
+        alarm wake lands sooner in Doze than `WorkManager`'s;
+      - an expedited worker for the probe, so it runs before the next maintenance window;
+      - exact alarms, whose delivery can start a foreground service — costs
+        `SCHEDULE_EXACT_ALARM`, a Play policy question for the maintainer (`SPEC.md` §3).
+- [ ] **A failed worker-side probe is not said on the card** (Codex, PR #310, deferred). When
+      the restore is refused and the probe finds the location grant gone, location services
+      off, or no fix at all, it ends nothing and the record and ongoing card go on claiming
+      full tracking, with the cap as the only exit. Not a regression — before the probe a
+      refused wake said nothing either — but it is principle 2's failure. The fix is to map
+      the requester's `PermissionLost` / `ServicesOff` outcomes to a degradation, write it to
+      the record and repost the card from the worker. Deferred because that is a record write
+      outside the service racing a retry alarm that may be starting it, which wants its own
+      design and tests.
+- [ ] **No-service releases check the record, then act on it, with no lock between**
+      (Codex, PR #310, second finding on the same check; maintainer's call). The worker
+      probe's identity check now runs inside `releaseDirectly`, against the record it loads,
+      but the store has no lock, so a service writing a newer record between that load and
+      the zen write can still be undone. Every no-service release (`releaseDirectlyIfStillOurs`,
+      the erase and discard retries) has the same shape. Closing it for real means a
+      compare-and-release under a lock the service's own writes also take — a store-wide
+      design change, not a patch to one caller. **Deferred by the maintainer (2026-10-05)**:
+      the window is milliseconds, it fails open (the phone rings), and the fix risks the arm
+      path and the release path. Revisit only if a field log shows a snooze ending right
+      after it was armed.
+      The same gap with a service on the other side (Codex, PR #310, third finding): a restore
+      left pending by another path (`presenceWake`'s in-process retry, a scheduling-rejection
+      retry, an earlier `ACTION_RESTORE`) can start the service during the worker's multi-minute
+      probe, and `releaseDirectly` then clears the record under a live controller, which may
+      repost the card or record a second ending. It fails open too — the rule is off. The same
+      coordination would cover it: the release taking the lock the service's adoption takes, or
+      the worker handing a confirmed departure to a service that turns out to be running.
+- [ ] **The worker-side probe does not remove the fence or the grace alarm** when it ends a
+      snooze, matching the cap's no-service fallback: a leftover fence wakes a restore that finds
+      no record, and the backstop retires itself on its next empty wake. Worth tidying if those
+      empty wakes show up in a field log.
+
 ## An anchor as vague as the radius can never confirm presence (field log, 2026-09-08)
 
 Found reading a field debug log from a `play` build: a snooze armed, captured an
@@ -9014,7 +9062,9 @@ log showed three faults in a row; the first is fixed, the other two are open.
       `FULL`, but its `startForeground` came a minute after the wake and was refused. Fixed:
       `ActiveSnooze.watchesInProcess` keeps the service through `NO_LOCATION_FIX`,
       `FIXES_TOO_VAGUE` and `LOCATION_SERVICES_OFF` on a fenced anchor (`SPEC.md` §3.4).
-- [ ] **The backstop cannot restore anything from the background.** Every `BackstopWorker`
+- [x] **The backstop cannot restore anything from the background.** Addressed by running
+      the departure test in the worker (see *The backstop tests departure when it cannot start
+      the service*, above in this file). Every `BackstopWorker`
       wake and every `ACTION_RESTORE` retry alarm was refused (`startService` from a
       background `WorkManager` worker, and from an inexact `setAndAllowWhileIdle` alarm), three
       backstop wakes in a row, so the ladder ended on "the cap bounds the snooze" each time.
