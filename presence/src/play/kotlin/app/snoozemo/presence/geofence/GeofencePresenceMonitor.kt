@@ -15,6 +15,7 @@ import app.snoozemo.core.DepartureObservation
 import app.snoozemo.core.LocationDuty
 import app.snoozemo.core.PresenceEvent
 import app.snoozemo.core.PresenceMonitor
+import app.snoozemo.core.Presence
 import app.snoozemo.core.PresenceSignal
 import app.snoozemo.core.PresenceUpdate
 import app.snoozemo.core.SnoozeDebugLog
@@ -526,7 +527,10 @@ class GeofencePresenceMonitor(
             trySend(PresenceUpdate(event = PresenceEvent.CapabilityLost(cause), degradation = null))
         }
 
-        fun deliver(signal: PresenceSignal) {
+        // [deliver], also answering what the engine made of a fix: read off
+        // the transition itself, under the same `feedLock` hold (Codex,
+        // PR #313), so the checking burst paces on exactly what was counted.
+        fun deliverAndClassify(signal: PresenceSignal): Presence.FixUse? {
             // A delivered platform fix is the recovery proof the services-off
             // level waits for: the subsystem it indicts just answered. The
             // fence, though, may not have survived the outage — the platform
@@ -556,8 +560,16 @@ class GeofencePresenceMonitor(
             val confirmationDeferralUsed: Boolean
             val locationAccessLost: Boolean
             val sequence: Long
+            val use: Presence.FixUse?
             synchronized(feedLock) {
-                update = feed.accept(signal)
+                if (signal is PresenceSignal.FixArrived) {
+                    val (fed, fixUse) = feed.acceptFix(signal.fix)
+                    update = fed
+                    use = fixUse
+                } else {
+                    update = feed.accept(signal)
+                    use = null
+                }
                 duty = feed.duty
                 graceDeadlineMs = feed.graceDeadlineMs
                 confirmationDeferralUsed = feed.confirmationDeferralUsed
@@ -748,6 +760,11 @@ class GeofencePresenceMonitor(
                 // that is acted on settles the slot through stop().
                 if (settlesHeldExit(duty, update.event)) GeofenceSignalBridge.settleExit()
             }
+            return use
+        }
+
+        fun deliver(signal: PresenceSignal) {
+            deliverAndClassify(signal)
         }
 
         // D4's suppressor extends to the backstop's probe: associated with
@@ -866,6 +883,12 @@ class GeofencePresenceMonitor(
             // per-snooze construction site, and a gap that later varies by
             // anchor replaces this expression and nothing else (`TODO.md`).
             confirmationGapMs = Departure.CONFIRMATION_GAP.toMillis(),
+            // Fed and classified in one locked step, so the burst backs off
+            // on exactly the readings the engine counted.
+            feedFix = { fix ->
+                deliverAndClassify(PresenceSignal.FixArrived(fix)) ?: Presence.FixUse.IGNORED
+            },
+            graceRunning = { synchronized(feedLock) { feed.graceDeadlineMs != null } },
         )
 
         var bridge: AutoCloseable? = null
@@ -1344,7 +1367,7 @@ class GeofencePresenceMonitor(
         // the resting snooze and is a declared no-op mid-check; `retryNow`
         // covers exactly that gap — an outage that began *during* a departure
         // check leaves the duty `ACTIVE`, where the probe does nothing and the
-        // burst's cadence has by then backed off to five minutes. They are
+        // burst's cadence has by then backed off. They are
         // mutually exclusive by their own guards, so calling both asks once,
         // never twice.
         //
