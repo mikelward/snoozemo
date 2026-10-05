@@ -4033,7 +4033,20 @@ the presence monitor for **one resting fix**, so a departure the geofence never 
 tested by §6.6 rather than waited out until the cap. The probe re-checks the location grants on
 the way, which is what makes a mid-snooze permission revocation detectable at the backstop's
 cadence: revocation kills the process, so no in-process watcher can exist, and a scheduled wake
-is the only detector Android leaves. The backstop is never load-bearing — the cap alarm is the
+is the only detector Android leaves. **When the restore is refused, the wake runs the test itself** (2026-10-05, field log). A
+`WorkManager` worker is a background caller, and Android refuses it a service start: the log showed
+every backstop restore refused, and every retry alarm's too, three wakes running while the user
+walked well clear of the anchor. So a refused wake takes the fixes in the worker — the snooze
+already holds background location — and runs §6.6 on them: one fix past the unambiguous margin, or
+two qualifying fixes a confirmation gap apart, at most three per wake. A confirmed departure ends the
+snooze through the same no-service release the cap's fallback uses; anything less ends nothing, arms
+the retry alarm as before, and leaves the question to the next wake. The retry comes *after* the
+probe, because the probe can outlast its delay and a service it started mid-probe would be running
+under the worker's release. D4's suppressor holds here too:
+an SSID anchor's association is watched for the whole probe, and only a positive report suppresses
+it — association at any fix stops the probe as present, and a change in association restarts the
+two-fix window, so no confirmation spans one. Background location limits may throttle these fixes; `TODO.md` carries what to try if
+the field says they do. The backstop is never load-bearing — the cap alarm is the
 floor and is armed independently — and it retires itself on a wake that finds no snooze, so a
 cancel lost to process death costs one empty wake, not a standing drain.
 

@@ -90,3 +90,14 @@ fun pokePresenceGrantRecheck() {
         ),
     )
 }
+
+/**
+ * The §6.10 backstop running the departure test itself, for a wake that could
+ * not start the service. Blocking: call it from a worker thread, never the main
+ * one. See [app.snoozemo.core.BackstopProbe].
+ */
+fun probeDepartureWithoutService(
+    context: Context,
+    snooze: app.snoozemo.core.ActiveSnooze,
+): app.snoozemo.core.BackstopProbe.Outcome =
+    app.snoozemo.presence.geofence.BackstopProbePlatform(context).probe(snooze)

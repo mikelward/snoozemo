@@ -7,8 +7,13 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
+import app.snoozemo.core.ActiveSnooze
+import app.snoozemo.core.BackstopProbe
+import app.snoozemo.core.EndReason
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.presence.pokePresenceSanity
+import app.snoozemo.presence.probeDepartureWithoutService
+import com.mikelward.androidlog.safe
 import java.util.concurrent.TimeUnit
 
 /**
@@ -212,6 +217,14 @@ internal object SnoozeBackstop {
     /** How soon the alarm ladder retries a refused backstop restore. */
     internal const val RETRY_MS = 60_000L
 
+    /**
+     * The worker's own departure test, for a wake whose restore was refused.
+     * A seam, because the platform probe blocks on real location requests
+     * that no JVM test can answer.
+     */
+    @Volatile
+    internal var probe: (Context, ActiveSnooze) -> BackstopProbe.Outcome = ::probeDepartureWithoutService
+
     /** Per-snooze bound on schedule-rejection retries; refilled on success. */
     internal const val SCHEDULE_RETRIES = 3
 
@@ -219,9 +232,11 @@ internal object SnoozeBackstop {
 }
 
 /**
- * One backstop wake. Synchronous and short: load the record, start the
- * service, poke the probe — every slow or fallible repair lives behind the
- * service's own tested paths, not here.
+ * One backstop wake: load the record, start the service, poke the probe —
+ * every slow or fallible repair lives behind the service's own tested paths,
+ * not here. Short, except when the start is refused: then the wake runs the
+ * departure test itself, which blocks for a few minutes at most, well inside
+ * a worker's budget.
  */
 internal class BackstopWorker(
     context: Context,
@@ -229,7 +244,8 @@ internal class BackstopWorker(
 ) : Worker(context, params) {
 
     override fun doWork(): Result {
-        if (ActiveSnoozeStore(applicationContext).load() == null) {
+        val snooze = ActiveSnoozeStore(applicationContext).load()
+        if (snooze == null) {
             // The snooze this schedule served is gone — ended on a path whose
             // cancel was lost, or the record was erased cold. Retire rather
             // than keep waking for nothing (SPEC.md §9); the retire re-checks
@@ -243,13 +259,28 @@ internal class BackstopWorker(
             // A worker's process is not an alarm receiver's start window, so
             // the refusal falls to the same ladder the presence wake uses:
             // the retry alarm restores from its own better-privileged window.
-            SnoozeDebugLog.warning("backstop restore refused; arming a check-in to retry")
-            if (!CapAlarm.armPresenceRetry(applicationContext, SnoozeBackstop.RETRY_MS)) {
-                // Even the alarm refused: WorkManager's own backoff is the
-                // last rung left standing.
-                return Result.retry()
+            // The retry ladder cannot be relied on alone: a field log
+            // (2026-10-05) showed every one of its restores refused as well,
+            // three wakes running, with the user long gone. So the wake runs
+            // the departure test here, with the background-location grant the
+            // snooze already holds, and ends the snooze itself on a confirmed
+            // departure.
+            //
+            // **The probe first, the retry after** (Codex, PR #310). The probe
+            // can outlast the retry's delay by minutes, and a retry that did
+            // start the service mid-probe would leave a live controller under
+            // a release this worker then performs. A process death mid-probe
+            // loses only this rung: the cap alarm and the next wake stand.
+            SnoozeDebugLog.warning("backstop restore refused; testing departure here")
+            if (probeWithoutService(snooze)) return Result.success()
+            SnoozeDebugLog.event("backstop probe ended nothing; arming a check-in to retry")
+            // Even the alarm refused: WorkManager's own backoff is the last
+            // rung left standing.
+            return if (CapAlarm.armPresenceRetry(applicationContext, SnoozeBackstop.RETRY_MS)) {
+                Result.success()
+            } else {
+                Result.retry()
             }
-            return Result.success()
         }
         // The warm half of the probe: a monitor already attached takes one
         // resting fix now. If the restore above is still starting, the poke
@@ -257,5 +288,38 @@ internal class BackstopWorker(
         // either way exactly one probe per wake.
         pokePresenceSanity()
         return Result.success()
+    }
+
+    /**
+     * The §6.6 test from the worker, ending the snooze through the no-service
+     * release on a confirmed departure, and returning whether the rule is now
+     * confirmed off. Anything short of that ends nothing —
+     * the cap still bounds the snooze, and the next wake asks again.
+     */
+    private fun probeWithoutService(snooze: ActiveSnooze): Boolean {
+        val outcome = runCatching { SnoozeBackstop.probe(applicationContext, snooze) }
+            .getOrElse {
+                // A probe that threw has learned nothing, so it ends nothing;
+                // the retry armed after it and the cap still stand.
+                SnoozeDebugLog.failure(it, "backstop probe failed; the cap bounds the snooze")
+                return false
+            }
+        SnoozeDebugLog.event("backstop probe: %s", safe(outcome.toString()))
+        if (outcome !is BackstopProbe.Outcome.Departed) return false
+        // Only the snooze that was probed, and only while it still ends on
+        // departure. The probe takes up to a few minutes: a snooze the user
+        // ended and re-armed in that time was never tested — its anchor may be
+        // where the user is standing now — and one switched to a time-only end
+        // keeps its start but has withdrawn the exit this would take (Codex,
+        // PR #310). Checked inside the release, against the record it loads,
+        // so no second read sits between the check and the act; the store has
+        // no lock to close the rest of that window, and the other no-service
+        // releases share it (TODO.md).
+        return releaseDirectly(applicationContext, EndReason.DEPARTURE) { current ->
+            current != null &&
+                current.startedAt == snooze.startedAt &&
+                current.endsOnDeparture &&
+                current.anchor == snooze.anchor
+        }
     }
 }

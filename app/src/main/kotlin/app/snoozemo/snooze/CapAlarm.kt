@@ -667,14 +667,24 @@ private fun androidZen(context: Context): ZenController = AndroidZenController.d
  * not read a refusal as an ending: saying "Snooze ended" over a phone that may
  * still be silent is the quiet-wrong-answer this app's second principle is
  * about. Callers with nothing to report can ignore it.
+ *
+ * [onlyIf] is a caller's last word on *which* record it may end, checked
+ * against the record this function loads itself, so no second read sits
+ * between that check and the release. A refusal touches nothing and returns
+ * false. Default: any record, as every caller but one needs.
  */
 internal fun releaseDirectly(
     context: Context,
     reason: EndReason,
     zen: ZenController = androidZen(context),
+    onlyIf: (ActiveSnooze?) -> Boolean = { true },
 ): Boolean {
     val store = ActiveSnoozeStore(context)
     val snooze = store.load()
+    if (!onlyIf(snooze)) {
+        SnoozeDebugLog.event("no-service release (%s) declined: the record changed", reason)
+        return false
+    }
 
     // Why this release is being attempted, recorded before attempting it — the
     // same marker the service's own release path writes (SPEC.md §5.8). This
