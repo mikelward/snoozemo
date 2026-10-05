@@ -4063,8 +4063,12 @@ the service that would say it is the thing that could not start: a request that 
 gone or location off records that cause as the snooze's degradation (duration-only, as the
 controller maps it) and reposts the card. It only ever lowers the card: a later probe's fix proves location answers,
 not that the fence or Wi-Fi watch was rebuilt, so lifting it again is left to a restore whose watch
-actually comes back. A plain miss changes nothing — one throttled wake is not evidence location is
-broken. The backstop is never load-bearing — the cap alarm is the
+actually comes back. Any other wake whose start was refused and whose probe could run the test says
+the card is **`Checking less often`** in place of its mode line (maintainer, 2026-10-05): no fence or
+Wi-Fi watch is up, so a departure is caught only at the backstop's pace — still caught, so not
+`Timer only`, and not a location fault either, since one throttled wake is not evidence location is
+broken. It never replaces a stated cause, and the next restore drops it, since a running service is
+the thing it says is missing. The backstop is never load-bearing — the cap alarm is the
 floor and is armed independently — and it retires itself on a wake that finds no snooze, so a
 cancel lost to process death costs one empty wake, not a standing drain.
 

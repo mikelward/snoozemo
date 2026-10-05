@@ -5462,6 +5462,24 @@ are simply what the one build ships.
 
 ## Decisions needing review
 
+- [x] **What the card says when the backstop's service start is refused** (autopilot call,
+      2026-10-05; **decided by the maintainer the same day**: every such wake marks the card).
+      A probe whose requests reported the grant gone or location off records that cause and
+      reposts the card as `Timer only — <reason>`. Any other refused-start wake whose probe could
+      run the test marks the card `Checking less often` (`BACKGROUND_CHECKS_ONLY`, copy approved
+      2026-10-05) without lowering the mode, since the departure test still runs; a restore
+      drops it. A plain miss is still not a location fault: one background wake can be throttled
+      by Background Location Limits. **Still open**: counting probe misses toward
+      `NO_LOCATION_FIX` across wakes, which would catch a provider that is genuinely dead but
+      never says so. Also open, with the no-service coordination entry: a service another path
+      started during the probe is not restoring, so it keeps a `Checking less often` the worker
+      wrote until its own next record write.
+- [ ] **All three backstop-written causes lower the mode to duration-only** (autopilot,
+      2026-10-05), never `Wi-Fi only`, following `SnoozeController.modeFor`'s reasoning that
+      each withholds the SSID too. **The alternative** is `WIFI_ONLY` for an SSID anchor when
+      only the background grant is gone, if the foreground SSID read turns out to matter.
+      Reversible: one expression in `reflectOnCard`.
+
 - [ ] **Ask-on + locked: the chooser opens after unlock, not an instant arm** (PR #284,
       maintainer 2026-09-14: "keep whatever you've got for the lock screen question and add
       a to-do to decide later"). With `Ask when to unsnooze` on, a tile tap opens the
@@ -8984,7 +9002,10 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
       - an expedited worker for the probe, so it runs before the next maintenance window;
       - exact alarms, whose delivery can start a foreground service — costs
         `SCHEDULE_EXACT_ALARM`, a Play policy question for the maintainer (`SPEC.md` §3).
-- [ ] **A failed worker-side probe is not said on the card** (Codex, PR #310, deferred). When
+- [x] **A failed worker-side probe is not said on the card** (Codex, PR #310, deferred;
+      built 2026-10-05). The probe now reports a stated cause (`BackstopProbe.Outcome.Unavailable`)
+      and the worker writes it to the record and reposts the card. Lowering only: a restored
+      service lifts it once its watch is back (Codex, PR #312). See *Decisions needing review* for the two calls made. When
       the restore is refused and the probe finds the location grant gone, location services
       off, or no fix at all, it ends nothing and the record and ongoing card go on claiming
       full tracking, with the cap as the only exit. Not a regression — before the probe a
@@ -9011,6 +9032,13 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
       repost the card or record a second ending. It fails open too — the rule is off. The same
       coordination would cover it: the release taking the lock the service's adoption takes, or
       the worker handing a confirmed departure to a service that turns out to be running.
+- [ ] **The backstop reposts the card only when one is already up** (Codex, PR #312,
+      deferred there). `repostIfStillShowing` refuses to create a missing card, so a live snooze
+      whose card was never posted, or was cleared across a reboot whose restore was then refused,
+      gets its record lowered with nothing on screen saying so. Not a regression: before PR #312
+      such a snooze had no card either. Creating one from the worker needs a protocol that cannot
+      race the teardown, which cancels the card before it clears the record, so a check of the
+      record alone would put `Snoozing` back over an ending in progress.
 - [ ] **The worker-side probe does not remove the fence or the grace alarm** when it ends a
       snooze, matching the cap's no-service fallback: a leftover fence wakes a restore that finds
       no record, and the backstop retires itself on its next empty wake. Worth tidying if those
