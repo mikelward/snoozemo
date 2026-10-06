@@ -208,6 +208,11 @@ jobs:
         # Ahead of the Gradle work because it takes about a second and needs
         # nothing but the checkout.
         run: python3 scripts/publish_github_release_test.py
+      - name: Test the shallow-clone deepener
+        # scripts/unshallow.sh runs from the session-start hook, which no CI job
+        # executes. Pins that a single-branch feature clone comes out complete
+        # with origin/main present, since the versionCode is counted from it.
+        run: python3 scripts/unshallow_test.py
 
       - name: Test the release-notes deduplication
         # Same reason as the step above: the "Build release notes" step is

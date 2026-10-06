@@ -214,12 +214,14 @@ it in the same commit.
 - **Unshallow before answering anything that depends on git history depth.** The sandbox
   clones shallow, so `git rev-list --count`, `git log` past the shallow boundary, blame,
   and any "how many commits / what versionCode is this" question return wrong answers
-  without warning. If `git rev-parse --is-shallow-repository` says `true`, run
-  `git fetch --unshallow origin +refs/heads/main:refs/remotes/origin/main` first (by
-  refspec, so `origin/main` itself moves in a single-branch clone) — do it once at the
-  start of any session that will report a versionCode — then re-check. It exits 0 even
-  when it deepened nothing, so if `--is-shallow-repository` is still `true`, say the
-  history is truncated instead of quoting a versionCode.
+  without warning. The session-start hook runs `scripts/unshallow.sh`, but it is
+  best-effort and Claude-only, so check anyway: if `git rev-parse
+  --is-shallow-repository` says `true`, run `git fetch --unshallow origin
+  +refs/heads/main:refs/remotes/origin/main` first (by refspec, so `origin/main` itself
+  moves in a single-branch clone) — do it once at the start of any session that will
+  report a versionCode — then re-check. It exits 0 even when it deepened nothing, so if
+  `--is-shallow-repository` is still `true`, say the history is truncated instead of
+  quoting a versionCode.
 
 ## Commit messages
 
