@@ -33,7 +33,22 @@ import app.snoozemo.snooze.SnoozeService
  * `edit()` waits on the same kind of file load. The settings and the last known
  * SSID join them as later phases add them.
  */
-class SnoozemoApplication : Application(), androidx.work.Configuration.Provider {
+open class SnoozemoApplication : Application(), androidx.work.Configuration.Provider {
+
+    /**
+     * Whether the process start and the app being opened run the ringer
+     * hand-back check (`reconcileRingerInBackground`). Always true in
+     * production; open only so the unit tests' application can turn it off.
+     *
+     * Robolectric builds an application for every test, and the check is a
+     * daemon thread that reaches for a process-wide lock five seconds later —
+     * long after the test that started it has finished. Left on, a stray from
+     * one test class held the ringer lock under another and failed its
+     * assertions about who got the lock (`AudioRingerControllerTest`,
+     * PR #260). A per-class plain `Application` dodged only that class's own
+     * stray; switching it off at the source dodges everyone else's.
+     */
+    internal open val reconcilesRingerOnStart: Boolean get() = true
 
     /**
      * On-demand WorkManager, replacing the removed startup initializer
@@ -122,7 +137,7 @@ class SnoozemoApplication : Application(), androidx.work.Configuration.Provider 
         // are checked together under the ringer controller's own lock, so a cold
         // tile tap arming alongside this cannot end up with no ceiling — see
         // `reconcileRingerInBackground`.
-        reconcileRingerInBackground(this)
+        if (reconcilesRingerOnStart) reconcileRingerInBackground(this)
         // Crash reporting's own gate (SPEC.md §12). Spawns its own worker like
         // the line above, so the cold tap never waits on the preferences read
         // — and it is what makes the opt-out real: the play manifest starts

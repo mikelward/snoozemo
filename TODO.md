@@ -2236,7 +2236,7 @@ the point is that every other line of the app is worthless if it isn't true.
       string with `tools:ignore="MissingTranslation"` and a `<!-- TODO: translate -->` until the
       locales are fanned out.
 
-- [ ] **`AudioRingerControllerTest` shares process-wide ringer state with the rest of the
+- [x] **`AudioRingerControllerTest` shares process-wide ringer state with the rest of the
       suite** — seen failing once on PR #260 and green on every run around it, so it is
       intermittent rather than broken. `an arm that arrives mid-hand-back sends reconciliation
       away, loan intact` asserted `Untouched` and got `null`, which is the *pre-lock*
@@ -2249,6 +2249,15 @@ the point is that every other line of the app is worthless if it isn't true.
       Not from that PR's diff, which touches neither file. Fix by making the contention
       explicit rather than by retrying: give the stand-downs distinguishable outcomes, and have
       every test that starts one join it before returning (`RingerReconcileTest` already does).
+      **Done:** the thread that took the lock was the startup check itself. Robolectric builds
+      the application for every test, the check sleeps five seconds before reaching for the
+      lock, and the lock is static within the sandbox — so a check started by one test class
+      landed in whichever test was running five seconds later. Nine classes already dodged
+      their *own* copy with a plain `Application`; none could dodge the other classes'. The
+      unit tests now get `TestSnoozemoApplication` by default (`robolectric.properties`), which
+      leaves the startup and app-opened checks off at the source; tests that exercise it start
+      it themselves and join it. The two stand-downs stay indistinguishable by return value —
+      with no stray left to contend, nothing needs to tell them apart.
 
 - [ ] **Decide what an unconfirmed un-stick may promise when its record did not land** —
       maintainer's call, raised on PR #260 (Codex, two findings that cancel each other).
