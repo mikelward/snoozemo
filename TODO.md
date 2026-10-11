@@ -2193,7 +2193,8 @@ the point is that every other line of the app is worthless if it isn't true.
       stepper change (`33bb5ce`), so loosening it reopens something freshly settled, and §7
       records the 8-hour default as a backstop above any chosen value.
 
-- [ ] **During Wi-Fi grace the countdown is the cap's, not the deadline's** (maintainer,
+- [x] **During Wi-Fi grace the countdown is the cap's, not the deadline's** — built with the
+      entry below (the grace countdown). (maintainer,
       2026-09-11: "why would we say 3h 40m left if there's only minutes of grace left"). A snooze
       in `WIFI_GRACE` reads `Wi-Fi lost — ending soon` over `3h 40m left`, which is the one line
       that contradicts the other: the grace period ends the snooze on expiry whether or not the
@@ -4461,7 +4462,10 @@ question.
   snapshots, the drift-checked `docs/play-store/*.png`) stay code by default,
   with no carve-out to forget.
 
-- [ ] **Show the Wi-Fi-grace countdown** (maintainer, 2026-09-13). The decided
+- [x] **Show the Wi-Fi-grace countdown** (maintainer, 2026-09-13) — built: the presence
+  update carries the deadline, the controller holds it under `WIFI_GRACE`, the card asks it
+  and the main screen follows `GraceDeadlines`; `ActiveSnooze.countdown` picks it or a sooner
+  cap. Original note: The decided
   design (`dev-docs/STATES.md`) is for a `WIFI_GRACE` card to name "Wi-Fi lost" and count
   down to the 5-minute grace deadline, not the passive failsafe. It isn't built:
   the ongoing card is assembled from the snooze record alone, which carries no

@@ -127,6 +127,15 @@ class SnoozeController(
          * one that forgot a case.
          */
         fun onAnchorWifi(atAnchorWifi: Boolean, changed: Boolean) = Unit
+
+        /**
+         * The running Wi-Fi grace period's deadline, in elapsed realtime, or
+         * null when none runs — restated on every presence update with the
+         * edge marked, exactly like [onAnchorWifi], so a surface counting
+         * down to it reposts only when it moves. Defaulted to nothing for the
+         * same reason.
+         */
+        fun onGraceDeadline(graceDeadlineMs: Long?, changed: Boolean) = Unit
     }
 
     var state: SnoozeState = SnoozeState.IDLE
@@ -181,6 +190,24 @@ class SnoozeController(
      * when the row's answer actually moved, and the unconditional call is what
      * lets that flag be trustworthy.
      */
+    /**
+     * When the running Wi-Fi grace period ends this snooze, in elapsed
+     * realtime, or null when the snooze is not in [TrackingMode.WIFI_GRACE].
+     *
+     * **Read, don't copy**, for [atAnchorWifi]'s reasons: a surface counting
+     * down to it asks here (maintainer, 2026-09-13: the countdown during grace
+     * is the grace's, not the cap's). Only ever set alongside the mode it
+     * belongs to, so it cannot outlive the grace that produced it.
+     */
+    var graceDeadlineMs: Long? = null
+        private set
+
+    private fun setGraceDeadline(value: Long?) {
+        val changed = value != graceDeadlineMs
+        graceDeadlineMs = value
+        listener.onGraceDeadline(value, changed)
+    }
+
     private fun setAnchorWifi(value: Boolean) {
         val changed = value != atAnchorWifi
         atAnchorWifi = value
@@ -306,6 +333,7 @@ class SnoozeController(
         // that the new snooze starts with nothing known about its network,
         // before any card for it is posted.
         setAnchorWifi(false)
+        setGraceDeadline(null)
         active = snooze
         state = SnoozeState.ARMING
         listener.onStateChanged(state, snooze, null)
@@ -748,6 +776,10 @@ class SnoozeController(
         // true whatever location can currently do. Which surfaces act on it is
         // theirs to decide.
         setAnchorWifi(update.atAnchorWifi)
+        // Gated on the mode it explains: a deadline a mode below grace has no
+        // countdown to show, and it is set before any transition below posts
+        // a card, so that card is built with it.
+        setGraceDeadline(update.graceDeadlineMs.takeIf { mode == TrackingMode.WIFI_GRACE })
 
         val before = state
         update.event?.let { report(it) }
@@ -831,6 +863,7 @@ class SnoozeController(
         // ongoing notification in front of a snooze that is about to end —
         // which is the whole reason this path exists rather than [restore].
         setAnchorWifi(false)
+        setGraceDeadline(null)
         active = snooze
         state = SnoozeState.ARMED
     }
@@ -855,6 +888,7 @@ class SnoozeController(
         // card, so a surface caching the level is told to forget the previous
         // snooze's network first rather than drawing it (Codex, PR #229).
         setAnchorWifi(false)
+        setGraceDeadline(null)
         // The record's own claim is lowered too: it was written under some
         // machinery, but not provably this one — an app update can change
         // what is watched between the write and this read.

@@ -61,6 +61,26 @@ class GeofencePresenceMonitorTest {
     }
 
     @Test
+    fun `the published update carries the grace deadline`() {
+        // A rebuild, so a field not named in `published` reaches nobody —
+        // the readout's own history (Codex, PR #210).
+        val update = GeofencePresenceMonitor.published(
+            event = null,
+            levels = PublishedLevels(
+                degradation = null,
+                graceActive = true,
+                locationAccessLost = false,
+                atAnchorWifi = false,
+                graceDeadlineMs = 123_456L,
+            ),
+            platformLevel = null,
+            observation = null,
+        )
+
+        assertEquals(123_456L, update.graceDeadlineMs)
+    }
+
+    @Test
     fun `a superseded update publishes no readout of its own`() {
         // Its reading is older than one already published, so carrying it
         // would move the number on screen backwards.

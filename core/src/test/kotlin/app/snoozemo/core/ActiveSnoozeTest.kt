@@ -937,4 +937,36 @@ class ActiveSnoozeTest {
             snooze().copy(mode = TrackingMode.WIFI_GRACE, endsOnDeparture = true).capCountdownShown,
         )
     }
+
+    @Test
+    fun `during Wi-Fi grace the countdown is the grace deadline`() {
+        val now = at(start.plusSeconds(3600))
+        val grace = snooze().copy(mode = TrackingMode.WIFI_GRACE, endsOnDeparture = true)
+
+        assertEquals(
+            Duration.ofMinutes(4),
+            grace.countdown(now, graceDeadlineMs = now.uptimeMillis + Duration.ofMinutes(4).toMillis()),
+        )
+    }
+
+    @Test
+    fun `during Wi-Fi grace a sooner cap still wins`() {
+        val now = at(start.plusSeconds(60))
+        val grace = snooze(cap = Duration.ofMinutes(3)).copy(mode = TrackingMode.WIFI_GRACE, endsOnDeparture = true)
+
+        assertEquals(
+            Duration.ofMinutes(2),
+            grace.countdown(now, graceDeadlineMs = now.uptimeMillis + Duration.ofMinutes(5).toMillis()),
+        )
+    }
+
+    @Test
+    fun `without a grace deadline the countdown is the cap only when it is shown`() {
+        val now = at(start.plusSeconds(60))
+        val grace = snooze().copy(mode = TrackingMode.WIFI_GRACE, endsOnDeparture = true)
+
+        assertNull("the passive failsafe stays hidden", grace.countdown(now, graceDeadlineMs = null))
+        val timer = snooze(cap = Duration.ofHours(1)).copy(endsOnDeparture = false)
+        assertEquals(timer.remaining(now), timer.countdown(now, graceDeadlineMs = 123L))
+    }
 }

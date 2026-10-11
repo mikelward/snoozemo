@@ -636,7 +636,11 @@ what the app *does*.
   time** — `Ending soon`, checked *first*, ahead of even a chosen time, because grace is a short
   deadline that ends the snooze on expiry whether or not the phone leaves or moves and before a
   chosen time further out, so anything else could be disproved minutes later; the screen and
-  notification say `Wi-Fi lost — ending soon` for the same reason. "Active" is `effectiveMode ==
+  notification say `Wi-Fi lost — ending soon` for the same reason, and **count down to the grace
+  deadline** (`0h 4m left`) rather than the failsafe, or to the cap if that is sooner — the end
+  that will actually happen (maintainer, 2026-09-13). The deadline is live presence state, asked
+  from the running service rather than stored on the record; a surface with no service to ask
+  shows no time rather than the failsafe. "Active" is `effectiveMode ==
   WIFI_GRACE` (the mode *and* a departure still armed), not the raw mode: a snooze narrowed to a
   timer keeps its capability mode, so a residual `WIFI_GRACE` after a successful conversion is a
   plain timer and shows its time. A distance-to-go readout for the departure exit

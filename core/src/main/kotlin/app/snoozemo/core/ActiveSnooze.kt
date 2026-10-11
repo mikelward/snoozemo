@@ -488,6 +488,30 @@ data class ActiveSnooze(
         Duration.ofMillis(remainingMillis(now).coerceAtLeast(0L))
 
     /**
+     * The countdown a surface shows, or null for none.
+     *
+     * **During Wi-Fi grace it is the grace's** (maintainer, 2026-09-13; design
+     * in `dev-docs/STATES.md`): the grace period ends the snooze on expiry
+     * whether or not the phone moves, so its deadline — minutes away — is the
+     * one that will actually happen, and the passive eight-hour failsafe beside
+     * a `Wi-Fi lost — ending soon` warning contradicted it. The cap still wins
+     * when it is sooner, since it ends the snooze either way.
+     *
+     * Otherwise the cap, exactly when [capCountdownShown] says it is a real
+     * deadline. [graceDeadlineMs] is the controller's live reading, in elapsed
+     * realtime like [ClockReading.uptimeMillis]; it is asked, never stored on
+     * the record.
+     */
+    fun countdown(now: ClockReading, graceDeadlineMs: Long?): Duration? {
+        val cap = remaining(now)
+        if (effectiveMode == TrackingMode.WIFI_GRACE && graceDeadlineMs != null) {
+            val grace = Duration.ofMillis((graceDeadlineMs - now.uptimeMillis).coerceAtLeast(0L))
+            return minOf(grace, cap)
+        }
+        return if (capCountdownShown) cap else null
+    }
+
+    /**
      * Whether the cap has fired. Inclusive of the exact instant, so a cap that
      * lands precisely on `now` ends the snooze — the fail-open direction
      * (SPEC.md D7).

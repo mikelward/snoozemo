@@ -447,7 +447,15 @@ class GeofencePresenceMonitor(
                 when (publication(sequence, publishedSequence, update.event)) {
                     Publication.Publish -> {
                         publishedSequence = sequence
-                        published = PublishedLevels(update.degradation, graceActive, locationAccessLost, update.atAnchorWifi)
+                        published = PublishedLevels(
+                            update.degradation,
+                            graceActive,
+                            locationAccessLost,
+                            update.atAnchorWifi,
+                            // The feed's own deadline, which is non-null
+                            // exactly when `graceActive` is.
+                            graceDeadlineMs = update.graceDeadlineMs,
+                        )
                         emit(update.event, published, update.observation)
                     }
                     Publication.EventOnly -> {
@@ -2335,6 +2343,7 @@ class GeofencePresenceMonitor(
             // identically, so only the recorded cause differs.
             degradation = platformLevel ?: levels.degradation,
             graceActive = levels.graceActive,
+            graceDeadlineMs = levels.graceDeadlineMs,
             locationAccessLost = levels.locationAccessLost,
             atAnchorWifi = levels.atAnchorWifi,
             observation = observation,
@@ -2474,6 +2483,7 @@ internal data class PublishedLevels(
     val graceActive: Boolean,
     val locationAccessLost: Boolean,
     val atAnchorWifi: Boolean,
+    val graceDeadlineMs: Long? = null,
 )
 
 /** What a feed transition does when it reaches publication; see [GeofencePresenceMonitor.publication]. */

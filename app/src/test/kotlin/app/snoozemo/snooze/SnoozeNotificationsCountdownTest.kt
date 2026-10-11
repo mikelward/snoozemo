@@ -101,8 +101,44 @@ class SnoozeNotificationsCountdownTest {
         assertTrue("counts down", posted.extras.getBoolean(Notification.EXTRA_CHRONOMETER_COUNT_DOWN))
     }
 
-    private fun post(snooze: ActiveSnooze): Notification {
-        SnoozeNotifications(appContext).showOngoing(snooze)
+    @Test
+    fun `Wi-Fi grace counts down to the grace deadline, not the failsafe`() {
+        // The maintainer's case (2026-09-11): minutes of grace left beside an
+        // eight-hour countdown. The chronometer now ends at the grace deadline.
+        val grace = snoozeFixture(now).copy(mode = TrackingMode.WIFI_GRACE)
+        val deadline = SnoozeClock.read().uptimeMillis + Duration.ofMinutes(4).toMillis()
+
+        val before = System.currentTimeMillis()
+        val posted = post(grace, graceDeadlineMs = deadline)
+
+        assertTrue("chronometer", posted.extras.getBoolean(Notification.EXTRA_SHOW_CHRONOMETER))
+        assertTrue("counts down", posted.extras.getBoolean(Notification.EXTRA_CHRONOMETER_COUNT_DOWN))
+        val endsIn = posted.`when` - before
+        assertTrue("about four minutes, not hours: $endsIn", endsIn in 0..Duration.ofMinutes(5).toMillis())
+    }
+
+    @Test
+    fun `Wi-Fi grace with no deadline in hand fronts no countdown`() {
+        // A card built where no service can be asked says nothing rather than
+        // falling back to the failsafe it used to contradict.
+        val posted = post(snoozeFixture(now).copy(mode = TrackingMode.WIFI_GRACE))
+        assertFalse("chronometer", posted.extras.getBoolean(Notification.EXTRA_SHOW_CHRONOMETER))
+    }
+
+    private fun post(snooze: ActiveSnooze, graceDeadlineMs: Long? = null): Notification {
+        SnoozeNotifications(appContext)
+            .apply {
+                if (graceDeadlineMs != null) {
+                    ongoingForegroundHost = object : SnoozeNotifications.OngoingForegroundHost {
+                        override fun promote(notification: Notification) = false
+                        override fun demote() = Unit
+                        override fun watchIsUnprotected() = false
+                        override fun atAnchorWifi() = false
+                        override fun graceDeadlineMs() = graceDeadlineMs
+                    }
+                }
+            }
+            .showOngoing(snooze)
         val manager = appContext.getSystemService(NotificationManager::class.java)
         return requireNotNull(shadowOf(manager).getNotification(SnoozeNotifications.ID_ONGOING))
     }
