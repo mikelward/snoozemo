@@ -27,6 +27,8 @@ import app.snoozemo.core.ZenFailure
 import app.snoozemo.ui.MainActivity
 import app.snoozemo.ui.formatSheetTime
 import java.time.Instant
+import app.snoozemo.tile.TileReadout
+import app.snoozemo.tile.TileReadoutStore
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 
@@ -411,10 +413,19 @@ class SnoozeNotifications(private val context: Context) {
         // card from a newer reading than the one it is correcting, or the two
         // posts would differ in a second way nobody asked about.
         val departure = DepartureObservations.latest()
+        // Decided once, for the card's top row and the tile alike: the row
+        // reads the clock for freshness, so deciding it twice could put a
+        // distance on the tile that the card had already dropped (Codex,
+        // PR #323). The tile's copy is handed over only with a post that goes
+        // ahead (see [postOngoing]), so a card the generation guard rejects
+        // cannot leave its readout behind.
+        val readout = distanceRow(snooze, departure, atAnchorWifi)
+        val startedAtMs = snooze.startedAt.toEpochMilli()
         betweenReadAndPost()
         val posted = postOngoing(
-            buildOngoing(snooze, builtWith, ringerShortfall, silent, departure, unprotected, atAnchorWifi, graceDeadlineMs),
+            buildOngoing(snooze, builtWith, ringerShortfall, silent, readout, unprotected, graceDeadlineMs),
             onlyIfGeneration,
+            readout = startedAtMs to readout,
         )
         // The cache is read above but written under the lock this post takes,
         // so the worker can commit an answer in between and lose its own
@@ -433,8 +444,9 @@ class SnoozeNotifications(private val context: Context) {
             if (settled != builtWith) {
                 betweenReadAndPost()
                 postOngoing(
-                    buildOngoing(snooze, settled, ringerShortfall, silent, departure, unprotected, atAnchorWifi, graceDeadlineMs),
+                    buildOngoing(snooze, settled, ringerShortfall, silent, readout, unprotected, graceDeadlineMs),
                     onlyIfGeneration = posted,
+                    readout = startedAtMs to readout,
                 )
             }
         }
@@ -500,13 +512,16 @@ class SnoozeNotifications(private val context: Context) {
      * The clock is read here rather than passed in because freshness is a
      * property of *now*, not of the post: this card is rebuilt on every
      * reading, and a value captured earlier would age against a check that
-     * thinks it is current.
+     * thinks it is current. It is read **once per card**: the card's top row
+     * ([distanceSubText]) and the tile's readout (`Until you leave · 45 m to
+     * go`) both take this one answer, so a reading ageing out between two
+     * reads cannot leave them disagreeing (Codex, PR #323).
      */
-    private fun distanceSubText(
+    private fun distanceRow(
         snooze: ActiveSnooze,
         departure: DepartureObservation?,
         atAnchorWifi: Boolean,
-    ): String? {
+    ): TileReadout? {
         // `effectiveMode` like the lines above: nothing is measuring a distance
         // for a snooze the user narrowed to its timer. `stopDepartureWatch`
         // clears the last reading too, so this is the second of two — the
@@ -525,8 +540,8 @@ class SnoozeNotifications(private val context: Context) {
         // Saying `Wi-Fi` there would claim the network had settled a question
         // the engine is in the middle of distrusting, and would hide a
         // departure that is one fix from ending the snooze.
-        if (reading?.qualifies == true) return context.getString(R.string.ongoing_distance_leaving)
-        if (atAnchorWifi) return context.getString(R.string.ongoing_distance_wifi)
+        if (reading?.qualifies == true) return TileReadout(TileReadout.Kind.LEAVING)
+        if (atAnchorWifi) return TileReadout(TileReadout.Kind.ON_WIFI)
         if (reading == null) return null
         // A reading whose numbers are not numbers has no row, for the same
         // reason it has no sentence on the screen: the alternative is
@@ -539,7 +554,22 @@ class SnoozeNotifications(private val context: Context) {
         // once, so a row disagreeing with the screen about how sharp the same
         // reading is would be worse than either being coarse.
         val step = unit.step(reading.uncertaintyM)
-        return distanceText(context, unit, unit.toGo(reading.remainingM, step), step)
+        return TileReadout(
+            TileReadout.Kind.DISTANCE,
+            distanceText(context, unit, unit.toGo(reading.remainingM, step), step),
+        )
+    }
+
+    /**
+     * The card's wording of [distanceRow]: the number and its unit, `Wi-Fi`, or
+     * `Leaving?`. The tile words the same row its own way (`TileSnapshot`).
+     */
+    private fun distanceSubText(row: TileReadout?): String? = row?.let {
+        when (it.kind) {
+            TileReadout.Kind.LEAVING -> context.getString(R.string.ongoing_distance_leaving)
+            TileReadout.Kind.ON_WIFI -> context.getString(R.string.ongoing_distance_wifi)
+            TileReadout.Kind.DISTANCE -> it.distance
+        }
     }
 
     /**
@@ -566,9 +596,8 @@ class SnoozeNotifications(private val context: Context) {
         until: Instant?,
         ringerShortfall: String?,
         silent: Boolean,
-        departure: DepartureObservation?,
+        distanceRow: TileReadout?,
         unprotected: Boolean,
-        atAnchorWifi: Boolean,
         graceDeadlineMs: Long?,
     ): android.app.Notification {
         // **`Timer only` says nothing true while the movement exit is armed.**
@@ -744,7 +773,7 @@ class SnoozeNotifications(private val context: Context) {
             // (maintainer, 2026-09-08). Null leaves the row as it was, which is
             // the honest rendering of "no reading yet" — an empty string would
             // reserve space for a number that is not coming.
-            .setSubText(distanceSubText(snooze, departure, atAnchorWifi))
+            .setSubText(distanceSubText(distanceRow))
             .setOngoing(true)
             // This card is reposted on every ARMED/CHECKING transition, which
             // includes presence evidence flip-flopping (ProbablyLeft then
@@ -888,6 +917,7 @@ class SnoozeNotifications(private val context: Context) {
     private fun postOngoing(
         notification: android.app.Notification,
         onlyIfGeneration: Long? = null,
+        readout: Pair<Long, TileReadout?>? = null,
     ): Long? {
         synchronized(ongoingLock) {
             if (onlyIfGeneration != null && onlyIfGeneration != ongoingGeneration) {
@@ -896,6 +926,27 @@ class SnoozeNotifications(private val context: Context) {
             }
             ongoingGeneration++
             ongoingUp = true
+            // The tile's readout, queued under this lock so the writes land in
+            // the order the cards did and a takedown's clear cannot be
+            // overtaken by an older card's write (Codex, PR #323). Off this
+            // thread: the store's first use is a disk read, and this card goes
+            // up on the arm path (SPEC.md §4.1).
+            if (readout != null) {
+                val appContext = context.applicationContext
+                val (startedAtMs, value) = readout
+                tileReadoutWrites.execute {
+                    val changed = TileReadoutStore(appContext).write(startedAtMs, value)
+                    // Only a readout going away repaints an open tile. The
+                    // service repaints on a state change right after posting,
+                    // which can read the store before this write lands, so a
+                    // transition that removes the readout (a degraded mode, no
+                    // distance any more) would otherwise leave the old one up.
+                    // A new distance does not: the readout is snapshot-at-open
+                    // (SPEC.md §4.2) and the tile does not follow presence
+                    // updates (Codex, PR #323, both ways).
+                    if (changed && value == null) SnoozeTileBridge.refresh()
+                }
+            }
             // Through the host first where there is one: a foreground service's
             // notification is posted by `startForeground`, and posting the same
             // id separately would leave two ideas of one card. A host that
@@ -1154,6 +1205,14 @@ class SnoozeNotifications(private val context: Context) {
             // running one's.
             ongoingForegroundHost?.demote()
             drop(ID_ONGOING)
+            // The tile's readout goes with the card it came from, queued under
+            // the same lock as the posts' writes so none can land after it.
+            // Its stamp would stop a later snooze reading it anyway; this keeps
+            // a finished one from leaving a distance behind on disk.
+            val appContext = context.applicationContext
+            tileReadoutWrites.execute {
+                if (TileReadoutStore(appContext).clear()) SnoozeTileBridge.refresh()
+            }
         }
     }
 
@@ -1720,6 +1779,7 @@ class SnoozeNotifications(private val context: Context) {
             ongoingGeneration = 0L
             ongoingUp = false
             readCalendar = Executor { it.run() }
+            tileReadoutWrites = Executor { it.run() }
             betweenAnswerAndRepost = {}
             betweenReadAndPost = {}
         }
@@ -1808,6 +1868,16 @@ class SnoozeNotifications(private val context: Context) {
          * idle thread is the cheapest thing that will never run this on the
          * main one.
          */
+        /**
+         * Where the tile's readout is written: one thread, so writes land in
+         * the order the cards were built and the newest wins, and never the
+         * caller's, since the first write loads the store from disk.
+         */
+        @VisibleForTesting
+        internal var tileReadoutWrites: Executor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "snoozemo-tile-readout").apply { isDaemon = true }
+        }
+
         @VisibleForTesting
         internal var readCalendar: Executor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "snoozemo-calendar").apply { isDaemon = true }

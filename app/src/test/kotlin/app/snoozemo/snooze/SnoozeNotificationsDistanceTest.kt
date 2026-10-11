@@ -9,6 +9,9 @@ import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.DepartureObservation
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.dnd.PrefsRingerLoanStore
+import app.snoozemo.tile.TileReadout
+import app.snoozemo.tile.TileReadoutStore
+import app.snoozemo.tile.TileRepaintRegistry
 import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -230,6 +233,112 @@ class SnoozeNotificationsDistanceTest {
 
         assertNull(subText(TrackingMode.FULL))
     }
+
+    @Test
+    @Config(qualifiers = "en-rGB")
+    fun `the tile is handed the same distance the card shows`() {
+        // `Until you leave · 100 m to go` on the tile: the same reading, the
+        // same rounding, stamped with this snooze so a later one ignores it.
+        publish(distanceM = 60.0)
+
+        subText(TrackingMode.FULL)
+
+        assertEquals(
+            TileReadout(TileReadout.Kind.DISTANCE, appContext.getString(R.string.distance_meters, 100)),
+            tileReadout(),
+        )
+    }
+
+    @Test
+    fun `the tile is told the anchor's network, not a distance`() {
+        subText(TrackingMode.FULL, atAnchorWifi = true)
+
+        assertEquals(TileReadout(TileReadout.Kind.ON_WIFI), tileReadout())
+    }
+
+    @Test
+    fun `the tile is told a departure is being confirmed`() {
+        publish(distanceM = 400.0)
+
+        subText(TrackingMode.FULL)
+
+        assertEquals(TileReadout(TileReadout.Kind.LEAVING), tileReadout())
+    }
+
+    @Test
+    fun `a card with nothing to say clears what the tile had`() {
+        publish(distanceM = 60.0)
+        subText(TrackingMode.FULL)
+
+        subText(TrackingMode.DURATION_ONLY)
+
+        assertNull(tileReadout())
+    }
+
+    @Test
+    fun `taking the card down takes the tile's readout with it`() {
+        publish(distanceM = 60.0)
+        subText(TrackingMode.FULL)
+
+        SnoozeNotifications(appContext).cancelOngoing()
+
+        assertNull(tileReadout())
+    }
+
+    @Test
+    fun `the tile's readout follows the order the cards were posted in`() {
+        // Handed over with the post, under its lock, rather than when the card
+        // was built: an answer built first but posted second must win, and
+        // one whose post is refused must not land at all (Codex, PR #323).
+        val notifications = SnoozeNotifications(appContext).apply { ongoingForegroundHost = host(atAnchorWifi = true) }
+        publish(distanceM = 60.0)
+        var stale = true
+        SnoozeNotifications.betweenReadAndPost = {
+            if (stale) {
+                stale = false
+                // A newer card, with nothing to say, lands first.
+                SnoozeNotifications(appContext)
+                    .apply { ongoingForegroundHost = host(atAnchorWifi = false) }
+                    .showOngoing(snoozeFixture(now).copy(mode = TrackingMode.DURATION_ONLY))
+            }
+        }
+        notifications.showOngoing(snoozeFixture(now).copy(mode = TrackingMode.FULL))
+
+        // The outer post was unguarded, so it still went ahead after the inner
+        // one; what matters is that the order of the writes follows the order
+        // of the posts.
+        assertEquals(TileReadout(TileReadout.Kind.ON_WIFI), tileReadout())
+    }
+
+    @Test
+    fun `an open tile repaints when its readout goes away, not when the distance moves`() {
+        // Snapshot-at-open: a new distance waits for the shade to reopen, so
+        // the tile does not follow presence updates. But a readout that goes
+        // away — a mode with no distance — repaints, since the service's own
+        // repaint can read the store before the clear lands and would leave
+        // the old distance up (Codex, PR #323, both ways).
+        var repaints = 0
+        val tile = TileRepaintRegistry.Repaint { repaints++ }
+        TileRepaintRegistry.register(tile)
+        try {
+            publish(distanceM = 60.0)
+            subText(TrackingMode.FULL)
+            publish(distanceM = 20.0)
+            subText(TrackingMode.FULL)
+            assertEquals("a moving distance repaints nothing", 0, repaints)
+
+            subText(TrackingMode.DURATION_ONLY)
+            assertEquals(1, repaints)
+
+            subText(TrackingMode.DURATION_ONLY)
+            assertEquals("nothing to clear repaints nothing", 1, repaints)
+        } finally {
+            TileRepaintRegistry.unregister(tile)
+        }
+    }
+
+    private fun tileReadout(): TileReadout? =
+        TileReadoutStore(appContext).read(snoozeFixture(now).startedAt.toEpochMilli())
 
     private fun publish(distanceM: Double) = DepartureObservations.publish(
         DepartureObservation(

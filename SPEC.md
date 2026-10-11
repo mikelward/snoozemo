@@ -643,9 +643,13 @@ what the app *does*.
   shows no time rather than the failsafe. "Active" is `effectiveMode ==
   WIFI_GRACE` (the mode *and* a departure still armed), not the raw mode: a snooze narrowed to a
   timer keeps its capability mode, so a residual `WIFI_GRACE` after a successful conversion is a
-  plain timer and shows its time. A distance-to-go readout for the departure exit
-  (`Until you leave · 45 m to go`, the meters the ongoing card already shows) is a planned addition,
-  deferred (`TODO.md`).
+  plain timer and shows its time. **The departure exit carries the card's readout** (maintainer,
+  2026-09-14): `Until you leave · 45 m to go` with the distance the ongoing card's top row shows,
+  `· on Wi-Fi` while the anchor's own network answers, or `· leaving?` while a departure is being
+  confirmed; nothing extra when the card has nothing to say. It is the card's answer handed over,
+  not a second derivation, stamped with the snooze it belongs to, and snapshot-at-open like the
+  rest of the tile — no repaint on presence updates. `Until you move` stays bare: motion has no
+  distance.
 - **Tap while inactive:** arm. **Tap while active:** end the snooze immediately (D6).
 - **Long press:** opens the app, via an activity registered for
   `android.service.quicksettings.action.QS_TILE_PREFERENCES`.
