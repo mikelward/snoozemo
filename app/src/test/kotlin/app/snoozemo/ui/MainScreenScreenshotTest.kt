@@ -1771,6 +1771,76 @@ class MainScreenScreenshotTest {
         composeRule.onNodeWithText("0h 4m left").assertExists()
     }
 
+    /**
+     * The card's `tracking may pause`, on the screen too (TODO.md, deferred
+     * from PR #262): a refused foreground service leaves the watch killable,
+     * and the one-row sentence would claim an exit the process may not live to
+     * take — so the split form carries the warning instead.
+     */
+    @Test
+    fun `an unprotected watch says tracking may pause`() {
+        capture("main-screen-snoozing-unprotected.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.FULL,
+                remaining = Duration.ofHours(7),
+                degradation = null,
+                watchUnprotected = true,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Ends when you leave — tracking may pause").assertExists()
+        composeRule.onNodeWithText("Snoozing until you leave").assertDoesNotExist()
+    }
+
+    /** And on a motion snooze, whose only exit most needs the process alive. */
+    @Test
+    fun `an unprotected motion snooze says tracking may pause`() {
+        capture {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.DURATION_ONLY,
+                remaining = Duration.ofHours(7),
+                degradation = null,
+                endsOnMotion = true,
+                watchUnprotected = true,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Ends when you move — tracking may pause").assertExists()
+        composeRule.onNodeWithText("Snoozing until you move").assertDoesNotExist()
+    }
+
     @Test
     fun `a Wi-Fi-only snooze says so`() {
         capture("main-screen-snoozing-wifi-only.png") {

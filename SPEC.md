@@ -976,6 +976,15 @@ move` (maintainer, 2026-09-11 — tapping `Until I move` changed nothing this sc
 names the exit that was tapped and only that one: significant motion is the stricter trigger,
 so it already covers leaving, and enumerating both spends a line to say what one says.
 
+**A watch the process may not survive says so here too**: `Ends when you leave — tracking may
+pause`, the card's clause (§4.3) on the card's own condition. It applies when the foreground
+service a watch needs was refused and the snooze makes a promise a killed process would break: a
+watch still running in process (a watched mode, or a fenced snooze degraded by a cause it recovers
+from), a motion exit, or a capture still out — exactly what the service asks protection for. The notification can be swiped away or never
+looked at, and this is the screen a user opens when a snooze did not end. A warning is never part
+of the one-sentence form, so this state always takes the two-row shape. The screen asks the
+running service rather than reading the record, which must not carry a copy of live service state.
+
 **A plain timer-only snooze names its end time**, `Snoozing until 4:30 PM` (maintainer,
 2026-09-12) — the fold the notification does (§4.3), applied here for the same reason: `Snoozing`
 over `Timer only` said nothing the cap's own time does not say better. Only the *plain* case, with

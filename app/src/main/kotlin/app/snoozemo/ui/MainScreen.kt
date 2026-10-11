@@ -174,6 +174,13 @@ internal fun MainScreen(
      * an opinion; the default hides the countdown.
      */
     capCountdownShown: Boolean = false,
+    /**
+     * Whether to say `tracking may pause`: the running watch's foreground
+     * service was refused, and this snooze makes a promise a killed process
+     * would break — the card's clause, on the card's predicate, precomputed by
+     * the caller. Defaulted off, like the countdown.
+     */
+    watchUnprotected: Boolean = false,
     onOpenPermissions: () -> Unit,
     onOpenSettings: () -> Unit,
     /**
@@ -385,6 +392,7 @@ internal fun MainScreen(
                         endsOnMotion,
                         capCountdownShown,
                         endsAtLabel,
+                        watchUnprotected,
                     )
                 snoozing == false -> NotSnoozingStatus()
                 // Nothing yet: either the record is still being read, or it read
@@ -675,6 +683,9 @@ private fun SnoozeStatus(
     // No formatting happens here, so this composable does no 12/24-hour Settings
     // lookup on the minute tick (Codex, PR #276).
     endsAtLabel: String?,
+    // `MainScreen`'s parameter of the same name, already narrowed by the caller
+    // to the snoozes the card would warn on.
+    watchUnprotected: Boolean,
 ) {
     // **Not while the Wi-Fi grace period is running** (Codex, PR #263, and a
     // different argument from the degraded-mode one it follows). `WIFI_ONLY`
@@ -744,15 +755,32 @@ private fun SnoozeStatus(
     // narrow fallback would read "Until 4:30 PM" and hide the movement exit the
     // sentence names — the exit is the one thing that snooze reports (Codex).
     val plainTimerEndTime: String? =
-        if (!motionOnly && !backgroundChecksOnly && mode == TrackingMode.DURATION_ONLY && reason == null) {
+        if (!motionOnly && !backgroundChecksOnly && !watchUnprotected &&
+            mode == TrackingMode.DURATION_ONLY && reason == null
+        ) {
             endsAtLabel
         } else {
             null
         }
-    val condition = when {
+    val withReason = when {
         plainTimerEndTime != null -> stringResource(R.string.main_until_time, plainTimerEndTime)
         reason != null -> stringResource(R.string.ongoing_degraded_reason, body, reason)
         else -> body
+    }
+    // The card's third axis (TODO.md, deferred from PR #262): the mode and its
+    // cause say what can be watched, and this says whether the watch will
+    // survive to do it. Joined the way the card joins it and after the cause,
+    // where the card puts it — and on a motion snooze too, which is the snooze
+    // whose only exit most needs the process alive. The ringer clause the card
+    // carries between the two is not on this screen at all.
+    val condition = if (watchUnprotected) {
+        stringResource(
+            R.string.ongoing_degraded_reason,
+            withReason,
+            stringResource(R.string.ongoing_watch_unprotected),
+        )
+    } else {
+        withReason
     }
     StatusBlock(
         headline = stringResource(R.string.ongoing_title),
@@ -772,6 +800,10 @@ private fun SnoozeStatus(
         // behind the sentence, it is not reported at all, because it describes
         // an exit this snooze was not started to end on.
         oneRow = when {
+            // The sentence is only ever the whole statement, and a warning is
+            // not part of it — so an unprotected watch keeps the split form,
+            // where the condition line can carry the clause.
+            watchUnprotected -> null
             motionOnly -> stringResource(R.string.main_snoozing_until_you_move)
             mode == TrackingMode.FULL && !backgroundChecksOnly ->
                 stringResource(R.string.main_snoozing_until_you_leave)

@@ -969,4 +969,40 @@ class ActiveSnoozeTest {
         val timer = snooze(cap = Duration.ofHours(1)).copy(endsOnDeparture = false)
         assertEquals(timer.remaining(now), timer.countdown(now, graceDeadlineMs = 123L))
     }
+
+    @Test
+    fun `a watched snooze needs its process protected`() {
+        assertTrue(snooze().watchProtectionMatters)
+    }
+
+    @Test
+    fun `a plain timer promises nothing a killed process would break`() {
+        assertFalse(snooze().copy(endsOnDeparture = false).watchProtectionMatters)
+    }
+
+    @Test
+    fun `a fenced snooze degraded by its fixes still needs the process`() {
+        // It reads `DURATION_ONLY` but its watch is still running and can
+        // recover, so the service still asks for protection (Codex, PR #321).
+        val degraded = snooze().copy(
+            mode = TrackingMode.DURATION_ONLY,
+            degradation = DegradationCause.NO_LOCATION_FIX,
+        )
+
+        assertTrue(degraded.watchesInProcess)
+        assertTrue(degraded.watchProtectionMatters)
+    }
+
+    @Test
+    fun `a motion exit needs the process even on a timer`() {
+        assertTrue(snooze().copy(endsOnDeparture = false, endsOnMotion = true).watchProtectionMatters)
+    }
+
+    @Test
+    fun `a capture still out needs the process even on a timer`() {
+        val settling = snooze().copy(mode = TrackingMode.SETTLING, endsOnDeparture = false)
+
+        assertEquals(TrackingMode.DURATION_ONLY, settling.effectiveMode)
+        assertTrue(settling.watchProtectionMatters)
+    }
 }

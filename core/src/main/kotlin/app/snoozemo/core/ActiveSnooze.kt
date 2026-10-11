@@ -480,6 +480,30 @@ data class ActiveSnooze(
         )
 
     /**
+     * Whether a killable process could break a promise this snooze makes, and
+     * so whether "tracking may pause" is worth saying when the foreground
+     * service that protects it was refused. The card and the main screen both
+     * ask this, so they cannot disagree about when the warning applies.
+     *
+     * - A **watch in process** ([watchesInProcess]) depends on the process
+     *   staying alive to receive what the fence and the sensors deliver — a
+     *   watched mode, and a fenced snooze degraded to `DURATION_ONLY` by a
+     *   cause the watch recovers from, which still holds the foreground
+     *   service (Codex, PR #321).
+     * - A **motion exit** depends on it whatever the mode says: `Timer only`
+     *   promises nothing a dead process would break, until `When I move` is
+     *   armed on it.
+     * - A **capture still out** reads `DURATION_ONLY` through [effectiveMode]
+     *   while [mode] is still settling, and the capture's anchor is what
+     *   `Until I leave` goes back to (Codex, PR #267).
+     *
+     * The same three things `SnoozeService.wantsForeground` asks the service
+     * for, so a refusal the service can suffer is one the surfaces can report.
+     */
+    val watchProtectionMatters: Boolean
+        get() = watchesInProcess || endsOnMotion || mode.isSettling
+
+    /**
      * How long is left before the cap fires, floored at zero. Never negative: an
      * overdue cap is expressed as [isExpired], not as a negative countdown that a
      * caller might format into the notification as "ends in -4m".

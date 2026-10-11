@@ -2209,7 +2209,7 @@ the point is that every other line of the app is worthless if it isn't true.
       it is owed, and then the shorter of the two deadlines shown. The ongoing notification has
       the same line and the same problem.
 
-- [ ] **The main screen never says `tracking may pause`** — deferred from PR #262 (Codex, P1
+- [x] **The main screen never says `tracking may pause`** — deferred from PR #262 (Codex, P1
       against the new motion clause). The ongoing card qualifies its end conditions when the
       watch wants a foreground service and has been refused one, and the main screen's status
       block does not — for any snooze, not just one ending on motion: `protectionMatters` is
@@ -2222,6 +2222,12 @@ the point is that every other line of the app is worthless if it isn't true.
       mirrored copy of a live service reading is the shape that produced four bugs already
       (`atAnchorWifi`, maintainer 2026-09-08). So this wants a seam the screen can *ask*, on the
       same terms, and then the same clause in the same order the card builds it.
+      **Done:** the service publishes the card's own reading (`watchIsUnprotected`) to
+      `UnprotectedWatches` at each place it can change, withdrawing it when the foreground
+      service is given back or the service is destroyed. The screen follows that, as it follows
+      the grace deadline, and gates it on `ActiveSnooze.watchProtectionMatters`, the card's
+      predicate moved onto the record so the two cannot disagree. The clause joins the
+      condition after any cause and always takes the two-row form.
 
 - [ ] **Give `RULE_TURNED_OFF` its own copy** — deferred from PR #260 (Codex) because it is
       new user-facing text, and *Translations* has the maintainer approve English copy before
