@@ -1734,6 +1734,43 @@ class MainScreenScreenshotTest {
         composeRule.onNodeWithText("Ends when you move").assertDoesNotExist()
     }
 
+    /**
+     * During Wi-Fi grace the status line counts down to the grace deadline
+     * (maintainer, 2026-09-13; `dev-docs/STATES.md`): the caller hands it the
+     * grace's remaining time from `ActiveSnooze.countdown`, minutes rather than
+     * the hours of the failsafe it used to sit beside.
+     */
+    @Test
+    fun `Wi-Fi grace counts down to its deadline`() {
+        capture("main-screen-snoozing-wifi-grace.png") {
+            MainScreen(
+                access = PolicyAccess.GRANTED,
+                tileAdded = true,
+                tileBannerDismissed = true,
+                snoozing = true,
+                trackingMode = TrackingMode.WIFI_GRACE,
+                remaining = Duration.ofMinutes(4),
+                degradation = null,
+                capCountdownShown = true,
+                lastOutcome = null,
+                crashPending = false,
+                shareFailed = false,
+                dismissFailed = false,
+                onOpenPermissions = {},
+                onOpenSettings = {},
+                onAddTile = {},
+                onDismissTileBanner = {},
+                onArm = {},
+                onRelease = {},
+                onShareDebugLog = {},
+                onDismissCrash = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Wi-Fi lost — ending soon").assertExists()
+        composeRule.onNodeWithText("0h 4m left").assertExists()
+    }
+
     @Test
     fun `a Wi-Fi-only snooze says so`() {
         capture("main-screen-snoozing-wifi-only.png") {

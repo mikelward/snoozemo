@@ -195,6 +195,14 @@ data class PresenceUpdate(
      * are restated levels to avoid.
      */
     val observation: DepartureObservation? = null,
+    /**
+     * When the running §6.6 grace period ends the snooze, in elapsed realtime,
+     * or null when none is running — non-null exactly when [graceActive] is.
+     * A level like the others, for the same reason; and a reading for the
+     * surfaces to count down to rather than a decision anything branches on
+     * (`TODO.md`, the Wi-Fi-grace countdown).
+     */
+    val graceDeadlineMs: Long? = null,
 )
 
 /** What the presence engine has concluded, in increasing order of confidence. */

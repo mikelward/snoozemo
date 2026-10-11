@@ -8,6 +8,7 @@ import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.PresenceEvent
 import app.snoozemo.core.PresenceUpdate
 import app.snoozemo.core.TrackingMode
+import app.snoozemo.core.ZenFailure
 import app.snoozemo.core.ZenOutcome
 import java.time.Instant
 import org.junit.Assert.assertEquals
@@ -49,6 +50,7 @@ class SnoozeServicePresenceTest {
         TestSnoozeService.zen.outcome = ZenOutcome.Applied("refusing-zen-rule-id")
         ActiveSnoozeStore(appContext).clear()
         TogglableAlarmManager.refuse = false
+        GraceDeadlines.clear()
     }
 
     /** Arms and completes capture, so the watch is running. */
@@ -162,6 +164,97 @@ class SnoozeServicePresenceTest {
         emit(PresenceUpdate(event = null, degradation = DegradationCause.NO_LOCATION_FIX, graceActive = true))
 
         assertEquals(TrackingMode.WIFI_GRACE, ActiveSnoozeStore(appContext).load()?.mode)
+    }
+
+    @Test
+    fun `grace publishes its deadline for the screen`() {
+        armWatched()
+
+        emit(
+            PresenceUpdate(
+                event = null,
+                degradation = DegradationCause.NO_LOCATION_FIX,
+                graceActive = true,
+                graceDeadlineMs = 987_654L,
+            ),
+        )
+
+        assertEquals(987_654L, GraceDeadlines.latest())
+    }
+
+    @Test
+    fun `a refused release keeps the grace deadline published`() {
+        // The snooze survives the refusal and the grace alarm still ends it,
+        // so the countdown must survive too (Codex, PR #319).
+        val controller = startService(SnoozeService.ACTION_ARM)
+        TestSnoozeService.captureRequests.single().invoke(captured)
+        shadowOf(getMainLooper()).idle()
+        emit(
+            PresenceUpdate(
+                event = null,
+                degradation = DegradationCause.NO_LOCATION_FIX,
+                graceActive = true,
+                graceDeadlineMs = 987_654L,
+            ),
+        )
+
+        TestSnoozeService.zen.outcome = ZenOutcome.NotApplied(ZenFailure.PLATFORM_REFUSED)
+        controller.get().onStartCommand(
+            Intent(appContext, TestSnoozeService::class.java).setAction(SnoozeService.ACTION_END),
+            0,
+            2,
+        )
+        shadowOf(getMainLooper()).idle()
+
+        assertNotNull("the snooze survived the refusal", ActiveSnoozeStore(appContext).load())
+        assertEquals(987_654L, GraceDeadlines.latest())
+    }
+
+    @Test
+    fun `ending the snooze clears the grace deadline`() {
+        val controller = startService(SnoozeService.ACTION_ARM)
+        TestSnoozeService.captureRequests.single().invoke(captured)
+        shadowOf(getMainLooper()).idle()
+        emit(
+            PresenceUpdate(
+                event = null,
+                degradation = DegradationCause.NO_LOCATION_FIX,
+                graceActive = true,
+                graceDeadlineMs = 987_654L,
+            ),
+        )
+
+        controller.get().onStartCommand(
+            Intent(appContext, TestSnoozeService::class.java).setAction(SnoozeService.ACTION_END),
+            0,
+            2,
+        )
+
+        assertNull(GraceDeadlines.latest())
+    }
+
+    @Test
+    fun `a destroyed service withdraws its grace deadline`() {
+        // Android destroys an ordinary service without ending the snooze, and
+        // nothing updates the deadline once its collection is gone (Codex, PR
+        // #319).
+        val controller = startService(SnoozeService.ACTION_ARM)
+        TestSnoozeService.captureRequests.single().invoke(captured)
+        shadowOf(getMainLooper()).idle()
+        emit(
+            PresenceUpdate(
+                event = null,
+                degradation = DegradationCause.NO_LOCATION_FIX,
+                graceActive = true,
+                graceDeadlineMs = 987_654L,
+            ),
+        )
+        assertEquals(987_654L, GraceDeadlines.latest())
+
+        controller.destroy()
+
+        assertNull(GraceDeadlines.latest())
+        assertNotNull("the snooze outlives its service", ActiveSnoozeStore(appContext).load())
     }
 
     @Test

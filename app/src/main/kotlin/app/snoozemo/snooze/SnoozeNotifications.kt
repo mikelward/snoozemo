@@ -102,6 +102,13 @@ class SnoozeNotifications(private val context: Context) {
          * guessing — a card posted with no live service genuinely cannot say.
          */
         fun atAnchorWifi(): Boolean
+
+        /**
+         * The running Wi-Fi grace period's deadline, in elapsed realtime, or
+         * null — asked from the controller for [atAnchorWifi]'s reasons. The
+         * card counts down to it during grace rather than to the cap.
+         */
+        fun graceDeadlineMs(): Long? = null
     }
 
     init {
@@ -398,13 +405,15 @@ class SnoozeNotifications(private val context: Context) {
         // And this one, for the same reason and through the same seam: the
         // controller is asked once so both posts describe the same moment.
         val atAnchorWifi = ongoingForegroundHost?.atAnchorWifi() == true
+        // And the grace deadline, once, for the same reason.
+        val graceDeadlineMs = ongoingForegroundHost?.graceDeadlineMs()
         // Once, for the same reason: the follow-up post below must not build a
         // card from a newer reading than the one it is correcting, or the two
         // posts would differ in a second way nobody asked about.
         val departure = DepartureObservations.latest()
         betweenReadAndPost()
         val posted = postOngoing(
-            buildOngoing(snooze, builtWith, ringerShortfall, silent, departure, unprotected, atAnchorWifi),
+            buildOngoing(snooze, builtWith, ringerShortfall, silent, departure, unprotected, atAnchorWifi, graceDeadlineMs),
             onlyIfGeneration,
         )
         // The cache is read above but written under the lock this post takes,
@@ -424,7 +433,7 @@ class SnoozeNotifications(private val context: Context) {
             if (settled != builtWith) {
                 betweenReadAndPost()
                 postOngoing(
-                    buildOngoing(snooze, settled, ringerShortfall, silent, departure, unprotected, atAnchorWifi),
+                    buildOngoing(snooze, settled, ringerShortfall, silent, departure, unprotected, atAnchorWifi, graceDeadlineMs),
                     onlyIfGeneration = posted,
                 )
             }
@@ -560,6 +569,7 @@ class SnoozeNotifications(private val context: Context) {
         departure: DepartureObservation?,
         unprotected: Boolean,
         atAnchorWifi: Boolean,
+        graceDeadlineMs: Long?,
     ): android.app.Notification {
         // **`Timer only` says nothing true while the movement exit is armed.**
         // The clause further down appends `, or when you move`, so the two
@@ -774,10 +784,14 @@ class SnoozeNotifications(private val context: Context) {
             // time indicator is dropped (`setShowWhen(false)`, so no corner
             // timestamp stands in for it) and the card says only what ends the
             // snooze.
+            //
+            // **During Wi-Fi grace the countdown is the grace's** (maintainer,
+            // 2026-09-13): [ActiveSnooze.countdown] picks it, or a sooner cap.
             .let { builder ->
-                if (snooze.capCountdownShown) {
+                val countdown = snooze.countdown(SnoozeClock.read(), graceDeadlineMs)
+                if (countdown != null) {
                     builder
-                        .setWhen(System.currentTimeMillis() + snooze.remaining(SnoozeClock.read()).toMillis())
+                        .setWhen(System.currentTimeMillis() + countdown.toMillis())
                         .setUsesChronometer(true)
                         .setChronometerCountDown(true)
                 } else {

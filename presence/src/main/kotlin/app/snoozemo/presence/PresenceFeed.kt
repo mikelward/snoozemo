@@ -207,6 +207,7 @@ internal class PresenceFeed(
             event = step.event,
             degradation = step.state.degradation,
             graceActive = step.state.graceDeadlineMs != null,
+            graceDeadlineMs = step.state.graceDeadlineMs,
             // **Confirmed** association only, which is not what the engine
             // holds internally (Codex, PR #229). The seed above believes the
             // anchor's network is associated whenever the stored anchor has an
