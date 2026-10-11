@@ -136,7 +136,7 @@ class ProcessExitReasonsTest {
         // Precondition: only the pinned copy can carry them now.
         assertTrue(SnoozeDebugLog.snapshot().none { it.contains("processExit ") })
 
-        val report = recentLogForReport()
+        val report = recentLogForReport(APP_SECTION_CHARS)
 
         val exits = report.filter { it.contains("processExit reason=anr") }
         assertEquals(report.toString(), ProcessExits.DEFAULT_MAX_RECORDS, exits.size)

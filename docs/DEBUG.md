@@ -81,28 +81,27 @@ the caller) and answer through a callback, the same shape `DebugLogging.setEnabl
 
 - `hasPinnedCrash(onResult: (pinned: Boolean, checkSucceeded: Boolean) -> Unit)` — whether an
   unacknowledged crash run is still on disk, and whether the check could be made at all.
-- `readPreviousOrCrash(onResult: (run: PreviousRun?, wasCrash: Boolean, readSucceeded: Boolean) -> Unit)`
-  — the prior runs, oldest first, read to fit the report's earlier-runs section with the newest
-  kept. Several are kept side by side (SPEC.md §4.6), so a crashed run does not displace an
-  ordinary one; a crashed run carries its own suffix rather than occupying a single `previous`
-  slot. Only the text reaches the report; nothing is deleted on its behalf, so no handle has to
-  travel with it.
-- `consumeCrashPin(onResult: (Boolean) -> Unit)` — what a landed Share performs:
-  `acknowledgeCrashBanner()` alone, which lowers the banner and deletes nothing (maintainer,
-  2026-09-30). The runs age out under the library's run cap like any other. A Share whose read
-  timed out or failed carried nothing from those runs, so it leaves the banner up instead.
+- `sinkForReport()` — the installed sink, handed to a report. The report reads the earlier
+  runs from it on its own thread, through androidlog's `DebugReport.collect`, so a slow read
+  never parks this worker and the opt-out queued behind it. `Unavailable` when there should
+  be a sink and none could be handed over; the report then says the earlier runs could not
+  be included.
 - `dismissCrashPin()` — Dismiss without sending, over the library's
   `acknowledgeCrashBanner()`. Takes the run off its crash-suffixed name, after which it is an
-  ordinary prior run: still shareable, pruned by age like any other. A refusal leaves the
-  banner **up**, by construction rather than by a second code path.
+  ordinary prior run: still shareable, pruned by age like any other. The banner comes down
+  even when the run cannot be renamed or read (maintainer, 2026-10-11): the log stays, and the
+  banner returns only when a later check reads it as a crash. Only a worker that refuses the
+  dismissal leaves it up, and says so on the screen.
 
-Each no-ops safely (`onResult` with the "nothing to report" answer) when no sink is installed
+Each no-ops safely (the "nothing to report" answer) when no sink is installed
 yet — mirroring `DebugLogging.setEnabled`'s own "not installed" handling.
 
 ### 2. Building the payload
 
-New file, `app/snooze/DebugReport.kt` (package-mate of `DebugLogFiles.kt` — needs
-`Context`/`Intent`/`ClipboardManager`, so it stays in `:app`, not `:core`).
+`app/snooze/DebugReport.kt` (package-mate of `DebugLogFiles.kt`) builds this app's section and
+hands it to androidlog's `DebugReport.collect`, which appends the earlier runs after it and holds
+the whole report to a size that pastes. Every app in the fleet shares through the same two
+calls, `collect` and `deliver`, so the reports and the banner behave the same everywhere.
 
 Sections, in order:
 
@@ -114,53 +113,53 @@ Sections, in order:
    whether the tile has been added. Every one of these is a fact already in `SPEC.md`'s
    correctness checklist ("no Wi-Fi, no location fix, permission revoked mid-snooze, ...")
    and each is a plausible whole answer to "why didn't it end" (SPEC.md §4.6).
-5. **Earlier runs** — present only when `readPreviousOrCrash` found something. Plural
-   because the handle covers every unshared prior run as one text with no marker saying
-   where each begins, and `wasCrash` is the global banner state rather than a fact about
-   one of them: `(one ended in an uncaught exception)` when it is true, otherwise
-   unlabeled. Naming *which* run crashed would need per-run metadata the handle does not
-   carry.
-6. **Recent log** — `SnoozeDebugLog.boundedSnapshot(...)`, newest-last: the ring's newest
+5. **Recent log** — `SnoozeDebugLog.boundedSnapshot(...)`, newest-last: the ring's newest
    lines, with any pinned lines the ring has since evicted (why the previous processes
    ended) put back ahead of them. The heading counts the lines shown and says older ones
    may be dropped, rather than claiming a total the trimmed list can't know.
 
 No settings/rules section — see above.
 
+After this section the library appends **Earlier runs (newest last)**: the prior runs, oldest
+first, read to fit their share with the newest kept. When there should be a log and none could
+be handed over, this section ends with that heading and a line saying the earlier runs could not
+be included, rather than reading like a report with none to send.
+
 ### 3. Size bounds
 
-Same reasoning as both siblings: the payload crosses Binder twice (into the clipboard, then
-again in the chooser's `ACTION_SEND` extra), the per-process buffer is shared and ~1 MB, and
-strings parcel as UTF-16 (2 bytes/char). Proposed budgets, scaled down from Simmo's (which
-carries a full rule/SIM dump Snoozemo has no equivalent of) toward ClothesCast's smaller
-figures, since Snoozemo's structured section is closer to ClothesCast's build/device/permissions
-header than to Simmo's rule dump:
+The report is read by pasting it: into a chat, a message, an email or an issue, as plain text
+with no attachment. So the whole of it has to survive a paste, and a paste keeps less than the
+share sheet's Binder transfer allows. Reports at the old 60,000 characters were cut at about their
+first 20,000 when pasted, and what went was the newest log lines, the ones that explain the bug.
+The ceiling is androidlog's (`DebugReport.MAX_REPORT_CHARS`), set by the library so every app's
+report stays pasteable:
 
 | Section | Budget (chars) |
 |---|---|
-| Total (`MAX_SHARE_PAYLOAD_CHARS`) | 60,000 |
-| Structured header (build/device/state) | 4,000 |
-| Previous/crashed run | 25,000 |
-| Recent log (of which `ProcessExits.maxBatchChars()`, about 2,850, is held for pinned lines) | 30,000 |
+| Total (androidlog's `MAX_REPORT_CHARS`) | 18,000 |
+| Earlier runs (androidlog's `MAX_EARLIER_RUNS_CHARS`, heading included) | 4,000 |
+| This app's section (`APP_SECTION_CHARS`, androidlog's) | 14,000 |
+| — structured header (build/device/state) | 4,000 |
+| — recent log | the rest of the section |
 
-Numbers are a starting point for the implementation PR, not a commitment — they get pinned
-by that PR's own bounds test (mirroring `DebugReportBoundsTest` / `BugReportBoundsTest`),
-and can move if a real payload doesn't fit comfortably.
+Each part has its own cap, so a long one cannot crowd out another, and the most important is
+what fits: the build and state first, then the earlier runs, newest kept, then this run's log,
+which takes the room the rest left. The log is fetched to fit that room
+(`DebugReport.logLines`): why the previous processes ended first, then the newest lines.
 
 ### 4. Delivery
 
-`Intent.ACTION_SEND`, `type = "text/plain"`, `EXTRA_SUBJECT = "Snoozemo debug log —
-$versionName"`, `EXTRA_TEXT = <payload>`, wrapped in `Intent.createChooser`. Clipboard copy
-(`ClipData.newPlainText`) is attempted independently and always, not gated on the chooser.
-`Toast`/on-row failure text only when *both* fail to land — matching the `DebugLogRow`
-pattern already on this screen (a short message under the tapped control, not a `Toast`,
-since nothing else on this screen uses one).
+androidlog's `DebugReport.deliver`, on the main thread: a clipboard copy and an
+`ACTION_SEND` chooser (`EXTRA_SUBJECT = "Snoozemo debug log — $versionName"`), each attempted
+regardless of the other. The on-row failure text shows only when *both* fail — matching the
+`DebugLogRow` pattern already on this screen (a short message under the tapped control, not a
+`Toast`, since nothing else on this screen uses one).
 
-The crash pin is consumed **only when the clipboard copy is confirmed** — the durable proof
-of delivery, since `ACTION_SEND` has no send/selection callback and firing the chooser is not
-proof the user completed a share. A share whose clipboard copy failed leaves the crash file
-in place for a retry, per AGENTS.md principle 3 ("never lose the user's settings" extended to
-the one piece of crash evidence that explains a stuck or early-ended snooze).
+**Sharing deletes nothing.** Whether a report was actually sent can't be known: the chooser
+reports nothing back, and a clipboard copy is only a copy. The earlier runs stay on disk under
+the library's own retention, and a later report may carry some of the same lines. A landed
+clipboard copy lowers the crash banner for every crash, one too old for the report included; that
+crash's log stays on disk, still shareable.
 
 ### 5. UI
 
@@ -172,8 +171,8 @@ the one piece of crash evidence that explains a stuck or early-ended snooze).
 - **Crash banner** on `MainScreen`, above even the Do-Not-Disturb-access banner, shown only
   while `hasPinnedCrash()` is true — modeled on ClothesCast's `LastCrashBannerCard`: title,
   body, `Dismiss` (text button, consumes the pin without sharing) and `Share` (filled button,
-  shares — which itself consumes the pin only on a landed clipboard copy, so a failed share
-  leaves the banner up for a retry rather than silently dropping the crash). Neither deletes
+  shares — which lowers the banner only on a landed clipboard copy, so a failed share leaves
+  it up for a retry). Neither deletes
   the log (maintainer, 2026-09-30): consuming the pin lowers the banner, and the runs age out. `MainScreen`
   rather than `SettingsScreen`, refined during implementation (maintainer): it is the screen
   the user actually lands on, and a crash is exactly the thing that should not wait for a
@@ -199,9 +198,9 @@ the one piece of crash evidence that explains a stuck or early-ended snooze).
   legacy-directory migration, and the screen-facing outcome mirrors.
 - A payload-builder test (mirrors Simmo's `buildDebugReportPayload` / ClothesCast's
   `buildBugReportPayload`) — pure function, unit-tested for section assembly and truncation.
-- A share-flow test (mirrors `DebugReportShareTest` / `BugReportShareTest`) — the four
-  clipboard×chooser outcome combinations, and that the pin is consumed on and only on a
-  landed clipboard copy.
+- A share-flow test (`DebugReportShareTest`) — the delivery's outcome passed through, the tap
+  ordering, and, against the real library, that a share lowers the banner and keeps the run.
+  The clipboard×chooser rules themselves are androidlog's, tested there.
 - A **floor test**, called out explicitly because `docs/PRIVACY.md` already promises one
   ("as a hard rule with its own automated test"): the built payload never contains a raw
   coordinate, a full SSID/BSSID, or a user-typed place name **that this app wrote**,
