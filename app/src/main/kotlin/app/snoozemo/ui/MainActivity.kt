@@ -2650,7 +2650,11 @@ class MainActivity : ComponentActivity() {
                 // own check only runs on a fresh process — a long-lived one
                 // would never reach it (Codex, PR #176). Its own thread, and a
                 // no-op with nothing outstanding.
-                reconcileRingerInBackground(this)
+                // Gated on the application's switch, which only the unit tests'
+                // application turns off — see `reconcilesRingerOnStart`.
+                if ((application as? app.snoozemo.SnoozemoApplication)?.reconcilesRingerOnStart == true) {
+                    reconcileRingerInBackground(this)
+                }
                 // Its own one-key file too. `compareAndSet`-style guard isn't
                 // needed the way a coroutine version would need one: this is
                 // a single main-thread assignment, and a dismissal made
