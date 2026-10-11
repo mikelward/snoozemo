@@ -105,6 +105,12 @@ class SnoozeControllerTest {
         /** [snoozeAtReport], sampled at each report. */
         val activeWhenAnchorWifi = mutableListOf<ActiveSnooze?>()
 
+        val graceDeadlineReports = mutableListOf<Pair<Long?, Boolean>>()
+
+        override fun onGraceDeadline(graceDeadlineMs: Long?, changed: Boolean) {
+            graceDeadlineReports += graceDeadlineMs to changed
+        }
+
         override fun onAnchorWifi(atAnchorWifi: Boolean, changed: Boolean) {
             anchorWifiReports += atAnchorWifi to changed
             activeWhenAnchorWifi += snoozeAtReport()
@@ -966,7 +972,8 @@ class SnoozeControllerTest {
         // there is a test below that does.
         locationAccessLost: Boolean = degradation?.blocksLocationReads == true,
         atAnchorWifi: Boolean = false,
-    ) = PresenceUpdate(event, degradation, graceActive, locationAccessLost, atAnchorWifi)
+        graceDeadlineMs: Long? = null,
+    ) = PresenceUpdate(event, degradation, graceActive, locationAccessLost, atAnchorWifi, graceDeadlineMs = graceDeadlineMs)
 
     private fun observation(distanceM: Double) = DepartureObservation(
         distanceM = distanceM,
@@ -1166,6 +1173,37 @@ class SnoozeControllerTest {
         controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX, graceActive = true))
 
         assertEquals(TrackingMode.WIFI_GRACE, controller.active?.mode)
+    }
+
+    @Test
+    fun `the grace deadline is held while in grace and dropped when it clears`() {
+        // The surfaces count down to it (maintainer, 2026-09-13), asked from
+        // here rather than mirrored onto the record.
+        armFully()
+        controller.onPresenceUpdate(
+            update(degradation = DegradationCause.NO_LOCATION_FIX, graceActive = true, graceDeadlineMs = 300_000L),
+        )
+        assertEquals(300_000L, controller.graceDeadlineMs)
+        assertEquals(300_000L to true, listener.graceDeadlineReports.last())
+
+        controller.onPresenceUpdate(
+            update(degradation = DegradationCause.NO_LOCATION_FIX, graceActive = true, graceDeadlineMs = 300_000L),
+        )
+        assertEquals("a restated level is not an edge", 300_000L to false, listener.graceDeadlineReports.last())
+
+        controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX, graceActive = false))
+        assertEquals(null, controller.graceDeadlineMs)
+        assertEquals(null to true, listener.graceDeadlineReports.last())
+    }
+
+    @Test
+    fun `a grace deadline outside WIFI_GRACE is not held`() {
+        // An anchor with no SSID never reads WIFI_GRACE, so there is no grace
+        // countdown to show for it.
+        armFully(anchor.copy(ssid = null))
+        controller.onPresenceUpdate(update(graceActive = true, graceDeadlineMs = 300_000L))
+
+        assertEquals(null, controller.graceDeadlineMs)
     }
 
     @Test

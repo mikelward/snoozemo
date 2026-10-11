@@ -282,6 +282,19 @@ class PresenceFeedTest {
     }
 
     @Test
+    fun `the update carries the grace deadline the surfaces count down to`() {
+        val feed = PresenceFeed(
+            Anchor(ssid = "AnchorNet", capturedAt = Instant.EPOCH),
+            seedElapsedRealtimeMs = armedAtMs,
+        )
+
+        val update = feed.accept(PresenceSignal.AnchorWifiLost(armedAtMs + 5_000))
+
+        assertEquals(feed.graceDeadlineMs, update.graceDeadlineMs)
+        assertTrue("a deadline exists while grace runs", update.graceDeadlineMs != null)
+    }
+
+    @Test
     fun `graceActive is false once a genuine Wi-Fi return clears the deadline`() {
         val restoredDeadlineMs = armedAtMs + 60_000
         val feed = PresenceFeed(

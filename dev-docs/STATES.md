@@ -100,7 +100,7 @@ Ordinary snooze (`Until I leave`, no chosen time, no motion exit):
 | `SETTLING` | Waiting for location | 8 h failsafe | can't yet tell what will be watched |
 | `FULL` | leave | none | departure watched |
 | `WIFI_ONLY` | leave | none | departure watched (Wi-Fi) |
-| `WIFI_GRACE` | Wi-Fi lost | 5 min grace countdown — **planned, see below** | not the failsafe; recovers to `WIFI_ONLY` if Wi-Fi/fix returns |
+| `WIFI_GRACE` | Wi-Fi lost | 5 min grace countdown (or a sooner cap) | not the failsafe; recovers to `WIFI_ONLY` if Wi-Fi/fix returns |
 | `DURATION_ONLY` (degraded) | timer | 8 h failsafe | location off / grant gone / no plan |
 
 How the exit flags change it:
@@ -117,7 +117,7 @@ How the exit flags change it:
   trigger, so it already covers leaving, SPEC §4.4); the notification names both;
   the tile names neither.
 
-## `WIFI_GRACE` display (decided; grace countdown is a follow-up)
+## `WIFI_GRACE` display
 
 A departure is technically "being watched", so the 8 h failsafe stays hidden —
 but the next end here is not a user action: the anchor Wi-Fi already dropped and a
@@ -128,9 +128,11 @@ scheduled end (`graceDeadlineMs`), nearer than the failsafe, so by the unified
 rule it is the time to show (maintainer, 2026-09-13). If Wi-Fi or a fix returns,
 the snooze goes back to `WIFI_ONLY` and the card returns to "leave".
 
-**Not yet implemented.** The ongoing card is built from the snooze record alone,
-which does not carry the grace deadline, so threading it into the main screen and
-notification is a follow-up (tracked in `TODO.md`). Until it lands the card reads
-`Wi-Fi lost — ending soon` with no countdown. The countdown, when it lands, will
-use the same always-hours copy as the rest of the app (`0h 4m left`); the format
-lives in code and `TODO.md`, not here.
+**How it reaches the surfaces.** The deadline is live presence state, so it is
+not stored on the snooze record: the presence update carries it as a level, the
+controller holds it only while the mode is `WIFI_GRACE`, the notification asks the
+controller when it is built, and the main screen follows a process-wide
+publication of it (`GraceDeadlines`, on `DepartureObservations`' terms).
+`ActiveSnooze.countdown` picks the time: the grace deadline, or the cap when that
+is sooner. It uses the same always-hours copy as the rest of the app
+(`0h 4m left`).

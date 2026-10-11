@@ -64,6 +64,7 @@ import app.snoozemo.crash.CrashReporting
 import app.snoozemo.snooze.DebugLogStore
 import app.snoozemo.snooze.DebugLogging
 import app.snoozemo.snooze.DepartureObservations
+import app.snoozemo.snooze.GraceDeadlines
 import app.snoozemo.snooze.EndSheetSetting
 import app.snoozemo.snooze.reconcileRingerInBackground
 import app.snoozemo.snooze.SnoozeRingerSetting
@@ -445,6 +446,9 @@ class MainActivity : ComponentActivity() {
 
     /** Follows [DepartureObservations] while this screen is visible; see [departure]. */
     private var departureWatch: AutoCloseable? = null
+
+    /** Follows [GraceDeadlines] while this screen is visible; see [graceDeadline]. */
+    private var graceWatch: AutoCloseable? = null
     private var tileWatch: AutoCloseable? = null
 
     /**
@@ -521,6 +525,14 @@ class MainActivity : ComponentActivity() {
      * rather than sitting there looking live.
      */
     internal var departure by mutableStateOf<DepartureObservation?>(null)
+
+    /**
+     * The running Wi-Fi grace period's deadline the service published, in
+     * elapsed realtime, or null. Read from [GraceDeadlines] rather than the
+     * record, like [departure]: it is live presence state, asked rather than
+     * mirrored, and the status line counts down to it during grace.
+     */
+    internal var graceDeadline by mutableStateOf<Long?>(null)
 
     /**
      * The clock reading `MainScreen`'s status line computes [activeSnooze]'s
@@ -1723,7 +1735,11 @@ class MainActivity : ComponentActivity() {
                             // (principle 2). One property rather than the mode
                             // and the flag, so this cannot be half-remembered.
                             trackingMode = activeSnooze?.effectiveMode,
-                            remaining = activeSnooze?.remaining(now),
+                            // During Wi-Fi grace the grace's deadline, or a
+                            // sooner cap; otherwise the cap (see
+                            // `ActiveSnooze.countdown`). The countdown gate
+                            // below reads the same answer.
+                            remaining = activeSnooze?.let { it.countdown(now, graceDeadline) ?: it.remaining(now) },
                             // The cap end, formatted through this screen's own
                             // remembered formatter, for the plain timer-only
                             // headline ("Snoozing until 4:30 PM"). Formatted here
@@ -1744,7 +1760,7 @@ class MainActivity : ComponentActivity() {
                             // (effective end, or a shortened chosen cap even
                             // behind an exit), which `(mode, endsOnMotion)`
                             // alone cannot answer.
-                            capCountdownShown = activeSnooze?.capCountdownShown == true,
+                            capCountdownShown = activeSnooze?.countdown(now, graceDeadline) != null,
                             // Freshness decided here, against the same tick
                             // the countdown uses: a reading older than
                             // [DepartureObservation.FRESH_FOR_MS] describes
@@ -2173,6 +2189,18 @@ class MainActivity : ComponentActivity() {
                 // read it as coming from the future and withheld it — every
                 // new reading hidden for up to a minute, and the line already
                 // on screen vanishing as a newer fix replaced it.
+                now = SnoozeClock.read()
+            }
+        }
+        // The grace deadline, on the departure reading's terms: one call that
+        // delivers the current value and every later one.
+        graceWatch = GraceDeadlines.watch {
+            runOnUiThread {
+                graceDeadline = GraceDeadlines.latest()
+                // And the clock it counts against, in the same step, for the
+                // departure reading's reason: [now] ticks once a minute, so a
+                // grace that starts just before a tick would otherwise read a
+                // minute long beside the card's fresh count (Codex, PR #319).
                 now = SnoozeClock.read()
             }
         }
@@ -3222,6 +3250,8 @@ class MainActivity : ComponentActivity() {
         recordWatch = null
         departureWatch?.close()
         departureWatch = null
+        graceWatch?.close()
+        graceWatch = null
         tileWatch?.close()
         tileWatch = null
         askWhenToUnsnoozeWatch?.close()

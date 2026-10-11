@@ -653,6 +653,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // snooze armed within five minutes would open on where the last one
         // finished.
         DepartureObservations.clear()
+        GraceDeadlines.clear()
         // The snooze is over, so its periodic wake goes with it; a cancel
         // this path never reaches (cold death) costs one empty backstop
         // wake, which retires itself.
@@ -689,6 +690,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // the screen would go on showing how far away the user was when the
         // watch came down.
         DepartureObservations.clear()
+        GraceDeadlines.clear()
     }
 
     /** Restoring is attempted once per service instance, from onStartCommand. */
@@ -990,6 +992,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // release keeps the snooze alive without reaching `stopPresence`, and
         // the terminal fix would sit there reading `confirming` for the whole
         // five-minute freshness window while nothing was confirming anything.
+        //
+        // The grace deadline is *not* cleared here (Codex, PR #319): unlike the
+        // readout, it stays true across a refused release — the grace alarm is
+        // still armed and still ends the snooze — so it goes only when the
+        // watch actually stops ([stopPresence], [stopDepartureWatch]).
         DepartureObservations.clear()
         val marked = runCatching { store.markReleasing(reason) }
             .onFailure { Log.w(TAG, "Recording the release reason failed; continuing.", it) }
@@ -1006,7 +1013,8 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // way, so the readout stops either way (Codex, PR #210). This is the
         // user's own ending, which reaches here rather than there — and a
         // refused one keeps the snooze alive without reaching `stopPresence`
-        // exactly as a refused departure does.
+        // exactly as a refused departure does. The grace deadline stays, as in
+        // [onReleasing]: a refused release leaves it running.
         DepartureObservations.clear()
         // Read first, written only if there is something to retire: the
         // ordinary tile tap finds nothing and pays a map lookup, not a write
@@ -4048,6 +4056,19 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * for. Guarded on the live snooze for that repost's reason: a level
      * arriving just after an ending must not put a card back up.
      */
+    /**
+     * The Wi-Fi grace deadline, for the surfaces that count down to it.
+     *
+     * Published every time rather than on the edge, so a clear at a watch
+     * restart is put right by the next restated level even when the
+     * controller's value never moved; the publication dedups for itself. The
+     * card asks the controller when it is built, so only the edge reposts it.
+     */
+    override fun onGraceDeadline(graceDeadlineMs: Long?, changed: Boolean) {
+        GraceDeadlines.publish(graceDeadlineMs)
+        if (changed) controller.active?.let(notifications::showOngoing)
+    }
+
     override fun onAnchorWifi(atAnchorWifi: Boolean, changed: Boolean) {
         // Nothing is recorded here. The card reads the level from the
         // controller when it is built, through the same seam the foreground
@@ -4289,6 +4310,8 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // Straight through to the controller, which is the only thing that
         // knows (maintainer, 2026-09-08). Nothing caches it on the way.
         override fun atAnchorWifi(): Boolean = controller.atAnchorWifi
+
+        override fun graceDeadlineMs(): Long? = controller.graceDeadlineMs
     }
 
     /**
@@ -4445,6 +4468,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         presenceJob?.cancel()
         presenceJob = null
         presenceScope.cancel()
+        // The grace deadline was this controller's level, and nothing updates
+        // it once the collection above is gone (Codex, PR #319) — left
+        // published, the screen would count a dead instance's grace down to
+        // `0h 0m left` and hold it there. The next instance republishes it from
+        // the monitor's restored deadline on its first update.
+        GraceDeadlines.clear()
         // Unlike the geofence, this one is *not* meant to outlive the process:
         // a trigger sensor registration dies with it either way, and the flag
         // on the record is what re-arms the watch on the next restore. Closed
