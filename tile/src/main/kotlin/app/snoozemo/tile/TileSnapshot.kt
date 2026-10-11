@@ -55,6 +55,13 @@ internal data class TileSnapshot(
      * endsOnDeparture`, the lens the notification uses.
      */
     val endsOnDeparture: Boolean = true,
+    /**
+     * How far this snooze still has to go, as the ongoing card last said it —
+     * shown after `Until you leave` and nowhere else (motion has no distance,
+     * and a time or grace already names its own end). Snapshot-at-open like
+     * every other field here: the tile does not repaint on presence updates.
+     */
+    val readout: TileReadout? = null,
 ) {
 
     /** What the tile's subtitle says how this snooze ends. */
@@ -102,7 +109,7 @@ internal data class TileSnapshot(
     fun subtitle(context: Context): String? = when (subtitleKind) {
         SubtitleKind.NONE -> null
         SubtitleKind.UNTIL_TIME -> context.getString(R.string.tile_until_time, endsAtTime(context))
-        SubtitleKind.UNTIL_LEAVE -> context.getString(R.string.tile_until_leave)
+        SubtitleKind.UNTIL_LEAVE -> leaveText(context, leaveSubtitleRes)
         SubtitleKind.UNTIL_MOVE -> context.getString(R.string.tile_until_move)
         SubtitleKind.ENDING_SOON -> context.getString(R.string.tile_ending_soon)
     }
@@ -110,9 +117,30 @@ internal data class TileSnapshot(
     fun stateDescription(context: Context): String = when (subtitleKind) {
         SubtitleKind.NONE -> context.getString(R.string.tile_state_off)
         SubtitleKind.UNTIL_TIME -> context.getString(R.string.tile_state_until_time, endsAtTime(context))
-        SubtitleKind.UNTIL_LEAVE -> context.getString(R.string.tile_state_leave)
+        SubtitleKind.UNTIL_LEAVE -> leaveText(context, leaveStateRes)
         SubtitleKind.UNTIL_MOVE -> context.getString(R.string.tile_state_move)
         SubtitleKind.ENDING_SOON -> context.getString(R.string.tile_state_ending_soon)
+    }
+
+    /**
+     * Which string says `Until you leave` — with the readout after it when
+     * there is one, plain when there is not. Decided without a `Context`, like
+     * [subtitleKind], so the choice is unit-tested; [leaveStateRes] is the
+     * TalkBack sentence's twin.
+     */
+    internal val leaveSubtitleRes: Int
+        get() = if (readout != null) R.string.tile_until_leave_readout else R.string.tile_until_leave
+
+    internal val leaveStateRes: Int
+        get() = if (readout != null) R.string.tile_state_leave_readout else R.string.tile_state_leave
+
+    private fun leaveText(context: Context, res: Int): String {
+        val readout = readout ?: return context.getString(res)
+        val part = readout.distance
+            ?.takeIf { readout.kind == TileReadout.Kind.DISTANCE }
+            ?.let { context.getString(readoutRes(readout.kind), it) }
+            ?: context.getString(readoutRes(readout.kind))
+        return context.getString(res, part)
     }
 
     /**
@@ -127,6 +155,16 @@ internal data class TileSnapshot(
         DateFormat.getTimeFormat(context).format(Date(capExpiresAtMillis))
 
     companion object {
+
+        /**
+         * The words after the `·` for each readout. A distance's string takes
+         * the formatted distance (`45 m to go`); the other two are fixed.
+         */
+        internal fun readoutRes(kind: TileReadout.Kind): Int = when (kind) {
+            TileReadout.Kind.DISTANCE -> R.string.tile_readout_to_go
+            TileReadout.Kind.ON_WIFI -> R.string.tile_readout_on_wifi
+            TileReadout.Kind.LEAVING -> R.string.tile_readout_leaving
+        }
 
         /**
          * Whether the tile fronts the cap's *time* rather than naming an exit —
@@ -223,8 +261,9 @@ internal data class TileSnapshot(
             val released = prefs.getBoolean("released", false)
             val storedMode = prefs.getString("mode", null)
             val startedAt = prefs.getLong("started_at", 0L)
+            val snoozing = capExpiresAt != 0L && !released
             return TileSnapshot(
-                snoozing = capExpiresAt != 0L && !released,
+                snoozing = snoozing,
                 capExpiresAtMillis = capExpiresAt,
                 timerOnly = claimsTimerOnly(
                     stored = storedMode,
@@ -249,6 +288,8 @@ internal data class TileSnapshot(
                 // ([subtitleKind]); missing reads as `true`, the record's own
                 // default.
                 endsOnDeparture = prefs.getBoolean("ends_on_departure", true),
+                // Only read for a running snooze; matched to it by start time.
+                readout = if (snoozing) TileReadoutStore(context).read(startedAt) else null,
             )
         }
     }

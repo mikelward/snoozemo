@@ -17,6 +17,21 @@
     <string name="tile_until_time" tools:ignore="MissingTranslation">Until %1$s</string>
     <!-- TODO: translate -->
     <string name="tile_until_leave" tools:ignore="MissingTranslation">Until you leave</string>
+    <!-- A departure snooze with a live readout after its exit (maintainer,
+         2026-09-14): `Until you leave · 45 m to go`. %1$s is one of the
+         tile_readout_* strings below. -->
+    <!-- TODO: translate -->
+    <string name="tile_until_leave_readout" tools:ignore="MissingTranslation">Until you leave · %1$s</string>
+    <!-- The readouts: the distance still to go (%1$s is already formatted
+         with its unit, e.g. "45 m" or "< 5 m"); the anchor's own Wi-Fi, which
+         measures no distance; and one qualifying fix waiting on its
+         confirmation, which can still revert, hence the question mark. -->
+    <!-- TODO: translate -->
+    <string name="tile_readout_to_go" tools:ignore="MissingTranslation">%1$s to go</string>
+    <!-- TODO: translate -->
+    <string name="tile_readout_on_wifi" tools:ignore="MissingTranslation">on Wi-Fi</string>
+    <!-- TODO: translate -->
+    <string name="tile_readout_leaving" tools:ignore="MissingTranslation">leaving?</string>
     <!-- TODO: translate -->
     <string name="tile_until_move" tools:ignore="MissingTranslation">Until you move</string>
 
@@ -33,6 +48,8 @@
     <string name="tile_state_until_time" tools:ignore="MissingTranslation">Snoozing until %1$s</string>
     <!-- TODO: translate -->
     <string name="tile_state_leave" tools:ignore="MissingTranslation">Snoozing until you leave</string>
+    <!-- TODO: translate -->
+    <string name="tile_state_leave_readout" tools:ignore="MissingTranslation">Snoozing until you leave, %1$s</string>
     <!-- TODO: translate -->
     <string name="tile_state_move" tools:ignore="MissingTranslation">Snoozing until you move</string>
     <!-- TODO: translate -->

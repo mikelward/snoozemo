@@ -1954,7 +1954,7 @@ the point is that every other line of the app is worthless if it isn't true.
       §4.2 rewritten with the reason. Tile-only (`TileSnapshot`); the status line and notification are
       unchanged. Device verification still owed (Quick Settings truncates hard — the subtitle
       marquees on the maintainer's phone). New copy carries the deferral markers until translated.
-- [ ] **Tile: a live readout beside the exit — `Until you leave · 45 m to go`** (maintainer,
+- [x] **Tile: a live readout beside the exit — `Until you leave · 45 m to go`** (maintainer,
       2026-09-14; deferred from the `Until …` change above). For a departure snooze, show the
       distance-remaining the ongoing card already computes (`distanceSubText`: the meters/feet *to
       go*, or `leaving` / `on Wi-Fi` / nothing) after the exit label. Snapshot-at-open, like the rest
@@ -1964,6 +1964,11 @@ the point is that every other line of the app is worthless if it isn't true.
       so a stale one from a prior snooze is ignored) to a store the tile reads at shade-open. Motion
       has no distance/time-to-go, so `Until you move` stays bare — the one exit with no readout.
       Its own PR; verify truncation/marquee on a device for the longest string.
+      **Done:** `:app` hands the card's top-row answer to a `TileReadoutStore` in `:tile` (off
+      the arm path, stamped with the snooze's start), and the tile reads it at shade-open. The
+      Wi-Fi and confirming states read `· on Wi-Fi` and `· leaving?` (English approved by the
+      maintainer, 2026-10-11; translations still deferred). **Still owed:** the device check on
+      truncation above.
 - [x] **Tile: share the "front the time" decision with the model rather than re-deriving it**
       (Codex, PR #281; maintainer chose the shared-function option 2026-09-14). The tile's
       `claimsTimerOnly` re-derived whether to front a time from raw preference keys and drifted
