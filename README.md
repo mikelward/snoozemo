@@ -18,7 +18,7 @@ built yet — `TODO.md` Phase 1 starts it. The app currently launches to a place
 
 `:core` is a plain Kotlin JVM module — no Android SDK on its classpath, so the state
 machine stays testable without a device (`./gradlew :core:test`). `:dnd`, `:presence`, and
-`:tile` are Android libraries; `:app` holds the UI and builds the `play` distribution
+`:tile` are Android libraries; `:app` holds the UI and builds the app
 (see `SPEC.md` §3 and §11).
 
 ## Building

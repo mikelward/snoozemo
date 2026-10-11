@@ -7,10 +7,8 @@ import org.junit.Test
 /**
  * Pure logic, no Play objects — [progressForInstallStatus] and
  * [playUpdateDismissalKey] are what turns Play's raw answer into the
- * banner's state (`app.snoozemo.ui.SettingsScreen`). `play`-flavor test
- * source set (`app/src/testPlay`) since this exercises the real
- * `InstallStatus` constants, which only the `play` variant's classpath
- * carries.
+ * banner's state (`app.snoozemo.ui.SettingsScreen`). Exercises the real
+ * `InstallStatus` constants from Play's in-app update library.
  */
 class PlayUpdateStateTest {
 

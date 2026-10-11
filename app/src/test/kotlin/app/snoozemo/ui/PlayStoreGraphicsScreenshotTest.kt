@@ -155,11 +155,11 @@ class PlayStoreGraphicsScreenshotTest {
     /**
      * Nothing outside this recording variant may redefine the launcher icon.
      *
-     * These are recorded from `playDebug`, because that is the variant the
-     * screenshot job runs; what ships is `playRelease`. Today those resolve the
+     * These are recorded from `debug`, because that is the variant the
+     * screenshot job runs; what ships is `release`. Today those resolve the
      * same icon — only `src/main` declares `android:icon` and only `src/main`
-     * carries the drawables — but nothing stops a later `src/release` or
-     * `src/playRelease` from overriding either, and then the recording would
+     * carries the drawables — but nothing stops a later `src/release` from
+     * overriding either, and then the recording would
      * match the debug launcher while the store showed something else, with the
      * freshness check green throughout.
      *
@@ -181,7 +181,7 @@ class PlayStoreGraphicsScreenshotTest {
             .filter { set -> redefinesTheIcon(set) }
         assertTrue(
             "These source sets redefine the launcher icon, so what this records from " +
-                "playDebug is not what playRelease ships: $offenders. Either drop the " +
+                "debug is not what release ships: $offenders. Either drop the " +
                 "override, or record these graphics from the variant that ships.",
             offenders.isEmpty(),
         )
@@ -775,10 +775,10 @@ class PlayStoreGraphicsScreenshotTest {
         )
 
         /** The source sets that reach a shipped Play build. */
-        val SHIPPING_SOURCE_SETS = listOf("main", "play")
+        val SHIPPING_SOURCE_SETS = listOf("main")
 
-        /** Build-type source sets — the ones that can make playRelease differ from playDebug. */
-        val BUILD_TYPE_SOURCE_SETS = listOf("debug", "release", "playDebug", "playRelease")
+        /** Build-type source sets — the ones that can make release differ from debug. */
+        val BUILD_TYPE_SOURCE_SETS = listOf("debug", "release")
 
         val TAGLINE = listOf(
             "Silence your phone",

@@ -909,7 +909,7 @@ class MainActivity : ComponentActivity() {
     /**
      * What Play last told us about a waiting update, before [dismissedPlayUpdateVersionCode]
      * is applied — see [displayedPlayUpdate], which is what `SettingsScreen`'s
-     * banner (`play` flavor only) actually reads. Not persisted: reread on
+     * banner actually reads. Not persisted: reread on
      * every resume, the same as the record and the access check.
      *
      * Internal rather than private, like [setPlayUpdateAvailable] below, so

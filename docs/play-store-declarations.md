@@ -7,29 +7,29 @@ answer to give and the reason behind it. The mechanics of *getting a build up th
 declarations.
 
 Two rules govern everything below. **These answers must stay true of the shipped
-`play` manifest** (`SPEC.md` §3.4). `DeclaredPermissionsTest` covers four of them —
+manifest** (`SPEC.md` §3.4). `DeclaredPermissionsTest` covers four of them —
 `INTERNET` is present (Data safety), `AD_ID` is absent (Advertising ID), exactly
 `FOREGROUND_SERVICE_LOCATION` and exactly one service declaring
 `foregroundServiceType="location"` (foreground service types), and the background
 grant is present. Everything else here is a
 statement about the product, not something a test can hold.
 
-**The foreground-service answers below changed on 2026-09-08** (PR #230). The `play`
+**The foreground-service answers below changed on 2026-09-08** (PR #230). The
 build used to run no foreground service at all, and this guide said to expect no
 Foreground service types section. It now runs a `location` one while a snooze is
 actually watching, so that section **does** apply and owes a real answer — the rows
 and the paste-ready text below are written for the build that ships today.
 
-**What that test reads is the `playDebug` merged manifest, not `playRelease`.**
+**What that test reads is the `debug` merged manifest, not `release`.**
 Unit tests run on the debug build type alone here, so a permission arriving through
 a release-only overlay or a `releaseImplementation` dependency would not fail it.
-Neither exists today — there is no `src/release` or `src/playRelease` source set and
+Neither exists today — there is no `src/release` source set and
 no release-only dependency, and the two merged manifests carry identical permissions
 apart from the applicationId suffix on the auto-generated
 `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`. What makes that true by construction
-rather than by circumstance is the release build itself: the `play`
+rather than by circumstance is the release build itself: the
 release refuses to package a merged manifest that breaks the four lines above (the
-`verifyPlayReleaseManifest` task in `app/build.gradle.kts`, which reads the merged
+`verifyReleaseManifest` task in `app/build.gradle.kts`, which reads the merged
 manifest the artifact ships with, SDK-qualified and `maxSdkVersion`-capped
 declarations included), and CI proves the refusal against fixture manifests on every
 pull request. So the declarations below can be filed from the manifest the release
@@ -49,8 +49,8 @@ Three things gate the rest, in this order:
    declaration all take a URL, and Play checks that it resolves. The recorded URL is
    `https://mikelward.github.io/snoozemo/PRIVACY.html`.
 2. **Re-verify `docs/PRIVACY.md` against the shipped build** (`TODO.md`). The
-   permissions it names are all declared now — location and the Wi-Fi read in the main
-   manifest, background location in `play`'s — so the manifest half is done. What is
+   permissions it names are all declared now — location, the Wi-Fi read and background
+   location in the app manifest — so the manifest half is done. What is
    still ahead of the build is *behavior*: it describes v1 as specified, including the
    departure detection that ends a snooze when you leave. That is built and wired now,
    though it has never run on a handset — so the policy is ahead of what anyone has
@@ -99,7 +99,7 @@ Answers, and why each one is what it is.
 | **Financial features** | None | |
 | **Health apps** | No | Not a health app; DND is not a health feature. |
 | **Advertising ID** | Not used | Firebase Analytics merges `AD_ID`, so the `play` manifest removes it (`tools:node="remove"`) and switches `google_analytics_adid_collection_enabled` off. Analytics then reports against the per-install app-instance ID, which cannot be joined to activity in other apps. `DeclaredPermissionsTest` fails if `AD_ID` reappears. |
-| **Foreground service types** | **Location** — one service, `app.snoozemo.snooze.SnoozeService` | Declared since 2026-09-08 (`SPEC.md` D2, §3.4). Held only while a snooze is actually watching for a departure; a duration-only snooze starts none. See the paste-ready justification below. `verifyPlayReleaseManifest` fails the release if a second type appears, or if this one goes missing. |
+| **Foreground service types** | **Location** — one service, `app.snoozemo.snooze.SnoozeService` | Declared since 2026-09-08 (`SPEC.md` D2, §3.4). Held only while a snooze is actually watching for a departure; a duration-only snooze starts none. See the paste-ready justification below. `verifyReleaseManifest` fails the release if a second type appears, or if this one goes missing. |
 
 ### Settled: the Foreground service types section applies, and what it says
 
@@ -107,7 +107,7 @@ Answers, and why each one is what it is.
 because the question it asked was the right one and the answer moved.
 
 It used to read *open*: WorkManager merges `android.permission.FOREGROUND_SERVICE`
-and `WAKE_LOCK` into the `play` release manifest, Snoozemo's own manifests requested
+and `WAKE_LOCK` into the release manifest, Snoozemo's own manifests requested
 neither, no service declared a type — and the open question was whether a Foreground
 service types section would appear in the Console anyway, on the strength of a
 permission that grants nothing without a type. The instruction was to look before
@@ -127,7 +127,7 @@ still arrive from WorkManager rather than from Snoozemo's manifests, and
 described here and enforced nowhere.
 
 **Still a human's job before upload:** the justification text, the video, and
-confirming the Console renders the section as this guide expects. `verifyPlayReleaseManifest`
+confirming the Console renders the section as this guide expects. `verifyReleaseManifest`
 guarantees what the release *ships*; it cannot fill in a form.
 
 ### Data safety, in detail
@@ -246,7 +246,7 @@ the other.
 `DeclaredPermissionsTest`'s `AD_ID` assertion failed the moment Firebase Analytics
 arrived, which is exactly what it was written to do. The decision was to keep the
 Advertising ID answer at **no** and remove the permission rather than let the SDK merge it
-in — the `play` manifest carries `tools:node="remove"` for `AD_ID` and switches
+in — the app manifest carries `tools:node="remove"` for `AD_ID` and switches
 `google_analytics_adid_collection_enabled` off. What that costs is the ads-adjacent
 surface: audience export to Google Ads, and the demographics inferred from the advertising
 ID. Snoozemo has no use for either. What it keeps is a per-install identifier that cannot
@@ -272,7 +272,7 @@ Snoozemo's, and the runtime snooze record is excluded from it by
 **Updating the Console form is a maintainer action.** Nothing in the repo can do it,
 and a build that ships crash reporting and analytics under the old "no data collected"
 answer is a policy violation rather than a stale doc — so this is the one item here that has to
-be done before the next `play` upload, not alongside it.
+be done before the next upload, not alongside it.
 
 ## The background location permissions declaration
 

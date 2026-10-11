@@ -66,9 +66,9 @@ def run_case(name, *, release_exists, asset_state, commits=7, latest_code=0):
         gh.chmod(0o755)
 
         tree = work / "tree"
-        bundle = tree / "app/build/outputs/bundle/playRelease"
+        bundle = tree / "app/build/outputs/bundle/release"
         bundle.mkdir(parents=True)
-        aab = bundle / "app-play-release.aab"
+        aab = bundle / "app-release.aab"
         aab.write_bytes(b"not really a bundle")
 
         git = ["git", "-c", "user.email=t@example.com", "-c", "user.name=T"]

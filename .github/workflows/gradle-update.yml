@@ -67,4 +67,4 @@ jobs:
       regenerate: |
         ./gradlew :app:exportBundledLicenses --rerun
       regenerated-files: |
-        app/src/play/res/raw/aboutlibraries.json
+        app/src/main/res/raw/aboutlibraries.json

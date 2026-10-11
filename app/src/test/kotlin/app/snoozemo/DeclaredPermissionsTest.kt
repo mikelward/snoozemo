@@ -99,7 +99,7 @@ class DeclaredPermissionsTest {
     @Test
     fun `the build carries the restricted background grant`() {
         val restricted = Manifest.permission.ACCESS_BACKGROUND_LOCATION in declared
-        assertTrue("play is the Geofencing build and needs the grant", restricted)
+        assertTrue("the Geofencing build and needs the grant", restricted)
     }
 
     @Test
@@ -115,14 +115,14 @@ class DeclaredPermissionsTest {
         )
 
         val typed = Manifest.permission.FOREGROUND_SERVICE_LOCATION in declared
-        assertTrue("play keeps the presence watch's process alive", typed)
+        assertTrue("the app keeps the presence watch's process alive", typed)
     }
 
     @Test
     fun `the build can reach the network`() {
         val network = Manifest.permission.INTERNET in declared
         assertTrue(
-            "play declares INTERNET for crash reporting and analytics (SPEC.md §12)",
+            "the app declares INTERNET for crash reporting and analytics (SPEC.md §12)",
             network,
         )
     }
@@ -184,7 +184,7 @@ class DeclaredPermissionsTest {
             it.startsWith("android.permission.FOREGROUND_SERVICE_")
         }
         assertEquals(
-            "play declares the location type and no other",
+            "the app declares the location type and no other",
             listOf(Manifest.permission.FOREGROUND_SERVICE_LOCATION),
             typed,
         )

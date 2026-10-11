@@ -161,15 +161,15 @@ tasks.configureEach {
 // The other Phase 6 guard: a release build refuses on a merged manifest the
 // Play declarations do not rest on (TODO.md, Phase 6; Codex, PR #102).
 // `DeclaredPermissionsTest` pins the same facts, but unit tests run on the
-// debug build type alone, so what it reads is `playDebug` — and a release
+// debug build type alone, so what it reads is `debug` — and a release
 // source set, a `releaseImplementation`, or a library's manifest merged only
 // into release would differ from it without any test noticing. This reads the
 // artifact the release actually ships, `SingleArtifact.MERGED_MANIFEST`, and is
 // wired ahead of the tasks that package it: the APK's `package<Variant>`, the
 // AAB's `package<Variant>Bundle`, and both lifecycle names, so `assembleRelease`
-// on a pull request and `bundlePlayRelease` on `main` are covered alike.
+// on a pull request and `bundleRelease` on `main` are covered alike.
 //
-// What it refuses is what the tests assert. The `play` build may carry no
+// What it refuses is what the tests assert. The release may carry no
 // ad identifier, no typed foreground-service permission beyond the one it needs
 // and no unexpected `foregroundServiceType` (SPEC.md §3.3 — the type is what
 // Play reviews), and must carry the background-location grant Geofencing needs
@@ -190,17 +190,17 @@ abstract class CheckReleaseManifest : DefaultTask() {
 
     /**
      * Names exempted from [forbiddenPermissionPrefixes] — the prefix rule with
-     * a hole in it, so a flavor can hold exactly one member of a family it
+     * a hole in it, so the build can hold exactly one member of a family it
      * otherwise refuses.
      */
     @get:Input
     abstract val permissionPrefixExemptions: ListProperty<String>
 
     /**
-     * True where any `foregroundServiceType` is fine. False for the `play`
-     * build, which declares exactly the one typed service named below; kept as a
-     * knob on the generic task rather than inlined, since the flavor-concept
-     * removal (TODO.md) is what finally simplifies this guard.
+     * True where any `foregroundServiceType` is fine. False for the release,
+     * which declares exactly the one typed service named below.
+     * [requiredForegroundServiceTypes] is the half that carries the rule;
+     * this flag only says whether it applies.
      */
     @get:Input
     abstract val allowForegroundServiceType: Property<Boolean>
@@ -301,7 +301,7 @@ val foregroundServicePermission = "android.permission.FOREGROUND_SERVICE"
 val typedForegroundServicePrefix = "android.permission.FOREGROUND_SERVICE_"
 
 /**
- * One flavor's manifest policy, declared once and applied to both the real
+ * The release manifest policy, declared once and applied to both the real
  * release check and its proof: a proof that carried its own copy of the rules
  * would stay green while the variant's copy was weakened (Codex, PR #189).
  */
@@ -314,7 +314,7 @@ class ReleaseManifestRules(
     val requiredForegroundServiceTypes: Map<String, String>,
 )
 
-// The `play` build: nothing Play would review beyond the three grants its
+// The release: nothing Play would review beyond the three grants its
 // declarations rest on (SPEC.md §3.3, §12).
 //
 // **The foreground-service half was reversed on 2026-09-08** (maintainer). It
@@ -337,7 +337,7 @@ class ReleaseManifestRules(
 // WorkManager merges it in today, but "a dependency happens to supply it" is
 // not the same claim as "the release ships it".
 val locationForegroundServicePermission = "android.permission.FOREGROUND_SERVICE_LOCATION"
-val playManifestRules = ReleaseManifestRules(
+val releaseManifestRules = ReleaseManifestRules(
     forbidden = listOf(adIdPermission),
     forbiddenPrefixes = listOf(typedForegroundServicePrefix),
     prefixExemptions = listOf(locationForegroundServicePermission),
@@ -365,8 +365,7 @@ androidComponents {
         val check = tasks.register<CheckReleaseManifest>("verify${variantName}Manifest") {
             description = "Fails a $variantName build whose merged manifest carries what the Play declarations refuse."
             manifest.set(variant.artifacts.get(com.android.build.api.artifact.SingleArtifact.MERGED_MANIFEST))
-            // `play` is the only flavor now, so every release variant takes its rules.
-            applyRules(playManifestRules)
+            applyRules(releaseManifestRules)
         }
         tasks.configureEach {
             if (name == "package$variantName" || name == "package${variantName}Bundle" ||
@@ -380,13 +379,13 @@ androidComponents {
 
 // The negative half CI proves (`Verify the release manifest guard` in
 // ci.yml), the way the version guard is proved against a faked shallow clone:
-// the same task class under the `play` rules, pointed at a fixture manifest that
+// the same task class under the release rules, pointed at a fixture manifest that
 // carries everything those rules refuse. A guard nothing has ever seen fail is a
 // guard nobody can tell from a no-op.
-tasks.register<CheckReleaseManifest>("verifyPlayReleaseManifestProof") {
-    description = "Runs the play release manifest rules against a fixture that must fail them."
-    manifest.set(layout.projectDirectory.file("src/test/fixtures/release-manifest-refused-play.xml"))
-    applyRules(playManifestRules)
+tasks.register<CheckReleaseManifest>("verifyReleaseManifestProof") {
+    description = "Runs the release manifest rules against a fixture that must fail them."
+    manifest.set(layout.projectDirectory.file("src/test/fixtures/release-manifest-refused.xml"))
+    applyRules(releaseManifestRules)
 }
 
 android {
@@ -447,21 +446,10 @@ android {
         }
     }
 
-    // The shipping build (SPEC.md §3.4): `play` carries ACCESS_BACKGROUND_LOCATION
-    // and the Geofencing API and is the only distribution channel. It is still a
-    // product flavor rather than the bare default variant — collapsing the flavor
-    // dimension away so tasks read plain `assembleRelease` is tracked as its own
-    // follow-up (TODO.md), because it means moving `src/play` into `src/main` and
-    // merging manifests across `:app` and `:presence`. The `direct` sideload/F-Droid
-    // flavor it used to sit beside was retired once `play` was Play-approved
-    // (2026-09-12); SPEC.md §3 records why.
-    flavorDimensions += "distribution"
-    productFlavors {
-        create("play") {
-            dimension = "distribution"
-            isDefault = true
-        }
-    }
+    // No product flavors: one build, distributed through Play (SPEC.md §3).
+    // The `direct` sideload/F-Droid flavor was retired once Play approved the
+    // background-location build (2026-09-12), and the `play` flavor it left
+    // behind was then folded into `main` so tasks read plain `assembleRelease`.
 
     buildTypes {
         debug {
@@ -517,7 +505,7 @@ android {
 
     buildFeatures {
         compose = true
-        // Only for PLAY_UPDATE_CHECKS_ENABLED below — the `play` flavor's own
+        // Only for PLAY_UPDATE_CHECKS_ENABLED above — the release build's
         // update-check gate, mirroring the sibling Simmo repo.
         buildConfig = true
     }
@@ -567,17 +555,17 @@ kotlin {
 // `./gradlew :app:exportBundledLicenses`; CI reruns it and fails on drift. The
 // Licenses page reads the committed R.raw.aboutlibraries at runtime.
 //
-// The committed export names exactly what the `play` APK bundles — Play's in-app
+// The committed export names exactly what the release APK bundles — Play's in-app
 // update library and the Play Services stack under it. The plugin collects the
 // release variant into a build-directory scratch file, and the task below writes
 // the filtered resource from it.
 aboutLibraries {
     collect {
-        // The `play` release variant's runtime classpath. Scoping to release
+        // The release variant's runtime classpath. Scoping to release
         // keeps test/debug-only artifacts (JUnit, Robolectric, Roborazzi,
         // Compose tooling) out; includePlatform = false drops BOM/platform
         // POMs that ship no runtime artifact.
-        filterVariants.addAll("playRelease")
+        filterVariants.addAll("release")
         includePlatform = false
     }
     export {
@@ -595,21 +583,19 @@ aboutLibraries {
 // that resolve to no bundled artifact: KMP metadata coordinates (e.g.
 // androidx.compose.ui:ui, which selects ...:ui-android) and the
 // org.jetbrains.compose redirect modules that alias to the androidx artifacts on
-// Android. Both would render as duplicate rows. Intersecting against the `play`
+// Android. Both would render as duplicate rows. Intersecting against the
 // release runtime classpath drops them -- what's left is exactly what the APK
 // bundles.
 @Suppress("UNCHECKED_CAST")
 tasks.register("exportBundledLicenses") {
-    description = "Exports open-source attributions filtered to the play APK's bundled artifacts."
+    description = "Exports open-source attributions filtered to the release APK's bundled artifacts."
     group = "build"
     dependsOn("exportLibraryDefinitions")
     val scratchFile = layout.buildDirectory.file("aboutlibraries/all-variants.json")
-    val runtimeClasspaths = mapOf(
-        "play" to configurations.named("playReleaseRuntimeClasspath"),
-    )
-    val outputFiles = runtimeClasspaths.keys.associateWith { file("src/$it/res/raw/aboutlibraries.json") }
+    val runtimeClasspath = configurations.named("releaseRuntimeClasspath")
+    val outputFile = file("src/main/res/raw/aboutlibraries.json")
     doLast {
-        runtimeClasspaths.forEach { (flavor, classpath) ->
+        runtimeClasspath.let { classpath ->
             val bundled = classpath.get().incoming
                 .artifactView { lenient(true) }.artifacts.artifacts
                 .mapNotNull { it.id.componentIdentifier as? org.gradle.api.artifacts.component.ModuleComponentIdentifier }
@@ -622,7 +608,7 @@ tasks.register("exportBundledLicenses") {
             // Prune any license no longer referenced by a kept library.
             val used = kept.flatMap { (it["licenses"] as? List<String>).orEmpty() }.toSet()
             (root["licenses"] as? MutableMap<String, Any?>)?.keys?.retainAll(used)
-            val out = outputFiles.getValue(flavor)
+            val out = outputFile
             out.parentFile.mkdirs()
             out.writeText(groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(root)) + "\n")
         }
@@ -653,7 +639,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
     // Not used directly — pins the transitive `androidx.fragment` version the
-    // `registerForActivityResult` API family needs (1.3.0+; the `play` flavor's
+    // `registerForActivityResult` API family needs (1.3.0+; the
     // Play Services stack alone pulls a pre-1.3 `fragment` that fails Android
     // Lint's `InvalidFragmentVersionForActivityResult` check across every
     // `registerForActivityResult` call in the app, not only the new one this
@@ -666,18 +652,15 @@ dependencies {
     // The §6.10 periodic backstop: a deferrable, batched wake per half hour
     // while armed — the cheap kind of periodic (SPEC.md §9).
     implementation(libs.androidx.work.runtime)
-    // The update banner (Play's in-app update flow). Still `playImplementation`
-    // rather than plain `implementation` because `play` remains a flavor until
-    // the flavor concept is removed (TODO.md) — and `play` is now the only
-    // flavor, so it reaches every variant.
-    "playImplementation"(libs.play.app.update)
+    // The update banner (Play's in-app update flow).
+    implementation(libs.play.app.update)
     // Crash reporting (SPEC.md §12). Present in every build so the wiring
     // compiles, but inert unless the build had a google-services.json: with no
     // FirebaseApp initialized the gate reports unavailable and nothing is ever
-    // collected. `playImplementation` for the same reason as the line above.
-    "playImplementation"(platform(libs.firebase.bom))
-    "playImplementation"(libs.firebase.analytics)
-    "playImplementation"(libs.firebase.crashlytics)
+    // collected.
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.analytics)
+    implementation(libs.firebase.crashlytics)
     // Reads the committed res/raw/aboutlibraries.json for the Licenses page.
     // Only `rememberLibraries` and the `Libs`/`Library` model are used -- the
     // artifact's own list UI is not.
@@ -692,7 +675,7 @@ dependencies {
     testImplementation(libs.robolectric)
     testImplementation(libs.roborazzi)
     // Debug-only, and safe only because unit tests exist for the debug build
-    // type alone here — `./gradlew :app:tasks` lists `testPlayDebugUnitTest`
+    // type alone here — `./gradlew :app:tasks` lists `testDebugUnitTest`
     // and nothing else. This dependency is what
     // declares the activity `createAndroidComposeRule` launches, so setting
     // `testBuildType` to anything else, or turning release unit tests back on,

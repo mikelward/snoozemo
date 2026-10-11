@@ -16,7 +16,7 @@ change to the store's front door is reviewable in a PR.
 ## Regenerating
 
 ```sh
-./gradlew :app:testPlayDebugUnitTest \
+./gradlew :app:testDebugUnitTest \
   --tests "app.snoozemo.ui.PlayStoreGraphicsScreenshotTest" -Proborazzi.test.record=true
 ```
 
