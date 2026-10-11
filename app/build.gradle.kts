@@ -637,6 +637,10 @@ dependencies {
     // from its published Maven repository and pinned in
     // gradle/libs.versions.toml.
     implementation(libs.androidlog.logging.android)
+    // The shared text size: the range, the pinch and the Compose state that
+    // apply it. mikelward/androidzoom, resolved the same way; the store and the
+    // Settings rows stay here, because each app keeps its settings its own way.
+    implementation(libs.androidzoom.compose)
     implementation(project(":dnd"))
     implementation(project(":presence"))
     implementation(project(":tile"))

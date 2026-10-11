@@ -5,9 +5,9 @@ import androidx.annotation.VisibleForTesting
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import app.snoozemo.core.DEFAULT_FONT_SCALE
-import app.snoozemo.core.FontSizeSettings
-import app.snoozemo.core.clampFontScale
+import com.mikelward.androidzoom.DEFAULT_FONT_SCALE
+import com.mikelward.androidzoom.FontSizeSettings
+import com.mikelward.androidzoom.clampFontScale
 import app.snoozemo.storage.SerializedPreferences
 import java.util.concurrent.Executors
 

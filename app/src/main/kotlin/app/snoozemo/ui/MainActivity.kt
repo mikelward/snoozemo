@@ -93,6 +93,8 @@ import app.snoozemo.tile.SnoozeTileService
 import app.snoozemo.tile.TilePresenceStore
 import app.snoozemo.dnd.R as DndR
 import app.snoozemo.tile.R as TileR
+import com.mikelward.androidzoom.compose.FontSizeWindow
+import com.mikelward.androidzoom.compose.pinchFontSizeHost
 
 private const val TAG = "MainActivity"
 
@@ -1593,7 +1595,7 @@ class MainActivity : ComponentActivity() {
             // Settings slider and the pinch move one value (`SPEC.md` §4.8):
             // the theme sizes the app from this, and the settings screen shows
             // and changes the same handle.
-            val fontSize = rememberFontSizeState()
+            val fontSize = rememberAppFontSizeState()
             SnoozemoTheme(fontSize) {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     when (screen) {

@@ -17,7 +17,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import app.snoozemo.PlayUpdateState
 import app.snoozemo.UpdateProgress
-import app.snoozemo.core.FontSizeSettings
+import com.mikelward.androidzoom.FontSizeSettings
 import app.snoozemo.core.SnoozeRinger
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Assert.assertEquals
@@ -28,6 +28,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import com.mikelward.androidzoom.compose.FontSizeState
 
 /**
  * A representative `BuildConfig.VERSION_NAME`, same shape as the real
@@ -1088,7 +1089,7 @@ class SettingsScreenScreenshotTest {
     ) {
         composeRule.setContent {
             val fontSize = if (fontScale == null) {
-                rememberFontSizeState()
+                rememberAppFontSizeState()
             } else {
                 remember(fontScale) {
                     FontSizeState(

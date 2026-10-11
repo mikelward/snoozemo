@@ -10,7 +10,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
-import app.snoozemo.core.FontSizeSettings
+import com.mikelward.androidzoom.FontSizeSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -18,9 +18,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import com.mikelward.androidzoom.compose.FontSizeState
 
 /**
- * The same pinch as `PinchFontSizeTest`, but through the real
+ * The same pinch as mikelward/androidzoom's `PinchFontSizeTest`, but through the real
  * [SnoozemoTheme] — where every preview changes the `LocalDensity` the gesture
  * itself is hosted under (Codex, PR #217).
  *
@@ -31,7 +32,7 @@ import org.robolectric.annotation.Config
  * would keep moving, nothing more would follow them, and the release would
  * never persist anything.
  *
- * 420dpi makes the 24dp slop 63px, as in the sibling test.
+ * 420dpi makes the 24dp slop 63px, as in the library's test.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], qualifiers = "w411dp-h914dp-420dpi")
@@ -46,7 +47,7 @@ class ThemePinchFontSizeTest {
     private val drawnAt = mutableListOf<Float>()
 
     private fun setContent() {
-        // Built here rather than through `rememberFontSizeState`, so the
+        // Built here rather than through `rememberAppFontSizeState`, so the
         // settled size is captured without the real store being written to.
         fontSize = FontSizeState(
             initial = FontSizeSettings(),

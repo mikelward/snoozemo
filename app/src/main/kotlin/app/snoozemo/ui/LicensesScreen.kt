@@ -38,6 +38,8 @@ import app.snoozemo.core.SnoozeDebugLog
 import com.mikepenz.aboutlibraries.Libs
 import com.mikepenz.aboutlibraries.entity.Library
 import com.mikepenz.aboutlibraries.ui.compose.android.rememberLibraries
+import com.mikelward.androidzoom.compose.FontSizeWindow
+import com.mikelward.androidzoom.compose.pinchFontSizeHost
 
 /**
  * Open-source attribution, reached from the Settings foot: every third-party

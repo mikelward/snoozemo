@@ -50,6 +50,7 @@ jobs:
       # at whatever it was pinned to, silently, with no failing run to say so.
       extra-repositories: |
         https://raw.githubusercontent.com/mikelward/androidlog/maven
+        https://raw.githubusercontent.com/mikelward/androidzoom/maven
       # Both coordinates, because they share one `androidlog` version key and
       # the input exempts a key only when every coordinate it pins is named.
       # The cooldown exists to let a bad third-party release be yanked before
@@ -58,6 +59,7 @@ jobs:
       no-cooldown-for: |
         com.mikelward.androidlog:logging-core
         com.mikelward.androidlog:logging-android
+        com.mikelward.androidzoom:zoom-compose
       # The license inventory is derived from the dependency set, so the
       # batch rebuilds it and commits it alongside the catalog — without
       # this, ci.yml's drift check turns every benign bump into a manual

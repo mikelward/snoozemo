@@ -1,7 +1,7 @@
 ---
 trigger: always_on
 alwaysApply: true
-last_modified: 2026-10-06
+last_modified: 2026-10-11
 ---
 
 # Snoozemo
@@ -697,12 +697,13 @@ takes the `TODO` comment, the only record that its locales are stale. Escape apo
 - **`:core` also has a sandbox-friendly inner build**: `cd core && ../gradlew test` runs it
   through `core/settings.gradle.kts`, which needs no `google()` — an offramp for when the
   outer build's AGP plugin markers can't resolve.
-- **`mikelward/androidlog` is a published coordinate**, pinned in `gradle/libs.versions.toml`
-  and bumped by the weekly `gradle-update` batch. Don't make it a composite build again:
+- **`mikelward/androidlog` and `mikelward/androidzoom` (text size) are published
+  coordinates**, pinned in `gradle/libs.versions.toml` and bumped by the weekly
+  `gradle-update` batch. Don't make either a composite build again:
   that puts two AGP versions in one Gradle invocation and fails configuration outright. To
-  work on the library and this app together, `-PandroidlogLocal` includes a checkout at
-  `.androidlog/` or a sibling `../androidlog`; drop the property to go back to the
-  published version. Both settings files carry the rest.
+  work on a library and this app together, `-PandroidlogLocal` / `-PandroidzoomLocal`
+  includes a checkout at `.<name>/` or a sibling `../<name>`; drop the property to go back
+  to the published version. The settings files carry the rest.
 - **No emulator practicality**: KVM is unavailable in the remote environments. Beyond
   speed, an emulator cannot answer this app's real questions anyway — whether
   `setAutomaticZenRuleState` actually silences the device, what a geofence's exit latency

@@ -2421,6 +2421,11 @@ on the setting — per field, since the size and the pinch switch can be saved i
 only one of them fail — rather than letting either springing back read as a missed tap (principle
 2).
 
+The range, the default, the pinch and the way a popup window re-establishes the size are shared
+with the sibling apps through `mikelward/androidzoom` (maintainer, 2026-10-11), because the
+hand-kept copies had drifted apart. Where the size is stored, how a refused save is reported, and
+how the Settings rows are worded stay Snoozemo's own.
+
 ---
 
 ## 5. Do Not Disturb mechanism
