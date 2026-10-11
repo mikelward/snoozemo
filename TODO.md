@@ -4425,6 +4425,14 @@ question.
 
 ## Deferred
 
+- [ ] **A retake lost to process death goes unannounced** (Codex, PR #318). `Until I
+  leave` over a running snooze retakes the place in an up-to-ten-second capture; if
+  the process dies inside it, the restore resumes the old place and its watch with
+  no warning, though the tap reported success. Rare — it needs a death in that
+  window, with the foreground service held — and it errs toward ending (D7). Closing
+  it means persisting a "retake pending" marker on the record and, on restore,
+  retrying the capture or posting the "couldn't find where you are" card.
+
 - [ ] **Decide the countdown format** (maintainer, 2026-09-13). Still open, and
   independent of how much detail the tile shows. What ships now is a labeled,
   minute-granularity form with the hours always present (`0h 50m left`, never a
