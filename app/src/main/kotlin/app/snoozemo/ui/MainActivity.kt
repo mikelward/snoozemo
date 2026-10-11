@@ -65,6 +65,7 @@ import app.snoozemo.snooze.DebugLogStore
 import app.snoozemo.snooze.DebugLogging
 import app.snoozemo.snooze.DepartureObservations
 import app.snoozemo.snooze.GraceDeadlines
+import app.snoozemo.snooze.UnprotectedWatches
 import app.snoozemo.snooze.EndSheetSetting
 import app.snoozemo.snooze.reconcileRingerInBackground
 import app.snoozemo.snooze.SnoozeRingerSetting
@@ -449,6 +450,9 @@ class MainActivity : ComponentActivity() {
 
     /** Follows [GraceDeadlines] while this screen is visible; see [graceDeadline]. */
     private var graceWatch: AutoCloseable? = null
+
+    /** Follows [UnprotectedWatches] while this screen is visible; see [watchUnprotected]. */
+    private var protectionWatch: AutoCloseable? = null
     private var tileWatch: AutoCloseable? = null
 
     /**
@@ -533,6 +537,14 @@ class MainActivity : ComponentActivity() {
      * mirrored, and the status line counts down to it during grace.
      */
     internal var graceDeadline by mutableStateOf<Long?>(null)
+
+    /**
+     * Whether the running service's watch is unprotected — its foreground
+     * service refused — as the service published it to [UnprotectedWatches].
+     * Asked rather than mirrored onto the record, like [graceDeadline]; the
+     * status line then says `tracking may pause` where the card does.
+     */
+    internal var watchUnprotected by mutableStateOf(false)
 
     /**
      * The clock reading `MainScreen`'s status line computes [activeSnooze]'s
@@ -1761,6 +1773,10 @@ class MainActivity : ComponentActivity() {
                             // behind an exit), which `(mode, endsOnMotion)`
                             // alone cannot answer.
                             capCountdownShown = activeSnooze?.countdown(now, graceDeadline) != null,
+                            // The card's own predicate on the card's own
+                            // reading, so the two cannot disagree about when
+                            // `tracking may pause` applies.
+                            watchUnprotected = watchUnprotected && activeSnooze?.watchProtectionMatters == true,
                             // Freshness decided here, against the same tick
                             // the countdown uses: a reading older than
                             // [DepartureObservation.FRESH_FOR_MS] describes
@@ -2203,6 +2219,10 @@ class MainActivity : ComponentActivity() {
                 // minute long beside the card's fresh count (Codex, PR #319).
                 now = SnoozeClock.read()
             }
+        }
+        // The protection warning, on the same terms.
+        protectionWatch = UnprotectedWatches.watch {
+            runOnUiThread { watchUnprotected = UnprotectedWatches.latest() }
         }
         // Followed rather than read once. The tile service writes this when the
         // tile is added or removed from the shade, and the add-request's answer
@@ -3256,6 +3276,8 @@ class MainActivity : ComponentActivity() {
         departureWatch = null
         graceWatch?.close()
         graceWatch = null
+        protectionWatch?.close()
+        protectionWatch = null
         tileWatch?.close()
         tileWatch = null
         askWhenToUnsnoozeWatch?.close()

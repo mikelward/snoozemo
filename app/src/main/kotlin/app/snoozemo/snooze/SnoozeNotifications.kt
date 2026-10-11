@@ -678,10 +678,9 @@ class SnoozeNotifications(private val context: Context) {
         // has to agree with it — suppressing the warning there meant a refused
         // promotion went unsaid on the one snooze whose route home depends on
         // surviving long enough to capture (Codex, PR #267).
-        val protectionMatters =
-            snooze.effectiveMode != TrackingMode.DURATION_ONLY ||
-                snooze.endsOnMotion ||
-                snooze.mode.isSettling
+        // The predicate lives on the record (`watchProtectionMatters`) so the
+        // main screen asks the same question.
+        val protectionMatters = snooze.watchProtectionMatters
         val withProtection = if (unprotected && protectionMatters) {
             context.getString(
                 R.string.ongoing_degraded_reason,

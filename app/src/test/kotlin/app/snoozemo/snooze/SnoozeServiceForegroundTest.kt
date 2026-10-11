@@ -57,6 +57,7 @@ class SnoozeServiceForegroundTest {
         TestSnoozeService.reset(now)
         TestSnoozeService.zen.outcome = ZenOutcome.Applied("a-zen-rule-id")
         ActiveSnoozeStore(appContext).clear()
+        UnprotectedWatches.clear()
     }
 
     /** Arms and completes capture on one instance, so the watch is running. */
@@ -250,6 +251,55 @@ class SnoozeServiceForegroundTest {
             "nothing is being watched for, so nothing holds the process",
             shadowOf(controller.get()).lastForegroundNotification,
         )
+    }
+
+    @Test
+    fun `a refused foreground service is published for the main screen`() {
+        // The screen cannot reach this instance, so the card's reading is
+        // published for it (TODO.md, deferred from PR #262).
+        TestSnoozeService.refuseForeground = true
+
+        armWith(watchable)
+
+        assertTrue(UnprotectedWatches.latest())
+    }
+
+    @Test
+    fun `ending withdraws the protection warning`() {
+        TestSnoozeService.refuseForeground = true
+        val controller = armWith(watchable)
+        assertTrue(UnprotectedWatches.latest())
+
+        controller
+            .withIntent(
+                Intent(appContext, TestSnoozeService::class.java)
+                    .setAction(SnoozeService.ACTION_END),
+            )
+            .startCommand(0, 2)
+        shadowOf(getMainLooper()).idle()
+
+        assertFalse(UnprotectedWatches.latest())
+    }
+
+    @Test
+    fun `a destroyed service withdraws the protection warning`() {
+        // Nothing on a destroyed instance can retract it, so the screen would
+        // otherwise warn about a watch no service is running any more.
+        TestSnoozeService.refuseForeground = true
+        val controller = armWith(watchable)
+        assertTrue(UnprotectedWatches.latest())
+
+        controller.destroy()
+
+        assertFalse(UnprotectedWatches.latest())
+        assertNotNull("the snooze outlives its service", ActiveSnoozeStore(appContext).load())
+    }
+
+    @Test
+    fun `a held watch publishes no warning`() {
+        armWith(watchable)
+
+        assertFalse(UnprotectedWatches.latest())
     }
 
     @Test

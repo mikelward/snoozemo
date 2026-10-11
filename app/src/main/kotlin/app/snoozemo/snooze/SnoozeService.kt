@@ -4224,10 +4224,20 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     private fun noteForegroundOutcome(refused: Boolean) {
         if (refused == foregroundRefused) return
         foregroundRefused = refused
+        publishProtection()
         foregroundStateHandler.post {
             controller.active?.let(notifications::showOngoing)
         }
     }
+
+    /**
+     * Tells the main screen what the card is told (`watchIsUnprotected`), at
+     * each place the answer can change: [foregroundRefused] flipping, and the
+     * foreground service being given back. `foregroundHeld` changing alone
+     * never flips it — a refusal never clears it, and the release that does
+     * clears [foregroundRefused] too.
+     */
+    private fun publishProtection() = UnprotectedWatches.publish(foregroundHost.watchIsUnprotected())
 
     /**
      * Ties the ongoing card to a foreground service while something is
@@ -4345,6 +4355,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // is where a stale flag would otherwise survive into the next snooze's
         // first card.
         foregroundRefused = false
+        publishProtection()
         if (!foregroundHeld) return
         // Cleared only once the platform has actually taken it back (Codex,
         // PR #230). Clearing it first read as tidier and was wrong in the one
@@ -4474,6 +4485,10 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // `0h 0m left` and hold it there. The next instance republishes it from
         // the monitor's restored deadline on its first update.
         GraceDeadlines.clear()
+        // And the protection warning, for the same reason: nothing on this
+        // instance can retract it once it is gone. A replacement starts
+        // unrefused and publishes again if its own promotion is refused.
+        UnprotectedWatches.clear()
         // Unlike the geofence, this one is *not* meant to outlive the process:
         // a trigger sensor registration dies with it either way, and the flag
         // on the record is what re-arms the watch on the next restore. Closed
