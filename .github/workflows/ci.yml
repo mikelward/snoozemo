@@ -223,6 +223,11 @@ jobs:
         # would stay green if the loop stopped calling it.
         run: python3 scripts/release_notes_dedup_test.py
 
+      - name: Test the screenshot allow-list check
+        # Pins the check the screenshot job runs before Gradle, including
+        # that it passes on this repository's own workflow.
+        run: python3 scripts/check_screenshot_steps_test.py
+
       - name: Check the core module stays free of Android
         # :core is a plain Kotlin JVM module on purpose (SPEC.md §11) — the state
         # machine must stay testable with no Android SDK and no Robolectric.
@@ -512,6 +517,32 @@ jobs:
           # above), but false anyway — nothing here should assume otherwise
           # just because the checkout step's default happens to agree today.
           persist-credentials: false
+
+      - name: Check out the checker from the workflow's own revision
+        # The steps below come from this run's revision (the merge ref on a
+        # PR), not from the head branch checked out above, so the checker and
+        # the workflow it reads come from there too. A branch cut before the
+        # checker existed still gets checked, and the steps it reads are the
+        # ones that will actually run.
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          path: .ci-revision
+          sparse-checkout: |
+            scripts
+            .github/workflows
+          persist-credentials: false
+
+      - name: Check the screenshot steps against the test classes
+        # Before any Gradle work, so a step naming a missing class fails here
+        # with the class named, rather than as Gradle's "No tests found" line
+        # buried under a page of NO-SOURCE output — and a new
+        # *ScreenshotTest with no step below fails instead of recording
+        # nothing (TODO.md, maintainer 2026-08-23). The classes are the head
+        # branch's, which is what the steps compile.
+        run: >-
+          python3 .ci-revision/scripts/check_screenshot_steps.py
+          --repo .
+          --workflow .ci-revision/.github/workflows/ci.yml
 
       - name: Set up JDK
         uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654  # v5.2.0

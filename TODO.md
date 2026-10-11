@@ -5064,7 +5064,7 @@ Nothing here is scheduled; each is a sequel that follows from something already 
       satisfy a PR's required check under `pull_request_target` — it attributes to the
       base branch's tip, not the PR head), and the zizmor policy exceptions needed.
 
-- [ ] **Screenshot job: surface a missing `--tests` class clearly instead of Gradle's raw
+- [x] **Screenshot job: surface a missing `--tests` class clearly instead of Gradle's raw
       output.** (maintainer, 2026-08-23) When a screenshot job step's `--tests` filter
       matches no class — branch behind `main`, a renamed test, a step added without its
       class — Gradle's actual "No tests found for given includes: [...]" line is buried
@@ -5075,6 +5075,10 @@ Nothing here is scheduled; each is a sequel that follows from something already 
       an explicit failure message that names the missing class up front. Not built; ran into
       this while chasing a stale-merge-ref failure on PR #83 that turned out to be a
       behind-`main` branch, not a real bug.
+      **Done:** `scripts/check_screenshot_steps.py` runs first in the screenshot job, before
+      any Gradle work. It fails with an annotation naming the class when a step names one
+      that does not exist, and also when a `*ScreenshotTest` class has no step, which used
+      to record nothing silently. Its own test runs in `build`.
 
 - [ ] **Screenshot-diff PR comment: prioritize which screenshots survive truncation.**
       (maintainer, 2026-08-23) Suggested dropping dark-mode variants before light ones if
