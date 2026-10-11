@@ -47,8 +47,8 @@ downside (a permanently red `deploy` job on every push).
 
 ## What gets built
 
-`./gradlew :app:bundlePlayRelease` produces
-`app/build/outputs/bundle/playRelease/app-play-release.aab`. Play App Signing re-signs
+`./gradlew :app:bundleRelease` produces
+`app/build/outputs/bundle/release/app-release.aab`. Play App Signing re-signs
 the AAB with its own managed app-signing key on upload, so the upload key generated
 below only authenticates to Play — it doesn't sign what testers run.
 
@@ -69,7 +69,7 @@ shipping a release would be redundant.
 
 The release `signingConfig` in `app/build.gradle.kts` is also only attached
 when `RELEASE_KEYSTORE_FILE` is set, so a local
-`./gradlew :app:bundlePlayRelease` without the env vars produces an unsigned
+`./gradlew :app:bundleRelease` without the env vars produces an unsigned
 AAB rather than a build failure.
 
 ## One-time Play Console setup
@@ -127,10 +127,10 @@ RELEASE_KEYSTORE_FILE=/path/to/release.keystore \
 RELEASE_KEYSTORE_PASSWORD=<password> \
 RELEASE_KEY_PASSWORD=<password> \
 RELEASE_KEY_ALIAS=snoozemo \
-./gradlew :app:bundlePlayRelease
+./gradlew :app:bundleRelease
 ```
 
-Either way, upload `app-play-release.aab` via Play Console → Internal testing
+Either way, upload `app-release.aab` via Play Console → Internal testing
 → Create new release, and accept Play App Signing when prompted.
 
 Once the seed upload is done and the declarations checklist at the top of

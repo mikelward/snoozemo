@@ -5,8 +5,8 @@
       Reading which network the phone is on — the anchor SSID comes through a
       ConnectivityManager network callback (SPEC.md §6.4), and registering one
       requires this. A normal install-time permission: state only, no prompt,
-      no Data Safety impact, and nothing here can reach the network — the app
-      declares no INTERNET (SPEC.md §12), pinned by DeclaredPermissionsTest.
+      no Data Safety impact. It reads which network the phone is on and sends
+      nothing over it.
       Declared by this module because this module's code is what needs it.
     -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -21,5 +21,45 @@
     -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <application>
+        <!--
+          The geofence transition target. Not exported: the sender is our own
+          mutable PendingIntent, and an exported receiver would let any app on
+          the phone fake a departure and end someone's snooze.
+        -->
+        <receiver
+            android:name="app.snoozemo.presence.geofence.GeofenceTransitionReceiver"
+            android:exported="false" />
+
+        <!--
+          The grace alarm's target (SPEC.md 6.6). Not exported for the same
+          reason: only our own alarm PendingIntent may say a grace period ran
+          out, or any app could end a snooze five minutes after asking.
+        -->
+        <receiver
+            android:name="app.snoozemo.presence.geofence.GraceAlarmReceiver"
+            android:exported="false" />
+
+        <!--
+          The capability-loss alarm's target — a fail-open ending already
+          decided and durably recorded (TODO.md). Not exported for the same
+          reason as the receivers above: only our own alarm PendingIntent may
+          prompt this, or any app could end a snooze on demand.
+        -->
+        <receiver
+            android:name="app.snoozemo.presence.geofence.CapabilityLossAlarmReceiver"
+            android:exported="false" />
+        <!--
+          The Wi-Fi recheck alarm's target (SPEC.md 6.6): the durable
+          stand-in for a geofence on an anchor that has none. Not exported
+          for the same reason as the receivers above — it restores the
+          service, and nothing outside this app has any business doing that
+          on a schedule it chooses.
+        -->
+        <receiver
+            android:name="app.snoozemo.presence.geofence.WifiRecheckAlarmReceiver"
+            android:exported="false" />
+    </application>
 
 </manifest>

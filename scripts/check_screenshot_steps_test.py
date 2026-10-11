@@ -18,7 +18,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "scripts" / "check_screenshot_steps.py"
 
-STEP = '      - name: Run {name} tests\n        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.example.{name}" -Proborazzi.test.record=true\n'
+STEP = '      - name: Run {name} tests\n        run: ./gradlew :app:testDebugUnitTest --tests "app.example.{name}" -Proborazzi.test.record=true\n'
 
 
 def run(repo):
@@ -101,7 +101,7 @@ class CheckScreenshotStepsTest(unittest.TestCase):
         block = (
             "      - name: Run gone tests\n"
             "        run: |\n"
-            "          ./gradlew :app:testPlayDebugUnitTest \\\n"
+            "          ./gradlew :app:testDebugUnitTest \\\n"
             '            --tests "app.example.GoneScreenshotTest"\n'
         )
         root = self.tree(["MainScreenScreenshotTest"], ["MainScreenScreenshotTest"], block)
@@ -233,18 +233,18 @@ class CheckScreenshotStepsTest(unittest.TestCase):
         self.assertEqual(1, result.returncode)
         self.assertIn("::error::app.example.NewScreenshotTest has no recording step", result.stdout)
 
-    def test_a_suite_in_the_play_source_set_is_seen(self):
+    def test_a_suite_in_the_debug_source_set_is_seen(self):
         root = self.tree(["MainScreenScreenshotTest"], ["MainScreenScreenshotTest"])
-        play = root / "app/src/testPlay/kotlin/app/example"
-        play.mkdir(parents=True)
-        (play / "PlayOnlyScreenshotTest.kt").write_text(
-            "package app.example\n\nclass PlayOnlyScreenshotTest\n"
+        debug = root / "app/src/testDebug/kotlin/app/example"
+        debug.mkdir(parents=True)
+        (debug / "DebugOnlyScreenshotTest.kt").write_text(
+            "package app.example\n\nclass DebugOnlyScreenshotTest\n"
         )
 
         result = run(root)
 
         self.assertEqual(1, result.returncode)
-        self.assertIn("::error::app.example.PlayOnlyScreenshotTest has no recording step", result.stdout)
+        self.assertIn("::error::app.example.DebugOnlyScreenshotTest has no recording step", result.stdout)
 
     def test_a_record_flag_commented_out_inline_does_not_count(self):
         step = (

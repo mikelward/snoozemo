@@ -274,7 +274,7 @@ jobs:
         # RELEASE_KEYSTORE_* variables are unset outside deploy; signing is not
         # what this step checks.
         #
-        # Pull requests only. On main `deploy` runs bundlePlayRelease, so
+        # Pull requests only. On main `deploy` runs bundleRelease, so
         # running this too meant R8 ran twice per push, in series with the tests
         # and lint inside this job and therefore on the critical path into
         # deploy. The Gradle build cache does not save it: setup-gradle keys its
@@ -322,7 +322,7 @@ jobs:
         # Licenses page while CI stays green.
         run: |
           ./gradlew :app:exportBundledLicenses --rerun
-          git diff --exit-code app/src/play/res/raw/aboutlibraries.json
+          git diff --exit-code app/src/main/res/raw/aboutlibraries.json
 
       - name: Run unit tests
         run: ./gradlew test
@@ -405,7 +405,7 @@ jobs:
         # `.git/shallow`, and the trap puts the tree right even when the
         # expected failure isn't the one that happens.
         run: |
-          ./gradlew -q :app:prePlayReleaseBuild --dry-run | tee /tmp/release-task-graph.txt
+          ./gradlew -q :app:preReleaseBuild --dry-run | tee /tmp/release-task-graph.txt
           grep -q ':app:checkReleaseVersionDerivation' /tmp/release-task-graph.txt
           ./gradlew :app:checkReleaseVersionDerivation
           trap 'rm -f .git/shallow' EXIT
@@ -418,12 +418,12 @@ jobs:
           echo "$out" | grep -q "Refusing to build a release"
 
       - name: Verify the release manifest guard
-        # Same shape as the version guard above, for `verifyPlayReleaseManifest`
+        # Same shape as the version guard above, for `verifyReleaseManifest`
         # (app/build.gradle.kts): the task is still in every release entry
         # point's graph (an AGP rename of a package or bundle anchor would
         # unwire it without failing anything), it passes on the real merged
         # manifest, and the proof task refuses the fixture manifest that carries
-        # everything the play rules refuse — naming every one of them, so a
+        # everything the release rules refuse — naming every one of them, so a
         # single rule that stops firing is caught even while the others still
         # fail the task (Codex, PR #189). The proof shares the variant's rule
         # set, so a weakened rule fails its proof rather than leaving a copy
@@ -435,26 +435,25 @@ jobs:
           # One dry run per release entry point, not one for all of them: a
           # combined graph would still show a verifier that one entry point
           # had lost, through another that kept it (Codex, PR #189).
-          for entry in assemblePlayRelease bundlePlayRelease; do
+          for entry in assembleRelease bundleRelease; do
             ./gradlew -q ":app:$entry" --dry-run | tee /tmp/release-manifest-graph.txt
-            if ! grep -q ":app:verifyPlayReleaseManifest" /tmp/release-manifest-graph.txt; then
-              echo "::error::$entry no longer depends on verifyPlayReleaseManifest."
+            if ! grep -q ":app:verifyReleaseManifest" /tmp/release-manifest-graph.txt; then
+              echo "::error::$entry no longer depends on verifyReleaseManifest."
               exit 1
             fi
           done
-          ./gradlew :app:verifyPlayReleaseManifest
+          ./gradlew :app:verifyReleaseManifest
           prove() {
-            flavor=$1; shift
-            if out=$(./gradlew ":app:verify${flavor}ReleaseManifestProof" 2>&1); then
+            if out=$(./gradlew ":app:verifyReleaseManifestProof" 2>&1); then
               echo "$out"
-              echo "::error::The $flavor release manifest guard passed on a manifest it must refuse."
+              echo "::error::The release manifest guard passed on a manifest it must refuse."
               exit 1
             fi
             echo "$out" | grep -q "Refusing to build a release whose merged manifest"
             for expected in "$@"; do
               if ! echo "$out" | grep -qF -- "$expected"; then
                 echo "$out"
-                echo "::error::The $flavor release manifest guard no longer reports: $expected"
+                echo "::error::The release manifest guard no longer reports: $expected"
                 exit 1
               fi
             done
@@ -464,7 +463,7 @@ jobs:
           # the diagnostics are joined with "; ", and without it this fixed
           # string is a prefix of the `_LOCATION` line below and would pass
           # while the base rule was gone (Codex, PR #230, twice now).
-          play=$(prove Play \
+          proof=$(prove \
             "declares com.google.android.gms.permission.AD_ID" \
             "declares android.permission.FOREGROUND_SERVICE_DATA_SYNC" \
             "does not declare android.permission.ACCESS_BACKGROUND_LOCATION" \
@@ -479,11 +478,11 @@ jobs:
           # attribute, because the required-missing line above contains that
           # same substring and would make this fire on a correct run (Codex,
           # PR #230). The accepting case proper is proven by
-          # `verifyPlayReleaseManifest` passing on the real merged manifest
+          # `verifyReleaseManifest` passing on the real merged manifest
           # above, which ships both the permission and the type.
-          if echo "$play" | grep -qE 'service [^ ]+ declares foregroundServiceType="location"'; then
-            echo "$play"
-            echo "::error::The play release manifest guard reports the location type it must allow."
+          if echo "$proof" | grep -qE 'service [^ ]+ declares foregroundServiceType="location"'; then
+            echo "$proof"
+            echo "::error::The release manifest guard reports the location type it must allow."
             exit 1
           fi
 
@@ -575,42 +574,40 @@ jobs:
       # *ScreenshotTest that isn't listed here records nothing in CI even though
       # it passes, so its snapshots would silently never exist.
       #
-      # The `play` flavor only. The screens are flavor-agnostic — the split is
-      # below `PresenceMonitor` (SPEC.md §3.4) — so recording both would render
-      # identical pixels twice and race to write the same files.
+      # The debug build type only: release unit tests are off (app/build.gradle.kts).
       - name: Run main screen screenshot tests
-        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.MainScreenScreenshotTest" -Proborazzi.test.record=true
+        run: ./gradlew :app:testDebugUnitTest --tests "app.snoozemo.ui.MainScreenScreenshotTest" -Proborazzi.test.record=true
 
       - name: Run welcome flow screenshot tests
-        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.WelcomeScreenScreenshotTest" -Proborazzi.test.record=true
+        run: ./gradlew :app:testDebugUnitTest --tests "app.snoozemo.ui.WelcomeScreenScreenshotTest" -Proborazzi.test.record=true
 
       - name: Run permissions screen screenshot tests
-        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.PermissionsScreenScreenshotTest" -Proborazzi.test.record=true
+        run: ./gradlew :app:testDebugUnitTest --tests "app.snoozemo.ui.PermissionsScreenScreenshotTest" -Proborazzi.test.record=true
 
       - name: Run settings screen screenshot tests
-        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.SettingsScreenScreenshotTest" -Proborazzi.test.record=true
+        run: ./gradlew :app:testDebugUnitTest --tests "app.snoozemo.ui.SettingsScreenScreenshotTest" -Proborazzi.test.record=true
 
       - name: Run licenses screen screenshot tests
         # Records the attribution list from the committed
         # res/raw/aboutlibraries.json — so the baseline moves whenever what the
         # Play build bundles does. Drift in the list itself is caught by the
         # export check in `build`.
-        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.LicensesScreenScreenshotTest" -Proborazzi.test.record=true
+        run: ./gradlew :app:testDebugUnitTest --tests "app.snoozemo.ui.LicensesScreenScreenshotTest" -Proborazzi.test.record=true
 
       - name: Run edge-to-edge screenshot tests
-        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.EdgeToEdgeScreenshotTest" -Proborazzi.test.record=true
+        run: ./gradlew :app:testDebugUnitTest --tests "app.snoozemo.ui.EdgeToEdgeScreenshotTest" -Proborazzi.test.record=true
 
       - name: Run tile mark screenshot tests
-        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.TileMarkScreenshotTest" -Proborazzi.test.record=true
+        run: ./gradlew :app:testDebugUnitTest --tests "app.snoozemo.ui.TileMarkScreenshotTest" -Proborazzi.test.record=true
 
       - name: Run launcher icon screenshot tests
-        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.LauncherIconScreenshotTest" -Proborazzi.test.record=true
+        run: ./gradlew :app:testDebugUnitTest --tests "app.snoozemo.ui.LauncherIconScreenshotTest" -Proborazzi.test.record=true
 
       # The Play Store graphics are recorded like a screenshot, into
       # docs/play-store/ rather than the snapshot tree, so this step is what
       # keeps them from going stale after a launcher-drawable edit.
       - name: Run Play Store graphics tests
-        run: ./gradlew :app:testPlayDebugUnitTest --tests "app.snoozemo.ui.PlayStoreGraphicsScreenshotTest" -Proborazzi.test.record=true
+        run: ./gradlew :app:testDebugUnitTest --tests "app.snoozemo.ui.PlayStoreGraphicsScreenshotTest" -Proborazzi.test.record=true
 
       - name: Print failing test details
         if: failure()
@@ -642,7 +639,7 @@ jobs:
         # widening that is a change to a shared, deliberately narrow fork-safe
         # mechanism rather than a change to this repo. So drift here fails on
         # every event, including a same-repo PR, and is re-recorded by hand:
-        #   ./gradlew :app:testPlayDebugUnitTest \
+        #   ./gradlew :app:testDebugUnitTest \
         #     --tests "app.snoozemo.ui.PlayStoreGraphicsScreenshotTest" \
         #     -Proborazzi.test.record=true
         run: |
@@ -1125,10 +1122,6 @@ jobs:
         # decode step above guarantees whenever it sets RELEASE_KEYSTORE_FILE —
         # it fails first if any of the other three is empty. Without them Play
         # would reject the AAB anyway.
-        #
-        # `bundlePlayRelease` names the flavor explicitly. `play` is the only
-        # flavor (SPEC.md §3.4), so this is the whole release; the name stays
-        # until the flavor concept is removed (TODO.md).
         id: bundle
         if: env.RELEASE_KEYSTORE_FILE != ''
         env:
@@ -1136,7 +1129,7 @@ jobs:
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
         run: |
-          ./gradlew :app:bundlePlayRelease
+          ./gradlew :app:bundleRelease
           # Read by `deploy` as needs.release-build.outputs.signed. Set
           # after the build so it means "a signed AAB exists", not
           # "the keystore decoded".
@@ -1149,7 +1142,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: app-release-aab
-          path: app/build/outputs/bundle/playRelease/app-play-release.aab
+          path: app/build/outputs/bundle/release/app-release.aab
           if-no-files-found: error
           retention-days: 30
 
@@ -1696,7 +1689,7 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: app-release-aab
-          path: app/build/outputs/bundle/playRelease
+          path: app/build/outputs/bundle/release
 
       - name: Publish a GitHub release
         # Makes the signed bundle durable and the push's outcome legible.
@@ -1751,7 +1744,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.sha }}
-          AAB_PATH: app/build/outputs/bundle/playRelease/app-play-release.aab
+          AAB_PATH: app/build/outputs/bundle/release/app-release.aab
           ASSET_BASE: snoozemo
         run: scripts/publish-github-release.sh
 
@@ -1800,7 +1793,7 @@ jobs:
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: app.snoozemo
-          releaseFiles: app/build/outputs/bundle/playRelease/app-play-release.aab
+          releaseFiles: app/build/outputs/bundle/release/app-release.aab
           tracks: internal
           status: completed
           whatsNewDirectory: ${{ env.PLAY_WHATSNEW_DIR }}

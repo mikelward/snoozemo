@@ -4088,17 +4088,14 @@ networkless-manifest / no-Play-Services-dependency guards, and its on-handset de
 verification and battery measurement — is dropped with the flavor. Kept as a heading rather
 than deleted so the plan's history reads straight; `SPEC.md` §3.4 records the retirement.
 
-- [ ] **Remove the flavor concept entirely** — collapse `play` from a product flavor into the
-      default variant, so Gradle tasks read plain `installDebug` / `assembleRelease` /
-      `testDebugUnitTest` rather than `…PlayDebug…`. Left as a flavor when `direct` was deleted
-      because collapsing it is a larger, riskier change than the deletion was: move `src/play`
-      into `src/main` across `:app` and `:presence`, merge each `src/play` `AndroidManifest.xml`
-      into the base manifest, fold `playImplementation` dependencies into `implementation`,
-      simplify the release-manifest guard and the licenses export (no flavor axis left to
-      select on), and rewrite the CI job/task names and `SPEC.md` §3 to match. None of it
-      builds in the sandbox, so it lands blind on CI — pilot it carefully, and expect the
-      manifest merge to be the fiddly part (the `play` manifest carries the background-location
-      and foreground-service declarations the guard checks).
+- [x] **Remove the flavor concept entirely** — `play` folded into the default variant, so
+      Gradle tasks read plain `installDebug` / `assembleRelease` / `testDebugUnitTest`.
+      `src/play` and `src/testPlay` moved into `src/main` / `src/test` across `:app` and
+      `:presence`, both `play` manifests merged into the base ones (the `ACCESS_FINE_LOCATION`
+      duplicate dropped with them), `playImplementation` folded into `implementation`, the
+      release-manifest guard and licenses export lost their flavor axis, and CI's task names,
+      AAB path and licenses path followed. The `deploy` path runs only on `main`, so its first
+      run after this merge is the first proof of the new AAB path.
 
 ## Phase 8 (M8) — Samsung One UI
 
@@ -5482,20 +5479,12 @@ what the product *is*, so none is autopilot's to settle. Recorded here rather th
     against this question in the meantime; the engine work already landed stands either way, since
     a snooze that ends on a duration cap needs the same controller.
 
-## Foreground-service cleanup — folded into the flavor-concept removal (2026-09-12)
+## Foreground-service cleanup — done with the flavor-concept removal
 
-PR #230's foreground-service plumbing is flavor-agnostic and already lives in `:app`'s main
-source set (the `OngoingForegroundHost` seam, `wantsForeground()`, the refusal handling, the
-`tracking may pause` clause). This section used to track two Phase-7 follow-ups: giving
-`direct` a non-geofencing `PresenceMonitor`, and moving the foreground-service declarations out
-of `play`'s manifest once `direct` also watched. `direct` is retired (`SPEC.md` §3.4), so the
-first is gone. The second survives as part of *Remove the flavor concept entirely* (Phase 7
-above): when `src/play`'s manifest merges into the base manifest, the foreground-service
-declarations move with it, and the `ACCESS_FINE_LOCATION` duplicate — which exists only because
-lint's `ForegroundServicePermission` reads the manifest the `<service>` is declared in rather
-than the merged one — can be dropped. `DeclaredPermissionsTest` and `verifyPlayReleaseManifest`'s
-rules move with them. `ACCESS_BACKGROUND_LOCATION`, `INTERNET`, and the Play Services dependency
-are simply what the one build ships.
+PR #230's foreground-service plumbing was flavor-agnostic from the start. The last follow-up it
+left — moving the foreground-service declarations out of `play`'s manifest and dropping the
+`ACCESS_FINE_LOCATION` duplicate lint needed there — landed with *Remove the flavor concept
+entirely* (Phase 7 above).
 
 ## Decisions needing review
 

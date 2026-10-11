@@ -32,15 +32,15 @@ CLASS_NAME = re.compile(r"[A-Za-z_][\w.]*")
 PACKAGE = re.compile(r"^\s*package\s+([\w.]+)", re.MULTILINE)
 CLASS = re.compile(r"\bclass\s+([A-Za-z_]\w*)")
 
-# The source sets that feed the job's `testPlayDebugUnitTest` task, and only
-# those: a suite in another variant's set (`testRelease`, a retired flavor's)
+# The source sets that feed the job's `testDebugUnitTest` task, and only
+# those: a suite in another variant's set (`testRelease`, say)
 # cannot be recorded by that task, so demanding a step for it would make the
 # check impossible to satisfy (Codex, PR #322).
 # Java roots too: Gradle runs a suite from either, and the `package`/`class`
 # scan reads both languages the same way (Codex, PR #322).
 TEST_ROOTS = [
     Path("app/src") / name / language
-    for name in ("test", "testPlay", "testDebug", "testPlayDebug")
+    for name in ("test", "testDebug")
     for language in ("kotlin", "java")
 ]
 

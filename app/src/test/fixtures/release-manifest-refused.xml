@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   A merged manifest the play release rules must refuse, for
-  `verifyPlayReleaseManifestProof` (app/build.gradle.kts): the ad identifier, a
+  `verifyReleaseManifestProof` (app/build.gradle.kts): the ad identifier, a
   typed foreground-service permission that is *not* the allowed one, a service
   carrying a foregroundServiceType that is *not* the required one — which is two
   rules at once, the wrong type declared and the right one absent — and all four
@@ -17,7 +17,7 @@
   What this fixture deliberately does *not* prove is the accepting half — that
   `FOREGROUND_SERVICE_LOCATION` and `foregroundServiceType="location"` pass. A
   fixture cannot be both refused and accepted, and the real merged manifests are
-  the better witness anyway: CI runs `verifyPlayReleaseManifest` against them in
+  the better witness anyway: CI runs `verifyReleaseManifest` against them in
   the same step, and the play build ships exactly that permission and that type.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"

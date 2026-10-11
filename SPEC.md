@@ -247,8 +247,8 @@ retirement note after it records why the second, `direct`, was dropped.
 > first, keep `direct` compiling" collapses to "there is one build." The reasoning above is kept
 > rather than deleted because §3.5's risk was real and this retirement only makes sense in light of
 > how it resolved; §3.6 records what is left of the contingency now that the sideload fallback is
-> gone. `play` remains a *flavor* for the moment — collapsing the flavor dimension so tasks read
-> plain `assembleRelease` is its own follow-up (`TODO.md`).
+> gone. The `play` flavor itself was folded into the default variant afterwards, so the build
+> has no product flavors at all and its tasks read plain `assembleRelease`.
 
 ### 3.5 Will the Play declarations be approved?
 

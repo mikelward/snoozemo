@@ -75,7 +75,7 @@ site that could attach a coordinate, an SSID or a place name.
 
 Adding it did pull `AD_ID` in, exactly as the earlier note here guessed — and
 `DeclaredPermissionsTest` failed the moment the dependency landed, which is what that
-assertion was written to do. The Play **Advertising ID** answer stays "not used": `play`'s
+assertion was written to do. The Play **Advertising ID** answer stays "not used": the app
 manifest removes the permission with `tools:node="remove"` and switches
 `google_analytics_adid_collection_enabled` off, so Analytics reports against the
 per-install app-instance ID instead. What the Data Safety form did gain is **app
@@ -133,7 +133,7 @@ config:
 
 ## How the opt-out actually works
 
-`AndroidManifest.xml` in `src/play` sets `firebase_crashlytics_collection_enabled` to
+The app's `AndroidManifest.xml` sets `firebase_crashlytics_collection_enabled` to
 **false**, so Crashlytics starts every process collecting nothing.
 `CrashReporting.install`, called from `Application.onCreate`, reads the stored choice
 and applies it. Two consequences worth knowing:
