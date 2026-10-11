@@ -1,15 +1,14 @@
 package app.snoozemo.snooze
 
 import android.Manifest
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.location.LocationManager
 import android.media.AudioManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -22,20 +21,25 @@ import app.snoozemo.dnd.PrefsRingerLoanStore
 import app.snoozemo.dnd.SnoozeRingerStore
 import app.snoozemo.tile.TilePresenceStore
 import app.snoozemo.ui.locationTrackingNeedsBackgroundPermission
-import com.mikelward.androidlog.android.DebugFileSink
-import com.mikelward.androidlog.android.PreviousRun
-import com.mikelward.androidlog.android.ProcessExits
+import com.mikelward.androidlog.android.CollectedReport
+import com.mikelward.androidlog.android.ShareOutcome
+import com.mikelward.androidlog.android.DebugReport as SharedReport
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.CountDownLatch
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 private const val TAG = "DebugReport"
 
 /**
  * Builds the SPEC.md §4.6 share payload and hands it to the system share
  * sheet, with a copy-to-clipboard fallback (`TODO.md` Phase 5, `docs/DEBUG.md`).
+ * The mechanism is androidlog's `DebugReport`, the one every app in the fleet
+ * shares through: it appends the earlier runs, holds the report to a size that
+ * pastes whole, and lowers the crash banner on a landed copy. What is here is
+ * this app's section, and the tap-level bookkeeping the Share button needs.
  *
  * Ported from the sibling Simmo/ClothesCast repos' `DebugReport`/`BugReport`,
  * narrowed to what this app actually has to report: there is no settings or
@@ -47,33 +51,6 @@ private const val TAG = "DebugReport"
  * slow read in this app already follows.
  */
 internal object DebugReport {
-
-    /** What a share attempt actually achieved. */
-    data class Result(
-        /** Whether the clipboard copy landed — the durable, retryable proof of delivery. */
-        val clipboardCopied: Boolean,
-        /** Whether *either* route reached the user — what gates the failure message. */
-        val reachedUser: Boolean,
-    )
-
-    /**
-     * What [collectPayload] (or a test's own seam) produced.
-     *
-     * [pinConsumeSafe] is false when the earlier runs could not be read at all
-     * — the read timed out or failed, or the fallback path ran — so the text
-     * carries none of them, a pinned crash included. [share] then leaves the
-     * banner up rather than lowering it over a report that says the runs
-     * could not be included (Codex, PR #89). Those failures pass, so the next
-     * share reads them; a condition that would repeat on every share must not
-     * gate the banner, or it never comes down.
-     */
-    data class Payload(
-        val text: String,
-        val pinConsumeSafe: Boolean,
-    )
-
-    /** How long [share] waits for [consumeCrashPin] before giving up on it for this attempt. */
-    private const val CONSUME_PIN_TIMEOUT_MS = 2_000L
 
     /**
      * Whether the most recently completed [share] reached neither delivery
@@ -121,8 +98,8 @@ internal object DebugReport {
     private val applyLock = Any()
 
     /**
-     * Serializes the actual delivery (clipboard write, chooser launch, pin
-     * consume) across concurrently-running [share] calls — separate from
+     * Serializes the actual delivery (clipboard write, chooser launch, banner
+     * acknowledgement) across concurrently-running [share] calls — separate from
      * [applyLock], which stays fast and non-blocking since [nextAttempt] is
      * called synchronously on the tap thread and must never wait on a
      * background attempt's binder/IPC work (Codex, PR #89, fourth round on
@@ -217,27 +194,16 @@ internal object DebugReport {
     }
 
     /**
-     * Builds the payload, copies it to the clipboard, and fires the share
-     * chooser. Both routes are attempted independently and best-effort — the
-     * share sheet has no delivery callback, so [Result.clipboardCopied] is
-     * the only outcome this can safely gate anything on.
+     * Collects the report and delivers it: a clipboard copy and the share
+     * chooser, both attempted, through androidlog's [SharedReport.deliver]
+     * (SPEC.md §4.6, `docs/DEBUG.md`), the same path every app in the fleet
+     * shares through. A landed copy lowers the crash banner for the crashes
+     * the report carried; nothing is deleted, and the earlier runs age out
+     * under the logger's own retention (maintainer, 2026-10-11).
      *
-     * On a landed clipboard copy, also lowers the crash banner if one is up —
-     * SPEC.md §4.6, "sharing consumes the pin" — never on the chooser merely
-     * opening, which is not proof the user completed anything, and never when
-     * [Payload.pinConsumeSafe] is false, which means the text could not
-     * include the earlier runs at all (Codex, PR #89). It deletes nothing: the
-     * runs stay on disk, still shareable, and age out under the logger's
-     * retention count (maintainer, 2026-09-30), so a share that fails after
-     * the copy, or one the user abandons, costs no log. The pin's own consumer already
-     * notifies its own watch ([DebugLogging.watchCrashPinOutcome]) with the
-     * *real* outcome, so a caller must not infer the pin is gone from
-     * [Result.clipboardCopied] alone — a landed copy only means consuming was
-     * *attempted*, not that the file layer actually let it happen.
-     *
-     * [payloadCollect], [clipboardWrite], [chooserLaunch], and
-     * [consumeCrashPin] are injectable test seams; production uses the
-     * defaults.
+     * Returns what the delivery achieved, or null when a newer tap superseded
+     * this attempt before it delivered. [collect] and [deliver] are test
+     * seams; production uses the defaults.
      *
      * [attempt] identifies which tap this call answers, so a caller that can
      * fire more than one concurrently-running share (the repeatable Share
@@ -255,191 +221,167 @@ internal object DebugReport {
     fun share(
         context: Context,
         attempt: Int = 0,
-        payloadCollect: (Context) -> Payload = ::collectPayload,
-        clipboardWrite: (Context, String) -> Boolean = ::copyToClipboard,
-        chooserLaunch: (Context, String) -> Boolean = ::startShare,
-        consumeCrashPin: (onResult: (Boolean) -> Unit) -> Unit = DebugLogging::consumeCrashPin,
-    ): Result {
-        val payload = runCatching { payloadCollect(context) }
-            .onFailure { Log.e(TAG, "Building the debug report failed; sharing a minimal fallback.", it) }
-            .getOrElse { Payload(fallbackPayload(it), pinConsumeSafe = false) }
-        val text = payload.text
+        collect: (Context) -> CollectedReport = ::collectReport,
+        deliver: (Context, CollectedReport) -> ShareOutcome = ::deliverOnMain,
+        fallback: (Throwable) -> CollectedReport = ::collectFallback,
+    ): ShareOutcome? {
+        // A collection that throws still shares something, and every path,
+        // even one where the fallback throws too, reaches the settling below:
+        // an exception escaping here left the Share buttons disabled for the
+        // rest of the process with nothing to say why (Codex, PR #326). A
+        // report that could not be built at all is a failed share.
+        val report: CollectedReport? = runCatching { collect(context) }
+            .onFailure { SnoozeDebugLog.failure(it, "debug report: building it failed; sharing a minimal fallback") }
+            .recoverCatching { fallback(it) }
+            .onFailure { SnoozeDebugLog.failure(it, "debug report: the fallback could not be built either") }
+            .getOrNull()
         // Delivery is serialized on deliveryLock, not just the outcome it
         // produces: two concurrent calls would otherwise both write the
-        // clipboard and open a chooser, unordered, so a slower first one
-        // could overwrite a later report on the clipboard or open a second
-        // chooser after the user had already seen the later one resolve
-        // (Codex, PR #89). Callers gate their Share affordance on
-        // [shareInFlight], so in practice a second concurrent call doesn't
-        // arise — but gating is a UI contract and this is the floor beneath
-        // it, so the guarantee doesn't depend on every caller honoring it.
+        // clipboard and open a chooser, unordered (Codex, PR #89). Callers gate
+        // their Share affordance on [shareInFlight], so in practice a second
+        // concurrent call doesn't arise — this is the floor beneath that.
         //
-        // The ticket is re-checked here, once the lock is actually held,
-        // rather than only at entry: entry can pass before a concurrent tap
-        // issues a newer ticket while this attempt is still mid-flight
-        // (collecting its payload, above, or waiting for this very lock).
-        // An attempt found stale only once it reaches the front of the
-        // queue skips delivery entirely rather than clobbering what a newer
-        // attempt already delivered.
-        val result = synchronized(deliveryLock) {
-            if (attempt < synchronized(applyLock) { attemptTicket }) {
-                return@synchronized Result(clipboardCopied = false, reachedUser = false) to false
+        // The ticket is re-checked once the lock is held, rather than only at
+        // entry: a concurrent tap can issue a newer ticket while this attempt
+        // is still collecting. An attempt found stale here skips delivery
+        // entirely rather than clobbering what a newer attempt delivered.
+        return synchronized(deliveryLock) {
+            if (attempt < synchronized(applyLock) { attemptTicket }) return@synchronized null
+            val outcome = if (report == null) {
+                ShareOutcome.FAILED
+            } else {
+                runCatching { deliver(context, report) }
+                    .onFailure { SnoozeDebugLog.failure(it, "debug report: delivering it failed") }
+                    .getOrDefault(ShareOutcome.FAILED)
             }
-            val copied = runCatching { clipboardWrite(context, text) }
-                .onFailure { Log.e(TAG, "Copying the debug report to the clipboard failed.", it) }
-                .getOrDefault(false)
-            val launched = runCatching { chooserLaunch(context, text) }
-                .onFailure { Log.e(TAG, "Launching the share chooser failed.", it) }
-                .getOrDefault(false)
-            if (!copied && !launched) {
-                Log.e(TAG, "Sharing the debug report reached neither the clipboard nor the chooser.")
-            }
-            val delivered = Result(clipboardCopied = copied, reachedUser = copied || launched)
-            // Only the single most-recently-issued attempt may update the
-            // visible state — an attempt superseded by a later tap discards
-            // its own outcome here regardless of whether that later tap has
-            // completed yet, so a stale failure (or success) is never shown
-            // over a retry the user is still waiting on (Codex, PR #89,
-            // third round on this narrower point). applyLock's own critical
-            // section here is brief — two field writes and a callback — so
-            // this never holds up nextAttempt.
-            //
-            // shareInFlight clears here, and deliveryLock is released just
-            // below, *before* the pin consume rather than after it: that
-            // wait runs up to CONSUME_PIN_TIMEOUT_MS, but the delivery the
-            // user is actually waiting on is already done by this point, so
-            // holding the button disabled through the cleanup would read as
-            // the app doing nothing for however long the cleanup took
-            // (Codex, PR #89, on the older mechanism, for the same reason).
-            // A superseded attempt returns above and so never clears the
-            // flag, which correctly belongs to the newer attempt still
-            // running.
+            // Only the most-recently-issued attempt may update the visible
+            // state, whether or not a newer tap has completed yet, so a stale
+            // outcome is never shown over a retry the user is waiting on
+            // (Codex, PR #89). A superseded attempt returns above and never
+            // clears the in-flight flag, which belongs to the newer attempt.
             synchronized(applyLock) {
                 if (attempt >= attemptTicket) {
-                    lastShareFailed = !delivered.reachedUser
+                    lastShareFailed = outcome == ShareOutcome.FAILED
                     shareInFlight = false
                     runCatching { onShareOutcome?.invoke() }
                 }
             }
-            delivered to (copied && payload.pinConsumeSafe)
+            outcome
         }
-        val (delivered, shouldConsumePin) = result
-        if (shouldConsumePin) {
-            val latch = CountDownLatch(1)
-            runCatching { consumeCrashPin { latch.countDown() } }
-                .onFailure { Log.e(TAG, "Consuming the crash pin failed.", it) }
-            if (!latch.await(CONSUME_PIN_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                Log.w(TAG, "Consuming the crash pin timed out.")
-            }
-        }
-        return delivered
-    }
-
-    /** How long [collectPayload] waits on the debug-log worker for the previous run's file. */
-    private const val READ_TIMEOUT_MS = 2_000L
-
-    private fun collectPayload(context: Context): Payload {
-        val previousRunRead = blockingReadPreviousOrCrash()
-        val previousRunOmitted = previousRunRead.failed
-        val text = buildDebugReportPayload(
-            nowMillis = System.currentTimeMillis(),
-            versionName = appVersionName(context),
-            versionCode = appVersionCode(context),
-            applicationId = context.packageName,
-            isDebuggable = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0,
-            deviceManufacturer = Build.MANUFACTURER,
-            deviceModel = Build.MODEL,
-            androidRelease = Build.VERSION.RELEASE,
-            androidSdkInt = Build.VERSION.SDK_INT,
-            locale = Locale.getDefault(),
-            policyAccessGranted = isPolicyAccessGranted(context),
-            notificationsGranted = isPermissionGranted(context, Manifest.permission.POST_NOTIFICATIONS),
-            locationFineGranted = isPermissionGranted(context, Manifest.permission.ACCESS_FINE_LOCATION),
-            locationCoarseGranted = isPermissionGranted(context, Manifest.permission.ACCESS_COARSE_LOCATION),
-            locationBackgroundGranted = isPermissionGranted(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION),
-            locationBackgroundRequired = locationTrackingNeedsBackgroundPermission,
-            locationServicesEnabled = isLocationServicesEnabled(context),
-            batterySaverOn = isBatterySaverOn(context),
-            tileAdded = isTileAdded(context),
-            ringerMode = ringerMode(context),
-            snoozeRingerCeiling = snoozeRingerCeiling(context),
-            previousRun = previousRunRead.text,
-            previousRunCrashed = previousRunRead.wasCrash,
-            previousRunOmitted = previousRunOmitted,
-            recentLog = recentLogForReport(),
-        )
-        return Payload(text, pinConsumeSafe = !previousRunOmitted)
     }
 
     /**
-     * Whether the read of the earlier runs did not happen: it timed out, so it
-     * cannot tell "nothing was pinned" from "something was, and the worker
-     * was slow", or it failed outright (Codex, PR #89, two rounds). Only these
-     * keep the banner up after a share, because only these pass.
-     *
-     * The report used to keep the banner up for more: a pinned crash whose
-     * file read back blank, a crash the report's budget cut off behind newer
-     * runs, a crash the read could not open (Codex, PR #89 and #153). Each was
-     * there to stop a share *deleting* a crash it never carried. A share
-     * deletes nothing now, and each of those repeats on every share, so
-     * guarding the banner on them left it up for good, with Dismiss the only
-     * way down (maintainer, 2026-09-30). The runs stay on disk either way.
+     * The fallback still goes through the log's sink where it can, so a copy
+     * that lands lowers the crash banner like any other share (Codex, PR
+     * #326): without the sink a fallback reported success and left the banner
+     * up for the next tap. A sink that fails again falls back to none, since
+     * the sink is the one part that may be what threw.
      */
-    private val PreviousRunRead.failed: Boolean
-        get() = timedOut || !readSucceeded
+    private fun collectFallback(failure: Throwable): CollectedReport {
+        val sink = runCatching { (DebugLogging.sinkForReport() as? DebugLogging.SinkForReport.Available)?.sink }
+            .onFailure { SnoozeDebugLog.failure(it, "debug report: the fallback could not get the log sink") }
+            .getOrNull()
+        return runCatching {
+            SharedReport.collect(SnoozeDebugLog, sink, heading = EARLIER_RUNS_HEADING) { fallbackPayload(failure) }
+        }.onFailure { SnoozeDebugLog.failure(it, "debug report: the fallback could not read the earlier runs") }
+            .getOrElse { SharedReport.collect(SnoozeDebugLog, null) { fallbackPayload(failure) } }
+    }
 
     /**
-     * A minimal payload for when [collectPayload] itself throws — the one
-     * section that cannot fail to build (it touches nothing but [Build] and
-     * the in-memory buffer) is still worth sending, rather than nothing at
-     * all. Only the failure's type name is recorded, never its message — the
-     * paths this can run from include the ones the privacy floor is about.
+     * A minimal report for when collecting the real one threw: the one part
+     * that cannot fail to build is still worth sending. This line names only
+     * the failure's type; the failure itself is in the recent log below, which
+     * carries a thrown message under the log's own rule (SPEC §4.6) like any
+     * other failure the app records.
      */
     private fun fallbackPayload(failure: Throwable): String = buildString {
         appendLine("Snoozemo debug log")
         appendLine("Report collection failed: ${failure.javaClass.name}")
         appendLine("Android: ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
         appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
-        append(renderRecentLog(recentLogForReport(), MAX_LOG_PAYLOAD_CHARS))
+        append(renderRecentLog(recentLogForReport(FALLBACK_LOG_CHARS), FALLBACK_LOG_CHARS))
     }
 
     /**
-     * What [blockingReadPreviousOrCrash] found: whether the read completed
-     * in time, and — if it did — whether it actually succeeded (as against
-     * a real, still-pinned file that couldn't be read).
+     * The report: this app's section, with the earlier runs the library reads
+     * and appends ([SharedReport.collect]).
+     *
+     * Blocks on disk and binder calls; [share] runs on a background thread.
      */
-    private data class PreviousRunRead(
-        /** What the read returned; only its text reaches the report. */
-        val run: PreviousRun?,
-        val wasCrash: Boolean,
-        val timedOut: Boolean,
-        val readSucceeded: Boolean,
-    ) {
-        val text: String? get() = run?.text
+    private fun collectReport(context: Context): CollectedReport {
+        val handed = DebugLogging.sinkForReport()
+        val sink = (handed as? DebugLogging.SinkForReport.Available)?.sink
+        return SharedReport.collect(SnoozeDebugLog, sink, heading = EARLIER_RUNS_HEADING) {
+            buildDebugReportPayload(
+                nowMillis = System.currentTimeMillis(),
+                versionName = appVersionName(context),
+                versionCode = appVersionCode(context),
+                applicationId = context.packageName,
+                isDebuggable = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0,
+                deviceManufacturer = Build.MANUFACTURER,
+                deviceModel = Build.MODEL,
+                androidRelease = Build.VERSION.RELEASE,
+                androidSdkInt = Build.VERSION.SDK_INT,
+                locale = Locale.getDefault(),
+                policyAccessGranted = isPolicyAccessGranted(context),
+                notificationsGranted = isPermissionGranted(context, Manifest.permission.POST_NOTIFICATIONS),
+                locationFineGranted = isPermissionGranted(context, Manifest.permission.ACCESS_FINE_LOCATION),
+                locationCoarseGranted = isPermissionGranted(context, Manifest.permission.ACCESS_COARSE_LOCATION),
+                locationBackgroundGranted = isPermissionGranted(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION),
+                locationBackgroundRequired = locationTrackingNeedsBackgroundPermission,
+                locationServicesEnabled = isLocationServicesEnabled(context),
+                batterySaverOn = isBatterySaverOn(context),
+                tileAdded = isTileAdded(context),
+                ringerMode = ringerMode(context),
+                snoozeRingerCeiling = snoozeRingerCeiling(context),
+                // Said in the report, not only the log: a share that quietly
+                // left the earlier runs out would read like one with none to
+                // send (Codex, PR #89).
+                earlierRunsUnavailable = handed == DebugLogging.SinkForReport.Unavailable,
+                recentLog = ::recentLogForReport,
+            )
+        }
     }
 
     /**
-     * Bridges [DebugLogging.readPreviousOrCrash]'s callback so [collectPayload]
-     * can read it inline — safe to block on here because this already runs on
-     * its own caller-provided thread, never the FIFO worker it is waiting on.
-     * Bounded so a stuck worker degrades the report rather than hanging the
-     * share indefinitely; [PreviousRunRead.timedOut] and
-     * [PreviousRunRead.readSucceeded] are what tell the caller a timeout or a
-     * read failure happened, since neither must be reported the same way as
-     * a genuinely empty read (SPEC.md §4.6; Codex, PR #89, two rounds).
+     * [SharedReport.deliver] on the main thread, which it asks for because it
+     * touches the clipboard. Inline when already there (tests, Robolectric);
+     * otherwise posted and waited for, which costs the background thread
+     * [share] runs on and nothing else.
      */
-    private fun blockingReadPreviousOrCrash(): PreviousRunRead {
-        val latch = CountDownLatch(1)
-        var result = Triple<PreviousRun?, Boolean, Boolean>(null, false, true)
-        DebugLogging.readPreviousOrCrash { run, wasCrash, readSucceeded ->
-            result = Triple(run, wasCrash, readSucceeded)
-            latch.countDown()
+    private fun deliverOnMain(context: Context, report: CollectedReport): ShareOutcome {
+        val deliver = {
+            SharedReport.deliver(
+                context = context,
+                log = SnoozeDebugLog,
+                report = report,
+                subject = "Snoozemo debug log — ${appVersionName(context)}",
+                chooserTitle = context.getString(R.string.setup_debug_log_share_title),
+                clipboardLabel = "Snoozemo debug log",
+            )
         }
-        val completed = latch.await(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-        if (!completed) {
-            Log.w(TAG, "Reading the previous run's debug log timed out; reporting without it.")
+        val main = Looper.getMainLooper()
+        if (Looper.myLooper() == main) return deliver()
+        val result = LinkedBlockingQueue<ShareOutcome>(1)
+        // Whichever comes first, the delivery starting or the wait giving up,
+        // claims the attempt: a delivery that ran after the attempt was
+        // reported as failed would copy, share and lower the banner behind the
+        // user's back (Codex, PR #326).
+        val claimed = AtomicBoolean(false)
+        Handler(main).post {
+            if (!claimed.compareAndSet(false, true)) return@post
+            val outcome = runCatching(deliver)
+                .onFailure { SnoozeDebugLog.failure(it, "debug report: delivering it failed") }
+                .getOrDefault(ShareOutcome.FAILED)
+            result.offer(outcome)
         }
-        return PreviousRunRead(result.first, result.second, timedOut = !completed, readSucceeded = result.third)
+        result.poll(MAIN_THREAD_TIMEOUT_SECONDS, TimeUnit.SECONDS)?.let { return it }
+        if (claimed.compareAndSet(false, true)) {
+            SnoozeDebugLog.warning("debug report: delivery did not get the main thread in time")
+            return ShareOutcome.FAILED
+        }
+        // It started just as the wait ran out, so it is the outcome.
+        return result.take()
     }
 
     // Each of these returns null, not a substituted false, on its own
@@ -527,45 +469,6 @@ internal object DebugReport {
         context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
     }.onFailure { Log.w(TAG, "DebugReport could not read the app's own version code.", it) }
         .getOrDefault(-1L)
-
-    /** Returns whether the share chooser actually launched. */
-    private fun startShare(context: Context, text: String): Boolean =
-        runCatching {
-            val send = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_SUBJECT, "Snoozemo debug log — ${appVersionName(context)}")
-                putExtra(Intent.EXTRA_TEXT, text)
-            }
-            val chooser = Intent.createChooser(send, context.getString(R.string.setup_debug_log_share_title))
-            // Callers may pass a non-Activity context (applicationContext);
-            // harmless when the caller is one too.
-            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(chooser)
-        }
-            // Logged here, not left to share()'s own outer runCatching: this
-            // function already catches its own exception and returns false
-            // normally, so that outer catch never sees it — with a landed
-            // clipboard copy, that left a chooser that silently never opened
-            // with no diagnostic explanation anywhere (Codex, PR #89).
-            .onFailure { Log.e(TAG, "Launching the share chooser failed.", it) }
-            .isSuccess
-
-    /** Returns whether the report actually landed on the clipboard. */
-    private fun copyToClipboard(context: Context, text: String): Boolean =
-        runCatching {
-            val cm = context.getSystemService(ClipboardManager::class.java)
-            if (cm == null) {
-                false
-            } else {
-                cm.setPrimaryClip(ClipData.newPlainText("Snoozemo debug log", text))
-                true
-            }
-        }
-            // Same reason as startShare's own logging just above: this
-            // function's own runCatching already stops the exception from
-            // reaching share()'s outer one.
-            .onFailure { Log.e(TAG, "Copying the debug report to the clipboard failed.", it) }
-            .getOrDefault(false)
 }
 
 /**
@@ -604,10 +507,8 @@ internal fun buildDebugReportPayload(
     tileAdded: Boolean?,
     ringerMode: String? = null,
     snoozeRingerCeiling: String? = null,
-    previousRun: String?,
-    previousRunCrashed: Boolean,
-    previousRunOmitted: Boolean = false,
-    recentLog: List<String>,
+    earlierRunsUnavailable: Boolean = false,
+    recentLog: (budgetChars: Int) -> List<String>,
 ): String {
     val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(Date(nowMillis))
     val head = buildString {
@@ -646,67 +547,36 @@ internal fun buildDebugReportPayload(
     } else {
         head
     }
-    val previousSection = if (previousRun.isNullOrBlank()) {
-        // A blank previousRun is ambiguous on its own — genuinely nothing to
-        // report, or a read that timed out or failed and silently dropped
-        // whatever it would have shown. Say so explicitly rather than
-        // rendering the same as "nothing to show", since a share that landed
-        // while quietly omitting the one thing the crash banner exists to
-        // deliver is otherwise indistinguishable from a clean one (Codex,
-        // PR #89, two rounds — the wording names no specific cause, since a
-        // timeout and a failed read land here the same way).
-        if (previousRunOmitted) {
-            "\n--- Earlier runs ---\n(could not be included in this report — try Share again)\n"
-        } else {
-            ""
-        }
+    // The earlier runs themselves are the library's to append, after this
+    // section (`SharedReport.collect`). What it cannot say is that they could
+    // not be read at all, since it was handed no log to read.
+    val unavailable = if (earlierRunsUnavailable) {
+        "\n$EARLIER_RUNS_HEADING\n(could not be included in this report — try Share again)\n"
     } else {
-        buildString {
-            appendLine()
-            // Plural, and the crash named as *one of* them rather than as what
-            // the whole section is. The library hands over one text covering
-            // every unshared prior run with no marker saying where each begins,
-            // and the crash flag is the global banner state -- so labeling the
-            // aggregate "Previous run (ended in an uncaught exception)" told a
-            // reader that ordinary restarts were the crash (Codex, PR #153).
-            // Naming which one crashed needs per-run metadata the handle does
-            // not carry; saying it truthfully does not.
-            val label = if (previousRunCrashed) {
-                "--- Earlier runs (one ended in an uncaught exception) ---"
-            } else {
-                "--- Earlier runs ---"
-            }
-            appendLine(label)
-            // Before the text, not after: the reader needs to know what is
-            // missing before they read what is there, and a line at the end of
-            // 25,000 characters is a line nobody reaches. Unconditional, like
-            // the recent log's heading: the section keeps the newest of what
-            // is on disk, and a crash older than that is on the phone, unsent.
-            appendLine("(newest last; older lines are dropped to keep the report shareable)")
-            // Keep the newest lines: the file is oldest-first, so a crash
-            // entry or the last decisions are at the end.
-            appendLine(
-                boundedLogTail(previousRun.trimEnd().split("\n"), MAX_PREVIOUS_RUN_CHARS).joinToString("\n"),
-            )
-        }
+        ""
     }
-    return boundedHead + previousSection + renderRecentLog(recentLog, MAX_LOG_PAYLOAD_CHARS)
+    // The log takes the room the rest left, fetched to fit it rather than
+    // fetched whole and trimmed here: a trim keeps the newest and so drops
+    // the pinned lines first, the ones that say why the last processes
+    // ended.
+    val rest = boundedHead + unavailable
+    val logBudget = (APP_SECTION_CHARS - rest.length - LOG_HEADING_CHARS).coerceAtLeast(0)
+    return rest + renderRecentLog(recentLog(logBudget), logBudget)
 }
 
 /**
- * The current run's log for a report: the ring's newest lines, with the pinned
- * lines it has since evicted put back ahead of them, in one read.
+ * The current run's log for a report, within [budgetChars]: the ring's newest
+ * lines, with the pinned lines it has since evicted put back ahead of them, in
+ * one read ([SharedReport.logLines]).
  *
  * Pinned lines (why the previous processes ended) are written once at startup,
  * so on a busy run the ring has dropped them by the time a report is shared.
  * [SnoozeDebugLog.snapshot] is the ring alone and would leave them out (Codex,
- * PR #302). The pinned lines get their own reserve inside the section's budget,
- * so the recent lines can't crowd them out of it either.
+ * PR #302). They come first, up to a whole process-exit batch, and whatever of
+ * that they don't need goes to the newest lines.
  */
-internal fun recentLogForReport(): List<String> = SnoozeDebugLog.boundedSnapshot(
-    pinnedBudgetChars = MAX_PINNED_LOG_CHARS,
-    recentBudgetChars = MAX_LOG_PAYLOAD_CHARS - MAX_PINNED_LOG_CHARS,
-)
+internal fun recentLogForReport(budgetChars: Int): List<String> =
+    SharedReport.logLines(SnoozeDebugLog, budgetChars)
 
 /**
  * The "Recent log" section — newest last, bounded to [budgetChars].
@@ -794,41 +664,28 @@ internal fun boundedLogTail(lines: List<String>, budgetChars: Int): List<String>
 }
 
 /**
- * The ceiling a whole shared report stays under (`docs/DEBUG.md`). Strings
- * parcel as UTF-16, so N characters cost 2N bytes on the wire, and the
- * payload crosses Binder twice — into the clipboard, then again in the
- * chooser's `ACTION_SEND` extra — against a per-process buffer shared across
- * every in-flight transaction and roughly 1 MB. The three section budgets
- * below (4,000 + 25,000 + 30,000) sum to 59,000, leaving margin under this.
+ * The room this app's section has: the report's ceiling, androidlog's own
+ * (`docs/DEBUG.md`), less the earlier runs' share, which the library appends.
+ * The library sets the ceiling so a report survives being pasted whole into a
+ * chat, a message or an email.
  */
-internal const val MAX_SHARE_PAYLOAD_CHARS = 60_000
+internal const val APP_SECTION_CHARS = SharedReport.APP_SECTION_CHARS
+
+/** The heading the earlier runs go under, matching this report's own. */
+internal const val EARLIER_RUNS_HEADING = "--- Earlier runs (newest last) ---"
 
 /** Ceiling for the structured build/device/state header. */
 private const val MAX_STRUCTURED_CHARS = 4_000
 
-/** Ceiling for the previous (or crashed) run's section. */
-private const val MAX_PREVIOUS_RUN_CHARS = 25_000
+/** Room kept for the recent log's own heading line, which counts its lines. */
+private const val LOG_HEADING_CHARS = 200
+
+/** The log's budget in the fallback report, which has only a few lines besides. */
+private const val FALLBACK_LOG_CHARS = APP_SECTION_CHARS - 1_000
 
 /**
- * The earlier runs for a report, bounded to [MAX_PREVIOUS_RUN_CHARS] as they
- * are read, so the section carries exactly the text the read returned rather
- * than up to 150,000 characters trimmed again afterwards. The render still
- * bounds the section, so a report stays inside its ceiling whatever text it
- * is handed.
+ * How long [DebugReport.share] waits for the main thread to deliver. The main
+ * thread is the app's own UI thread and runs a post at once; this bounds only
+ * a process that is going away.
  */
-internal fun readPreviousRunForReport(sink: DebugFileSink): PreviousRun? =
-    // One under the section's bound: the section's own trim charges each line
-    // a newline, the last included, so a text read to the full bound would
-    // lose its oldest line there for no reason.
-    sink.readPreviousRun(MAX_PREVIOUS_RUN_CHARS - 1)
-
-/** Ceiling for the current run's recent-log section, pinned lines included. */
-private const val MAX_LOG_PAYLOAD_CHARS = 30_000
-
-/**
- * The part of [MAX_LOG_PAYLOAD_CHARS] held back for pinned lines: the most a
- * startup batch of process-exit records can take, which is every line this app
- * pins. Anything smaller drops the batch from its front, and the batch is
- * written newest exit first (Codex, PR #302).
- */
-private val MAX_PINNED_LOG_CHARS = ProcessExits.maxBatchChars()
+private const val MAIN_THREAD_TIMEOUT_SECONDS = 30L

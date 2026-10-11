@@ -144,50 +144,21 @@ class DebugReportTest {
     }
 
     @Test
-    fun `omits the previous-run section when there is nothing to show`() {
-        val payload = payload(previousRun = null)
-
-        assertFalse(payload.contains("Earlier runs"))
+    fun `leaves the earlier runs to the library when they were read`() {
+        // The library appends them after this section (SharedReport.collect);
+        // a heading here would be a second, empty one.
+        assertFalse(payload().contains("Earlier runs"))
     }
 
     @Test
-    fun `says the previous run could not be read, rather than reading like nothing happened`() {
-        // A blank previousRun is ambiguous on its own: genuinely nothing to
-        // report, or a read that timed out or failed and silently dropped a
-        // pinned crash along with it. A share that lands while quietly
-        // omitting the one thing the crash banner exists to deliver must
-        // not read as a clean report (Codex, PR #89).
-        val omitted = payload(previousRun = null, previousRunOmitted = true)
+    fun `says the earlier runs could not be read, rather than reading like nothing happened`() {
+        // With no log handed over, the library has nothing to append and
+        // nothing to say; a share that quietly left the runs out must not
+        // read as a clean report (Codex, PR #89).
+        val omitted = payload(earlierRunsUnavailable = true)
 
-        assertTrue(omitted.contains("--- Earlier runs ---"))
+        assertTrue(omitted.contains(EARLIER_RUNS_HEADING))
         assertTrue(omitted.contains("could not be included in this report"))
-    }
-
-    @Test
-    fun `the earlier runs say older lines may have been left out, ahead of the text`() {
-        // The section keeps the newest of what is on disk, so a crash older
-        // than that is on the phone but not in the report; the reader is told
-        // before the text rather than after 25,000 characters of it.
-        val payload = payload(previousRun = "state=ARMED", previousRunCrashed = true)
-
-        val note = "(newest last; older lines are dropped to keep the report shareable)"
-        assertTrue(payload.contains(note))
-        assertTrue(payload.indexOf(note) < payload.indexOf("state=ARMED"))
-        assertFalse(payload.contains("dismiss the banner"))
-    }
-
-    @Test
-    fun `labels an ordinary earlier run distinctly from a crashed one`() {
-        val ordinary = payload(previousRun = "state=ARMED", previousRunCrashed = false)
-        val crashed = payload(previousRun = "state=ARMED", previousRunCrashed = true)
-
-        assertTrue(ordinary.contains("--- Earlier runs ---"))
-        assertFalse(ordinary.contains("uncaught exception"))
-        // Plural, and the crash named as one *of* them: the section can carry
-        // several runs and only one of them crashed, so labeling the whole
-        // aggregate as the crash misclassifies the ordinary restarts beside it
-        // (Codex, PR #153).
-        assertTrue(crashed.contains("--- Earlier runs (one ended in an uncaught exception) ---"))
     }
 
     @Test
@@ -217,7 +188,7 @@ class DebugReportTest {
             // be carrying it from the pinned copy.
             assertFalse(SnoozeDebugLog.snapshot().any { "processExit reason=crash" in it })
 
-            val payload = payload(recentLog = recentLogForReport())
+            val payload = payload(recentLogFor = ::recentLogForReport)
 
             val section = payload.substringAfter("--- Recent log")
             assertTrue(section, section.contains("processExit reason=crash"))
@@ -249,30 +220,53 @@ class DebugReportTest {
     }
 
     @Test
-    fun `the previous-run section is bounded regardless of how long the file was`() {
-        val hugePreviousRun = (1..5_000).joinToString("\n") { "line $it of the previous run" }
-
-        val payload = payload(previousRun = hugePreviousRun)
-
-        val previousSection = payload
-            .substringAfter("--- Earlier runs ---")
-            .substringBefore("--- Recent log")
-        assertTrue(previousSection.length < 30_000)
-        // The newest lines are kept, not the oldest — a crash entry is always
-        // the last line written.
-        assertTrue(previousSection.contains("line 5000 of the previous run"))
-        assertFalse(previousSection.contains("line 1 of the previous run"))
-    }
-
-    @Test
     fun `the recent log is bounded regardless of how much was captured`() {
         val hugeLog = (1..10_000).map { "entry $it" }
 
         val payload = payload(recentLog = hugeLog)
 
-        assertTrue(payload.length < MAX_SHARE_PAYLOAD_CHARS)
+        assertTrue(payload.length < APP_SECTION_CHARS)
         assertTrue(payload.contains("entry 10000"))
         assertFalse(payload.contains("entry 1\n"))
+    }
+
+    @Test
+    fun `a section with every part full still fits its share of the report`() {
+        val payload = payload(
+            deviceModel = "x".repeat(50_000),
+            earlierRunsUnavailable = true,
+            recentLog = (1..10_000).map { "entry $it" },
+        )
+
+        // The library cuts an oversized section from the middle; one that
+        // fits its share is never cut.
+        assertTrue("${payload.length}", payload.length <= APP_SECTION_CHARS)
+        assertTrue(payload.contains("entry 10000"))
+    }
+
+    @Test
+    fun `the log is fetched to the room the rest left, so its pinned lines survive`() {
+        SnoozeDebugLog.resetForTest()
+        SnoozeDebugLog.setRecording(true)
+        try {
+            SnoozeDebugLog.pinnedEvent("processExit reason=%s", safe("crash"))
+            repeat(DebugLog.DEFAULT_MAX_ENTRIES + 50) { SnoozeDebugLog.event("busy %s %s", it, "x".repeat(100)) }
+            var asked = -1
+
+            val payload = payload(
+                recentLogFor = { budget -> asked = budget; recentLogForReport(budget) },
+            )
+
+            // Asked for less than the section's share: the header came off first.
+            assertTrue("$asked", asked in 1 until APP_SECTION_CHARS)
+            assertTrue("${payload.length}", payload.length <= APP_SECTION_CHARS)
+            val section = payload.substringAfter("--- Recent log")
+            assertTrue(section.contains("processExit reason=crash"))
+            assertTrue(section.contains("busy ${DebugLog.DEFAULT_MAX_ENTRIES + 49} "))
+        } finally {
+            SnoozeDebugLog.resetForTest()
+            SnoozeDebugLog.setRecording(true)
+        }
     }
 
     @Test
@@ -290,7 +284,7 @@ class DebugReportTest {
         // is built from is a typed grant/boolean/enum-ish value (SPEC.md
         // §4.6's build/device/state facts) — there is no string parameter
         // here a coordinate, an SSID, or a typed place name could ever be
-        // passed through as. This says nothing about previousRun/recentLog,
+        // passed through as. This says nothing about recentLog,
         // which is a different channel with a different guarantee — see the
         // test below (Codex, PR #89: the previous version of this test
         // asserted against fixtures that never contained a banned value in
@@ -300,7 +294,7 @@ class DebugReportTest {
         val bannedSsid = "TheSmithFamilyHomeWiFi"
         val bannedPlaceName = "123 Fictional Street Apartment 4B"
 
-        val payload = payload(previousRun = null, recentLog = emptyList())
+        val payload = payload(recentLog = emptyList())
 
         assertFalse(payload.contains(bannedCoordinate))
         assertFalse(payload.contains(bannedSsid))
@@ -308,7 +302,7 @@ class DebugReportTest {
     }
 
     @Test
-    fun `previousRun and recentLog are forwarded verbatim — their floor is a call-site discipline, not this function's`() {
+    fun `recentLog is forwarded verbatim — its floor is a call-site discipline, not this function's`() {
         // Unlike the structured header above, buildDebugReportPayload does
         // no filtering of these two: whatever SnoozeDebugLog's own call
         // sites throughout the app choose to record is what a share
@@ -320,15 +314,10 @@ class DebugReportTest {
         // value and asserting it *does* survive is what actually pins that
         // contract, rather than a fixture that never contained one testing
         // nothing (Codex, PR #89).
-        val previousRunLeak = "left previous run at 0.000000,0.000000"
         val recentLogLeak = "connected to TheSmithFamilyHomeWiFi"
 
-        val payload = payload(previousRun = previousRunLeak, recentLog = listOf(recentLogLeak))
+        val payload = payload(recentLog = listOf(recentLogLeak))
 
-        assertTrue(
-            "previousRun is forwarded verbatim — this function performs no redaction",
-            payload.contains(previousRunLeak),
-        )
         assertTrue(
             "recentLog is forwarded verbatim — this function performs no redaction",
             payload.contains(recentLogLeak),
@@ -356,10 +345,9 @@ class DebugReportTest {
         tileAdded: Boolean? = true,
         ringerMode: String? = "ring",
         snoozeRingerCeiling: String? = "VIBRATE",
-        previousRun: String? = null,
-        previousRunCrashed: Boolean = false,
-        previousRunOmitted: Boolean = false,
+        earlierRunsUnavailable: Boolean = false,
         recentLog: List<String> = emptyList(),
+        recentLogFor: (Int) -> List<String> = { recentLog },
     ): String = buildDebugReportPayload(
         nowMillis = 0L,
         versionName = versionName,
@@ -382,9 +370,7 @@ class DebugReportTest {
         tileAdded = tileAdded,
         ringerMode = ringerMode,
         snoozeRingerCeiling = snoozeRingerCeiling,
-        previousRun = previousRun,
-        previousRunCrashed = previousRunCrashed,
-        previousRunOmitted = previousRunOmitted,
-        recentLog = recentLog,
+        earlierRunsUnavailable = earlierRunsUnavailable,
+        recentLog = recentLogFor,
     )
 }

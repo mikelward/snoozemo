@@ -2,7 +2,12 @@ package app.snoozemo.snooze
 
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
+import android.content.Context
 import app.snoozemo.core.SnoozeDebugLog
+import com.mikelward.androidlog.DebugLog
+import com.mikelward.androidlog.android.CollectedReport
+import com.mikelward.androidlog.android.ShareOutcome
+import com.mikelward.androidlog.android.DebugReport as SharedReport
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
@@ -12,6 +17,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -58,114 +64,99 @@ class DebugReportShareTest {
         SnoozeDebugLog.setRecording(true)
     }
 
-    @Test
-    fun `a landed clipboard copy consumes the crash pin`() {
-        var pinConsumed = false
+    /** What the real delivery put on the clipboard. */
+    private fun clipboardText(): String? =
+        context.getSystemService(android.content.ClipboardManager::class.java)
+            ?.primaryClip?.getItemAt(0)?.text?.toString()
 
-        val result = DebugReport.share(
-            context,
-            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
-            clipboardWrite = { _, _ -> true },
-            chooserLaunch = { _, _ -> true },
-            consumeCrashPin = { onResult -> pinConsumed = true; onResult(true) },
-        )
+    /** A report of [text] alone, with no earlier runs. */
+    private fun report(text: String): CollectedReport = SharedReport.collect(DebugLog(), null) { text }
 
-        assertTrue(result.clipboardCopied)
-        assertTrue(result.reachedUser)
-        assertTrue("a landed copy is durable proof of delivery", pinConsumed)
+    /**
+     * A delivery from two routes, decided as the library decides it: the
+     * chooser opening is SHARED, a copy alone COPIED_ONLY, neither FAILED.
+     */
+    private fun deliverVia(
+        clipboardWrite: (Context, String) -> Boolean,
+        chooserLaunch: (Context, String) -> Boolean,
+    ): (Context, CollectedReport) -> ShareOutcome = { c, report ->
+        val copied = clipboardWrite(c, report.text)
+        val launched = chooserLaunch(c, report.text)
+        when {
+            launched -> ShareOutcome.SHARED
+            copied -> ShareOutcome.COPIED_ONLY
+            else -> ShareOutcome.FAILED
+        }
     }
 
     @Test
-    fun `a failed clipboard copy never touches the pin, even if the chooser opened`() {
-        var pinConsumed = false
-
-        val result = DebugReport.share(
-            context,
-            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
-            clipboardWrite = { _, _ -> false },
-            chooserLaunch = { _, _ -> true },
-            consumeCrashPin = { _ -> pinConsumed = true },
-        )
-
-        assertFalse(result.clipboardCopied)
-        assertTrue("the chooser opening is not proof of delivery", result.reachedUser)
-        assertFalse("no durable proof means the pin stays for a retry", pinConsumed)
+    fun `the outcome is the delivery's own, and only a failed one is reported as failed`() {
+        for (outcome in ShareOutcome.values()) {
+            val result = DebugReport.share(context, collect = { report("irrelevant") }, deliver = { _, _ -> outcome })
+            assertEquals(outcome, result)
+            assertEquals(outcome.name, outcome == ShareOutcome.FAILED, DebugReport.lastShareFailed)
+        }
     }
 
     @Test
-    fun `neither route landing is reported, and the pin is untouched`() {
-        var pinConsumed = false
-
-        val result = DebugReport.share(
-            context,
-            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
-            clipboardWrite = { _, _ -> false },
-            chooserLaunch = { _, _ -> false },
-            consumeCrashPin = { _ -> pinConsumed = true },
-        )
-
-        assertFalse(result.clipboardCopied)
-        assertFalse(result.reachedUser)
-        assertFalse(pinConsumed)
-    }
-
-    @Test
-    fun `a report collection failure shares a fallback instead of crashing`() {
+    fun `a collection that throws shares a fallback and settles the tap`() {
         var sharedText: String? = null
+        val attempt = DebugReport.nextAttempt()
 
         val result = DebugReport.share(
             context,
-            payloadCollect = { error("collection broke") },
-            clipboardWrite = { _, text -> sharedText = text; true },
-            chooserLaunch = { _, _ -> true },
-            consumeCrashPin = { _ -> },
+            attempt = attempt,
+            collect = { error("collection broke") },
+            deliver = deliverVia(
+                clipboardWrite = { _, text -> sharedText = text; true },
+                chooserLaunch = { _, _ -> true },
+            ),
         )
 
-        assertTrue(result.clipboardCopied)
+        assertEquals(ShareOutcome.SHARED, result)
+        assertFalse("the Share buttons come back", DebugReport.shareInFlight)
         val text = requireNotNull(sharedText)
         assertTrue(text.startsWith("Snoozemo debug log"))
-        assertTrue(text.contains("Report collection failed: java.lang.IllegalStateException"))
-        // Only the failing type is named, never its message — this path can
-        // run from exactly the collection step the privacy floor is about.
-        assertFalse(text.contains("collection broke"))
+        // The fallback's own line names only the failing type. The failure
+        // itself is in the app's log, which the report carries under the log's
+        // own rules (SPEC §4.6), so the next report can say what went wrong.
+        val fallbackLine = text.lines().single { it.startsWith("Report collection failed:") }
+        assertEquals("Report collection failed: java.lang.IllegalStateException", fallbackLine)
+        assertTrue(SnoozeDebugLog.snapshot().any { it.contains("debug report: building it failed") })
     }
 
     @Test
-    fun `a share that fails to consume the pin still reports what it delivered`() {
+    fun `a fallback that throws too is a failed share that still settles the tap`() {
+        var delivered = false
+        val attempt = DebugReport.nextAttempt()
+
         val result = DebugReport.share(
             context,
-            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
-            clipboardWrite = { _, _ -> true },
-            chooserLaunch = { _, _ -> true },
-            consumeCrashPin = { onResult -> onResult(false) },
+            attempt = attempt,
+            collect = { error("collection broke") },
+            deliver = { _, _ -> delivered = true; ShareOutcome.SHARED },
+            fallback = { error("fallback broke") },
         )
 
-        // A refused consume is a file-layer detail the share's own outcome
-        // does not change: the copy still landed, so the failure text on
-        // screen must not fire — the pin just gets picked up again by the
-        // next hasPinnedCrash read.
-        assertTrue(result.clipboardCopied)
-        assertTrue(result.reachedUser)
+        assertEquals(ShareOutcome.FAILED, result)
+        assertFalse("nothing to deliver", delivered)
+        assertFalse("the Share buttons come back", DebugReport.shareInFlight)
+        assertTrue(DebugReport.lastShareFailed)
+        assertTrue(SnoozeDebugLog.snapshot().any { it.contains("debug report: the fallback could not be built either") })
     }
 
     @Test
-    fun `a payload that could not confirm the pinned crash was included does not consume the pin`() {
-        var pinConsumed = false
-
+    fun `a delivery that throws is reported as failed rather than taking the share down`() {
         val result = DebugReport.share(
             context,
-            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = false) },
-            clipboardWrite = { _, _ -> true },
-            chooserLaunch = { _, _ -> true },
-            consumeCrashPin = { _ -> pinConsumed = true },
+            collect = { report("irrelevant") },
+            deliver = { _, _ -> throw RuntimeException("boom") },
         )
 
-        // The clipboard copy landed, but the collector couldn't confirm the
-        // pinned crash actually made it into the shared text (its read
-        // timed out or failed) — consuming the pin here would delete the
-        // only evidence of a crash the user never actually saw reported.
-        assertTrue(result.clipboardCopied)
-        assertFalse("collection couldn't confirm the crash was included, so the pin must survive", pinConsumed)
+        assertEquals(ShareOutcome.FAILED, result)
+        assertTrue(DebugReport.lastShareFailed)
+        // In the app's own log, so the next report can say what went wrong.
+        assertTrue(SnoozeDebugLog.snapshot().any { it.contains("debug report: delivering it failed") })
     }
 
     @Test
@@ -176,18 +167,55 @@ class DebugReportShareTest {
 
         val result = DebugReport.share(
             context,
-            clipboardWrite = { _, text -> sharedText = text; true },
-            chooserLaunch = { _, _ -> true },
+            deliver = deliverVia(
+                clipboardWrite = { _, text -> sharedText = text; true },
+                chooserLaunch = { _, _ -> true },
+            ),
         )
 
-        assertTrue(result.clipboardCopied)
+        assertEquals(ShareOutcome.SHARED, result)
         val text = requireNotNull(sharedText)
         assertTrue(text.startsWith("Snoozemo debug log"))
         assertTrue(text.contains("the cap alarm was armed"))
-        // No debug-log install has run in this test, so there is nothing
-        // pinned — the real DebugLogging.consumeCrashPin behind the default
-        // seam must still complete cleanly rather than hanging the share.
         assertTrue(text.contains("--- State ---"))
+        assertTrue("${text.length}", text.length <= SharedReport.MAX_REPORT_CHARS)
+    }
+
+    /**
+     * No log installed while recording is on: there should be one, so the
+     * earlier runs are missing rather than absent, and the report says so
+     * instead of reading like one with nothing to send (Codex, PR #89).
+     */
+    @Test
+    fun `earlier runs that could not be read are named in the report`() {
+        var sharedText: String? = null
+
+        DebugReport.share(
+            context,
+            deliver = deliverVia(
+                clipboardWrite = { _, text -> sharedText = text; true },
+                chooserLaunch = { _, _ -> true },
+            ),
+        )
+
+        assertTrue(sharedText!!, sharedText!!.contains("could not be included in this report"))
+    }
+
+    @Test
+    fun `an installed log with nothing earlier says nothing is missing`() {
+        DebugLogging.install(context)
+        DebugLogging.awaitIdleForTest()
+        var sharedText: String? = null
+
+        DebugReport.share(
+            context,
+            deliver = deliverVia(
+                clipboardWrite = { _, text -> sharedText = text; true },
+                chooserLaunch = { _, _ -> true },
+            ),
+        )
+
+        assertFalse(sharedText!!, sharedText!!.contains("could not be included"))
     }
 
     /**
@@ -205,28 +233,16 @@ class DebugReportShareTest {
         org.robolectric.Shadows.shadowOf(context.packageManager).removePackage(context.packageName)
         var sharedText: String? = null
 
-        val result = DebugReport.share(
+        DebugReport.share(
             context,
-            clipboardWrite = { _, text -> sharedText = text; true },
-            chooserLaunch = { _, _ -> true },
+            deliver = deliverVia(
+                clipboardWrite = { _, text -> sharedText = text; true },
+                chooserLaunch = { _, _ -> true },
+            ),
         )
 
-        assertTrue(result.clipboardCopied)
         val text = requireNotNull(sharedText)
         assertTrue(text.contains("Version: unknown (-1)"))
-    }
-
-    @Test
-    fun `an exception from consumeCrashPin does not take the share down with it`() {
-        val result = DebugReport.share(
-            context,
-            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
-            clipboardWrite = { _, _ -> true },
-            chooserLaunch = { _, _ -> true },
-            consumeCrashPin = { _ -> throw RuntimeException("boom") },
-        )
-
-        assertEquals(DebugReport.Result(clipboardCopied = true, reachedUser = true), result)
     }
 
     // --- lastShareFailed / watchShareOutcome (Codex, PR #89: a config change
@@ -236,19 +252,21 @@ class DebugReportShareTest {
     fun `lastShareFailed reflects the most recently completed share`() {
         DebugReport.share(
             context,
-            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
-            clipboardWrite = { _, _ -> false },
-            chooserLaunch = { _, _ -> false },
-            consumeCrashPin = { _ -> },
+            collect = { report("irrelevant") },
+            deliver = deliverVia(
+                clipboardWrite = { _, _ -> false },
+                chooserLaunch = { _, _ -> false },
+            ),
         )
         assertTrue(DebugReport.lastShareFailed)
 
         DebugReport.share(
             context,
-            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
-            clipboardWrite = { _, _ -> true },
-            chooserLaunch = { _, _ -> true },
-            consumeCrashPin = { _ -> },
+            collect = { report("irrelevant") },
+            deliver = deliverVia(
+                clipboardWrite = { _, _ -> true },
+                chooserLaunch = { _, _ -> true },
+            ),
         )
         assertFalse("a later successful share supersedes the earlier failure", DebugReport.lastShareFailed)
     }
@@ -267,20 +285,22 @@ class DebugReportShareTest {
         DebugReport.share(
             context,
             attempt = attempt2,
-            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
-            clipboardWrite = { _, _ -> true },
-            chooserLaunch = { _, _ -> true },
-            consumeCrashPin = { _ -> },
+            collect = { report("irrelevant") },
+            deliver = deliverVia(
+                clipboardWrite = { _, _ -> true },
+                chooserLaunch = { _, _ -> true },
+            ),
         )
         assertFalse("the newer, faster attempt succeeded", DebugReport.lastShareFailed)
 
         DebugReport.share(
             context,
             attempt = attempt1,
-            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
-            clipboardWrite = { _, _ -> false },
-            chooserLaunch = { _, _ -> false },
-            consumeCrashPin = { _ -> },
+            collect = { report("irrelevant") },
+            deliver = deliverVia(
+                clipboardWrite = { _, _ -> false },
+                chooserLaunch = { _, _ -> false },
+            ),
         )
 
         assertFalse(
@@ -295,10 +315,11 @@ class DebugReportShareTest {
         DebugReport.share(
             context,
             attempt = attempt1,
-            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
-            clipboardWrite = { _, _ -> true },
-            chooserLaunch = { _, _ -> true },
-            consumeCrashPin = { _ -> },
+            collect = { report("irrelevant") },
+            deliver = deliverVia(
+                clipboardWrite = { _, _ -> true },
+                chooserLaunch = { _, _ -> true },
+            ),
         )
         assertFalse(DebugReport.lastShareFailed)
 
@@ -306,10 +327,11 @@ class DebugReportShareTest {
         DebugReport.share(
             context,
             attempt = attempt2,
-            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
-            clipboardWrite = { _, _ -> false },
-            chooserLaunch = { _, _ -> false },
-            consumeCrashPin = { _ -> },
+            collect = { report("irrelevant") },
+            deliver = deliverVia(
+                clipboardWrite = { _, _ -> false },
+                chooserLaunch = { _, _ -> false },
+            ),
         )
 
         assertTrue(DebugReport.lastShareFailed)
@@ -334,10 +356,11 @@ class DebugReportShareTest {
         DebugReport.share(
             context,
             attempt = attempt1,
-            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
-            clipboardWrite = { _, _ -> false },
-            chooserLaunch = { _, _ -> false },
-            consumeCrashPin = { _ -> },
+            collect = { report("irrelevant") },
+            deliver = deliverVia(
+                clipboardWrite = { _, _ -> false },
+                chooserLaunch = { _, _ -> false },
+            ),
         )
 
         assertFalse(
@@ -364,10 +387,11 @@ class DebugReportShareTest {
         DebugReport.share(
             context,
             attempt = attempt2,
-            payloadCollect = { DebugReport.Payload("the retry's report", pinConsumeSafe = true) },
-            clipboardWrite = { _, _ -> true },
-            chooserLaunch = { _, _ -> true },
-            consumeCrashPin = { _ -> },
+            collect = { report("the retry's report") },
+            deliver = deliverVia(
+                clipboardWrite = { _, _ -> true },
+                chooserLaunch = { _, _ -> true },
+            ),
         )
 
         var clipboardWriteCalled = false
@@ -375,16 +399,16 @@ class DebugReportShareTest {
         val staleResult = DebugReport.share(
             context,
             attempt = attempt1,
-            payloadCollect = { DebugReport.Payload("the stale first attempt's report", pinConsumeSafe = true) },
-            clipboardWrite = { _, _ -> clipboardWriteCalled = true; true },
-            chooserLaunch = { _, _ -> chooserLaunchCalled = true; true },
-            consumeCrashPin = { _ -> },
+            collect = { report("the stale first attempt's report") },
+            deliver = deliverVia(
+                clipboardWrite = { _, _ -> clipboardWriteCalled = true; true },
+                chooserLaunch = { _, _ -> chooserLaunchCalled = true; true },
+            ),
         )
 
         assertFalse("a superseded attempt must never write the clipboard", clipboardWriteCalled)
         assertFalse("a superseded attempt must never open a chooser", chooserLaunchCalled)
-        assertFalse("its own returned Result reports nothing delivered either", staleResult.clipboardCopied)
-        assertFalse(staleResult.reachedUser)
+        assertNull("its own result reports nothing delivered either", staleResult)
     }
 
     /**
@@ -417,10 +441,11 @@ class DebugReportShareTest {
         DebugReport.share(
             context,
             attempt = attempt,
-            payloadCollect = { DebugReport.Payload("the report", pinConsumeSafe = false) },
-            clipboardWrite = { _, _ -> true },
-            chooserLaunch = { _, _ -> true },
-            consumeCrashPin = { _ -> },
+            collect = { report("the report") },
+            deliver = deliverVia(
+                clipboardWrite = { _, _ -> true },
+                chooserLaunch = { _, _ -> true },
+            ),
         )
 
         assertFalse("the completed attempt re-enables the affordance", DebugReport.shareInFlight)
@@ -438,13 +463,14 @@ class DebugReportShareTest {
         val result = DebugReport.share(
             context,
             attempt = attempt,
-            payloadCollect = { DebugReport.Payload("the report", pinConsumeSafe = false) },
-            clipboardWrite = { _, _ -> false },
-            chooserLaunch = { _, _ -> false },
-            consumeCrashPin = { _ -> },
+            collect = { report("the report") },
+            deliver = deliverVia(
+                clipboardWrite = { _, _ -> false },
+                chooserLaunch = { _, _ -> false },
+            ),
         )
 
-        assertFalse("precondition: this attempt genuinely failed", result.reachedUser)
+        assertEquals("precondition: this attempt genuinely failed", ShareOutcome.FAILED, result)
         assertTrue("the failure is what's visible", DebugReport.lastShareFailed)
         assertFalse(
             "a failed share must still re-enable its own affordance, or the retry it is " +
@@ -466,10 +492,11 @@ class DebugReportShareTest {
         DebugReport.share(
             context,
             attempt = stale,
-            payloadCollect = { DebugReport.Payload("the report", pinConsumeSafe = false) },
-            clipboardWrite = { _, _ -> true },
-            chooserLaunch = { _, _ -> true },
-            consumeCrashPin = { _ -> },
+            collect = { report("the report") },
+            deliver = deliverVia(
+                clipboardWrite = { _, _ -> true },
+                chooserLaunch = { _, _ -> true },
+            ),
         )
 
         assertTrue(
@@ -497,16 +524,17 @@ class DebugReportShareTest {
             Thread {
                 DebugReport.share(
                     context,
-                    payloadCollect = { DebugReport.Payload("the report", pinConsumeSafe = false) },
-                    clipboardWrite = { _, _ ->
+                    collect = { report("the report") },
+                    deliver = deliverVia(
+                        clipboardWrite = { _, _ ->
                         val now = inDelivery.incrementAndGet()
                         maxConcurrent.updateAndGet { seen -> maxOf(seen, now) }
                         Thread.sleep(10)
                         inDelivery.decrementAndGet()
                         true
                     },
-                    chooserLaunch = { _, _ -> true },
-                    consumeCrashPin = { _ -> },
+                        chooserLaunch = { _, _ -> true },
+                    ),
                 )
             }
         }
@@ -518,85 +546,6 @@ class DebugReportShareTest {
             1,
             maxConcurrent.get(),
         )
-    }
-
-    /**
-     * `deliveriesCompleted`/`lastDeliveryResult` used to be recorded only
-     * *after* the pin-consume wait finished, which can take up to
-     * `CONSUME_PIN_TIMEOUT_MS` — so a retry tapped once the first attempt's
-     * clipboard write and chooser launch had already both landed, with only
-     * that cleanup step still outstanding, blocked on `deliveryLock` for
-     * the same duration before it could even see the outcome waiting for
-     * it, reading as the retry silently doing nothing (Codex, PR #89,
-     * twenty-seventh round on this mechanism). The outcome — and now
-     * `shareInFlight` — is applied, and `deliveryLock` released, before the
-     * pin-consume wait begins, so attempt 2 here, tapped strictly after
-     * attempt 1's own delivery, gets its own real, prompt retry rather than
-     * waiting out attempt 1's still-open cleanup step. The gate matters as
-     * much as the lock now: holding the button disabled through that cleanup
-     * would read the same way to the user.
-     */
-    @Test
-    fun `a retry tapped after delivery finishes gets its own prompt attempt, without waiting on a slow pin consume`() {
-        val pinConsumeStarted = CountDownLatch(1)
-        val releasePinConsume = CountDownLatch(1)
-        val attempt2Done = CountDownLatch(1)
-        val clipboardWrites2 = AtomicInteger(0)
-        val chooserLaunches2 = AtomicInteger(0)
-
-        val attempt1 = DebugReport.nextAttempt()
-        val thread1 = Thread {
-            DebugReport.share(
-                context,
-                attempt = attempt1,
-                payloadCollect = { DebugReport.Payload("the report", pinConsumeSafe = true) },
-                clipboardWrite = { _, _ -> true },
-                chooserLaunch = { _, _ -> true },
-                consumeCrashPin = { onResult ->
-                    pinConsumeStarted.countDown()
-                    releasePinConsume.await(2, TimeUnit.SECONDS)
-                    onResult(true)
-                },
-            )
-        }
-        thread1.start()
-        assertTrue(
-            "precondition: attempt 1 has fully delivered and is now only waiting on a slow pin consume",
-            pinConsumeStarted.await(2, TimeUnit.SECONDS),
-        )
-
-        // The tap happens now, strictly after attempt 1's own clipboard
-        // write and chooser launch — deliveriesCompleted already reflects
-        // attempt 1's delivery by this point, so this is not the
-        // mid-delivery overlap the tests above cover.
-        val attempt2 = DebugReport.nextAttempt()
-        var result2: DebugReport.Result? = null
-        val thread2 = Thread {
-            result2 = DebugReport.share(
-                context,
-                attempt = attempt2,
-                payloadCollect = { DebugReport.Payload("the report", pinConsumeSafe = true) },
-                clipboardWrite = { _, _ -> clipboardWrites2.incrementAndGet(); true },
-                chooserLaunch = { _, _ -> chooserLaunches2.incrementAndGet(); true },
-                consumeCrashPin = { onResult -> onResult(true) },
-            )
-            attempt2Done.countDown()
-        }
-        thread2.start()
-
-        assertTrue(
-            "attempt 2 must not block behind attempt 1's still-open pin consume — " +
-                "deliveryLock must already be released once only cleanup is left to do",
-            attempt2Done.await(500, TimeUnit.MILLISECONDS),
-        )
-        assertEquals("a tap after full delivery gets its own real clipboard write", 1, clipboardWrites2.get())
-        assertEquals("a tap after full delivery gets its own real chooser launch", 1, chooserLaunches2.get())
-        assertNotNull(result2)
-        assertTrue(result2!!.reachedUser)
-
-        releasePinConsume.countDown()
-        thread1.join(2_000)
-        thread2.join(2_000)
     }
 
     @Test
@@ -629,10 +578,11 @@ class DebugReportShareTest {
         DebugReport.share(
             context,
             attempt = firstAttempt,
-            payloadCollect = { DebugReport.Payload("text", pinConsumeSafe = true) },
-            clipboardWrite = { _, _ -> false },
-            chooserLaunch = { _, _ -> false },
-            consumeCrashPin = { _ -> },
+            collect = { report("text") },
+            deliver = deliverVia(
+                clipboardWrite = { _, _ -> false },
+                chooserLaunch = { _, _ -> false },
+            ),
         )
         assertTrue("precondition: the first attempt genuinely failed", DebugReport.lastShareFailed)
 
@@ -659,10 +609,11 @@ class DebugReportShareTest {
         DebugReport.share(
             context,
             attempt = firstAttempt,
-            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
-            clipboardWrite = { _, _ -> false },
-            chooserLaunch = { _, _ -> false },
-            consumeCrashPin = { _ -> },
+            collect = { report("irrelevant") },
+            deliver = deliverVia(
+                clipboardWrite = { _, _ -> false },
+                chooserLaunch = { _, _ -> false },
+            ),
         )
         assertTrue(DebugReport.lastShareFailed)
 
@@ -673,10 +624,11 @@ class DebugReportShareTest {
         DebugReport.share(
             context,
             attempt = replacementAttempt,
-            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
-            clipboardWrite = { _, _ -> true },
-            chooserLaunch = { _, _ -> true },
-            consumeCrashPin = { _ -> },
+            collect = { report("irrelevant") },
+            deliver = deliverVia(
+                clipboardWrite = { _, _ -> true },
+                chooserLaunch = { _, _ -> true },
+            ),
         )
 
         assertFalse(
@@ -693,10 +645,11 @@ class DebugReportShareTest {
         try {
             DebugReport.share(
                 context,
-                payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
-                clipboardWrite = { _, _ -> false },
-                chooserLaunch = { _, _ -> false },
-                consumeCrashPin = { _ -> },
+                collect = { report("irrelevant") },
+                deliver = deliverVia(
+                    clipboardWrite = { _, _ -> false },
+                    chooserLaunch = { _, _ -> false },
+                ),
             )
         } finally {
             watch.close()
@@ -712,10 +665,11 @@ class DebugReportShareTest {
 
         DebugReport.share(
             context,
-            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
-            clipboardWrite = { _, _ -> true },
-            chooserLaunch = { _, _ -> true },
-            consumeCrashPin = { _ -> },
+            collect = { report("irrelevant") },
+            deliver = deliverVia(
+                clipboardWrite = { _, _ -> true },
+                chooserLaunch = { _, _ -> true },
+            ),
         )
 
         assertEquals(0, heard)
@@ -743,15 +697,11 @@ class DebugReportShareTest {
         DebugLogging.awaitIdleForTest()
         assertEquals("precondition: a crash is pinned", true, pinnedBefore)
 
-        var sharedText: String? = null
-        val result = DebugReport.share(
-            context,
-            clipboardWrite = { _, text -> sharedText = text; true },
-            chooserLaunch = { _, _ -> true },
-        )
+        val result = DebugReport.share(context)
+        val sharedText: String? = clipboardText()
         DebugLogging.awaitIdleForTest()
 
-        assertTrue(result.clipboardCopied)
+        assertEquals("delivered through the library", ShareOutcome.SHARED, result)
         // The premise: the report could not carry the whole run.
         assertTrue(sharedText!!.contains("line 4000 padding padding"))
         assertFalse(sharedText!!.contains("line 1 padding padding\n"))
@@ -766,34 +716,40 @@ class DebugReportShareTest {
     }
 
     /**
-     * A share whose copy did not land leaves the banner up, so the crash is
-     * still offered when the user tries again.
+     * A fallback that lands is still the user acting on the banner, so it
+     * comes down like any other share (Codex, PR #326).
      */
     @Test
-    fun `a share whose copy did not land leaves the banner up`() {
+    fun `a fallback share still lowers the crash banner`() {
         val dir = context.cacheDir
         File(dir, "androidlog.log").writeText("the run that crashed\n")
         File(dir, "androidlog.log.crash").writeText("1")
         DebugLogging.install(context)
         DebugLogging.awaitIdleForTest()
 
-        DebugReport.share(
-            context,
-            clipboardWrite = { _, _ -> false },
-            chooserLaunch = { _, _ -> true },
-        )
+        var pinnedBefore: Boolean? = null
+        DebugLogging.hasPinnedCrash { pinned, _ -> pinnedBefore = pinned }
+        DebugLogging.awaitIdleForTest()
+        assertEquals("precondition: a crash is pinned", true, pinnedBefore)
+
+        val result = DebugReport.share(context, collect = { error("collection broke") })
+        val sharedText: String? = clipboardText()
         DebugLogging.awaitIdleForTest()
 
+        assertEquals(ShareOutcome.SHARED, result)
+        assertTrue(sharedText!!.contains("Report collection failed: java.lang.IllegalStateException"))
+        assertTrue("the crashed run rides along", sharedText.contains("the run that crashed"))
         var pinnedAfter: Boolean? = null
         DebugLogging.hasPinnedCrash { pinned, _ -> pinnedAfter = pinned }
         DebugLogging.awaitIdleForTest()
-        assertEquals(true, pinnedAfter)
+        assertEquals("the banner comes down", false, pinnedAfter)
     }
 
     /**
      * A crash the read could not open is skipped and left on disk, and the
      * report carries the ordinary run beside it with the library's notice that
-     * a run could not be read (Codex, PR #153). Sharing deletes neither.
+     * a run could not be read (Codex, PR #153). Sharing deletes neither, and
+     * lowers the banner anyway.
      */
     @Test
     fun `a crash the read could not open stays on disk with the run the report carried`() {
@@ -820,15 +776,11 @@ class DebugReportShareTest {
         DebugLogging.awaitIdleForTest()
         assertEquals("precondition: the crash is still pinned", true, pinnedBefore)
 
-        var sharedText: String? = null
-        val result = DebugReport.share(
-            context,
-            clipboardWrite = { _, text -> sharedText = text; true },
-            chooserLaunch = { _, _ -> true },
-        )
+        val result = DebugReport.share(context)
+        val sharedText: String? = clipboardText()
         DebugLogging.awaitIdleForTest()
 
-        assertTrue(result.clipboardCopied)
+        assertEquals("delivered through the library", ShareOutcome.SHARED, result)
         // The report carries what it could read, and the library's own notice
         // says a run is missing from it -- so the reader is told.
         assertTrue(sharedText ?: "", sharedText!!.contains("an ordinary earlier run"))
@@ -844,8 +796,8 @@ class DebugReportShareTest {
         var pinnedAfter: Boolean? = null
         DebugLogging.hasPinnedCrash { pinned, _ -> pinnedAfter = pinned }
         DebugLogging.awaitIdleForTest()
-        // Up, because acknowledging renames a crash file off its suffix and
-        // this one cannot be classified, not because the share held it up.
-        assertEquals("and the banner stays up", true, pinnedAfter)
+        // Down: the share is the user acting on the banner, and a log nobody
+        // can read must not hold it up for good (maintainer, 2026-10-11).
+        assertEquals("and the banner comes down", false, pinnedAfter)
     }
 }

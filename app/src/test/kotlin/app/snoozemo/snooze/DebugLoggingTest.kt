@@ -196,43 +196,31 @@ class DebugLoggingTest {
     }
 
     @Test
-    fun `readPreviousOrCrash before install reports a failed read, not a clean empty one`() {
+    fun `a report before install is told the earlier runs are unavailable, not that there are none`() {
         // Same reasoning as hasPinnedCrash above: a pinned crash from a
         // previous run cannot be told apart from "genuinely nothing to
         // report" if this process never got as far as checking.
-        var run: com.mikelward.androidlog.android.PreviousRun? = null
-        var wasCrash: Boolean? = null
-        var readSucceeded: Boolean? = null
-        DebugLogging.readPreviousOrCrash { r, c, s -> run = r; wasCrash = c; readSucceeded = s }
-        DebugLogging.awaitIdleForTest()
-
-        assertEquals(null, run)
-        assertEquals(false, wasCrash)
-        assertEquals(false, readSucceeded)
+        assertEquals(DebugLogging.SinkForReport.Unavailable, DebugLogging.sinkForReport())
     }
 
     @Test
-    fun `consumeCrashPin reports success before install — nothing to consume`() {
-        var consumed: Boolean? = null
-        DebugLogging.consumeCrashPin { consumed = it }
-        DebugLogging.awaitIdleForTest()
-
-        assertEquals(true, consumed)
-    }
-
-    @Test
-    fun `installed pass-throughs reach the sink`() {
+    fun `a report after install is handed the sink`() {
         DebugLogging.install(context)
         DebugLogging.awaitIdleForTest()
 
-        var consumed: Boolean? = null
-        DebugLogging.consumeCrashPin { consumed = it }
-        DebugLogging.awaitIdleForTest()
+        val handed = DebugLogging.sinkForReport()
 
-        // No crash pinned in this run — a real sink answers the same
-        // trivial-success as the no-sink case, but this pins that the call
-        // actually reached a `DebugFileSink`, not just the guard above it.
-        assertEquals(true, consumed)
+        assertTrue("$handed", handed is DebugLogging.SinkForReport.Available && handed.sink != null)
+    }
+
+    @Test
+    fun `a report with the log off is handed no sink, and that is not a failure`() {
+        SnoozeDebugLog.setRecording(false)
+        try {
+            assertEquals(DebugLogging.SinkForReport.Available(null), DebugLogging.sinkForReport())
+        } finally {
+            SnoozeDebugLog.setRecording(true)
+        }
     }
 
     // --- watchCrashPinOutcome (Codex, PR #89: a Share/Dismiss tap's own
@@ -240,36 +228,24 @@ class DebugLoggingTest {
     // a configuration change can hand the screen to a replacement instance
     // first) ---
 
-    @Test
-    fun `watchCrashPinOutcome fires after consumeCrashPin completes, before install`() {
-        var fired = 0
-        val watch = DebugLogging.watchCrashPinOutcome { fired++ }
-
-        try {
-            DebugLogging.consumeCrashPin {}
-            DebugLogging.awaitIdleForTest()
-        } finally {
-            watch.close()
-        }
-
-        assertEquals(1, fired)
+    /** Installs over a crashed previous run, so a dismissal changes the pin. */
+    private fun installWithPinnedCrash() {
+        File(context.cacheDir, "androidlog.log").writeText("the run that crashed\n")
+        File(context.cacheDir, "androidlog.log.crash").writeText("1")
+        DebugLogging.install(context)
+        // Drained before any watch is registered: `install` queues the sink's
+        // own first crash derivation, which publishes through the same watch.
+        DebugLogging.awaitIdleForTest()
     }
 
     @Test
-    fun `watchCrashPinOutcome fires once a real sink's consume completes too`() {
-        DebugLogging.install(context)
-        // Drained before the watch is registered, deliberately: `install`
-        // queues the sink's own first crash derivation, which publishes
-        // through this same watch. Registering while that is still in flight
-        // leaves the count depending on which lands first — 0 or 1 by
-        // scheduling, which is a test that passes most of the time.
-        DebugLogging.awaitIdleForTest()
-
+    fun `watchCrashPinOutcome hears the pin change`() {
+        installWithPinnedCrash()
         var fired = 0
         val watch = DebugLogging.watchCrashPinOutcome { fired++ }
 
         try {
-            DebugLogging.consumeCrashPin {}
+            DebugLogging.dismissCrashPin()
             DebugLogging.awaitIdleForTest()
         } finally {
             watch.close()
@@ -280,10 +256,11 @@ class DebugLoggingTest {
 
     @Test
     fun `closing watchCrashPinOutcome stops it from hearing later completions`() {
+        installWithPinnedCrash()
         var fired = 0
         DebugLogging.watchCrashPinOutcome { fired++ }.close()
 
-        DebugLogging.consumeCrashPin {}
+        DebugLogging.dismissCrashPin()
         DebugLogging.awaitIdleForTest()
 
         assertEquals(0, fired)
@@ -291,6 +268,7 @@ class DebugLoggingTest {
 
     @Test
     fun `a later watch registration replaces the earlier one, like watchSaveOutcome`() {
+        installWithPinnedCrash()
         var firstHeard = 0
         var secondHeard = 0
         val first = DebugLogging.watchCrashPinOutcome { firstHeard++ }
@@ -299,7 +277,7 @@ class DebugLoggingTest {
         val second = DebugLogging.watchCrashPinOutcome { secondHeard++ }
         first.close()
 
-        DebugLogging.consumeCrashPin {}
+        DebugLogging.dismissCrashPin()
         DebugLogging.awaitIdleForTest()
         second.close()
 
@@ -504,15 +482,11 @@ class DebugLoggingTest {
     }
 
     @Test
-    fun `a dismissal the storage refused says why the banner is still up`() {
-        // A refused dismissal leaves the banner up by construction, so the user
-        // is never told it worked -- but without this they are left tapping a
-        // control with no visible effect and no reason, and the one line that
-        // explains it is in a log they would have to go and read (Codex,
-        // PR #153).
+    fun `a dismissal onto a taken name still lowers the banner and keeps both runs`() {
+        // The library moves the crashed run to the next free name rather than
+        // leaving the banner up for good over an obstruction the user cannot
+        // fix (androidlog 5.0; maintainer, 2026-10-11).
         val dir = context.cacheDir
-        // The crashed run's plain name is already taken, so the rename off the
-        // crash suffix is refused rather than replacing the run that is there.
         File(dir, "androidlog-prev-1.crash.log").writeText("the run that crashed\n")
         File(dir, "androidlog-prev-1.log").writeText("an earlier run, never shared\n")
         DebugLogging.install(context)
@@ -520,14 +494,14 @@ class DebugLoggingTest {
 
         DebugLogging.dismissCrashPin()
         DebugLogging.awaitIdleForTest()
-        assertTrue("precondition: it really was refused", File(dir, "androidlog-prev-1.crash.log").exists())
-        assertTrue(DebugLogging.lastDismissFailed)
 
-        // And a retry that works clears it.
-        File(dir, "androidlog-prev-1.log").delete()
-        DebugLogging.dismissCrashPin()
-        DebugLogging.awaitIdleForTest()
         assertFalse(DebugLogging.lastDismissFailed)
+        var pinned: Boolean? = null
+        DebugLogging.hasPinnedCrash { p, _ -> pinned = p }
+        DebugLogging.awaitIdleForTest()
+        assertEquals(false, pinned)
+        assertEquals("an earlier run, never shared\n", File(dir, "androidlog-prev-1.log").readText())
+        assertEquals("the run that crashed\n", File(dir, "androidlog-prev-1-1.log").readText())
     }
 
     /**
@@ -717,119 +691,5 @@ class DebugLoggingTest {
             "a validated snapshot must not carry the slow-worker caveat: $stall",
             stall.contains("cannot be placed either side of it"),
         )
-    }
-
-    /**
-     * A read that never comes back must fail at the bound, not park the worker.
-     *
-     * The library's `readPreviousRun()` is synchronous, and until androidlog
-     * 2.0.50 it waited on the sink's own worker with no timeout — so a stalled
-     * read parked `DebugLogging`'s worker for the life of the process, taking
-     * the recording gate and the user's opt-out with it. The library bounds its
-     * own wait now; this bound is the half that does not depend on which
-     * version an install resolved, and it is what turns a stall into
-     * `readSucceeded = false` rather than a silent "nothing to send".
-     */
-    @Test
-    fun `a read that never returns fails at the bound and is interrupted`() {
-        val started = java.util.concurrent.CountDownLatch(1)
-        val interrupted = java.util.concurrent.CountDownLatch(1)
-
-        val startedAt = System.nanoTime()
-        val thrown = runCatching {
-            DebugLogging.awaitBounded(timeoutSeconds = 1) {
-                started.countDown()
-                try {
-                    // Longer than any bound under test, so the wait can only
-                    // end at the timeout or the interrupt below.
-                    Thread.sleep(30_000)
-                } catch (e: InterruptedException) {
-                    interrupted.countDown()
-                    throw e
-                }
-            }
-        }.exceptionOrNull()
-        val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
-
-        assertTrue("the read must have actually started", started.await(5, java.util.concurrent.TimeUnit.SECONDS))
-        assertTrue(
-            "a stalled read must surface as a timeout, not a null result: $thrown",
-            thrown is java.util.concurrent.TimeoutException,
-        )
-        assertTrue("it must fail at its own bound, not wait the read out: $elapsedMs ms", elapsedMs < 15_000)
-        // Otherwise every stalled read leaks a thread that stays blocked for as
-        // long as whatever wedged it does. What the interrupt reaches is this
-        // *thread*, and only it — the test below is the production shape, where
-        // the work it is waiting on belongs to somebody else's executor.
-        assertTrue(
-            "the abandoned read must be interrupted rather than left running",
-            interrupted.await(5, java.util.concurrent.TimeUnit.SECONDS),
-        )
-    }
-
-    /**
-     * The interrupt releases this caller; it does not cancel the sink's work.
-     *
-     * The test above hands `awaitBounded` a lambda that does the blocking
-     * itself, so its interrupt lands on the work. Production nests: the lambda
-     * calls `DebugFileSink.readPreviousRun()`, which blocks *waiting on* the
-     * sink's own single worker, so the interrupt reaches that wait and nothing
-     * further. The read task keeps its place in the sink's queue, and so does
-     * everything behind it — an opt-out's purge included (Codex, PR #169).
-     *
-     * That residue is deliberate, not an oversight, and propagating the
-     * cancellation would be worse: the sink's executor has one thread shared by
-     * every file operation, so interrupting the task at its head could land on
-     * an unrelated write, and dequeuing the read would not unwedge a worker
-     * that is stuck on something else anyway. `TODO.md` carries what is still
-     * owed — reporting the opt-out honestly when the purge behind it cannot run.
-     */
-    @Test
-    fun `an interrupted wait leaves the work it was waiting on alone`() {
-        val sinkWorker = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
-            Thread(runnable, "test-sink-worker").apply { isDaemon = true }
-        }
-        val running = java.util.concurrent.CountDownLatch(1)
-        val release = java.util.concurrent.CountDownLatch(1)
-        val workInterrupted = java.util.concurrent.atomic.AtomicBoolean(false)
-        try {
-            val onSinkWorker = sinkWorker.submit {
-                running.countDown()
-                try {
-                    release.await(30, java.util.concurrent.TimeUnit.SECONDS)
-                } catch (e: InterruptedException) {
-                    workInterrupted.set(true)
-                    Thread.currentThread().interrupt()
-                }
-            }
-            assertTrue(
-                "the sink's task must have started, or this proves nothing",
-                running.await(5, java.util.concurrent.TimeUnit.SECONDS),
-            )
-
-            val thrown = runCatching {
-                // `readPreviousRun()`'s shape: block on the sink's worker.
-                DebugLogging.awaitBounded(timeoutSeconds = 1) { onSinkWorker.get() }
-            }.exceptionOrNull()
-
-            assertTrue(
-                "the caller must still give up at its own bound: $thrown",
-                thrown is java.util.concurrent.TimeoutException,
-            )
-            assertFalse(
-                "the sink's own task must be left running, not interrupted",
-                workInterrupted.get(),
-            )
-            assertFalse("and it must still be pending", onSinkWorker.isDone)
-        } finally {
-            release.countDown()
-            sinkWorker.shutdownNow()
-        }
-    }
-
-    /** And the ordinary path still answers with what the read produced. */
-    @Test
-    fun `a read that returns in time answers with its result`() {
-        assertEquals("done", DebugLogging.awaitBounded { "done" })
     }
 }

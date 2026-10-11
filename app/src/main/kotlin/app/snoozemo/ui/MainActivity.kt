@@ -4519,9 +4519,8 @@ class MainActivity : ComponentActivity() {
     /**
      * Shares the debug log (SPEC.md §4.6), from either the permanent row or
      * the crash banner's own Share button — the same flow either way, since
-     * [DebugReport.share] already picks up a pinned crash automatically
-     * (`DebugLogging.readPreviousOrCrash`) and consumes the pin itself once
-     * the share actually lands.
+     * [DebugReport.share] carries the earlier runs, a pinned crash included,
+     * and lowers the banner for what it carried once the copy lands.
      *
      * Runs off the main thread: [DebugReport.share] does binder and disk I/O
      * (policy access, permission checks, reading the previous run's file),

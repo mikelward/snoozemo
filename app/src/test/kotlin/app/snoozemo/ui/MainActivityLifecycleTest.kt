@@ -67,10 +67,8 @@ class MainActivityLifecycleTest {
         // after onStop.
         DebugReport.share(
             activity.applicationContext,
-            payloadCollect = { DebugReport.Payload("irrelevant", pinConsumeSafe = true) },
-            clipboardWrite = { _, _ -> false },
-            chooserLaunch = { _, _ -> false },
-            consumeCrashPin = { _ -> },
+            collect = { com.mikelward.androidlog.android.DebugReport.collect(com.mikelward.androidlog.DebugLog(), null) { "irrelevant" } },
+            deliver = { _, _ -> com.mikelward.androidlog.android.ShareOutcome.FAILED },
         )
 
         controller.start()
@@ -97,10 +95,7 @@ class MainActivityLifecycleTest {
         DebugLogging.resetForTest()
         val app: Application = ApplicationProvider.getApplicationContext()
         DebugLogStore(app).setEnabled(true)
-        // The crashed run's plain name is already taken, so the rename off the
-        // crash suffix is refused -- the failure this outcome carries.
         File(app.cacheDir, "androidlog-prev-1.crash.log").writeText("the run that crashed\n")
-        File(app.cacheDir, "androidlog-prev-1.log").writeText("an earlier run, never shared\n")
 
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         val activity = controller.get()
@@ -111,6 +106,9 @@ class MainActivityLifecycleTest {
         // outcome regardless of whether anything is watching -- what a worker
         // thread's completion looks like landing after onStop.
         DebugLogging.install(app)
+        // A dismissal that runs always lowers the banner, so the failure this
+        // outcome carries is one the worker refused.
+        DebugLogging.refuseDismissForTest = true
         DebugLogging.dismissCrashPin()
         // Checked rather than assumed. The worker is shared by every test class
         // in the sandbox, so a task an earlier class wedged it with leaves this

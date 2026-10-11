@@ -8,27 +8,18 @@ import app.snoozemo.presence.deviceHasMotionSensor
 import app.snoozemo.storage.SerializedPreferences
 import app.snoozemo.ui.motionEndUnavailability
 import com.mikelward.androidlog.android.DebugFileSink
-import com.mikelward.androidlog.android.PreviousRun
 import java.io.File
-import java.util.concurrent.ExecutionException
-import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
 
 /**
- * How long [DebugLogging.readPreviousOrCrash] waits for a previous-run read
- * before reporting that it could not be read.
- *
- * A quarter of the library's own bound, deliberately. This one is in front of
- * a user who has asked to share their log, so the failure needs to arrive
- * while they are still watching; the library's has to be generous enough never
- * to fire on a slow device doing nothing wrong, since it answers a caller that
- * cannot tell a timeout from "there is nothing to send". Here that ambiguity
- * does not arise -- a timeout becomes `readSucceeded = false`.
+ * How long [DebugLogging.sinkForReport] waits for the worker to hand over the
+ * sink. The hand-off is a field read; this only bounds a worker busy with
+ * something else, so a user waiting on a share is told the earlier runs could
+ * not be included rather than left waiting.
  */
-private const val PREVIOUS_RUN_READ_TIMEOUT_SECONDS = 5L
+private const val SINK_HANDOFF_TIMEOUT_SECONDS = 5L
 
 private const val TAG = "SnoozemoDebugLog"
 
@@ -729,116 +720,47 @@ internal object DebugLogging {
     }
 
     /**
-     * The prior runs still on disk, newest-bounded for a report.
+     * The installed sink, for a report to read the earlier runs from and to
+     * lower the banner through ([DebugReport]), or [SinkForReport.Unavailable]
+     * when it could not be handed over.
      *
-     * A null [PreviousRun] means there is nothing to send. It does not
-     * distinguish that from a read that failed — the library reports a failed
-     * read into the log itself rather than to the caller — so `readSucceeded`
-     * answers the narrower question the caller can still be told: whether the
-     * read ran at all, as against no sink installed or a worker that refused
-     * the task. A run the read could not open is named in the text by the
-     * library's own notice.
+     * Only the hand-off runs on [worker]; the read itself runs on the caller's
+     * thread, so a slow read never parks the worker and the opt-out queued
+     * behind it. The reference is handed off, not the field: [sink] stays
+     * confined to [worker]. A null sink with recording off is not a failure —
+     * there is nothing to send.
      */
-    fun readPreviousOrCrash(
-        onResult: (run: PreviousRun?, wasCrash: Boolean, readSucceeded: Boolean) -> Unit,
-    ) {
+    fun sinkForReport(timeoutSeconds: Long = SINK_HANDOFF_TIMEOUT_SECONDS): SinkForReport {
+        val result = LinkedBlockingQueue<SinkForReport>(1)
         runCatching {
             worker.execute {
                 reinstallIfNeeded()
                 val installed = sink
-                if (installed == null) {
-                    onResult(null, false, false)
-                } else {
-                    // A throw here would otherwise escape this Runnable on the
-                    // worker thread, never reaching onResult, and every caller
-                    // would wait out its own timeout and report a misleading
-                    // "timed out" instead of the real failure (Codex, PR #89).
-                    runCatching { readPreviousRunBounded(installed) }
-                        .onSuccess { onResult(it, pinnedCrash, true) }
-                        .onFailure {
-                            logFailure(it, "the previous runs could not be read")
-                            onResult(null, pinnedCrash, false)
-                        }
-                }
+                result.offer(
+                    if (installed != null || !SnoozeDebugLog.isRecording) {
+                        SinkForReport.Available(installed)
+                    } else {
+                        SinkForReport.Unavailable
+                    },
+                )
             }
         }.onFailure {
-            logFailure(it, "debug-log worker refused a previous-run read")
-            onResult(null, false, false)
+            logFailure(it, "debug-log worker refused a report's sink hand-off")
+            return SinkForReport.Unavailable
+        }
+        return result.poll(timeoutSeconds, TimeUnit.SECONDS) ?: run {
+            runCatching { SnoozeDebugLog.warning("The debug-log worker did not hand over the log for a report in time") }
+            SinkForReport.Unavailable
         }
     }
 
-    /**
-     * [DebugFileSink.readPreviousRun] on a thread that is not [worker], waited
-     * for with a bound.
-     *
-     * That call is synchronous and, until androidlog 2.0.50, waited on the
-     * sink's own worker with no timeout at all — so a sink read that never
-     * came back parked *this* worker for the life of the process, and with it
-     * everything queued behind: the recording gate, and the user's opt-out.
-     * A privacy control that never applies while Settings shows it off is
-     * principle 2's failure, not a test problem (`TODO.md`).
-     *
-     * The library now bounds its own wait, and this is deliberately kept
-     * anyway. It is the half that does not depend on which version of the
-     * library an install resolved, it fails in a quarter of the time so a user
-     * waiting on a share is not left for ten seconds, and — the part that
-     * matters most — a timeout here becomes `readSucceeded = false`, so the
-     * screen says the log could not be read rather than showing "nothing to
-     * send" over runs that are still on disk.
-     *
-     * The reference is handed off, not the field: [sink] stays confined to
-     * [worker], which reads it and passes the value. The pool is cached rather
-     * than single-threaded on purpose — a thread still stuck on a previous
-     * stalled read must not be what makes the next one time out.
-     */
-    private fun readPreviousRunBounded(installed: DebugFileSink): PreviousRun? =
-        awaitBounded { readPreviousRunForReport(installed) }
+    /** What [sinkForReport] could hand over. */
+    sealed interface SinkForReport {
+        /** The sink, or null when the log is off and there is nothing to read. */
+        data class Available(val sink: DebugFileSink?) : SinkForReport
 
-    /**
-     * Runs [read] on [blockingReads] and waits [timeoutSeconds] for it.
-     *
-     * Takes the work rather than the sink so the bound can be tested at all:
-     * `DebugFileSink` is a final class this module cannot stall — the seams
-     * that would allow it are internal to the library — so a test that had to
-     * go through one could only ever assert the happy path.
-     */
-    internal fun <T> awaitBounded(
-        timeoutSeconds: Long = PREVIOUS_RUN_READ_TIMEOUT_SECONDS,
-        read: () -> T,
-    ): T {
-        val pending = blockingReads.submit<T> { read() }
-        return try {
-            pending.get(timeoutSeconds, TimeUnit.SECONDS)
-        } catch (e: TimeoutException) {
-            // Interrupts the read, which the library's own wait reports and
-            // returns from; without that it would sit on the thread until the
-            // sink's worker freed up, or forever.
-            //
-            // It releases *this* thread and nothing further: the task the read
-            // submitted keeps its place in the sink's queue, as does everything
-            // behind it, an opt-out's purge included (Codex, PR #169; `TODO.md`
-            // carries what is still owed there). Propagating the cancellation
-            // is not the answer — the sink's executor has one thread shared by
-            // every file operation, so interrupting the task at its head could
-            // land on an unrelated write, and dequeuing the read would not
-            // unwedge a worker stuck on something else anyway.
-            pending.cancel(true)
-            throw e
-        } catch (e: ExecutionException) {
-            // The read's own failure, already logged by the library. Unwrapped
-            // so the caller's failure line names what actually went wrong
-            // rather than the wrapper this hand-off added.
-            throw e.cause ?: e
-        }
-    }
-
-    /**
-     * The pool [readPreviousRunBounded] hands the blocking read to. Cached and
-     * daemon: threads are created only when a read is in flight, a stalled one
-     * cannot hold the process open, and one left stuck does not delay the next.
-     */
-    private val blockingReads = Executors.newCachedThreadPool { runnable ->
-        Thread(runnable, "snoozemo-debug-log-read").apply { isDaemon = true }
+        /** No sink when one was expected, or the worker did not answer. */
+        data object Unavailable : SinkForReport
     }
 
     /** Mirrors [watchSaveOutcome]; fed by the sink's own crash listener. */
@@ -849,51 +771,6 @@ internal object DebugLogging {
 
     @Volatile
     private var onCrashPinOutcome: (() -> Unit)? = null
-
-    /**
-     * Lowers the crash banner after a delivered report. Reported as success
-     * before [install] has run: there is nothing to lower.
-     *
-     * Deletes nothing (maintainer, 2026-09-30). It used to delete the runs the
-     * report was built from, which cost the logs whenever the share failed
-     * after the clipboard copy or the user changed their mind about where to
-     * send it — and, to avoid deleting a crash the report had not carried, it
-     * refused to lower the banner for any crash too old to fit, so the banner
-     * for that crash never came down. The runs now stay, still shareable, and
-     * age out under the logger's retention count like any other.
-     */
-    fun consumeCrashPin(onResult: (Boolean) -> Unit) {
-        runCatching {
-            worker.execute {
-                val installed = sink
-                if (installed != null) {
-                    runCatching { installed.acknowledgeCrashBanner() }
-                        .onFailure { logFailure(it, "a crash banner could not be acknowledged after a share") }
-                }
-                // Unconditional, because "a consume completed" is its own event
-                // and not the same fact as "the pin state changed". The sink's
-                // crash listener reports the second; only this reports the
-                // first, and with nothing pinned there is no state change to
-                // report at all. It matters because a configuration change can
-                // recreate the activity while this is still on the worker, and
-                // the `onResult` that started it closes over the instance that
-                // is now gone — without this the screen sits on stale state
-                // until something else happens to refresh it.
-                //
-                // A consume that *does* lower the banner therefore notifies
-                // twice, which costs nothing: the observer re-reads the state
-                // rather than trusting a delivered value, so a duplicate is
-                // the same answer a second time. Making this conditional to
-                // avoid that is what left a test racing the install's own
-                // first derivation.
-                runCatching { onCrashPinOutcome?.invoke() }
-                onResult(true)
-            }
-        }.onFailure {
-            logFailure(it, "debug-log worker refused a crash-pin consume")
-            onResult(false)
-        }
-    }
 
     /**
      * Whether the most recently completed [dismissCrashPin] was refused.
@@ -940,6 +817,7 @@ internal object DebugLogging {
      */
     fun dismissCrashPin() {
         try {
+            if (refuseDismissForTest) throw java.util.concurrent.RejectedExecutionException("refused for a test")
             worker.execute {
                 localDismissFailed = false
                 try {
@@ -1100,6 +978,14 @@ internal object DebugLogging {
      * [install] leaves behind — so the next crash read takes the inline retry
      * path. [resetForTest] also forgets the application, which disables it.
      */
+    /**
+     * Test-only: the worker refuses the next dismissals, the one way a
+     * dismissal can still fail now that a dismissal that runs always lowers the
+     * banner (androidlog 5.0).
+     */
+    @Volatile
+    internal var refuseDismissForTest = false
+
     internal fun forgetSinkForTest() {
         awaitIdleForTest()
         sink = null
@@ -1203,6 +1089,7 @@ internal object DebugLogging {
 
     /** Test seam: forgets the installed sink so the next [install] rebuilds it. */
     internal fun resetForTest() {
+        refuseDismissForTest = false
         awaitIdleForTest()
         installHold = null
         sink = null
