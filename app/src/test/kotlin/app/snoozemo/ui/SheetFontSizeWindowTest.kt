@@ -15,7 +15,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
-import app.snoozemo.core.FontSizeSettings
+import com.mikelward.androidzoom.FontSizeSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -23,6 +23,12 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import com.mikelward.androidzoom.compose.FontSizePinchWindow
+import com.mikelward.androidzoom.compose.FontSizeState
+import com.mikelward.androidzoom.compose.FontSizeWindow
+import com.mikelward.androidzoom.compose.LocalBaseDensity
+import com.mikelward.androidzoom.compose.LocalFontSizeState
+import com.mikelward.androidzoom.compose.pinchFontSizeHost
 
 /**
  * The chosen text size, and the pinch, inside a composable Compose hosts in its
@@ -69,6 +75,10 @@ class SheetFontSizeWindowTest {
             )
             androidx.compose.runtime.CompositionLocalProvider(
                 LocalFontSizeState provides fontSize,
+                // What `ProvideFontSize` provides above every window, which the
+                // window re-derives its size from rather than from the density it
+                // happens to inherit.
+                LocalBaseDensity provides platform,
                 LocalDensity provides platform,
             ) {
                 FontSizePinchWindow {
@@ -224,6 +234,10 @@ class SheetFontSizeWindowTest {
         composeRule.setContent {
             androidx.compose.runtime.CompositionLocalProvider(
                 LocalFontSizeState provides fontSize,
+                // What `ProvideFontSize` provides above every window, which the
+                // window re-derives its size from rather than from the density it
+                // happens to inherit.
+                LocalBaseDensity provides LocalDensity.current,
             ) {
                 Box(Modifier.fillMaxSize()) {
                     if (hosted) {
@@ -251,6 +265,10 @@ class SheetFontSizeWindowTest {
             )
             androidx.compose.runtime.CompositionLocalProvider(
                 LocalFontSizeState provides fontSize,
+                // What `ProvideFontSize` provides above every window, which the
+                // window re-derives its size from rather than from the density it
+                // happens to inherit.
+                LocalBaseDensity provides platform,
                 LocalDensity provides platform,
             ) {
                 FontSizeWindow {
@@ -279,6 +297,10 @@ class SheetFontSizeWindowTest {
             )
             androidx.compose.runtime.CompositionLocalProvider(
                 LocalFontSizeState provides fontSize,
+                // What `ProvideFontSize` provides above every window, which the
+                // window re-derives its size from rather than from the density it
+                // happens to inherit.
+                LocalBaseDensity provides platform,
                 LocalDensity provides platform,
             ) {
                 androidx.compose.foundation.layout.Column(

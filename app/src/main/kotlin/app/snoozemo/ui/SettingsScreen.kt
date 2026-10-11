@@ -19,7 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.snoozemo.PlayUpdateState
-import app.snoozemo.core.DEFAULT_FONT_SCALE
+import com.mikelward.androidzoom.DEFAULT_FONT_SCALE
 import app.snoozemo.core.SnoozeRinger
 import app.snoozemo.R
 

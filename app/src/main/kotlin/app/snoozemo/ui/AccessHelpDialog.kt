@@ -23,6 +23,8 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import app.snoozemo.R
+import com.mikelward.androidzoom.compose.FontSizeWindow
+import com.mikelward.androidzoom.compose.pinchFontSizeHost
 
 /**
  * The "how to grant Do Not Disturb access" help dialog (maintainer,

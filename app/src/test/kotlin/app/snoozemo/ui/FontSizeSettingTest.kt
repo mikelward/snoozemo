@@ -2,8 +2,8 @@ package app.snoozemo.ui
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import app.snoozemo.core.DEFAULT_FONT_SCALE
-import app.snoozemo.core.FontSizeSettings
+import com.mikelward.androidzoom.DEFAULT_FONT_SCALE
+import com.mikelward.androidzoom.FontSizeSettings
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

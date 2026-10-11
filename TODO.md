@@ -4361,7 +4361,7 @@ that can only be settled on a real device, ordered by risk.
 ### Pinch to resize text
 
 Added 2026-09-06 with the feature (`SPEC.md` §4.8). Robolectric can drive synthetic pointer
-events and does (`PinchFontSizeTest`), but it cannot answer what the gesture *feels* like,
+events and does (`PinchFontSizeTest`, now in `mikelward/androidzoom`), but it cannot answer what the gesture *feels* like,
 which is the whole of what was tuned here.
 
 - [ ] Does the 24dp slop hold both ends of its job on a real hand: no accidental resize

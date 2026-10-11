@@ -1,5 +1,6 @@
 [versions]
 androidlog = "3.1.76"
+androidzoom = "1.0.3"
 agp = "9.4.1"
 activity = "1.13.0"
 composeBom = "2026.09.00"
@@ -28,6 +29,7 @@ androidxWork = "2.12.0"
 [libraries]
 androidlog-logging-core = { group = "com.mikelward.androidlog", name = "logging-core", version.ref = "androidlog" }
 androidlog-logging-android = { group = "com.mikelward.androidlog", name = "logging-android", version.ref = "androidlog" }
+androidzoom-compose = { group = "com.mikelward.androidzoom", name = "zoom-compose", version.ref = "androidzoom" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activity" }
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
 androidx-compose-foundation = { group = "androidx.compose.foundation", name = "foundation" }

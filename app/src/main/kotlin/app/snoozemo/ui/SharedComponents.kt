@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.heightIn
@@ -30,18 +29,15 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -49,15 +45,19 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import app.snoozemo.core.MAX_FONT_SCALE
-import app.snoozemo.core.MIN_FONT_SCALE
+import com.mikelward.androidzoom.MAX_FONT_SCALE
+import com.mikelward.androidzoom.MIN_FONT_SCALE
 import app.snoozemo.core.SnoozeRinger
-import app.snoozemo.core.fontScalePercent
+import com.mikelward.androidzoom.fontScalePercent
 import app.snoozemo.R
 import app.snoozemo.UpdateProgress
+import com.mikelward.androidzoom.compose.FontSizeState
+import com.mikelward.androidzoom.compose.FontSizeWindow
+import com.mikelward.androidzoom.compose.ProvideFontSize
+import com.mikelward.androidzoom.compose.StableInputDensity
+import com.mikelward.androidzoom.compose.pinchFontSizeHost
 
 /**
  * Every screen (`MainScreen`, `PermissionsScreen`, `SettingsScreen`,
@@ -66,113 +66,6 @@ import app.snoozemo.UpdateProgress
  * capability row looks like wherever one appears, so it lives here rather than
  * inside any one screen's file.
  */
-/**
- * The text size in force, reachable from a composable Compose hosts in its own
- * **window** (Codex, PR #217).
- *
- * A `ModalBottomSheet`, an `AlertDialog` and a `DropdownMenu` each render in a
- * separate window whose own owner provides `LocalDensity` afresh — so the
- * scaled density [SnoozemoTheme] provides never reaches them, and their text
- * came out at the system size however the user had set it. The gesture is
- * lost the same way: a pointer handler on the activity's root never sees a
- * touch made in another window.
- *
- * Null outside the theme, so a composable used on its own still renders.
- */
-internal val LocalFontSizeState = staticCompositionLocalOf<FontSizeState?> { null }
-
-/**
- * The density before the text-size multiplier, for a control whose own gesture
- * would otherwise be hosted under a density its drag keeps changing (Codex,
- * PR #217).
- *
- * Compose resets a pointer-input handler when the density under it changes, so
- * the size slider — which changes exactly that on every frame of its drag —
- * died on its first resizing movement, the same way the pinch host did before
- * it was lifted out. Null outside the theme.
- */
-internal val LocalBaseDensity = staticCompositionLocalOf<Density?> { null }
-
-/**
- * Hosts [content] at the unscaled density, for a control that resizes text
- * while being dragged. See [LocalBaseDensity].
- *
- * Only `fontScale` differs between the two densities, so a control with no text
- * of its own — a slider's track and thumb are dp — looks identical either way.
- */
-@Composable
-internal fun StableInputDensity(content: @Composable () -> Unit) {
-    val base = LocalBaseDensity.current
-    if (base == null) {
-        content()
-        return
-    }
-    CompositionLocalProvider(LocalDensity provides base, content = content)
-}
-
-/**
- * Re-provides the chosen text size inside one of those windows.
- *
- * For a slot that only shows text — a dialog's title, body or buttons. Reads
- * the window's own density as its base, which is the unscaled one, so this
- * applies the multiplier exactly once wherever it is used.
- */
-@Composable
-internal fun FontSizeWindow(content: @Composable () -> Unit) {
-    val state = LocalFontSizeState.current
-    val base = LocalDensity.current
-    if (state == null) {
-        content()
-        return
-    }
-    val scaled = remember(base, state.scale) { Density(base.density, base.fontScale * state.scale) }
-    CompositionLocalProvider(LocalDensity provides scaled, content = content)
-}
-
-/**
- * The pinch, for a surface in one of those windows.
- *
- * "Two fingers anywhere in Snoozemo" is what the setting promises, so every
- * window the app opens takes the gesture — the sheet, both dialogs, the ringer
- * menu (maintainer, 2026-09-07). Each window needs its own host: a pointer
- * handler no more crosses the boundary than a density does.
- *
- * Apply it to the surface *containing* the text rather than inside it, so one
- * pinch spans a dialog's title, body and buttons instead of dying at the edge
- * of whichever slot it started in. It handles the Initial pass, so it reaches
- * the surface ahead of anything inside it and consumes nothing until the
- * fingers have actually spread — see [pinchFontSize].
- *
- * Never nest two of these: both would see the same events and apply the same
- * zoom twice. No-op outside [SnoozemoTheme].
- */
-@Composable
-internal fun Modifier.pinchFontSizeHost(): Modifier {
-    val state = LocalFontSizeState.current ?: return this
-    return pinchFontSize(
-        enabled = { state.pinchEnabled },
-        scale = { state.scale },
-        onStart = state::startGesture,
-        onPreview = state::preview,
-        onSettled = state::commit,
-    )
-}
-
-/**
- * [FontSizeWindow] plus [pinchFontSizeHost], for a whole surface in its own
- * window — the end-condition sheet, which is a screen in its own right.
- *
- * The gesture is hosted outside the scaled density for the reason
- * [SnoozemoTheme] is: a density change restarts a pointer handler, so a
- * gesture hosted under the size it is changing dies on its own first resize.
- */
-@Composable
-internal fun FontSizePinchWindow(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    Box(modifier = modifier.pinchFontSizeHost()) {
-        FontSizeWindow(content)
-    }
-}
-
 @Composable
 fun SnoozemoTheme(
     /**
@@ -183,7 +76,7 @@ fun SnoozemoTheme(
      * *shows* the setting (Settings) passes its own handle in so the slider and
      * the gesture move one value.
      */
-    fontSize: FontSizeState = rememberFontSizeState(),
+    fontSize: FontSizeState = rememberAppFontSizeState(),
     content: @Composable () -> Unit,
 ) {
     // Built once per dark-mode reading rather than on every recomposition:
@@ -194,53 +87,17 @@ fun SnoozemoTheme(
     // for no visual difference.
     val darkTheme = isSystemInDarkTheme()
     val colorScheme = remember(darkTheme) { if (darkTheme) darkColorScheme() else lightColorScheme() }
-    // Only `fontScale` is overridden, so text grows while paddings, icons, and
-    // touch targets keep the layout the 4dp grid describes — and it multiplies
-    // the system's own scale rather than replacing it, so an accessibility
-    // setting made in Android is respected (`SPEC.md` §4.8).
-    val density = LocalDensity.current
-    val scaled = remember(density, fontSize.scale) {
-        Density(density.density, density.fontScale * fontSize.scale)
-    }
     MaterialTheme(colorScheme = colorScheme) {
         // The gesture sits above every screen rather than on any one of them: a
         // pinch resizes the app, so it must work wherever the user happens to
-        // be — the welcome flow and the end-condition sheet included.
-        //
-        // **Outside the scaled density, not inside it** (Codex, PR #217).
-        // Compose restarts a pointer-input handler when the density under it
-        // changes, and every preview frame of a pinch changes exactly that —
-        // so hosting the gesture under `scaled` killed it on its own first
-        // resize: the fingers kept moving, nothing followed them, and the
-        // release persisted nothing. The scaled density belongs to the content
-        // being sized, not to the hand doing the sizing. Only `fontScale`
-        // differs between the two, so the slop this reads is unchanged either
-        // way — it is a distance in fingers, not in text.
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .pinchFontSize(
-                    enabled = { fontSize.pinchEnabled },
-                    scale = { fontSize.scale },
-                    onStart = fontSize::startGesture,
-                    onPreview = fontSize::preview,
-                    onSettled = fontSize::commit,
-                ),
-        ) {
-            CompositionLocalProvider(
-                LocalDensity provides scaled,
-                // So a sheet, dialog or menu in its own window can re-establish
-                // both — neither the density nor the gesture crosses a window
-                // boundary on its own. See [LocalFontSizeState].
-                LocalFontSizeState provides fontSize,
-                // And so a control that resizes text as it is dragged can host
-                // its own input where the density does not move. See
-                // [LocalBaseDensity].
-                LocalBaseDensity provides density,
-            ) {
-                content()
-            }
-        }
+        // be — the welcome flow and the end-condition sheet included. Only
+        // `fontScale` is overridden, so text grows while paddings, icons, and
+        // touch targets keep the layout the 4dp grid describes, and it
+        // multiplies the system's own scale rather than replacing it
+        // (`SPEC.md` §4.8). A sheet, dialog or menu in its own window
+        // re-establishes both through `FontSizeWindow` / `pinchFontSizeHost`,
+        // since neither crosses a window boundary on its own.
+        ProvideFontSize(fontSize, content = content)
     }
 }
 
