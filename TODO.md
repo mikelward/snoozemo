@@ -3985,6 +3985,15 @@ the point is that every other line of the app is worthless if it isn't true.
       warning that doing it wrong breaks every screenshot test on a variant with no
       activity to launch. That is a test-configuration change for the whole suite, so it
       wants doing deliberately rather than inside a store-graphics PR.
+      **Tried 2026-10-11, and the obvious version does not work.** With the flavor gone the
+      variants are plain `debug` / `release`, and setting `testBuildType = "release"` with
+      `ui-test-manifest` moved to `testImplementation` builds, but 196 of 1160 tests fail with
+      `Unable to resolve activity for Intent … ComponentActivity`. A test-scoped library's
+      manifest never reaches the merged manifest Robolectric reads, so the activity
+      `createAndroidComposeRule` launches is gone. A fix needs another way to declare that
+      activity to the release variant's tests without shipping it (a Robolectric shadow
+      registration in a shared rule, say), and it would also put `testReleaseUnitTest` behind
+      the release version guard, which refuses a shallow clone.
 - [ ] **Screenshots are recorded against the PR head, not the merge ref** (Codex,
       PR #101). The `screenshot-tests` job deliberately checks out the head branch on a
       same-repo PR, so that what it renders matches what `sync-screenshots` would commit
