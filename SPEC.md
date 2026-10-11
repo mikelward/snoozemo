@@ -1567,6 +1567,25 @@ layout:
   `startedAt`, so the identity check passes and the screen's own reading is by definition a moment
   behind. Restoring anyway would put an eight-hour cap on a snooze with nothing watching for the
   departure the row named.
+- **`Until I leave` means *still here, and here is big*: it retakes the anchor where the phone
+  is now and keeps the old place inside it** (maintainer, 2026-10-11). Over a snooze already
+  ending on departure it used to change nothing, so a snooze armed in one spot and carried to
+  another kept measuring against the first. The capture is the arm's (§4.1); what it brings back
+  is merged with the old place into **the smallest circle containing both circles whole** —
+  centred between the two fixes, radius half their distance plus the radii — so the geofence and
+  the departure test keep one centre and one radius, and each later retake folds the next spot in
+  the same way. **Capped at 500 m**: the radius only grows, and a wild fix or a tap made after
+  really leaving would otherwise draw a fence nobody walks out of, so past the cap the fresh spot
+  stands alone. The rejected options were growing the radius around the new spot alone (it cuts
+  through the old place's own circle) and keeping two circles (two fences, two tests, for little
+  gain).
+  **The old place's watch is paused while the capture runs**: left running, it could end the
+  snooze during the very tap meant to keep it. The gap is the arm's own ten seconds, under the
+  cap. A capture that comes back less watchable than the old anchor — no fix where it had one —
+  is dropped, the old place and its watch come back, and the shade says so, since the tap
+  already reported success. A retake that lands retires what was pending about the old place —
+  a held exit, a running grace period — before watching the merged one. A newer tap replaces a
+  retake still out; while the arm's own capture is still out there is nothing to retake.
 
   **Two checks, because the record cannot answer the second** (maintainer, 2026-09-12). The
   record's own mode says what *this snooze's* watch degraded to, including failures nothing can
@@ -5182,6 +5201,7 @@ merge result.
 | Arm with no meeting in progress (ask off) | Armed in one tap; no chooser opens |
 | Arm during a meeting, tap `Until <time>`, then leave early | **Stays snoozed until that time** — a chosen time replaces the other exits (§4.4). Reversed 2026-09-11; this row used to expect a departure |
 | Arm during a meeting, tap `Until <time>`, then tap `Until I leave` | Ends on departure again — the way back is one tap |
+| Arm in one room, walk to another, tap `Until I leave` | Ends on leaving the area holding both rooms (radius up to 500 m); a spot further than that starts over on its own |
 | Arm during a meeting, tap `Until <time>`, stay put | Ends at the meeting end |
 | Arm during an all-day event or a "free" calendar block | Not offered as a meeting |
 | Arm minutes before a meeting starts | Its end is offered, since the offer is not gated on overlapping now |

@@ -1426,6 +1426,14 @@ class SnoozeNotifications(private val context: Context) {
      */
     fun showCouldNotSetEnd() = showOneShot(R.string.failure_could_not_set_end)
 
+    /**
+     * `Until I leave` could not retake the place: the fresh capture came back
+     * less watchable than the anchor the snooze already had, so that one is
+     * kept and the snooze still ends on leaving *it*. Said, because the tap
+     * reported success the moment it was taken (SPEC.md principle 2).
+     */
+    fun showCouldNotRetakePlace() = showOneShot(R.string.failure_could_not_retake_place)
+
     /** `+30 min` with nowhere left to go: the 24 h backstop is absolute (§7). */
     fun showAtMaxDuration() = showOneShot(R.string.extend_at_max)
 

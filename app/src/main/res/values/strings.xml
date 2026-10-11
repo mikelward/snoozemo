@@ -504,6 +504,10 @@
     <string name="extend_at_max">Already at the time limit</string>
     <!-- TODO: translate -->
     <string name="failure_could_not_set_end" tools:ignore="MissingTranslation">Couldn\'t set the end time</string>
+    <!-- `Until I leave` retakes the place where the phone is; this is the
+         capture coming back with less than the place it already had, which
+         is kept. TODO: translate -->
+    <string name="failure_could_not_retake_place" tools:ignore="MissingTranslation">Couldn\'t find where you are; still using where you started</string>
     <!--
       A chosen time that applied, over an exit that would not come off. The end
       time is set, so "Couldn't set the end time" describes the opposite

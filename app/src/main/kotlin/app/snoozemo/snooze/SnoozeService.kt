@@ -15,6 +15,7 @@ import android.os.Looper
 import android.util.Log
 import app.snoozemo.core.ActiveSnooze
 import app.snoozemo.core.Anchor
+import app.snoozemo.core.AnchorRetake
 import app.snoozemo.core.Attempt
 import app.snoozemo.core.ClockChange
 import app.snoozemo.core.ClockChangeAction
@@ -301,6 +302,14 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * snooze that had stopped tracking anything (Codex, PR #267).
      */
     private var capturePending: Boolean = false
+
+    /**
+     * Whether the capture [capturePending] describes is an `Until I leave`
+     * retake rather than the arm's own. A newer tap replaces a pending retake
+     * — the user may have moved again — but never the arm's capture, which is
+     * already taking this place (Codex, PR #318).
+     */
+    private var reanchorPending: Boolean = false
 
     /**
      * Collects the presence monitor while a snooze runs; this service's
@@ -2171,25 +2180,74 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * fresh tap inside ten seconds would otherwise land the *old* place on the
      * *new* snooze. The controller's own null-check cannot see that case.
      */
-    private fun beginAnchorCaptureFor(snooze: ActiveSnooze) {
+    private fun beginAnchorCaptureFor(
+        snooze: ActiveSnooze,
+        capturedAt: Instant = snooze.anchor.capturedAt,
+        reanchoring: Boolean = false,
+    ) {
         anchorCapture?.close()
         anchorCapture = null
         capturePending = true
+        reanchorPending = reanchoring
         val startedAt = snooze.startedAt
-        val handle = beginAnchorCapture(snooze.anchor.capturedAt) { anchor ->
+        val handle = beginAnchorCapture(capturedAt) { anchor ->
             capturePending = false
+            reanchorPending = false
             anchorCapture = null
             val running = controller.active
             if (running == null || running.startedAt != startedAt) {
                 SnoozeDebugLog.event("anchor arrived for an ended snooze; dropped")
                 return@beginAnchorCapture
             }
+            // A timed end chosen while the retake was out took departure off;
+            // the place no longer ends anything, so there is nothing to swap
+            // and nothing to warn about (Codex, PR #318).
+            if (reanchoring && !running.endsOnDeparture) {
+                SnoozeDebugLog.event("re-anchor: departure no longer ends this snooze; dropped")
+                return@beginAnchorCapture
+            }
+            // **A re-anchor only replaces the place it has with one at least as
+            // watchable.** A capture that came back with less — no fix where
+            // the old anchor had one — would swap a working departure test for
+            // a weaker one, or for none, so the old place stands and its watch,
+            // paused for the capture, comes back. Keeping it errs toward ending
+            // (D7). Compared on what the fields allow, the ladder
+            // [TrackingMode.honest] walks.
+            if (reanchoring &&
+                TrackingMode.from(anchor).ordinal > TrackingMode.from(running.anchor).ordinal
+            ) {
+                SnoozeDebugLog.warning(
+                    "re-anchor: the new place is less watchable than the old; keeping the old",
+                )
+                startPresence(running)
+                // The tap already answered `APPLIED`, so the user believes the
+                // snooze starts over from here; say that it did not.
+                notifications.showCouldNotRetakePlace()
+                return@beginAnchorCapture
+            }
+            // **Both places, as one circle** (maintainer, 2026-10-11): the tap
+            // says "still here, and here is big", so the old place stays
+            // inside the new one — see [AnchorRetake].
+            val watched = if (reanchoring) AnchorRetake.merge(running.anchor, anchor) else anchor
+            if (reanchoring) {
+                SnoozeDebugLog.event("re-anchor: watching the new place; radius=%sm", watched.radiusM)
+                // **Retire the old place's evidence before watching the new
+                // one** (Codex, PR #318). [startPresence] alone keeps the
+                // snooze's identity, so the monitor would reload a grace
+                // deadline and replay a held geofence exit that were both
+                // about the *old* place, and the new one could end on them.
+                // `stop()` is exactly that retirement — the held exit, the
+                // grace and capability-loss records, the fence. Already done
+                // when the retake began; repeated because it is idempotent and
+                // the start below must not inherit anything.
+                stopDepartureWatch()
+            }
             // The mode is the machinery's claim, not the anchor's:
             // `supportedModes` says which modes anything actually watches for
             // these fields (SPEC.md §6.1, §8.1), and the controller lowers
             // every mode it ever computes — the arm's and every later
             // report's — through the same set.
-            controller.onAnchorCaptured(anchor, presenceMonitor.supportedModes(anchor))
+            controller.onAnchorCaptured(watched, presenceMonitor.supportedModes(watched))
             // And now watch it. After the controller, so the first update
             // finds the armed snooze; identity-guarded either way.
             controller.active?.let(::startPresence)
@@ -2200,6 +2258,46 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // [capturePending]. Nothing to close either: `close()` is a no-op once
         // the session is done.
         if (capturePending) anchorCapture = handle
+    }
+
+    /**
+     * `Until I leave` over a running snooze means *leave here*, so it takes a
+     * fresh anchor where the phone is now (maintainer, 2026-10-11) rather than
+     * keeping the place the snooze armed at. Tapping it after moving rooms, or
+     * after a snooze armed in one spot and was carried to another, used to
+     * change nothing — "the chosen end changes nothing" — and kept measuring
+     * against wherever the tap that armed it happened.
+     *
+     * The capture is the arm's, with the same ceiling and the same gates
+     * (SPEC.md §4.1), and what it brings back is merged with the old place
+     * rather than replacing it ([AnchorRetake]).
+     *
+     * **The old place's watch is paused while the capture runs** (maintainer,
+     * 2026-10-11). Left running, it could decide the phone had left the old
+     * place during the ten seconds the new one takes, and end the snooze the
+     * user had just tapped to keep (Codex, PR #318) — the one outcome this
+     * control must not have. The gap is the arm's own: the first capture
+     * runs unwatched for the same ceiling, and the cap holds throughout. A
+     * capture that comes back worse puts the old watch back.
+     *
+     * Not while the arm's own capture is out: that one is already taking this
+     * place, and replacing it would only restart its ceiling. A retake still
+     * out is replaced, though: the newer tap is the place the user means.
+     */
+    private fun reanchorHere() {
+        val running = controller.active ?: return
+        if (!running.endsOnDeparture) return
+        if (capturePending && !reanchorPending) {
+            SnoozeDebugLog.event("re-anchor: the arm's capture is still out; it is taking this place")
+            return
+        }
+        SnoozeDebugLog.event("re-anchor: taking a fresh place for until I leave")
+        stopDepartureWatch()
+        beginAnchorCaptureFor(
+            running,
+            capturedAt = Instant.ofEpochMilli(readClock().wallMillis),
+            reanchoring = true,
+        )
     }
 
     /**
@@ -3098,7 +3196,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // is still running to its ceiling and has nothing left to do here.
             // Clearing before this return is what keeps that from being a tap
             // that does nothing at all.
-            SnoozeDebugLog.event("end-condition: the chosen end changes nothing; leaving the cap")
+            SnoozeDebugLog.event("end-condition: the cap already stands for the chosen end; leaving it")
             // The cap being already right is not a reason to leave exits the
             // user replaced: a time chosen over a snooze that already ends at
             // that moment still means "and nothing else ends it".
@@ -3230,6 +3328,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // The restore applied, so whatever the shade was saying about this
             // snooze is now the previous attempt's and stale.
             notifications.cancelFailure()
+            // **After the cancel, not before**: a capture can settle inside
+            // `begin`, and a dropped retake posts its warning under the same
+            // id — cancelling second took down the one card saying the tap
+            // did not take (Codex, PR #318).
+            reanchorHere()
             return EndChoiceResult.APPLIED
         }
 
@@ -3362,6 +3465,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 anchorCapture?.close()
                 anchorCapture = null
                 capturePending = false
+                reanchorPending = false
                 snooze?.let { erasing = it.startedAt }
                 forget()
                 // After the record is gone, like the refused-arm transition:
@@ -4329,6 +4433,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         anchorCapture?.close()
         anchorCapture = null
         capturePending = false
+        reanchorPending = false
         // The *collection* dies with this instance — the next one restores
         // the record and re-collects — but deliberately not through
         // [stopPresence]: `stop()` removes the geofence, and Android destroys

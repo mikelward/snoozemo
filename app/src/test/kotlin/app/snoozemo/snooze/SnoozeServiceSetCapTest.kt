@@ -1,8 +1,10 @@
 package app.snoozemo.snooze
 
 import android.content.Intent
+import android.os.Looper
 import app.snoozemo.R
 import app.snoozemo.core.ActiveSnooze
+import app.snoozemo.core.Anchor
 import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.ZenOutcome
@@ -18,6 +20,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ServiceController
 import org.robolectric.annotation.Config
 
@@ -239,6 +242,132 @@ class SnoozeServiceSetCapTest {
             ActiveSnoozeStore(appContext).load()?.capExpiresAt,
         )
         assertEquals("and the tap is not left looking accepted", EndChoiceResult.REFUSED, reported)
+    }
+
+    @Test
+    fun `restoring takes a fresh place where the phone is now`() {
+        // The maintainer's case (2026-10-11): already snoozed until leaving,
+        // tap `Until I leave` again somewhere else, and it should start over
+        // from here. It used to be "the chosen end changes nothing".
+        val record = snoozeFixture(now)
+        restoreEnd(record)
+        assertEquals("the tap applied at once", EndChoiceResult.APPLIED, reported)
+        assertEquals("one fresh capture", 1, TestSnoozeService.captureRequests.size)
+
+        // Stock stand-ins (AGENTS.md, *Privacy*): a second synthetic spot.
+        val here = Anchor(lat = 0.001, lon = 0.0, fixAccuracyM = 12f, capturedAt = now, ssid = null)
+        val stopsBefore = TestSnoozeService.presence.stops
+        TestSnoozeService.captureRequests.single()(here)
+        shadowOf(Looper.getMainLooper()).idle()
+
+        // Both places as one circle (AnchorRetake): about 111 m apart with
+        // 100 m radii gives a radius of about 156 m, holding both whole.
+        val watched = ActiveSnoozeStore(appContext).load()!!.anchor
+        assertEquals("the merged circle holds both places", 156.0, watched.radiusM.toDouble(), 2.0)
+        assertEquals("on the network the phone is on now", here.ssid, watched.ssid)
+        assertEquals("and the watch was restarted on it", watched, TestSnoozeService.presence.startedWith.last())
+        // A held exit or a running grace was about the old place; the
+        // monitor's stop is what retires them (Codex, PR #318).
+        assertEquals("the old place's evidence was retired first", stopsBefore + 1, TestSnoozeService.presence.stops)
+    }
+
+    @Test
+    fun `the old place is not watched while the retake runs`() {
+        // Left running, the old watch could end the snooze the tap just kept
+        // (Codex, PR #318); the cap holds through the capture instead.
+        restoreEnd(snoozeFixture(now))
+
+        assertTrue("the old watch was taken down for the capture", TestSnoozeService.presence.stops >= 1)
+    }
+
+    @Test
+    fun `a fresh place less watchable than the old one is dropped`() {
+        // The old watch is still running while the capture is out; swapping
+        // its fix for an anchor with none would leave less watching than
+        // before the tap.
+        val record = snoozeFixture(now)
+        restoreEnd(record)
+        val startsBefore = TestSnoozeService.presence.startedWith.size
+
+        TestSnoozeService.captureRequests.single()(
+            Anchor(lat = null, lon = null, fixAccuracyM = null, capturedAt = now, ssid = null),
+        )
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals("the old place stands", record.anchor, ActiveSnoozeStore(appContext).load()?.anchor)
+        // The old watch was paused for the capture, so it comes back on the
+        // old place.
+        assertEquals("the old watch is back", startsBefore + 1, TestSnoozeService.presence.startedWith.size)
+        assertEquals("on the old place", record.anchor, TestSnoozeService.presence.startedWith.last())
+        // The tap already said `APPLIED`; the shade says it did not take.
+        assertEquals(
+            appContext.getString(R.string.failure_could_not_retake_place),
+            postedOneShot(),
+        )
+    }
+
+    @Test
+    fun `a fresh place dropped inside begin still says so`() {
+        // The runner may settle synchronously; the restore's own cancel of
+        // stale failure cards must not take this one down with them.
+        TestSnoozeService.captureSettlesInBegin =
+            Anchor(lat = null, lon = null, fixAccuracyM = null, capturedAt = now, ssid = null)
+
+        restoreEnd(snoozeFixture(now))
+
+        assertEquals(EndChoiceResult.APPLIED, reported)
+        assertEquals(
+            appContext.getString(R.string.failure_could_not_retake_place),
+            postedOneShot(),
+        )
+    }
+
+    @Test
+    fun `a newer tap replaces a retake still out`() {
+        // The user may have moved again; the older capture must not win.
+        val record = snoozeFixture(now)
+        val service = restoreEnd(record)
+        service.send(SnoozeService.ACTION_SET_CAP, 2) {
+            putExtra(SnoozeService.EXTRA_RESTORE_END, true)
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+            putExtra(SnoozeService.EXTRA_CHOICE_FOR_SNOOZE, record.startedAt.toEpochMilli())
+        }
+
+        assertEquals("a second capture started", 2, TestSnoozeService.captureRequests.size)
+        assertEquals("and the first was closed", 1, TestSnoozeService.captureClosed)
+    }
+
+    @Test
+    fun `a retake that lands after a timed end changes nothing and says nothing`() {
+        // Departure came off under the pending capture, so the place it brings
+        // back no longer ends anything (Codex, PR #318).
+        val record = snoozeFixture(now)
+        val service = restoreEnd(record)
+        service.send(SnoozeService.ACTION_SET_CAP, 2) {
+            putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, now.plus(Duration.ofHours(1)).toEpochMilli())
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+        val oneShotBefore = postedOneShot()
+
+        TestSnoozeService.captureRequests.single()(
+            Anchor(lat = null, lon = null, fixAccuracyM = null, capturedAt = now, ssid = null),
+        )
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals("the stored place is untouched", record.anchor, ActiveSnoozeStore(appContext).load()?.anchor)
+        assertEquals("and no retake warning was posted", oneShotBefore, postedOneShot())
+    }
+
+    @Test
+    fun `a chosen time takes no fresh place`() {
+        val record = snoozeFixture(now)
+
+        startService(SnoozeService.ACTION_SET_CAP, record) {
+            putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, now.plus(Duration.ofHours(1)).toEpochMilli())
+            putExtra(SnoozeService.EXTRA_CHOICE_REQUEST_ID, REQUEST)
+        }
+
+        assertTrue("no capture for a timer", TestSnoozeService.captureRequests.isEmpty())
     }
 
     @Test
