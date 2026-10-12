@@ -373,9 +373,13 @@ class SnoozeServicePresenceTest {
         TestSnoozeService.captureRequests.single().invoke(captured)
         shadowOf(getMainLooper()).idle()
 
-        assertTrue(
-            "with the anchor in hand the timer-only snooze gives the process back",
-            TestSnoozeService.foregroundExits >= 1,
+        // Narrowed rather than given back: the timer-only snooze keeps the
+        // process for the ringer hand-back at its end (SPEC.md §5.9 rule 5),
+        // but no longer under the location type.
+        assertEquals(
+            "with the anchor in hand the timer-only snooze drops the location type",
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            TestSnoozeService.foregroundType,
         )
     }
 

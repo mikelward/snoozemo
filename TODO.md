@@ -1988,17 +1988,21 @@ the point is that every other line of the app is worthless if it isn't true.
 
 ## Phase 5 (M5) — Edge cases and degraded modes
 
-- [ ] **Restore the ringer automatically on Android 17** (maintainer, 2026-10-12 — investigate,
-      then bring the policy question back). Background audio hardening silently ignores
-      `setRingerMode` unless the app has a visible activity or a running non-`SHORT_SERVICE`
-      foreground service (any target SDK; targeting 37 also needs while-in-use). A snooze whose
-      process died ends through the cap alarm with no service, and every retry fires from an
-      alarm, so none of them can land; the stuck-ringer notice's tap is the working path today
-      (`SPEC.md` §5.9 rule 5). The automatic route is a foreground service started from the
-      exact cap alarm just long enough to hand back — which means deciding its type (the
-      service is `location` today, and a background start of that type depends on background
-      location), its Play declaration, and whether targeting 37's while-in-use rule leaves it
-      possible at all. A Play-policy question, so not autopilot's to guess.
+- [x] **Restore the ringer automatically on Android 17** (maintainer, 2026-10-12 — decided:
+      every snooze holds a `specialUse` foreground service from its arm to its end, `location`
+      added while watching; SPEC.md §3.4, §5.9 rule 5). Starting one from the cap alarm was
+      rejected: that alarm is inexact on purpose, and a background-started service would lack
+      the while-in-use capability a target-37 build needs.
+  - [ ] **Declare the `specialUse` foreground service in the Play Console** before the release
+        that carries it reaches a review (maintainer action). The manifest's subtype reads
+        "Restores the ringer mode when a Do Not Disturb snooze ends"; the declaration should say
+        the same, with the Android 17 background-audio rule as the reason no other type fits.
+  - [ ] **Device check on Android 17**: a timer-only snooze ending on its cap with the screen
+        off restores the ringer with no tap, and `adb shell dumpsys audio` shows no
+        `AudioHardening` entry for Snoozemo.
+  - [ ] **Motion-only snoozes still claim `location`** (`SnoozeService.wantsLocationForeground`
+        calls it a stated compromise): `specialUse` could now carry that process instead, but
+        only if the Play declaration covers it — revisit with the declaration.
 
 - [ ] **Warn on entering a non-time "ending soon" state — build next PR** (maintainer,
       2026-09-13). **Decided to build**, its own follow-up PR after the drop-the-failsafe-from-UI

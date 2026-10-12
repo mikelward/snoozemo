@@ -98,6 +98,13 @@ internal class RefusingZen : ZenController {
         RuleOwnership.isOurs(ruleId, current = ownRuleId, enforcing = enforcing)
     override fun ensureRule(): ZenRuleState = ZenRuleState.READY
 
+    /**
+     * The service's foreground type at each [setSnoozed], in order — 0 where
+     * it held none. The ringer is handed back inside the release, so this is
+     * what says whether that hand-back ran from a foreground service.
+     */
+    val foregroundTypeAtCalls = mutableListOf<Int>()
+
     override fun setSnoozed(
         snoozed: Boolean,
         trigger: ZenTrigger,
@@ -105,6 +112,7 @@ internal class RefusingZen : ZenController {
         snooze: SnoozeIdentity?,
     ): ZenOutcome {
         calls += snoozed to trigger
+        foregroundTypeAtCalls += TestSnoozeService.foregroundType
         // The platform remembers, so the fake does too. Without this a test
         // could not see the failure mode where a *reassertion* is what makes
         // the later state read answer `ACTIVE` (Codex, PR #36) — the fake would
@@ -245,10 +253,13 @@ internal class TestSnoozeService : SnoozeService() {
      * production path cannot be driven to do off a device.
      */
     override fun enterForeground(id: Int, notification: android.app.Notification, type: Int) {
-        if (refuseForeground) {
+        val withLocation = (type and android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION) != 0
+        if (refuseForeground || (refuseLocationForeground && withLocation)) {
             throw android.app.ForegroundServiceStartNotAllowedException("refused by the test")
         }
         super.enterForeground(id, notification, type)
+        foregroundType = type
+        foregroundTypesEntered += type
     }
 
     override fun exitForeground() {
@@ -257,6 +268,7 @@ internal class TestSnoozeService : SnoozeService() {
             throw IllegalStateException("giving it back refused by the test")
         }
         super.exitForeground()
+        foregroundType = 0
     }
 
     /**
@@ -414,6 +426,19 @@ internal class TestSnoozeService : SnoozeService() {
         var refuseForeground: Boolean = false
 
         /**
+         * Refuses only a `startForeground` that carries the `location` type —
+         * a withdrawn location grant or location services off, which the
+         * platform enforces for that type and not for `specialUse`.
+         */
+        var refuseLocationForeground: Boolean = false
+
+        /** The foreground type the service holds now, 0 for none. */
+        var foregroundType: Int = 0
+
+        /** Every type a `startForeground` the platform accepted carried, in order. */
+        var foregroundTypesEntered: MutableList<Int> = mutableListOf()
+
+        /**
          * Refuses the *give-back*, which no shadow throws either — and which
          * is where clearing the held flag too early stranded the service.
          */
@@ -424,6 +449,9 @@ internal class TestSnoozeService : SnoozeService() {
 
         fun reset(now: Instant) {
             refuseForeground = false
+            refuseLocationForeground = false
+            foregroundType = 0
+            foregroundTypesEntered = mutableListOf()
             refuseForegroundExit = false
             refuseRuleStatusReceiver = false
             foregroundExits = 0

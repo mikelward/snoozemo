@@ -337,18 +337,26 @@ class ReleaseManifestRules(
 // WorkManager merges it in today, but "a dependency happens to supply it" is
 // not the same claim as "the release ships it".
 val locationForegroundServicePermission = "android.permission.FOREGROUND_SERVICE_LOCATION"
+
+// **And `specialUse` beside it** (maintainer, 2026-10-12): every running snooze
+// holds a foreground service so the ringer can be handed back at its end, which
+// Android 17 otherwise drops from the background (SPEC.md §5.9 rule 5). Required
+// for the same reason the location grant is: a typed `startForeground` without
+// it is refused, and that refusal is the stuck ringer this exists to prevent.
+val specialUseForegroundServicePermission = "android.permission.FOREGROUND_SERVICE_SPECIAL_USE"
 val releaseManifestRules = ReleaseManifestRules(
     forbidden = listOf(adIdPermission),
     forbiddenPrefixes = listOf(typedForegroundServicePrefix),
-    prefixExemptions = listOf(locationForegroundServicePermission),
+    prefixExemptions = listOf(locationForegroundServicePermission, specialUseForegroundServicePermission),
     required = listOf(
         backgroundLocation,
         internetPermission,
         foregroundServicePermission,
         locationForegroundServicePermission,
+        specialUseForegroundServicePermission,
     ),
     allowForegroundServiceType = false,
-    requiredForegroundServiceTypes = mapOf("app.snoozemo.snooze.SnoozeService" to "location"),
+    requiredForegroundServiceTypes = mapOf("app.snoozemo.snooze.SnoozeService" to "location|specialUse"),
 )
 fun CheckReleaseManifest.applyRules(rules: ReleaseManifestRules) {
     forbiddenPermissions.set(rules.forbidden)
