@@ -67,6 +67,7 @@ import app.snoozemo.snooze.DepartureObservations
 import app.snoozemo.snooze.GraceDeadlines
 import app.snoozemo.snooze.UnprotectedWatches
 import app.snoozemo.snooze.EndSheetSetting
+import app.snoozemo.snooze.handBackRingerNow
 import app.snoozemo.snooze.reconcileRingerInBackground
 import app.snoozemo.snooze.SnoozeRingerSetting
 import app.snoozemo.core.EndCondition
@@ -139,6 +140,20 @@ internal const val EXTRA_BLOCKED_TAP_ID = "app.snoozemo.BLOCKED_TAP_ID"
  */
 internal const val EXTRA_TILE_CHOOSER = "app.snoozemo.TILE_CHOOSER"
 
+/**
+ * Opened from the `Ringer not restored` notice: hand the ringer back now.
+ *
+ * Android 17 silently ignores `setRingerMode` from an app with no visible
+ * activity and no foreground service, whatever its target SDK (background audio
+ * hardening) — so every hand-back the retry alarm or a no-service release makes
+ * is dropped, and a field report sat on vibrate for hours. While this screen is
+ * showing the call is allowed, so the tap is what puts the ringer back.
+ */
+internal const val ACTION_RESTORE_RINGER = "app.snoozemo.action.RESTORE_RINGER"
+
+/** Whether [intent] is the stuck-ringer notice asking for the ringer back. */
+internal fun wantsRingerRestored(intent: Intent?): Boolean = intent?.action == ACTION_RESTORE_RINGER
+
 private const val KEY_SCREEN = "screen"
 
 /**
@@ -158,6 +173,7 @@ private const val KEY_IDLE_OFFER_ARM_COUNT = "idle_offer_arm_count"
 private const val KEY_BACKGROUND_RATIONALE = "background_location_rationale"
 private const val KEY_ACCESS_HELP = "accessHelp"
 private const val KEY_CHOOSER_ASK_OWED = "chooserNotificationAskOwed"
+private const val KEY_RINGER_RESTORE_ASKED = "ringerRestoreAsked"
 private const val KEY_PERMISSIONS_ORIGIN = "permissionsOrigin"
 private const val KEY_ROUTED_TO_PERMISSIONS_ONCE = "routedToPermissionsOnce"
 private const val KEY_WELCOME_TAP_BLOCKED = "welcomeTapBlocked"
@@ -624,6 +640,15 @@ class MainActivity : ComponentActivity() {
          */
         @androidx.annotation.VisibleForTesting
         internal var testNotificationRequest: (() -> Unit)? = null
+
+        /**
+         * Test seam for the stuck-ringer notice's restore: when non-null it
+         * replaces the hand-back thread, so a lifecycle test can observe when
+         * (and how often) the activity acts on the request. Null in production;
+         * a test that sets it resets it after.
+         */
+        @androidx.annotation.VisibleForTesting
+        internal var testRingerRestore: (() -> Unit)? = null
 
         /**
          * Whether the calendar read taken at [readAtMillis] no longer
@@ -1370,6 +1395,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // On every creation, not only a fresh one: a notification launch can
+        // land on a restored task, and a recreation can come between the tap
+        // and `onResume` (Codex, PR #327). Repeating a restore that already ran
+        // is harmless — with nothing owed the hand-back does nothing — where
+        // dropping one leaves the phone quiet. A request noted but not yet
+        // consumed rides the saved state too.
+        noteRingerRestoreAsked(intent)
+        if (savedInstanceState?.getBoolean(KEY_RINGER_RESTORE_ASKED) == true) ringerRestoreAsked = true
         // The window is drawn edge to edge whether or not we ask for it —
         // Android 15 made that the behavior for every app targeting SDK 35 and
         // up, and Android 16 dropped the opt-out — so the only real choice is
@@ -2035,6 +2068,7 @@ class MainActivity : ComponentActivity() {
         // is saved, though: that cannot be re-derived from the intent, and a
         // recreation before the first-frame ask fires must carry it forward.
         outState.putBoolean(KEY_CHOOSER_ASK_OWED, chooserNotificationAskOwed)
+        outState.putBoolean(KEY_RINGER_RESTORE_ASKED, ringerRestoreAsked)
         // Null when nothing is waiting, which reads back as nothing waiting —
         // a grant arriving with no tap behind it must not replay one.
         outState.putString(KEY_PENDING_LOCATION_ACTION, pendingLocationAction?.name)
@@ -2367,6 +2401,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         checkPlayUpdate()
+        restoreRingerIfAsked()
     }
 
     /**
@@ -4718,6 +4753,46 @@ class MainActivity : ComponentActivity() {
             askChooserNotificationsAfterFirstFrame()
         }
         takeBlockedTileTapFrom(intent)
+        noteRingerRestoreAsked(intent)
+    }
+
+    /**
+     * Set when the stuck-ringer notice opened this; consumed in [onResume].
+     *
+     * Noted here rather than acted on, because `onCreate` and `onNewIntent`
+     * run before the activity is visible, and Android 17 drops a
+     * `setRingerMode` made from a non-visible app — on a cold tap the
+     * hand-back would race visibility and could lose (Codex, PR #327).
+     */
+    private var ringerRestoreAsked = false
+
+    private fun noteRingerRestoreAsked(intent: Intent?) {
+        if (wantsRingerRestored(intent)) ringerRestoreAsked = true
+    }
+
+    /**
+     * Hands the ringer back at once when the stuck-ringer notice opened this,
+     * skipping the startup check's arm-window wait: there is no tile tap racing
+     * this one, and the hand-back has to land while this screen is visible —
+     * Android 17 drops it otherwise ([ACTION_RESTORE_RINGER]). Called from
+     * [onResume], once the activity is visible, and on its own thread, so
+     * nothing here sits in front of a frame.
+     */
+    private fun restoreRingerIfAsked() {
+        if (!ringerRestoreAsked) return
+        ringerRestoreAsked = false
+        SnoozeDebugLog.event("ringer: the stuck-ringer notice was tapped; handing it back while visible")
+        testRingerRestore?.let { it(); return }
+        if ((application as? app.snoozemo.SnoozemoApplication)?.reconcilesRingerOnStart == true) {
+            // The **waiting** form (`giveBackIfIdle`, as the retry alarm uses),
+            // not the startup check's stand-down: the notice auto-cancelled on
+            // the tap, so a hand-back that gave way to a momentarily busy
+            // ringer would leave a quiet phone with nothing on screen (Codex,
+            // PR #327). The record is still checked under the lock, so a live
+            // snooze is left alone, and a refusal re-posts the notice.
+            val app = applicationContext
+            Thread { handBackRingerNow(app) }.apply { isDaemon = true }.start()
+        }
     }
 
     /**

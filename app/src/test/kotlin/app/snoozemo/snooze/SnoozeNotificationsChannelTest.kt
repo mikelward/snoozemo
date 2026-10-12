@@ -75,6 +75,15 @@ class SnoozeNotificationsChannelTest {
         // explanations rather than on the Do-Not-Disturb-bypassing channel.
         assertEquals(SnoozeNotifications.CHANNEL_ENDED, posted.channelId)
         assertEquals(stringOf(R.string.failure_ringer_stuck_body), shadowOf(posted).contentText?.toString())
+        // Re-posted on every refused retry, so it must not sound each time.
+        assertTrue(posted.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0)
+        // Tapping it opens the app asking for the ringer back: Android 17 lets
+        // the hand-back through only while the app is visible.
+        val opened = shadowOf(posted.contentIntent).savedIntent
+        assertEquals(app.snoozemo.ui.MainActivity::class.java.name, opened.component?.className)
+        assertTrue(app.snoozemo.ui.wantsRingerRestored(opened))
+        // And only that: a launcher open must not skip the arm-window wait.
+        assertFalse(app.snoozemo.ui.wantsRingerRestored(android.content.Intent(android.content.Intent.ACTION_MAIN)))
 
         // And it comes down when the ringer is back, since nothing else would
         // take it down and it would otherwise outlive the problem.

@@ -82,7 +82,7 @@
     <string name="channel_urgent">„Nicht stören“ hängt fest</string>
     <string name="ongoing_cause_ringer_unknown">klingelt möglicherweise noch</string>
     <string name="failure_ringer_stuck">Klingelmodus nicht wiederhergestellt</string>
-    <string name="failure_ringer_stuck_body">Ändere ihn im Lautstärkeregler.</string>
+    <string name="failure_ringer_stuck_body">Zum Wiederherstellen tippen.</string>
     <string name="ongoing_title">Schlummert</string>
     <string name="ongoing_ends_when_you_leave">Endet, wenn du gehst</string>
     <string name="ongoing_wifi_only">Nur WLAN</string>
