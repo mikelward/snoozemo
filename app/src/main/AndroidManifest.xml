@@ -107,10 +107,22 @@
       what the process is doing while it waits.
 
       The gate in the service is the tracking mode: a duration-only snooze
-      starts no watch and needs no service to outlive one, so it takes none.
+      starts no watch, so its foreground run does not carry this type.
     -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+
+    <!--
+      The `specialUse` type, held by every running snooze so the ringer can be
+      handed back when it ends (SPEC.md §5.9 rule 5). Chosen by the maintainer
+      (2026-10-12): Android 17 silently ignores `setRingerMode` from an app with
+      neither a visible activity nor a non-SHORT_SERVICE foreground service, so
+      a snooze ending on its own in the background left the phone on vibrate.
+      No other type describes it, and `shortService` is the one the platform
+      names as not enough. Play needs a declaration for it; the subtype below is
+      what that declaration says.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <!--
       Crash reporting and Firebase Analytics use this, and nothing else
@@ -184,13 +196,18 @@
 
         <!--
           Started by the tile's trampoline; owns the running snooze. Typed
-          `location` for the foreground run that keeps a presence watch alive
-          (see the FOREGROUND_SERVICE_LOCATION grant above).
+          `specialUse` for the whole snooze, so the ringer can be handed back at
+          its end, and `location` while a presence watch needs keeping alive
+          (see the two typed grants above).
         -->
         <service
             android:name=".snooze.SnoozeService"
             android:exported="false"
-            android:foregroundServiceType="location" />
+            android:foregroundServiceType="location|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Restores the ringer mode when a Do Not Disturb snooze ends" />
+        </service>
 
         <!--
           Transparent, and on the arm path: it starts the service before any UI

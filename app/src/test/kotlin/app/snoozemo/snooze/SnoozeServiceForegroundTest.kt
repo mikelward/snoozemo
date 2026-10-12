@@ -1,6 +1,7 @@
 package app.snoozemo.snooze
 
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Looper.getMainLooper
 import app.snoozemo.core.Anchor
 import app.snoozemo.core.DegradationCause
@@ -25,9 +26,10 @@ import org.robolectric.android.controller.ServiceController
  * (SPEC.md §6.10).
  *
  * What it buys is the process, not the card — the ongoing notification is
- * posted either way — so these assert the *binding*: which snoozes take one,
- * which do not, and that ending gives it back rather than leaving a `Snoozing`
- * card in the shade for a snooze that is over.
+ * posted either way — so these assert the *binding*: every snooze takes one
+ * (`specialUse`, so the ringer can be handed back at the end — SPEC.md §5.9
+ * rule 5), the watched ones add `location`, and ending gives it back rather
+ * than leaving a `Snoozing` card in the shade for a snooze that is over.
  */
 @RunWith(RobolectricTestRunner::class)
 class SnoozeServiceForegroundTest {
@@ -51,6 +53,10 @@ class SnoozeServiceForegroundTest {
      * and the snooze degrades all the way to duration-only while it runs.
      */
     private val fixOnly = Anchor(lat = 0.0, lon = 0.0, fixAccuracyM = 20f, capturedAt = now)
+
+    private val specialUse = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+    private val locationAndSpecialUse =
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
 
     @Before
     fun reset() {
@@ -86,18 +92,22 @@ class SnoozeServiceForegroundTest {
         // The ongoing card itself, not a second one: two notifications for one
         // snooze is the shade telling the user two different things.
         assertEquals(SnoozeNotifications.ID_ONGOING, shadow.lastForegroundNotificationId)
+        assertEquals("location for the watch, specialUse for the ringer", locationAndSpecialUse, TestSnoozeService.foregroundType)
     }
 
     @Test
-    fun `a duration-only snooze takes no foreground service`() {
-        // Nothing is watching — the cap alarm is this snooze's only exit and it
-        // is durable on its own — so keeping the process alive buys nothing,
-        // and claiming a *location* foreground service for a snooze doing no
+    fun `a duration-only snooze holds a specialUse foreground service and no location`() {
+        // Field log, 2026-10-12: a timer-only snooze held no foreground
+        // service, so its cap ended it from the background and Android 17
+        // dropped the ringer hand-back — the phone stayed on vibrate. The
+        // process is now held for the ringer, but under `specialUse` only:
+        // claiming a *location* foreground service for a snooze doing no
         // location work would be a claim the app cannot back.
         val controller = armWith(unwatchable)
 
         assertEquals(TrackingMode.DURATION_ONLY, ActiveSnoozeStore(appContext).load()?.mode)
-        assertNull(shadowOf(controller.get()).lastForegroundNotification)
+        assertNotNull(shadowOf(controller.get()).lastForegroundNotification)
+        assertEquals(specialUse, TestSnoozeService.foregroundType)
         // And the card is still up: the binding is what changes, not what the
         // user sees. Located by its stable id, since a plain timer-only card
         // now folds its title to "Snoozing until <time>" (PR #276) and the
@@ -152,16 +162,56 @@ class SnoozeServiceForegroundTest {
     }
 
     @Test
-    fun `a fenced snooze whose location grant is gone gives the foreground service back`() {
+    fun `a fenced snooze whose location grant is gone drops the location type and keeps the service`() {
         // The other side: the grant is the platform's own prerequisite for a
-        // location service, and nothing in process can bring it back.
+        // location service, and nothing in process can bring it back — so the
+        // type goes. The service stays, under `specialUse`, because the ringer
+        // still has to be handed back from inside one when the snooze ends.
         val controller = armWith(fixOnly)
         TestSnoozeService.presence.canTrackDeparture = false
 
         emit(PresenceUpdate(event = null, degradation = DegradationCause.LOCATION_PERMISSION_GONE))
 
         assertEquals(TrackingMode.DURATION_ONLY, ActiveSnoozeStore(appContext).load()?.mode)
-        assertTrue(shadowOf(controller.get()).isForegroundStopped)
+        assertEquals("narrowed, not given back", specialUse, TestSnoozeService.foregroundType)
+        assertEquals(0, TestSnoozeService.foregroundExits)
+        assertFalse(shadowOf(controller.get()).isForegroundStopped)
+    }
+
+    @Test
+    fun `a refused location type still holds the service for the ringer`() {
+        // A withdrawn grant or location services off refuses a location
+        // `startForeground` outright. That must not also cost the ringer
+        // hand-back: the service falls back to `specialUse` alone, and the card
+        // still says the watch is unprotected, because it is.
+        TestSnoozeService.refuseLocationForeground = true
+
+        val controller = armWith(watchable)
+
+        assertNotNull(shadowOf(controller.get()).lastForegroundNotification)
+        assertEquals(specialUse, TestSnoozeService.foregroundType)
+        assertTrue(
+            "the watch is still unprotected, and the card says so",
+            shadeText().contains(stringOf(app.snoozemo.R.string.ongoing_watch_unprotected)),
+        )
+        assertTrue(UnprotectedWatches.latest())
+    }
+
+    @Test
+    fun `a refused location refresh does not narrow a service that holds it`() {
+        // The fallback is only for a service that has no location to lose: a
+        // *refresh* refused while location is already held leaves it held, and
+        // narrowing it to `specialUse` would take away a watch that is fine.
+        val controller = armWith(watchable)
+        assertEquals(locationAndSpecialUse, TestSnoozeService.foregroundType)
+
+        TestSnoozeService.refuseLocationForeground = true
+        TestSnoozeService.presence.canTrackDeparture = false
+        emit(PresenceUpdate(event = null, degradation = DegradationCause.NO_LOCATION_FIX))
+
+        assertEquals(TrackingMode.WIFI_ONLY, ActiveSnoozeStore(appContext).load()?.mode)
+        assertEquals("still location", locationAndSpecialUse, TestSnoozeService.foregroundType)
+        assertFalse(shadowOf(controller.get()).isForegroundStopped)
     }
 
     @Test
@@ -224,7 +274,7 @@ class SnoozeServiceForegroundTest {
     }
 
     @Test
-    fun `a capture that finished inside begin holds no foreground service`() {
+    fun `a capture that finished inside begin holds no location foreground service`() {
         // The real runner starts inside `begin`, and both halves can settle
         // there — no location permission plus a refused Wi-Fi callback. The
         // callback then clears the handle field *before* the assignment that
@@ -247,9 +297,10 @@ class SnoozeServiceForegroundTest {
         )
         shadowOf(getMainLooper()).idle()
 
-        assertNull(
-            "nothing is being watched for, so nothing holds the process",
-            shadowOf(controller.get()).lastForegroundNotification,
+        assertEquals(
+            "nothing is being watched for, so only the ringer holds the process",
+            specialUse,
+            TestSnoozeService.foregroundType,
         )
     }
 
@@ -405,31 +456,15 @@ class SnoozeServiceForegroundTest {
     }
 
     @Test
-    fun `a refused give-back is retried rather than stranding the service`() {
-        // Codex, PR #230. The snooze degrades to duration-only while it runs,
-        // so the service gives the foreground back mid-snooze — and if that
-        // throws, the process may still be foreground. Marking it released
-        // anyway meant every later attempt returned early: a location
-        // foreground service held for a snooze doing no location work, and its
-        // card left in the shade after the snooze ended.
-        val controller = armWith(fixOnly)
-        assertNotNull(shadowOf(controller.get()).lastForegroundNotification)
-        TestSnoozeService.presence.canTrackDeparture = false
+    fun `a refused give-back at the end leaves the service to retry it`() {
+        // Codex, PR #230. If `stopForeground` throws, the process may still be
+        // foreground, so the held flag stays set and the next give-back tries
+        // again rather than taking the early return — a service held past the
+        // snooze, its card left in the shade, is the failure. The second
+        // give-back here is the card's own takedown after the ended notice.
+        val controller = armWith(unwatchable)
         TestSnoozeService.refuseForegroundExit = true
 
-        // A lost grant rather than a missing fix: a degradation the watch can
-        // recover from in process keeps the service (field log, 2026-10-05),
-        // and this needs one that gives it back.
-        emit(PresenceUpdate(event = null, degradation = DegradationCause.LOCATION_PERMISSION_GONE))
-
-        assertEquals(TrackingMode.DURATION_ONLY, ActiveSnoozeStore(appContext).load()?.mode)
-        assertEquals("it tried to give it back", 1, TestSnoozeService.foregroundExits)
-        assertFalse(
-            "and the platform did not take it",
-            shadowOf(controller.get()).isForegroundStopped,
-        )
-
-        TestSnoozeService.refuseForegroundExit = false
         controller
             .withIntent(
                 Intent(appContext, TestSnoozeService::class.java)
@@ -438,10 +473,95 @@ class SnoozeServiceForegroundTest {
             .startCommand(0, 2)
         shadowOf(getMainLooper()).idle()
 
-        assertEquals("so it tries again", 2, TestSnoozeService.foregroundExits)
-        assertTrue(
-            "and this time it is released",
-            shadowOf(controller.get()).isForegroundStopped,
+        val tries = TestSnoozeService.foregroundExits
+        assertTrue("it tried to give it back", tries >= 1)
+        assertFalse("and the platform did not take it", shadowOf(controller.get()).isForegroundStopped)
+
+        TestSnoozeService.refuseForegroundExit = false
+        controller.get().notifications.cancelOngoing()
+
+        assertEquals("so it tries again", tries + 1, TestSnoozeService.foregroundExits)
+        assertTrue("and this time it is released", shadowOf(controller.get()).isForegroundStopped)
+    }
+
+    @Test
+    fun `a restored expired snooze takes the foreground service before it releases`() {
+        // Codex, PR #328. The process died before the cap; the alarm starts a
+        // fresh instance, and `restore` ends the expired record before its
+        // first transition would have posted the card. The ringer is handed
+        // back inside that release, and Android 17 drops it from a process
+        // with no foreground service — so the service has to hold one first.
+        val expired = snoozeFixture(now, startedAgo = java.time.Duration.ofHours(2), capIn = java.time.Duration.ofMinutes(-1))
+        ActiveSnoozeStore(appContext).arm(expired)
+        ActiveSnoozeStore(appContext).setState(
+            app.snoozemo.core.SnoozeRecordState(app.snoozemo.core.SnoozeLifecycle.ARMED),
         )
+
+        startService(SnoozeService.ACTION_CHECK_CAP)
+        shadowOf(getMainLooper()).idle()
+
+        val zen = TestSnoozeService.zen
+        // The *first* release: it is the one that ends the snooze and hands
+        // the ringer back. The cap check's own reconcile can drive the
+        // already-off rule off once more afterwards, recordlessly, after the
+        // card and its service are gone — that call has no snooze behind it.
+        val release = zen.calls.indexOfFirst { (snoozed, _) -> !snoozed }
+        assertTrue("the expired snooze was released: ${zen.calls}", release >= 0)
+        assertEquals(
+            "and the release ran from inside a specialUse foreground service",
+            specialUse,
+            zen.foregroundTypeAtCalls[release],
+        )
+        assertNull("and it is over", ActiveSnoozeStore(appContext).load())
+    }
+
+    @Test
+    fun `an End now on a fresh instance takes the foreground service before it releases`() {
+        // The adopt path: the user taps `End now` after the process died, and
+        // the release that hands the ringer back runs in the same start.
+        val running = snoozeFixture(now)
+        ActiveSnoozeStore(appContext).arm(running)
+        ActiveSnoozeStore(appContext).setState(
+            app.snoozemo.core.SnoozeRecordState(app.snoozemo.core.SnoozeLifecycle.ARMED),
+        )
+
+        startService(SnoozeService.ACTION_END)
+        shadowOf(getMainLooper()).idle()
+
+        val zen = TestSnoozeService.zen
+        val release = zen.calls.indexOfFirst { (snoozed, _) -> !snoozed }
+        assertTrue("the snooze was released: ${zen.calls}", release >= 0)
+        assertEquals(specialUse, zen.foregroundTypeAtCalls[release])
+    }
+
+    @Test
+    @org.robolectric.annotation.Config(shadows = [TogglableAlarmManager::class])
+    fun `a restore whose cap re-arm is refused takes the foreground service before its direct release`() {
+        // Codex, PR #328, the same gap one branch earlier: a cold restore that
+        // cannot re-arm the cap ends the snooze straight away through the
+        // direct release, which hands the ringer back too. Nothing on that
+        // branch posts the card afterwards, so a `specialUse` start here can
+        // only have come from the restore taking it first.
+        TogglableAlarmManager.refuse = true
+        try {
+            ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
+            ActiveSnoozeStore(appContext).setState(
+                app.snoozemo.core.SnoozeRecordState(app.snoozemo.core.SnoozeLifecycle.ARMED),
+            )
+
+            startService(SnoozeService.ACTION_CHECK_CAP)
+            shadowOf(getMainLooper()).idle()
+
+            assertTrue(
+                "the restore took a specialUse foreground service: ${TestSnoozeService.foregroundTypesEntered}",
+                specialUse in TestSnoozeService.foregroundTypesEntered,
+            )
+            assertTrue(
+                "and could not resume, so it ended directly",
+                shadeShows(stringOf(app.snoozemo.R.string.failure_could_not_resume)),
+            )
+        } finally {
+            TogglableAlarmManager.refuse = false
+        }
     }
 }

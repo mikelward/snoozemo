@@ -54,7 +54,7 @@ DND back off.
 | # | Decision | Rationale |
 |---|---|---|
 | D1 | Control DND via **`AutomaticZenRule`**, never `setInterruptionFilter` | Required for apps targeting Android 15+; also composes correctly with the user's other rules |
-| D2 | **One build, `play`** — the Geofencing API and `ACCESS_BACKGROUND_LOCATION`, plus a `location` foreground service while something is watching (`direct`, a second flavor using a foreground service and no restricted permissions, retired 2026-09-12; see §3.4) | Play's April 2026 policy removed geofencing as an approved foreground-service use case and directs it to the Geofence API, so an FGS cannot be the *mechanism* on Play — and it is not: the fence still delivers the exit. **Amended 2026-09-08**: the fence delivering it is worth nothing with no process left to hear it (a field log: the watch closed 67 s after arming, the exit arrived to a refused service start, the snooze did not end), so `play` now holds an FGS for process survival, gated on the snooze actually watching (§3.4) |
+| D2 | **One build, `play`** — the Geofencing API and `ACCESS_BACKGROUND_LOCATION`, plus a `location` foreground service while something is watching (`direct`, a second flavor using a foreground service and no restricted permissions, retired 2026-09-12; see §3.4) | Play's April 2026 policy removed geofencing as an approved foreground-service use case and directs it to the Geofence API, so an FGS cannot be the *mechanism* on Play — and it is not: the fence still delivers the exit. **Amended 2026-09-08**: the fence delivering it is worth nothing with no process left to hear it (a field log: the watch closed 67 s after arming, the exit arrived to a refused service start, the snooze did not end), so `play` now holds an FGS for process survival, gated on the snooze actually watching (§3.4). **Amended 2026-10-12**: every snooze holds one, `specialUse`, so the ringer hand-back at its end is not dropped by Android 17; `location` is still added only while watching (§3.4, §5.9 rule 5) |
 | D3 | The presence engine is **behind one interface** | Keeps all product behavior, DND handling, and UI above `PresenceMonitor` (§6.1) and independent of it. (Had two implementations, one per flavor; `direct` retired 2026-09-12, §3.4) |
 | D4 | **Wi-Fi is a suppressor, not a trigger** | Still on the anchor SSID ⇒ definitely still here (skip location entirely). Wi-Fi dropped ⇒ *maybe* left, so escalate to a location check. Never end a snooze on Wi-Fi loss alone |
 | D5 | **Implicit anchor**: the tile captures "here" at arm time | Zero setup. Saved places are a later addition, not a prerequisite |
@@ -163,7 +163,9 @@ retired (§3.4).
 retirement note after it records why the second, `direct`, was dropped.
 
 - **`play`** — option B. Geofencing API, `ACCESS_BACKGROUND_LOCATION`, and — since 2026-09-08 — a
-  **`location` foreground service while something is watching**. This is the shipping build for any
+  **`location` foreground service while something is watching** — and, since 2026-10-12, a
+  **`specialUse` foreground service for every snooze**, so the ringer can be handed back when it
+  ends (see the note after the next one, and §5.9 rule 5). This is the shipping build for any
   Play track, internal included.
 
   > **Reversed 2026-09-08** (maintainer, from a device log). This bullet read "**no foreground
@@ -199,6 +201,21 @@ retirement note after it records why the second, `direct`, was dropped.
   > prerequisite for the service, which nothing in process can repair.
   > §3.5's risk is unchanged in kind and larger in degree: the Console now owes a
   > foreground-service declaration beside the background-location one.
+  >
+  > **Amended 2026-10-12** (maintainer, from a field report): *every* snooze now holds a
+  > foreground service, from the arm to its end, typed `specialUse`, with `location` added only
+  > while something is watching as above. "A duration-only one takes none" was right for its
+  > exit and wrong for its ringer: Android 17 silently ignores `setRingerMode` from an app with
+  > neither a visible activity nor a non-`SHORT_SERVICE` foreground service, so a timer-only
+  > snooze ending on its cap handed the ringer back into nothing and the phone stayed on vibrate
+  > (§5.9 rule 5). Held from the arm, which runs while the tile's trampoline is on screen, so the
+  > service also carries the while-in-use capability a target-37 build will need. A process that
+  > died and is started again — by the cap alarm, or by `End now` — takes it before it hands the
+  > record back to the controller, since either can end the snooze in that same start; from the
+  > background that start may be refused, which leaves the stuck-ringer notice. A degrade now
+  > drops the `location` type rather than the service, so the gate above still decides what the
+  > app *claims* — no location type for a snooze doing no location work. `specialUse` is the only
+  > type that describes this, and it needs its own Play Console declaration beside the other two.
   >
   > Three passages below still argue from "`play` runs no foreground service" and are marked where
   > they stand: the 10-minute cadence (§6.7), the sensor restriction (§6.8), and the Wi-Fi watch's
@@ -3138,9 +3155,12 @@ literal form. Six rules keep that from happening, and each one prefers the audib
    which hands it back at once while visible. On Android 17 that is the path that works — background
    audio hardening silently ignores `setRingerMode` from an app with neither a visible activity nor a
    foreground service, whatever its target SDK, so the retries from the alarm and a release made with
-   no service running are dropped without an error (field report, 2026-10-12). Restoring it
-   automatically would need a foreground service started from the end-of-snooze alarm, a
-   foreground-service-type and Play policy question that is open (`TODO.md`). **Its interval doubles
+   no service running are dropped without an error (field report, 2026-10-12). So every snooze
+   holds a foreground service from its arm to its end (§3.4, amended 2026-10-12), and the release
+   at the end hands the ringer back from inside it; the tap is what is left for a snooze whose
+   process died anyway. Starting one from the end-of-snooze alarm instead was rejected: a
+   background start needs an exact alarm, which this one deliberately is not, and would not carry
+   the while-in-use capability a target-37 build needs. **Its interval doubles
    and its sequence ends** — a minute, then two, up to an hour, for ten rounds — because a refusal
    can also be *permanent* (a fixed-volume policy appeared, notification-policy access was revoked),
    and nothing about the next attempt would be different: a fixed interval would buy a wake-up a

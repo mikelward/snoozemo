@@ -116,6 +116,9 @@ class DeclaredPermissionsTest {
 
         val typed = Manifest.permission.FOREGROUND_SERVICE_LOCATION in declared
         assertTrue("the app keeps the presence watch's process alive", typed)
+
+        val specialUse = Manifest.permission.FOREGROUND_SERVICE_SPECIAL_USE in declared
+        assertTrue("and every snooze's, so the ringer can be handed back", specialUse)
     }
 
     @Test
@@ -153,7 +156,7 @@ class DeclaredPermissionsTest {
     }
 
     @Test
-    fun `the build declares the location type and no other`() {
+    fun `the build declares the location and specialUse types and no other`() {
         // **This assertion was reversed** (maintainer, 2026-09-08). It used to
         // require that *no* service declared a type at all, on the reasoning
         // that the location type's approved use cases are the ones SPEC.md §3.3
@@ -168,8 +171,11 @@ class DeclaredPermissionsTest {
         // anyway: Snoozemo does both, and the service is what survives to hear
         // what the fence delivers.
         //
-        // So the invariant is no longer "no type" but "*this* type and nothing
-        // else". A second type appearing — a dependency merging `dataSync`, a
+        // So the invariant is no longer "no type" but "*these* types and
+        // nothing else". The second, `specialUse`, was the same decision taken
+        // again (maintainer, 2026-10-12): Android 17 drops a background
+        // `setRingerMode`, so every snooze now holds a foreground service to
+        // hand the ringer back at its end (SPEC.md §5.9 rule 5). A second type appearing — a dependency merging `dataSync`, a
         // future feature reaching for `mediaPlayback` — changes what Play
         // reviews and what the Console declaration has to say, and is exactly
         // the decision this test exists to force rather than let happen.
@@ -184,9 +190,12 @@ class DeclaredPermissionsTest {
             it.startsWith("android.permission.FOREGROUND_SERVICE_")
         }
         assertEquals(
-            "the app declares the location type and no other",
-            listOf(Manifest.permission.FOREGROUND_SERVICE_LOCATION),
-            typed,
+            "the app declares the location and specialUse types and no other",
+            setOf(
+                Manifest.permission.FOREGROUND_SERVICE_LOCATION,
+                Manifest.permission.FOREGROUND_SERVICE_SPECIAL_USE,
+            ),
+            typed.toSet(),
         )
 
         val services = packageManager
@@ -200,8 +209,8 @@ class DeclaredPermissionsTest {
             withType,
         )
         assertEquals(
-            "and the type it carries is location",
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
+            "and the types it carries are location and specialUse",
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
             services.single { it.foregroundServiceType != 0 }.foregroundServiceType,
         )
     }
