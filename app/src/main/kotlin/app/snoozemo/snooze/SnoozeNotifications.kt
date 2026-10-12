@@ -24,6 +24,7 @@ import app.snoozemo.core.EndReason
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.MeetingEnd
 import app.snoozemo.core.ZenFailure
+import app.snoozemo.ui.ACTION_RESTORE_RINGER
 import app.snoozemo.ui.MainActivity
 import app.snoozemo.ui.formatSheetTime
 import java.time.Instant
@@ -1341,9 +1342,16 @@ class SnoozeNotifications(private val context: Context) {
      *
      * **Its own id**, not the one-shots' shared one: an unrelated failure must
      * not replace the only thing telling the user their phone is quiet. And
-     * `setAutoCancel` rather than `setOngoing`, unlike the stuck-rule card,
-     * because this one carries no action to protect — the fix is in the volume
-     * panel, and a user who has read it should be able to swipe it away.
+     * `setAutoCancel` rather than `setOngoing`, unlike the stuck-rule card: a
+     * user who has read it should be able to swipe it away.
+     *
+     * **Tapping it puts the ringer back.** It opens the app with
+     * [ACTION_RESTORE_RINGER], and the hand-back runs while the app is visible —
+     * the one place Android 17 still lets it run, since background audio
+     * hardening silently drops `setRingerMode` from an app with no visible
+     * activity and no foreground service, which is every retry this notice
+     * follows. Auto-cancel is safe for that: a tap whose hand-back is refused
+     * again lands in the idle check, which posts this afresh.
      *
      * [dropRingerStuck] is the other half: a later hand-back makes this untrue,
      * and nothing else would take it down.
@@ -1354,9 +1362,29 @@ class SnoozeNotifications(private val context: Context) {
             .setSmallIcon(DndR.drawable.ic_snooze_mark)
             .setContentTitle(context.getString(R.string.failure_ringer_stuck))
             .setContentText(context.getString(R.string.failure_ringer_stuck_body))
+            .setContentIntent(restoreRingerPendingIntent())
+            // Re-posted on every refused retry round, which runs for hours; it
+            // should sound once, when the problem is first reported (Codex,
+            // PR #327).
+            .setOnlyAlertOnce(true)
             .setAutoCancel(true)
             .build(),
     )
+
+    /**
+     * Opens [MainActivity] asking for the ringer back. A plain activity launch
+     * from a notification tap, which the platform always allows, and the app
+     * being visible is what lets the hand-back through on Android 17.
+     */
+    private fun restoreRingerPendingIntent(): PendingIntent =
+        PendingIntent.getActivity(
+            context,
+            REQUEST_RESTORE_RINGER,
+            Intent(context, MainActivity::class.java)
+                .setAction(ACTION_RESTORE_RINGER)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
 
     /** Takes the notice above down once the ringer is back. */
     fun dropRingerStuck() = drop(ID_RINGER)
@@ -1927,6 +1955,9 @@ class SnoozeNotifications(private val context: Context) {
 
         /** The `Until <time>` action; see [endAtPendingIntent]. */
         const val REQUEST_END_AT = 15
+
+        /** Tapping the stuck-ringer notice; see [restoreRingerPendingIntent]. */
+        const val REQUEST_RESTORE_RINGER = 16
 
         /** Handled by [NotificationActionReceiver]; takes the card down and nothing else. */
         const val ACTION_DISMISS_STUCK = "app.snoozemo.action.DISMISS_STUCK"

@@ -653,7 +653,7 @@
       state, the body names the one place the user can fix it.
     -->
     <string name="failure_ringer_stuck">Ringer not restored</string>
-    <string name="failure_ringer_stuck_body">Change it in the volume panel.</string>
+    <string name="failure_ringer_stuck_body">Tap to restore.</string>
 
     <!-- The app version, at the foot of Settings — same format as the sibling Simmo repo. -->
     <string name="settings_version">Version %1$s</string>

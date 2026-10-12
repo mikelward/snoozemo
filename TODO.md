@@ -1988,6 +1988,18 @@ the point is that every other line of the app is worthless if it isn't true.
 
 ## Phase 5 (M5) — Edge cases and degraded modes
 
+- [ ] **Restore the ringer automatically on Android 17** (maintainer, 2026-10-12 — investigate,
+      then bring the policy question back). Background audio hardening silently ignores
+      `setRingerMode` unless the app has a visible activity or a running non-`SHORT_SERVICE`
+      foreground service (any target SDK; targeting 37 also needs while-in-use). A snooze whose
+      process died ends through the cap alarm with no service, and every retry fires from an
+      alarm, so none of them can land; the stuck-ringer notice's tap is the working path today
+      (`SPEC.md` §5.9 rule 5). The automatic route is a foreground service started from the
+      exact cap alarm just long enough to hand back — which means deciding its type (the
+      service is `location` today, and a background start of that type depends on background
+      location), its Play declaration, and whether targeting 37's while-in-use rule leaves it
+      possible at all. A Play-policy question, so not autopilot's to guess.
+
 - [ ] **Warn on entering a non-time "ending soon" state — build next PR** (maintainer,
       2026-09-13). **Decided to build**, its own follow-up PR after the drop-the-failsafe-from-UI
       change. The intent: **any time the snooze enters an "ending soon"/about-to-end state whose

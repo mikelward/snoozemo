@@ -3129,12 +3129,18 @@ literal form. Six rules keep that from happening, and each one prefers the audib
    would read the same stale count and schedule the same first delay forever, which is the unbounded
    wake-up the pacing exists to prevent. **The first round refused with no snooze running tells
    the user**, not the last (on the release path itself a refused rule write can keep the snooze
-   armed, so the notice waits for the first retry, a minute later) — a notification (`Ringer not restored` / `Change it in the volume panel.`), because the
+   armed, so the notice waits for the first retry, a minute later) — a notification (`Ringer not restored` / `Tap to restore.`), because the
    snooze has ended and taken the ongoing card with it, the loan alone is not something a user can
    read, and the ladder spans about five hours: telling them only when it ran out left a phone on
    vibrate for hours after a snooze it was told had ended (field report, 2026-10-12). The retries
    go on behind the notice, which comes down again the moment any later hand-back succeeds or the
-   user's own change disowns the loan. **Its interval doubles
+   user's own change disowns the loan. **Tapping the notice puts the ringer back**: it opens the app,
+   which hands it back at once while visible. On Android 17 that is the path that works — background
+   audio hardening silently ignores `setRingerMode` from an app with neither a visible activity nor a
+   foreground service, whatever its target SDK, so the retries from the alarm and a release made with
+   no service running are dropped without an error (field report, 2026-10-12). Restoring it
+   automatically would need a foreground service started from the end-of-snooze alarm, a
+   foreground-service-type and Play policy question that is open (`TODO.md`). **Its interval doubles
    and its sequence ends** — a minute, then two, up to an hour, for ten rounds — because a refusal
    can also be *permanent* (a fixed-volume policy appeared, notification-policy access was revoked),
    and nothing about the next attempt would be different: a fixed interval would buy a wake-up a
