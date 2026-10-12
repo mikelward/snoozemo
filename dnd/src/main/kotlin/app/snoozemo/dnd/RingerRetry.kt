@@ -55,13 +55,14 @@ internal fun requestRingerHandBackRetry(delayMillis: Long) {
 }
 
 /**
- * Whether a hand-back has run out of retries, for `:app` to tell the user
+ * Whether a hand-back has been refused, for `:app` to tell the user
  * (SPEC.md §5.9).
  *
- * The retry sequence ends so a permanently refused write stops waking the
- * phone — and when it ends the loan is still outstanding, so the phone is
- * quieter than its owner set it with nothing left that will fix it by itself.
- * That is principle 2's case exactly: do the safe thing and **say so**. The
+ * Raised on the first round refused once the snooze is known to be over (the
+ * idle check), not when the retries run out: the loan is outstanding from that
+ * moment, so the phone is already quieter than its owner set it, and the retry
+ * ladder spans hours. That is principle 2's case
+ * exactly: do the safe thing and **say so**. The
  * ongoing card cannot, because the snooze has ended and taken it down, so this
  * asks for the one channel left.
  *

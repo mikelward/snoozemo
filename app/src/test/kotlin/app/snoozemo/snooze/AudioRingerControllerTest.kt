@@ -898,6 +898,115 @@ class AudioRingerControllerTest {
     }
 
     @Test
+    fun `a refused idle hand-back tells the user on its first round`() {
+        val delays = mutableListOf<Long>()
+        val stuck = mutableListOf<Boolean>()
+        installRingerHandBackRetry { delays += it }
+        installRingerStuckNotice { stuck += it }
+        newController().quiet()
+        loseTheAudioManager()
+
+        newController().giveBackIfIdle { false }
+
+        // Round one of ten, so the ladder goes on — and the notice is already
+        // up, because no snooze is running, the phone is quiet now and the
+        // ladder spans hours: a field report sat on vibrate for two of them
+        // with nothing on screen.
+        assertEquals(listOf(RingerHandBack.FIRST_RETRY_MILLIS), delays)
+        assertEquals(listOf(true), stuck)
+    }
+
+    @Test
+    fun `a refused idle hand-back says nothing while an arm is waiting`() {
+        val delays = mutableListOf<Long>()
+        val stuck = mutableListOf<Boolean>()
+        installRingerHandBackRetry { delays += it }
+        installRingerStuckNotice { stuck += it }
+        newController().quiet()
+        loseTheAudioManager()
+        // Clear for the three checks up to the hand-back (before the lock, on
+        // taking it, before the release; with no AudioManager the release
+        // escalates before its write loop asks), then wanted: the arm that
+        // queued on the lock during the last write (Codex, PR #327).
+        var asked = 0
+        val armWanted = { ++asked > 3 }
+
+        newController().giveBackIfIdleUnlessBusy(snoozeRunning = { false }, armWanted = armWanted)
+
+        // Nothing posted in front of the arm; the retry it scheduled says it later.
+        assertEquals(emptyList<Boolean>(), stuck)
+        assertEquals(listOf(RingerHandBack.FIRST_RETRY_MILLIS), delays)
+    }
+
+    @Test
+    fun `the retry alarm's idle hand-back says nothing while an arm is queued`() {
+        val reportedHere = mutableListOf<Boolean>()
+        val self = Thread.currentThread()
+        installRingerHandBackRetry { }
+        installRingerStuckNotice { if (Thread.currentThread() == self) reportedHere += it }
+        newController().quiet()
+        loseTheAudioManager()
+        // Holds the arm inside its own critical section until this test lets
+        // it go, so the recovery's post-unlock check meets an arm still in
+        // flight every time rather than most of the time.
+        val letArmFinish = java.util.concurrent.CountDownLatch(1)
+        val armed = newController(GatedLoan(PrefsRingerLoanStore(context), letArmFinish))
+        var arm: Thread? = null
+
+        // The retry alarm's path, which passes no yield of its own. The
+        // predicate runs under the lock, so an arm started here queues on it
+        // exactly as a tile tap during the hand-back would (Codex, PR #327).
+        newController().giveBackIfIdle {
+            arm = Thread { armed.quiet() }.apply { start() }
+            val deadline = System.nanoTime() + 10_000_000_000L
+            while (java.util.concurrent.locks.LockSupport.getBlocker(arm) == null) {
+                check(System.nanoTime() < deadline) { "the arm never queued on the ringer" }
+                Thread.yield()
+            }
+            false
+        }
+        letArmFinish.countDown()
+        arm!!.join()
+
+        // Nothing posted from the recovery while an arm was in flight; the arm
+        // finds the loan and reports for itself on its own thread.
+        assertEquals(emptyList<Boolean>(), reportedHere)
+    }
+
+    @Test
+    fun `a refused hand-back on the release path waits for the idle check to say so`() {
+        val stuck = mutableListOf<Boolean>()
+        installRingerHandBackRetry { }
+        installRingerStuckNotice { stuck += it }
+        newController().quiet()
+        loseTheAudioManager()
+
+        newController().giveBack()
+
+        // The rule write that follows may be refused and keep the snooze
+        // armed, where "change it in the volume panel" would make a live
+        // snooze louder (Codex, PR #327).
+        assertEquals(emptyList<Boolean>(), stuck)
+    }
+
+    @Test
+    fun `a hand-back that lands after a refused one takes the notice down`() {
+        val stuck = mutableListOf<Boolean>()
+        installRingerHandBackRetry { }
+        installRingerStuckNotice { stuck += it }
+        newController().quiet()
+        val manager = audio
+        loseTheAudioManager()
+        newController().giveBackIfIdle { false }
+        shadowOf(context as android.app.Application).setSystemService(Context.AUDIO_SERVICE, manager)
+
+        newController().giveBackIfIdle { false }
+
+        assertEquals(listOf(true, false), stuck)
+        assertEquals(AudioManager.RINGER_MODE_NORMAL, audio.ringerMode)
+    }
+
+    @Test
     fun `a hand-back with no AudioManager still asks for a durable retry`() {
         val delays = mutableListOf<Long>()
         installRingerHandBackRetry { delays += it }
@@ -1308,6 +1417,27 @@ class AudioRingerControllerTest {
     }
 
     /** Real storage whose loan cannot be read, with a tally that still writes. */
+    /** Real storage whose first loan read waits on [gate], so an arm can be held mid-flight. */
+    private class GatedLoan(
+        private val real: RingerLoanStore,
+        private val gate: java.util.concurrent.CountDownLatch,
+    ) : RingerLoanStore {
+        override fun borrowed(): BorrowedRinger? {
+            check(gate.await(10, java.util.concurrent.TimeUnit.SECONDS)) { "the gate was never opened" }
+            return real.borrowed()
+        }
+        override fun record(borrowed: BorrowedRinger): Boolean = real.record(borrowed)
+        override fun markApplied(): Boolean = real.markApplied()
+        override fun setUserMoved(moved: Boolean): Boolean = real.setUserMoved(moved)
+        override fun clear(): Boolean = real.clear()
+        override fun activeChoice(): SnoozeRinger? = real.activeChoice()
+        override fun choiceOwner(): SnoozeIdentity? = real.choiceOwner()
+        override fun recordChoice(choice: SnoozeRinger?, owner: SnoozeIdentity?): Boolean =
+            real.recordChoice(choice, owner)
+        override fun handBackFailures(): Int = real.handBackFailures()
+        override fun recordHandBackFailures(failures: Int): Boolean = real.recordHandBackFailures(failures)
+    }
+
     private class UnreadableLoan(private val real: RingerLoanStore) : RingerLoanStore {
         override fun borrowed(): BorrowedRinger? = error("the loan record is unreadable")
         override fun record(borrowed: BorrowedRinger): Boolean = real.record(borrowed)

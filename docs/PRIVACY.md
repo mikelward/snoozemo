@@ -290,6 +290,10 @@ settings — ring, vibrate or silent — along with the one it was put back to a
 and whether Snoozemo's own Do Not Disturb rule was in effect immediately before and after
 that change, which is there to answer whether turning the ringer down is what stops some
 phones staying snoozed at all,
+and — only when putting the ringer back after a snooze is refused — which Do Not Disturb
+level the phone was in at that moment, the ring volume as a step out of its maximum, and
+whether the ring sound was muted, which is there to tell apart the different reasons a
+phone can refuse to ring again,
 whether this build and this phone can offer the `When I move` end condition at all —
 recorded alongside the run details above — once per run, and again if you turn the log
 back on — and only as which of the two reasons it is: that this build of

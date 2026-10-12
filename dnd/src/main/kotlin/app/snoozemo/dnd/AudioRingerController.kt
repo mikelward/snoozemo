@@ -1,5 +1,6 @@
 package app.snoozemo.dnd
 
+import android.app.NotificationManager
 import android.content.Context
 import android.media.AudioManager
 import android.util.Log
@@ -138,7 +139,7 @@ class AudioRingerController(
      * cannot see.
      */
     fun giveBackIfIdle(snoozeRunning: () -> Boolean): RingerOutcome =
-        RINGER.withLock { giveBackIfIdleLocked(snoozeRunning) }
+        afterIdleCheck(RINGER.withLock { giveBackIfIdleLocked(snoozeRunning) })
 
     /**
      * The same check, but **declining to wait** for the ringer if something else
@@ -192,17 +193,52 @@ class AudioRingerController(
             SnoozeDebugLog.event("ringer: busy, so startup reconciliation stood down; the loan waits for the next start")
             return null
         }
-        return try {
+        val result = try {
             giveBackIfIdleLocked(snoozeRunning, armWanted)
         } finally {
             RINGER.unlock()
         }
+        return afterIdleCheck(result, armWanted)
+    }
+
+    /** What the idle check found, and whether it owes the user a stuck notice once the lock is free. */
+    private class IdleCheck(val outcome: RingerOutcome, val refusedWithNoSnooze: Boolean = false)
+
+    /**
+     * Says a refused idle hand-back out loud — **after** the lock is released.
+     *
+     * The notice is said on the first refused round rather than only when the
+     * retry ladder is spent: it spans about five hours, and a field report sat
+     * on vibrate for two of them after a snooze it was told had ended, with
+     * nothing on screen (principle 2). Only from here, the one caller that has
+     * just established no snooze is running — on the release path a refused
+     * rule write keeps the snooze armed, and the notice's advice would make it
+     * louder — and with the refusal context logged alongside.
+     *
+     * Outside the lock because both are binder calls (the interruption filter
+     * is a policy IPC) and any arm queued on the lock would wait behind them
+     * before reaching `STATE_TRUE`; four rounds of checking for a queued arm
+     * *inside* the lock each left a gap for one to arrive just after (Codex,
+     * PR #327). Out here no arm waits on this at all. Skipped when one is
+     * already waiting or holds the ringer: it finds the loan and reports for
+     * itself, and saying "stuck" over its report would be stale. The retries go
+     * on behind the notice; whichever hand-back lands takes it down.
+     */
+    private fun afterIdleCheck(
+        check: IdleCheck,
+        armWanted: () -> Boolean = { ARMS_WAITING.get() > 0 },
+    ): RingerOutcome {
+        if (check.refusedWithNoSnooze && !armWanted() && ARMS_WAITING.get() == 0 && !RINGER.isLocked) {
+            audioManager?.let(::logRefusalContext)
+            reportRingerStuck(true)
+        }
+        return check.outcome
     }
 
     private fun giveBackIfIdleLocked(
         snoozeRunning: () -> Boolean,
         armWanted: () -> Boolean = { false },
-    ): RingerOutcome {
+    ): IdleCheck {
         // **Asked again the moment the lock is held, before any recovery work
         // at all** (Codex, PR #259, the fourth finding on this contention).
         // Checking before `tryLock` and then again only at the writes leaves a
@@ -219,14 +255,14 @@ class AudioRingerController(
         val yieldingToArm = { armWanted().also { wanted -> yielded = yielded || wanted } }
         if (yieldingToArm()) {
             SnoozeDebugLog.event("ringer: an arm wanted it, so startup reconciliation stood down; the loan waits")
-            return RingerOutcome.Untouched
+            return IdleCheck(RingerOutcome.Untouched)
         }
         // The same ladder the release path takes, and for a sharper reason here
         // (Codex, PR #176): this is what the retry alarm's own receiver runs, so
         // a one-shot alarm that reaches an unreadable record is already spent —
         // returning without asking for a successor leaves nothing scheduled at
         // all.
-        val loan = readLoan() ?: return escalateUnreadableState()
+        val loan = readLoan() ?: return IdleCheck(escalateUnreadableState())
         val running = runCatching(snoozeRunning).getOrElse {
             SnoozeDebugLog.failure(it, "ringer: could not tell whether a snooze is running; leaving the loan alone")
             // Unknown is answered as "running", which keeps a phone that is
@@ -236,14 +272,14 @@ class AudioRingerController(
             // alarm spent that alarm and scheduled nothing, so a genuinely
             // stranded loan under it had nothing left coming.
             if (loan.borrowed != null) escalateUnreadableState("whether a snooze is running is unreadable")
-            return RingerOutcome.Untouched
+            return IdleCheck(RingerOutcome.Untouched)
         }
         if (running) {
             // A snooze this process is about to restore, or one whose release
             // is still being retried. Its own release gives the ringer back;
             // stepping in here would un-quiet a phone still meant to be quiet.
             SnoozeDebugLog.event("ringer: a live snooze holds the ringer; left to its release")
-            return RingerOutcome.Untouched
+            return IdleCheck(RingerOutcome.Untouched)
         }
         // Dropped on every path that resolves the loan, because the predicate
         // has just established that nothing is running: the choice record is
@@ -263,19 +299,19 @@ class AudioRingerController(
         // as it found it, or it is not standing down.
         if (yieldingToArm()) {
             SnoozeDebugLog.event("ringer: an arm wanted it, so startup reconciliation stood down; the loan waits")
-            return RingerOutcome.Untouched
+            return IdleCheck(RingerOutcome.Untouched)
         }
         // Asked *after* the predicate, unlike the loan-first shape this had at
         // first: a snooze that never borrowed still records a choice, so the
         // no-loan case had something to clear even before the line above moved.
         if (loan.borrowed == null) {
             rememberChoice(null)
-            return RingerOutcome.Untouched
+            return IdleCheck(RingerOutcome.Untouched)
         }
         SnoozeDebugLog.event("ringer: a snooze ended without handing it back; doing it now")
         val outcome = giveBackLocked(yieldingToArm)
         if (!yielded) rememberChoice(null)
-        return outcome
+        return IdleCheck(outcome, refusedWithNoSnooze = outcome is RingerOutcome.Refused && !yielded)
     }
 
     /**
@@ -565,6 +601,33 @@ class AudioRingerController(
     }
 
     /**
+     * What the platform looked like when it refused a hand-back, so a report
+     * can say *why* rather than only *that* (SPEC.md principle 6).
+     *
+     * A field report showed every hand-back after a snooze accepted and read
+     * back as `VIBRATE` for hours, with nothing in the log to tell an active
+     * Do Not Disturb source, a ring volume of zero or a muted stream apart —
+     * each refuses `NORMAL` differently and each wants a different fix. Coarse
+     * state only: a filter, a volume step and a flag, nothing about where the
+     * user is. Contained, because this is diagnosis on a path already failing.
+     * Called only after the idle check has released the ringer lock, never
+     * from anything an arm can reach or wait on: the interruption-filter read
+     * is a policy IPC (`AGENTS.md`, the arm path).
+     */
+    private fun logRefusalContext(manager: AudioManager) {
+        val filter = runCatching {
+            context.getSystemService(NotificationManager::class.java)?.currentInterruptionFilter
+        }.getOrNull()
+        val volume = runCatching { manager.getStreamVolume(AudioManager.STREAM_RING) }.getOrNull()
+        val max = runCatching { manager.getStreamMaxVolume(AudioManager.STREAM_RING) }.getOrNull()
+        val muted = runCatching { manager.isStreamMute(AudioManager.STREAM_RING) }.getOrNull()
+        SnoozeDebugLog.warning(
+            "ringer: refused with interruptionFilter=${filter ?: "unknown"} " +
+                "ringVolume=${volume ?: "?"}/${max ?: "?"} ringMuted=${muted ?: "unknown"}",
+        )
+    }
+
+    /**
      * Sets [mode] and confirms it took, in three outcomes rather than two.
      *
      * Verified rather than assumed, the same discipline
@@ -612,8 +675,12 @@ class AudioRingerController(
      * Paced by the loan's own tally, so a **permanent** refusal — a fixed-volume
      * policy, revoked policy access — stops asking rather than buying a wake-up
      * a minute forever for a write that cannot land. When the sequence is spent
-     * the user is told, since they are the only one who can fix it from there
-     * (principle 2). All of it from Codex, PR #176, over three rounds.
+     * the user is told. Earlier than that, the idle check tells them on its
+     * first refused round ([afterIdleCheck]); this does not, because it
+     * also runs where a snooze may still be live — a release whose rule write
+     * is then refused keeps the snooze armed, and an arm finishing a stale
+     * loan reports for itself (Codex, PR #327). The pacing is from Codex,
+     * PR #176, over three rounds.
      */
     private fun escalate(mode: RingerMode, why: String): RingerOutcome {
         val failures = tallyHandBackFailure()
