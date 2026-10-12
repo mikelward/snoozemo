@@ -3127,10 +3127,13 @@ literal form. Six rules keep that from happening, and each one prefers the audib
    after those refused writes, so in the normal case it wakes nothing (§9). A tally that cannot be
    stored **ends** the sequence rather than restarting it: each firing may wake a fresh process, which
    would read the same stale count and schedule the same first delay forever, which is the unbounded
-   wake-up the pacing exists to prevent. **When the sequence ends,
-   the user is told** — a notification (`Ringer not restored` / `Change it in the volume panel.`),
-   because the snooze has ended and taken the ongoing card with it, and the loan alone is not
-   something a user can read; it comes down again the moment any later hand-back succeeds or the
+   wake-up the pacing exists to prevent. **The first round refused with no snooze running tells
+   the user**, not the last (on the release path itself a refused rule write can keep the snooze
+   armed, so the notice waits for the first retry, a minute later) — a notification (`Ringer not restored` / `Change it in the volume panel.`), because the
+   snooze has ended and taken the ongoing card with it, the loan alone is not something a user can
+   read, and the ladder spans about five hours: telling them only when it ran out left a phone on
+   vibrate for hours after a snooze it was told had ended (field report, 2026-10-12). The retries
+   go on behind the notice, which comes down again the moment any later hand-back succeeds or the
    user's own change disowns the loan. **Its interval doubles
    and its sequence ends** — a minute, then two, up to an hour, for ten rounds — because a refusal
    can also be *permanent* (a fixed-volume policy appeared, notification-policy access was revoked),
