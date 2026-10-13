@@ -667,7 +667,9 @@ what the app *does*.
   not a second derivation, stamped with the snooze it belongs to, and snapshot-at-open like the
   rest of the tile — no repaint on presence updates. `Until you move` stays bare: motion has no
   distance.
-- **Tap while inactive:** arm. **Tap while active:** end the snooze immediately (D6).
+- **Tap while inactive:** arm. **Tap while active:** end the snooze immediately (D6). **A second
+  tap within half a second of the last one the tile acted on is ignored** — read as part of that
+  tap, not as its opposite (§7).
 - **Long press:** opens the app, via an activity registered for
   `android.service.quicksettings.action.QS_TILE_PREFERENCES`.
 - **Locked device:** arming works locked — no `unlockAndRun()` wrapper. The whole point is a
@@ -4328,8 +4330,26 @@ Idempotent; safe to call twice.
 |---|---|---|
 | **Departure** | §6.6 confirmation | The intended path |
 | **Duration cap** | Default 8 h, configurable 30 min – 24 h | Backstop for every sensor failure |
-| **Manual** | Tile tap, notification action, or in-app | Always available, always instant |
+| **Manual** | Tile tap, notification action, or in-app | Always available, always instant — bar a quick second tile tap (below) |
 | **Movement** | `TYPE_SIGNIFICANT_MOTION`, opt-in per snooze | §4.4's `When I move`; on trial, off by default |
+
+**A quick second tap on the tile is read as part of the first** (maintainer, 2026-10-13). The tile
+flips meaning under the finger — one tap arms, the next ends — and paints the flip before the
+service has answered, so a fast double tap meant as one would arm a snooze and end it at once. That
+is one candidate for the snoozes a device capture (2026-09-09) showed ending `MANUAL` seconds after
+they armed (`TODO.md`). So a tile tap within half a second of the last one the tile acted on is
+ignored, and the debug log records that it was. **Half a second, not longer:** two taps meant as
+one land about 300 ms apart, so 500 ms covers them, and every millisecond past that only ignores
+taps the user meant. The window runs from the last tap that *acted*, so tapping repeatedly cannot
+hold the tile inert, and an ignored tap leaves the tile showing what the first one asked for — the
+phone is never quiet without the tile saying so.
+
+**It is the tile's exception alone.** `End now` on the notification and in the app mean only
+"end", so a tap on either is deliberate, and both stay instant. Making every control inert while a
+change is in flight was the broader fix on the table, and it was set aside for exactly that reason:
+it would have delayed the exit the user reaches for when the phone has to ring again, which this
+section ranks above a stray end. The window is in memory, so a tap pays no read for it, and a
+process that died in between forgets it — which accepts the next tap, the side that acts.
 
 **Movement is opt-in, and it adds to the event exits but replaces a chosen time.** Arming
 movement never turns departure off or on — a leave+motion snooze ends on either — but it *is*
@@ -4831,7 +4851,7 @@ it is.
 |---|---|
 | Airplane mode / Wi-Fi off mid-snooze | Wi-Fi signal goes unavailable, not "lost". Fall through to location; if location is also unavailable, degrade to duration-only and say so |
 | Location services disabled system-wide | Degrade to duration-only, update notification |
-| Arm twice at the same place | Idempotent; second tap ends it (§4.2) |
+| Arm twice at the same place | Idempotent; second tap ends it (§4.2), unless it lands within 500 ms of the first (§7) |
 | Move a short distance and return | Hysteresis plus two-fix confirmation absorbs this |
 | Anchor captured with a bad fix (accuracy > 200 m) | Discard the coordinates, run Wi-Fi-only if associated, otherwise duration-only. Never anchor on a fix too vague to test against |
 | Battery saver on | Location updates throttle. Accept the added latency; the cap still holds |
