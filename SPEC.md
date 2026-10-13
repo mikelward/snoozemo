@@ -5330,6 +5330,17 @@ what keeps them fresh: a launcher-drawable
 change with no re-render fails the build rather than leaving artwork that quietly stopped matching
 the app.
 
+**What that guarantee covers, and what it does not** (maintainer, 2026-10-13). The graphics are
+drawn from the debug build's resources while Play ships release, so a release-only icon override
+would leave them matching artwork nobody installs; scans of the project's resource folders stand in
+for recording from release, refusing anything that could make the two builds' icons differ. They
+leave two cases open: a density-specific icon file, which Android does not require to match the
+others, and an icon differing only in its monochrome layer, which themed launchers draw. Closing
+them for real means recording from the release build, which adds a release compile to every PR's
+CI, and the maintainer chose not to make CI longer or heavier for it. So the invariant holds for
+the icon a launcher draws at the default density in color, and those two cases rest on review
+(`TODO.md`).
+
 Insets are dispatched by the test rather than assumed: Robolectric reports none of its own, so a
 screen that ignores the status bar and one that pads for it render identically, and the defect that
 prompted the edge-to-edge work would have been invisible to every snapshot in the suite. The
