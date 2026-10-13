@@ -324,6 +324,27 @@ class SnoozeServicePresenceTest {
     }
 
     @Test
+    fun `only the arm's own capture starts a watch as just captured`() {
+        // The fence goes without an initial exit only on a place captured
+        // moments ago; a restore minutes later may follow a walk out of it,
+        // and nothing about the clock tells the two apart (Codex, PR #332).
+        armWatched()
+        val armed = ActiveSnoozeStore(appContext).load()!!
+        assertEquals(listOf(true), TestSnoozeService.presence.startedJustCaptured)
+
+        TestSnoozeService.reset(now.plusSeconds(60))
+        TestSnoozeService.zen.outcome = ZenOutcome.Applied("refusing-zen-rule-id")
+        startService(SnoozeService.ACTION_CHECK_CAP, record = armed)
+        shadowOf(getMainLooper()).idle()
+
+        assertEquals(
+            "a restore a minute later still checks",
+            listOf(false),
+            TestSnoozeService.presence.startedJustCaptured,
+        )
+    }
+
+    @Test
     fun `a snooze ended from a cold process still takes the watch down`() {
         // An `End now` on a fresh process adopts the record without ever
         // starting a collection — but the durable geofence its arm registered

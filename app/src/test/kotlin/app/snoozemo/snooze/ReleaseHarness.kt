@@ -138,6 +138,9 @@ internal class FakePresenceMonitor : PresenceMonitor {
 
     /** What the service handed the monitor to restore with (Codex, PR #141). */
     val startedDegradations = mutableListOf<DegradationCause?>()
+
+    /** Whether each start was on an anchor captured moments ago (SPEC.md §6.10). */
+    val startedJustCaptured = mutableListOf<Boolean>()
     var stops: Int = 0
 
     /** Emit into this to stand in for the sensors. */
@@ -148,11 +151,13 @@ internal class FakePresenceMonitor : PresenceMonitor {
         sinceElapsedRealtimeMs: Long,
         armedAtEpochMs: Long,
         restoredDegradation: DegradationCause?,
+        anchorJustCaptured: Boolean,
     ): Flow<PresenceUpdate> {
         startedWith += anchor
         startedSeeds += sinceElapsedRealtimeMs
         startedArmedAtEpochMs += armedAtEpochMs
         startedDegradations += restoredDegradation
+        startedJustCaptured += anchorJustCaptured
         return updates
     }
 

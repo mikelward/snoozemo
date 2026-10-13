@@ -4388,6 +4388,13 @@ that can only be settled on a real device, ordered by risk.
         ends (the confirmation gap is 30 s, so it may not on a fast walk). Also note what it
         does under an unrelated Do Not Disturb such as Bedtime — §5.7 accepts a buzz there,
         but confirm it is only a buzz. Tap `Still here` and check the retake follows.
+21. [ ] **A rejected geofence exit no longer spends the fence** (`SPEC.md` §6.10). With an
+        anchor that has no SSID, provoke a false alarm (stand near the fence edge until an exit
+        fires and the check settles `still here`), then walk well clear. The debug log should
+        show the re-registration line, a fresh exit, and the snooze ending within a few minutes.
+        Also note whether the re-registration fires again at once while still inside, which
+        would mean Play Services' belief lags our fixes and the three-per-snooze budget is
+        spent in one sitting.
 
 ### Pinch to resize text
 
@@ -9188,10 +9195,12 @@ log showed three faults in a row; the first is fixed, the other two are open.
       location is granted, so `getCurrentLocation` works without the service) and end via the
       no-service release path; or an exact alarm, which costs `SCHEDULE_EXACT_ALARM` (a Play
       policy question, `SPEC.md` §3). The first needs no new permission.
-- [ ] **A rejected geofence exit leaves the fence spent.** The exit fired, one fix put the user
+- [x] **A rejected geofence exit leaves the fence spent.** The exit fired, one fix put the user
       inside (`STILL_HERE`), and the fence was re-registered with no initial trigger. Play
       Services already believed the device was outside, and it fires an exit only on an
-      inside-to-outside crossing, so the real departure that followed never fired one. Options:
-      re-register with `INITIAL_TRIGGER_EXIT` after a rejected exit (bounded against a
-      re-fire loop, since each re-fire costs a checking burst), or lean on the motion trigger
-      and the backstop and accept it. Needs a handset check either way.
+      inside-to-outside crossing, so the real departure that followed never fired one.
+      **Fixed** (maintainer chose the re-registration, 2026-10-13): a rejected exit registers
+      the fence again with `INITIAL_TRIGGER_EXIT`, at most three times per snooze, persisted
+      (`FenceRearm`, `SPEC.md` §6.10). A restore and a repair ask for the same trigger while
+      the budget lasts; the arm and a retake do not. Device check: *Hardware verification*,
+      item 21.
