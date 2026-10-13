@@ -50,12 +50,20 @@ interface PresenceMonitor {
      * On `play` that restart is the ordinary case, not an edge one: there is
      * no foreground service, so a monitor is rebuilt on every wake. A
      * monitor that cannot act on it may ignore it.
+     *
+     * [anchorJustCaptured] is true only when the caller captured [anchor]
+     * moments ago and is starting the watch on it now — the arm, or a retake
+     * (SPEC.md §6.10). Told, not inferred: a restore minutes after the arm
+     * looks the same by every clock, and it may follow a walk out of the
+     * place, so anything else — a restore, a re-enabled departure exit, an
+     * old place kept — starts as `false`, the side that checks.
      */
     fun start(
         anchor: Anchor,
         sinceElapsedRealtimeMs: Long,
         armedAtEpochMs: Long,
         restoredDegradation: DegradationCause? = null,
+        anchorJustCaptured: Boolean = false,
     ): Flow<PresenceUpdate>
 
     /**

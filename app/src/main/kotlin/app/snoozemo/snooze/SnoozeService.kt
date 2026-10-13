@@ -456,8 +456,12 @@ open class SnoozeService : Service(), SnoozeController.Listener {
      * Guarded by identity, like the capture's delivery and for the same
      * reason: a monitor started for one snooze must not steer a different
      * one, and liveness alone cannot tell an end-and-re-arm apart.
+     *
+     * [anchorJustCaptured] only from the capture's delivery: every other
+     * caller restarts a watch on a place captured earlier, which the phone
+     * may have left meanwhile (`PresenceMonitor.start`).
      */
-    private fun startPresence(snooze: ActiveSnooze) {
+    private fun startPresence(snooze: ActiveSnooze, anchorJustCaptured: Boolean = false) {
         // **The backstop first, and above the timer-only return below.** It is
         // not the presence probe's own schedule: a wake also re-arms the cap,
         // re-asserts the zen rule and reconciles policy access (SPEC.md §6.10),
@@ -517,6 +521,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                 seed,
                 startedAt.toEpochMilli(),
                 snooze.degradation,
+                anchorJustCaptured,
             ).collect { update ->
                 val running = controller.active
                 if (running == null || running.startedAt != startedAt) return@collect
@@ -2363,8 +2368,10 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             // report's — through the same set.
             controller.onAnchorCaptured(watched, presenceMonitor.supportedModes(watched))
             // And now watch it. After the controller, so the first update
-            // finds the armed snooze; identity-guarded either way.
-            controller.active?.let(::startPresence)
+            // finds the armed snooze; identity-guarded either way. The one
+            // start on a place captured moments ago, so the only one whose
+            // fence goes without an initial exit (SPEC.md §6.10).
+            controller.active?.let { startPresence(it, anchorJustCaptured = true) }
         }
         // **Only held while it is actually out.** A synchronous completion has
         // already run its own cleanup and cleared the flag, so storing the

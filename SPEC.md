@@ -4190,6 +4190,22 @@ Confirmation still runs through the one §6.6 test, so no source can end a snooz
 This layering is why departure latency should stay low in
 the common case, despite the geofence's own numbers.
 
+**A false alarm must not spend the fence** (field log, 2026-10-05; maintainer, 2026-10-13). The
+fence fires on an inside-to-outside crossing. When an exit fires and the §6.6 test rejects it, Play
+Services already believes the phone is outside, so the real departure that follows crosses nothing
+and fires nothing — a snooze outlived a 300 m walk this way. So a rejected exit registers the fence
+again with an **initial exit trigger**, which fires at once if the platform still believes the phone
+is outside, and a fresh check answers that. A restore, and a repair of a failed registration, ask
+for the same trigger, since the platform may believe in an exit nothing heard; the arm itself and a
+retake do not, because a capture moments ago just placed the phone inside. The service says which
+start that is, rather than the monitor guessing from the anchor's age: a restore minutes after the
+arm may follow a brisk walk out of the fence, and anything it does not mark as just captured gets
+the trigger. **Bounded at three false
+alarms per snooze**, persisted across process death: each re-fire costs a checking burst, and a
+platform stuck believing the phone is outside while fixes keep placing it inside would otherwise
+spend one per round. Past that the fence is left as it is, the debug log says so, and the motion
+trigger and the backstop are what catch the departure.
+
 **The backstop (3) is built**, and its design is deliberately thin: a `WorkManager` periodic wake
 (30 minutes — the coarse end of the range, matching §9's budget) that repairs nothing itself.
 The period is a cadence, not a guarantee: `WorkManager` defers in Doze and under battery saver,

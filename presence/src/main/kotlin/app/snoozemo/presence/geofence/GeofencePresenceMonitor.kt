@@ -12,6 +12,7 @@ import app.snoozemo.core.ClockReading
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.Departure
 import app.snoozemo.core.DepartureObservation
+import app.snoozemo.core.FenceRearm
 import app.snoozemo.core.LocationDuty
 import app.snoozemo.core.PresenceEvent
 import app.snoozemo.core.PresenceMonitor
@@ -153,6 +154,7 @@ class GeofencePresenceMonitor(
         sinceElapsedRealtimeMs: Long,
         armedAtEpochMs: Long,
         restoredDegradation: DegradationCause?,
+        anchorJustCaptured: Boolean,
     ): Flow<PresenceUpdate> {
         // Captured synchronously at the call, not inside the producer: the
         // whole point is telling a stop that happened after start() from one
@@ -484,6 +486,15 @@ class GeofencePresenceMonitor(
         // Never held across anything slow: `accept` is pure arithmetic.
         val feedLock = Any()
 
+        // Whether an exit is still unanswered, and how many more false alarms
+        // this snooze may answer by registering the fence again (SPEC.md
+        // §6.10). Advanced under `feedLock`, beside the engine step it reads,
+        // so a false alarm is judged on the transition the engine just made.
+        var fenceRearm = FenceRearm(left = FenceRearmStore.load(appContext, armedAtEpochMs))
+        // Assigned once `rearmFence` exists below; `deliver` runs only after
+        // setup, the same placeholder shape `repairOnRecovery` uses.
+        var rearmAfterFalseAlarm: () -> Unit = {}
+
         // Orders the grace deadline's durable side effects (the store, the
         // alarm) against each other, without widening `feedLock` to cover
         // them (Codex, PR #91, second pass): those are a binder call and a
@@ -570,6 +581,7 @@ class GeofencePresenceMonitor(
             val locationAccessLost: Boolean
             val sequence: Long
             val use: Presence.FixUse?
+            val rearm: FenceRearm.Step
             synchronized(feedLock) {
                 if (signal is PresenceSignal.FixArrived) {
                     val (fed, fixUse) = feed.acceptFix(signal.fix)
@@ -579,6 +591,8 @@ class GeofencePresenceMonitor(
                     update = feed.accept(signal)
                     use = null
                 }
+                rearm = fenceRearm.after(signal, update.event)
+                fenceRearm = rearm.next
                 duty = feed.duty
                 graceDeadlineMs = feed.graceDeadlineMs
                 confirmationDeferralUsed = feed.confirmationDeferralUsed
@@ -740,6 +754,32 @@ class GeofencePresenceMonitor(
                         }
                     }
                 }
+            }
+            // A false alarm leaves the fence spent: the platform counted the
+            // exit, and a fence fires only on an inside-to-outside crossing,
+            // so the real departure that follows would fire nothing (field
+            // log, 2026-10-05). Registering it again with an initial exit
+            // trigger lets it fire at once if the platform still believes the
+            // phone is outside, and a fresh check answers that.
+            if (rearm.rearmNow) {
+                // Generation-owned like the grace deadline's writes (Codex, PR
+                // #332): a retired flow's late false alarm must not write its
+                // snooze's budget over the one a newer start now owns.
+                synchronized(persistenceLock) {
+                    if (persistenceGeneration == startGeneration) {
+                        FenceRearmStore.save(appContext, armedAtEpochMs, rearm.next.left)
+                    }
+                }
+                SnoozeDebugLog.event(
+                    "geofence: a rejected exit left the fence spent; re-registering with an initial exit (%s left)",
+                    rearm.next.left,
+                )
+                rearmAfterFalseAlarm()
+            } else if (rearm.falseAlarm) {
+                SnoozeDebugLog.warning(
+                    "geofence: a rejected exit left the fence spent, and its re-registrations are used up;" +
+                        " the motion trigger and the backstop watch for the departure",
+                )
             }
             // Pause, not close: the duty leaving ACTIVE is a state the engine
             // can re-enter, and only teardown (awaitClose) may end the burst
@@ -926,9 +966,30 @@ class GeofencePresenceMonitor(
         // replaced it.
         val registrationAttempt = java.util.concurrent.atomic.AtomicLong(0L)
 
-        fun registerFence() {
+        // Whether this watch's first registration is still to come. Only that
+        // one, and only on an anchor the caller captured moments ago, goes
+        // without an initial exit; the caller says which, because a restore
+        // minutes after the arm looks the same by every clock (Codex, PR
+        // #332). Later registrations in this watch are repairs.
+        val firstRegistration = java.util.concurrent.atomic.AtomicBoolean(true)
+
+        // Whether a registration that is not a re-arm should ask for an
+        // initial exit ([FenceRearm.initialExitOnRegistration]).
+        fun initialExitOnRegistration(): Boolean {
+            val firstForAnchor = firstRegistration.getAndSet(false) && anchorJustCaptured
+            return synchronized(feedLock) { fenceRearm.initialExitOnRegistration(firstForAnchor) }
+        }
+
+        // [initialExit] null means "decide as a registration that is not a
+        // re-arm" — decided after the usable-fix check, so an anchor with no
+        // fence records nothing.
+        fun registerFence(initialExit: Boolean? = null) {
             if (!anchor.hasUsableFix) return
+            val asksForExit = initialExit ?: initialExitOnRegistration()
             val attempt = registrationAttempt.incrementAndGet()
+            // The platform's belief starts over with this registration, so an
+            // exit fired against the one it replaces is no longer pending.
+            synchronized(feedLock) { fenceRearm = fenceRearm.registered() }
             val client: GeofencingClient = LocationServices.getGeofencingClient(appContext)
             val request = GeofencingRequest.Builder()
                 .addGeofence(
@@ -944,11 +1005,15 @@ class GeofencePresenceMonitor(
                         .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_EXIT)
                         .build(),
                 )
-                // No initial trigger: the anchor was captured here
-                // moments ago, so an exit at registration would be a
-                // stale platform belief, and no single source may end
-                // a snooze anyway (SPEC.md §6.10).
-                .setInitialTrigger(0)
+                // No initial trigger for the arm: the anchor was
+                // captured here moments ago, so an exit at registration
+                // would be a stale platform belief, and no single source
+                // may end a snooze anyway (SPEC.md §6.10). An initial
+                // exit for a re-arm after a false alarm, a restore or a
+                // repair, while the budget lasts: the platform may
+                // already believe the phone is outside, and a fence
+                // registered without one would then never fire.
+                .setInitialTrigger(if (asksForExit) GeofencingRequest.INITIAL_TRIGGER_EXIT else 0)
                 .build()
             try {
                 // `addGeofences` only enqueues — the lock never waits
@@ -1351,6 +1416,20 @@ class GeofencePresenceMonitor(
             }
         }
         repairOnRecovery = ::repairFence
+
+        // The re-registration a false alarm asks for, on the repair's path
+        // and under its guard, so a late answer never registers a fence for
+        // a watch that has already stopped.
+        fun rearmFence() {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                synchronized(registrationLock) {
+                    if (stopGeneration.get() == startGeneration && !isClosedForSend) {
+                        registerFence(initialExit = true)
+                    }
+                }
+            }
+        }
+        rearmAfterFalseAlarm = ::rearmFence
 
         // The prompt half of an outage's recovery (TODO.md, Phase 3; Codex,
         // PR #70): `GEOFENCE_NOT_AVAILABLE` and a services outage both report
