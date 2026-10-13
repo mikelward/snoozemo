@@ -582,7 +582,8 @@ private fun RuleCard(
  * Card 3: how a snooze ends when the user ends it.
  *
  * The render is the picture because the notification is where every manual exit
- * lives at once (§4.3): `End now` and `+30 min` are its buttons, and its body
+ * lives at once (§4.3): `End now` and `Still here` (or `+30 min` on a timer)
+ * are its buttons, and its body
  * opens the sheet with more options. The tile is the other manual exit and is
  * named as a quieter note, since it does what the buttons already do. Split from
  * card 4's automatic endings (maintainer, 2026-09-15) so each card carries one
@@ -752,7 +753,12 @@ private fun NotificationRender(tracksDeparture: Boolean) {
             )
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 RenderedAction(stringResource(R.string.action_end_now))
-                RenderedAction(stringResource(R.string.action_extend))
+                // The way to keep going that the real card offers for this
+                // ending (SPEC.md §4.3): a departure is answered with
+                // `Still here`, a timer with `+30 min`.
+                RenderedAction(
+                    stringResource(if (tracksDeparture) R.string.action_still_here else R.string.action_extend),
+                )
                 RenderedAction(SAMPLE_UNTIL)
             }
         }

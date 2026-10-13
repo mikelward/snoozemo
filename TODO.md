@@ -2004,55 +2004,35 @@ the point is that every other line of the app is worthless if it isn't true.
         calls it a stated compromise): `specialUse` could now carry that process instead, but
         only if the Play declaration covers it — revisit with the declaration.
 
-- [ ] **Warn on entering a non-time "ending soon" state — build next PR** (maintainer,
-      2026-09-13). **Decided to build**, its own follow-up PR after the drop-the-failsafe-from-UI
-      change. The intent: **any time the snooze enters an "ending soon"/about-to-end state whose
-      end is *not* a chosen time, post a default-priority notification, behind a setting.** The
-      phone coming back to life unannounced can startle in the wrong room; a notification a little
-      ahead of it lets the user re-snooze, extend, or step away first.
-      - **The states that qualify** are the non-time endings, the ones with no visible countdown
-        already warning the user: `WIFI_GRACE` (already rendered `Wi-Fi lost — ending soon`),
-        **departure confirming** (a fix has landed outside the anchor and §6.6's two-fix
-        confirmation is running — "probably leaving" is nearly "leaving"), and **motion detected**
-        (about to end on movement). These are the strong signals; a bare anchor-SSID drop is *not*
-        one, since it is the start of the departure test, not its conclusion, and would fire on a
-        microwave-grade Wi-Fi blip.
-      - **A time-based end is excluded *from this PR*** — a chosen timer, or a failsafe promoted
-        to the effective end (`ActiveSnooze.capIsEffectiveEnd`). Its countdown is already on screen
-        after the drop-the-failsafe change, so it is not a *non-time* surprise. The time-based
-        **failsafe** is not dropped, though — the maintainer (2026-09-13) still wants it surfaced,
-        likely by a notification, but as its own later to-do *after* this one (see the separate
-        entry below). A plain chosen timer, which the user set and can see counting down, is the
-        one that plausibly needs nothing.
-      - **The response is a default-priority notification, not a bare haptic** (maintainer,
-        2026-09-13). Default priority — it posts visibly and alerts per its channel, rather than a
-        silent post or a full heads-up. Being a notification, it can carry actions (extend /
-        re-snooze / end now), which answers the passive-vs-actionable question in favor of
-        actionable.
-      - **Behind a setting.** Default (on or off) and the toggle's home in Settings still to
-        decide.
-      **Open questions for the build PR:**
-      - DND and alerting: a default-priority notification still *posts* (visible in the shade)
-        even if DND mutes its sound/vibration (§5.7), so the visible warning lands regardless —
-        but whether it should *alert* through the very DND rule Snoozemo armed needs a device
-        check and a decision.
-      - The exact state set above, and whether the promoted-failsafe exclusion is right (see the
-        confirm above).
-      - Whether the notification is a *new* post or a temporary promotion of the ongoing card
-        (§4.3), and its channel/importance so it is not lumped with the quiet ongoing one.
-- [ ] **Surface the time-based failsafe too — separate, after the non-time notification PR**
-      (maintainer, 2026-09-13). The non-time entry above deliberately excludes a time-based end,
-      but the **failsafe** — a passive 8-hour cap the user did not choose, or one promoted to the
-      effective end because departure lost its fix — can still reach its deadline as a surprise,
-      unlike a chosen timer. So it wants surfacing of its own, "somehow, and I'm thinking a
-      notification." Kept a **separate** to-do on purpose, sequenced after the non-time
-      notification lands, so the two designs (a non-time "ending soon" alert vs. a
-      you-set-no-real-end-and-the-cap-is-about-to-fire alert) are settled one at a time rather
-      than bundled. Open: the promoted failsafe already shows a countdown once it becomes the
-      effective end (the drop-the-failsafe change), so decide whether that countdown is surfacing
-      enough or a notification is still wanted, and whether a plain chosen timer is in scope at
-      all (probably not — the user set it and can see it). Same DND-alerting and channel questions
-      as the entry above.
+- [x] **Warn before a snooze ends — built** (maintainer, 2026-09-13; built 2026-10-13 on the
+      maintainer's "vibrate when the snooze is ending, e.g. when there's 5 minutes left or we're
+      confirming the geofence"). `SPEC.md` §4.3, *Ending soon*: a default-importance card on its
+      own vibrate-only, DND-bypassing channel (`snooze_ending`), raised 5 minutes before the cap
+      (chosen time **or** failsafe), when Wi-Fi grace starts, and when a departure is confirming
+      (one qualifying fix out, §6.6). A bare Wi-Fi drop or geofence exit does not warn. Two calls
+      the 2026-09-13 entry left open were settled by the new request rather than guessed:
+      **the time-based end is included** (the maintainer named "5 minutes left"), and the
+      response is a **buzzing notification** with actions, as decided then.
+  - [x] **Approve the copy, then translate** (maintainer, 2026-10-13): `Snooze ending soon`,
+        `Ends at %1$s`, `Wi-Fi lost`, `Looks like you're leaving`, `Still here`, `Couldn't
+        update where you are`. The channel is named `Snooze ending soon` — the card's own
+        title — with no description, like the other three; a first draft's description
+        promised a buzz, which the user can switch off per channel. German landed with it.
+  - [ ] **An in-app setting**, if the per-channel switch is not enough. The entry above asked for
+        the warning "behind a setting", default undecided; today the platform's own channel
+        toggle is the off switch and it defaults **on**. Decide whether Settings needs its own
+        row (and its default) once the buzz has been lived with.
+  - [ ] **Device check** — see *Hardware verification*, item 20.
+- [x] **Surface the time-based failsafe too** (maintainer, 2026-09-13) — folded into the entry
+      above: the 5-minute warning covers the failsafe as well as a chosen time, because a passive
+      cap reaching its end is the surprise in question. At its ceiling it offers `End now` only;
+      the backstop is not extendable (§7).
+- [x] **A way to keep a location snooze going from the notification** (maintainer, 2026-10-13:
+      "we should have a way to extend the snooze from the notification", and "for a location
+      snooze can we use the existing extend radius logic?"). `+30 min` could never move a
+      departure snooze — its cap arms at the ceiling — so its cards now offer `Still here`, the
+      `Until I leave` retake, in that slot; a time-ending snooze keeps `+30 min`, and a card with
+      neither that would work carries `End now` alone (`SPEC.md` §4.3).
 - [ ] **Decide what tapping an end condition means** — maintainer, 2026-09-11, and the
       question behind the report that opened PR #262. **As raised**, the three rows had three
       different semantics, which is why neither the card nor the behavior matched the row the
@@ -4400,6 +4380,14 @@ that can only be settled on a real device, ordered by risk.
         once for the mode and once for the ongoing notification. Robolectric cannot answer any of
         it: it stores the icon id but renders no Modes UI, and does not model the condition drop
         that makes the upgrade path wait.
+20. [ ] **The "ending soon" warning buzzes through Snoozemo's own Do Not Disturb** (`SPEC.md`
+        §4.3, §5.7). On a fresh install (bypass is set at channel creation): arm a 30-minute
+        timer and feel the buzz about 5 minutes out, with the default `Vibrate` ceiling; repeat
+        with the `Silent` ceiling and confirm it posts without buzzing; walk out on a location
+        snooze and note whether the `Looks like you're leaving` buzz lands before the snooze
+        ends (the confirmation gap is 30 s, so it may not on a fast walk). Also note what it
+        does under an unrelated Do Not Disturb such as Bedtime — §5.7 accepts a buzz there,
+        but confirm it is only a buzz. Tap `Still here` and check the retake follows.
 
 ### Pinch to resize text
 
@@ -5513,6 +5501,23 @@ entirely* (Phase 7 above).
 
 ## Decisions needing review
 
+- [ ] **The timed warning card is not repaired after a refused platform call or a failed save**
+      (autopilot, 2026-10-13, two Codex findings on PR #330). The `Ends at …` card is posted,
+      refreshed and taken down from `CapAlarm.armEndingSoon`, which runs whenever the cap alarm
+      is armed, so it follows the alarm rather than the saved record. Two rare cases leave it
+      wrong, and both were left alone:
+      - **A takedown that throws** (`+30 min` or a later time moved the cap out): logged, not
+        retried. Canceling the app's own notification throws only when the system server is
+        gone, which restarts the runtime and empties the shade.
+      - **An extension whose save fails after its alarm moved**: the card comes down with the
+        new alarm, and the rollback to the original cap doesn't bring it back, though the snooze
+        still ends within five minutes. The user has just been told `Couldn't extend` or
+        `Couldn't set the end time`.
+
+      Either way the card would have timed out within about six minutes, and the ongoing card
+      shows the right end throughout. **The alternative** is to drive the card from the saved
+      record, as one step after each save that moves a cap, which removes both cases; it
+      touches every path that moves a cap. Reversible: nothing persisted depends on either.
 - [ ] **The checking burst's backoff is half the grace window, 2.5 minutes** (autopilot,
       2026-10-05, Codex on PR #313). It was five minutes, the grace window exactly, which
       left no room for a recovery fix before grace ended the snooze. **The trade**: a backed-off

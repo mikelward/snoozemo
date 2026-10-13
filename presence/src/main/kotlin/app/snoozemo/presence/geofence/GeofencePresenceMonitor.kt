@@ -455,6 +455,7 @@ class GeofencePresenceMonitor(
                             // The feed's own deadline, which is non-null
                             // exactly when `graceActive` is.
                             graceDeadlineMs = update.graceDeadlineMs,
+                            confirmingDeparture = update.confirmingDeparture,
                         )
                         emit(update.event, published, update.observation)
                     }
@@ -2347,6 +2348,7 @@ class GeofencePresenceMonitor(
             locationAccessLost = levels.locationAccessLost,
             atAnchorWifi = levels.atAnchorWifi,
             observation = observation,
+            confirmingDeparture = levels.confirmingDeparture,
         )
 
         internal fun publication(
@@ -2484,6 +2486,7 @@ internal data class PublishedLevels(
     val locationAccessLost: Boolean,
     val atAnchorWifi: Boolean,
     val graceDeadlineMs: Long? = null,
+    val confirmingDeparture: Boolean = false,
 )
 
 /** What a feed transition does when it reaches publication; see [GeofencePresenceMonitor.publication]. */

@@ -80,6 +80,7 @@
     <string name="channel_active">Schlummert</string>
     <string name="channel_ended">Schlummern beendet</string>
     <string name="channel_urgent">„Nicht stören“ hängt fest</string>
+    <string name="channel_ending">Schlummern endet bald</string>
     <string name="ongoing_cause_ringer_unknown">klingelt möglicherweise noch</string>
     <string name="failure_ringer_stuck">Klingelmodus nicht wiederhergestellt</string>
     <string name="failure_ringer_stuck_body">Zum Wiederherstellen tippen.</string>
@@ -90,6 +91,11 @@
     <string name="ongoing_timer_only">Nur Timer</string>
     <string name="action_end_now">Jetzt beenden</string>
     <string name="action_extend">+30 Min.</string>
+    <string name="action_still_here">Noch hier</string>
+    <string name="ending_soon_title">Schlummern endet bald</string>
+    <string name="ending_soon_time">Endet um %1$s</string>
+    <string name="ending_soon_wifi_lost">WLAN verloren</string>
+    <string name="ending_soon_leaving">Du scheinst zu gehen</string>
     <string name="ended_departure">Schlummern beendet — du bist gegangen</string>
     <string name="ended_cap">Schlummern beendet — Zeitlimit erreicht</string>
     <string name="ended_lost_capability">Schlummern beendet — Snoozemo kann es nicht fortsetzen</string>
@@ -104,6 +110,7 @@
     <string name="failure_could_not_resume">Schlummern konnte nicht fortgesetzt werden</string>
     <string name="failure_not_forgotten">Schlummern beendet, aber es könnte zurückkommen</string>
     <string name="failure_could_not_extend">30 Minuten konnten nicht hinzugefügt werden</string>
+    <string name="failure_could_not_update_place">Dein Standort konnte nicht aktualisiert werden</string>
     <string name="extend_at_max">Zeitlimit bereits erreicht</string>
     <string name="settings_version">Version %1$s</string>
     <string name="settings_privacy_policy">Datenschutzerklärung</string>

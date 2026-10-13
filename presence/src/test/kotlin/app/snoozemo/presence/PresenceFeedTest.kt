@@ -527,6 +527,46 @@ class PresenceFeedTest {
     }
 
     @Test
+    fun `an open confirmation window is published as confirming a departure`() {
+        // What raises the "ending soon" warning: one qualifying fix is outside
+        // the anchor and the snooze ends on the next one 30 s on (SPEC.md §6.6).
+        val feed = PresenceFeed(anchor, seedElapsedRealtimeMs = armedAtMs)
+
+        val first = feed.accept(PresenceSignal.FixArrived(fixMetersNorth(300.0, armedAtMs + 60_000)))
+        assertTrue("one qualifying fix opens the window", first.confirmingDeparture)
+
+        val back = feed.accept(PresenceSignal.FixArrived(fixMetersNorth(0.0, armedAtMs + 75_000)))
+        assertFalse("a fix back at the anchor closes it", back.confirmingDeparture)
+    }
+
+    @Test
+    fun `a confirmed departure is no longer confirming`() {
+        val feed = PresenceFeed(anchor, seedElapsedRealtimeMs = armedAtMs)
+        feed.accept(PresenceSignal.FixArrived(fixMetersNorth(300.0, armedAtMs + 60_000)))
+
+        val gone = feed.accept(PresenceSignal.FixArrived(fixMetersNorth(300.0, armedAtMs + 95_000)))
+
+        assertEquals(PresenceEvent.Departed, gone.event)
+        assertFalse(gone.confirmingDeparture)
+    }
+
+    @Test
+    fun `a check that has not seen a qualifying fix is not confirming`() {
+        // A geofence exit or a Wi-Fi drop *starts* the test; warning on it
+        // would buzz on every router blip (TODO.md, the ending-soon entry).
+        val feed = PresenceFeed(anchor, seedElapsedRealtimeMs = armedAtMs)
+
+        val update = feed.accept(PresenceSignal.GeofenceExit(armedAtMs + 60_000))
+
+        assertEquals(PresenceEvent.ProbablyLeft, update.event)
+        assertFalse(update.confirmingDeparture)
+    }
+
+    /** A fictional fix [meters] north of the anchor at (0, 0), 10 m accurate. */
+    private fun fixMetersNorth(meters: Double, atMs: Long) =
+        Fix(lat = meters / 111_320.0, lon = 0.0, accuracyM = 10f, elapsedRealtimeMs = atMs)
+
+    @Test
     fun `state carries across signals`() {
         val feed = PresenceFeed(anchor, seedElapsedRealtimeMs = armedAtMs)
         feed.accept(PresenceSignal.GeofenceExit(armedAtMs + 60_000))

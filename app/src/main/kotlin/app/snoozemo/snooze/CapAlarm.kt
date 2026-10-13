@@ -13,6 +13,8 @@ import app.snoozemo.core.ClockChange
 import app.snoozemo.core.ClockChangeAction
 import app.snoozemo.core.ClockReading
 import app.snoozemo.core.EndReason
+import app.snoozemo.core.EndingSoon
+import app.snoozemo.core.EndingSoonCause
 import app.snoozemo.core.RecordOrigin
 import app.snoozemo.core.ReleaseEscalation
 import app.snoozemo.core.ReleaseProgress
@@ -67,7 +69,70 @@ object CapAlarm {
         context: Context,
         snooze: ActiveSnooze,
         now: ClockReading = SnoozeClock.read(),
-    ): Boolean = armCheckIn(context, snooze.remaining(now).toMillis())
+    ): Boolean = armCheckIn(context, snooze.remaining(now).toMillis()).also { armed ->
+        // The warning rides on the cap: every path that moves a deadline —
+        // `+30 min`, a chosen time, a restore, a clock change, a reboot —
+        // already re-arms the cap through here, so the warning moves with it
+        // rather than being taught each of them. Only once the cap itself is
+        // armed: a cap that is not is a snooze being ended, not warned about.
+        if (armed) armEndingSoon(context, snooze, now)
+    }
+
+    /**
+     * Arms the timed "ending soon" warning (SPEC.md §4.3) [EndingSoon.LEAD]
+     * before [snooze]'s cap, replacing any armed for an earlier deadline.
+     *
+     * **Best effort, and never part of the cap's answer.** The warning is a
+     * courtesy ahead of an ending the cap alarm guarantees by itself; a
+     * refusal here costs a buzz, not an exit, so it is logged and the caller
+     * goes on as if it had landed.
+     *
+     * Inexact like the cap, so it is "about five minutes": it never fires
+     * early, and the receiver says nothing if the deadline it was armed for
+     * has since moved ([EndingSoon.timedWarningDue]).
+     *
+     * **And not allow-while-idle, unlike the cap** (Codex, PR #330). Android
+     * rate-limits those per app — `AlarmManager`'s reference: "when in
+     * low-power idle modes this duration may be significantly longer, such as
+     * 15 minutes" — so a warning dispatched five minutes ahead could hold the
+     * cap itself back past its deadline. A plain alarm waits for the next
+     * maintenance window instead: in deep Doze the warning may come late, or
+     * after the snooze has already ended, when the receiver finds nothing to
+     * warn about and says nothing. A missed courtesy is the right price; a
+     * late cap is principle 1's failure.
+     *
+     * Inside the last [EndingSoon.LEAD] nothing new is armed — a restore
+     * there would otherwise buzz again for a warning already seen — but a card
+     * already showing is rebuilt in place, because a clock change re-arms the
+     * cap through here and the card's `Ends at …` would otherwise name the old
+     * deadline. Past the window, a card left showing is now false, so it comes
+     * down: the deadline it named has just moved out.
+     *
+     * Kept off the tap: the arm schedules its cap with [armCheckIn], before
+     * any record exists, and calls this once the rule is on.
+     */
+    fun armEndingSoon(
+        context: Context,
+        snooze: ActiveSnooze,
+        now: ClockReading = SnoozeClock.read(),
+    ) {
+        val delay = EndingSoon.timedWarningIn(snooze.remaining(now)) ?: run {
+            SnoozeNotifications.refreshTimedWarning(context, snooze)
+            return
+        }
+        SnoozeNotifications.cancelTimedWarning(context)
+        if (!schedule(
+                context,
+                SystemClock.elapsedRealtime() + delay.toMillis(),
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                SnoozeService.ACTION_ENDING_SOON,
+                recordStartedAtMillis = snooze.startedAt.toEpochMilli(),
+                allowWhileIdle = false,
+            )
+        ) {
+            SnoozeDebugLog.warning("ending soon: the warning alarm was refused; the cap still ends the snooze")
+        }
+    }
 
     /**
      * Arms a cap check [delayMillis] from now.
@@ -269,14 +334,23 @@ object CapAlarm {
         recordStartedAtMillis: Long? = null,
         reason: EndReason? = null,
         retriesLeft: Int? = null,
+        /**
+         * False only for a wake-up that must never compete with the cap:
+         * Android rate-limits allow-while-idle alarms per app — "such as 15
+         * minutes" in idle, by `AlarmManager`'s own reference — so a courtesy
+         * spending that budget just ahead of the cap could push the cap back
+         * (Codex, PR #330).
+         */
+        allowWhileIdle: Boolean = true,
     ): Boolean {
         val alarmManager = context.getSystemService(AlarmManager::class.java)
         return runCatching {
-            alarmManager.setAndAllowWhileIdle(
-                type,
-                triggerAtMillis,
-                pendingIntent(context, action, recordStartedAtMillis, reason, retriesLeft),
-            )
+            val operation = pendingIntent(context, action, recordStartedAtMillis, reason, retriesLeft)
+            if (allowWhileIdle) {
+                alarmManager.setAndAllowWhileIdle(type, triggerAtMillis, operation)
+            } else {
+                alarmManager.set(type, triggerAtMillis, operation)
+            }
             // That the cap was armed is one of §4.6's records — the alarm is
             // the exit that holds when everything else has failed, so "was one
             // ever scheduled" is the first question a stuck snooze raises.
@@ -311,6 +385,8 @@ object CapAlarm {
         runCatching {
             val alarmManager = context.getSystemService(AlarmManager::class.java)
             existing(context, SnoozeService.ACTION_CHECK_CAP)?.let(alarmManager::cancel)
+            // The warning goes with the deadline it was for.
+            existing(context, SnoozeService.ACTION_ENDING_SOON)?.let(alarmManager::cancel)
             if (everything) {
                 existing(context, SnoozeService.ACTION_ERASE_RETRY)?.let(alarmManager::cancel)
                 existing(context, SnoozeService.ACTION_CAP_LOST)?.let(alarmManager::cancel)
@@ -397,6 +473,7 @@ object CapAlarm {
         SnoozeService.ACTION_CAP_LOST -> REQUEST_RELEASE_RETRY
         SnoozeService.ACTION_RESTORE -> REQUEST_PRESENCE_RETRY
         SnoozeService.ACTION_RINGER_RETRY -> REQUEST_RINGER_RETRY
+        SnoozeService.ACTION_ENDING_SOON -> REQUEST_ENDING_SOON
         else -> REQUEST_CAP
     }
 
@@ -413,6 +490,7 @@ object CapAlarm {
     private const val REQUEST_RELEASE_RETRY = 3
     private const val REQUEST_PRESENCE_RETRY = 4
     private const val REQUEST_RINGER_RETRY = 5
+    private const val REQUEST_ENDING_SOON = 6
 }
 
 /**
@@ -464,6 +542,14 @@ class CapAlarmReceiver : BroadcastReceiver() {
             // A few milliseconds on the receiver's thread, against ~10 seconds
             // of budget, buys the guarantee outright.
             handBackRingerNow(context)
+            return
+        }
+        if (intent?.action == SnoozeService.ACTION_ENDING_SOON) {
+            // A courtesy, not an exit: the cap alarm still ends this snooze on
+            // its own. Inline for the ringer retry's reason — a preferences
+            // read and one post — and with no service, so a refused start
+            // cannot cost the warning.
+            warnEndingSoon(context, intent.getLongExtra(SnoozeService.EXTRA_RECORD_STARTED_AT, 0L))
             return
         }
         if (intent?.action == SnoozeService.ACTION_DISCARD_RETRY) {
@@ -533,6 +619,34 @@ class CapAlarmReceiver : BroadcastReceiver() {
         if (SnoozeService.checkCap(context)) return
         capReleaseFallback(context)
     }
+}
+
+/**
+ * Posts the timed "ending soon" warning (SPEC.md §4.3) if the snooze it was
+ * armed for is still running and still ends about now.
+ *
+ * Both checks, because the alarm can outlive what it was armed for: a snooze
+ * that ended and was replaced must not be warned about with a stranger's
+ * deadline ([ActiveSnooze.retryStillApplies]'s identity), and a deadline moved
+ * out since — `+30 min`, a chosen time — must not be warned about at all
+ * ([EndingSoon.timedWarningDue]). Either way it says nothing, which is the
+ * safe answer for a courtesy: the cap alarm, not this, ends the snooze.
+ */
+private fun warnEndingSoon(context: Context, armedForStartedAtMillis: Long) {
+    val snooze = runCatching { ActiveSnoozeStore(context).load() }.getOrElse {
+        Log.e(ENDING_SOON_TAG, "Reading the snooze for its ending-soon warning failed; not warning.", it)
+        SnoozeDebugLog.failure(it, "ending soon: the record could not be read; not warning")
+        return
+    }
+    if (snooze == null || snooze.startedAt.toEpochMilli() != armedForStartedAtMillis) {
+        SnoozeDebugLog.event("ending soon: the warning outlived its snooze; dropped")
+        return
+    }
+    if (!EndingSoon.timedWarningDue(snooze.remaining(SnoozeClock.read()))) {
+        SnoozeDebugLog.event("ending soon: the deadline moved since the warning was armed; dropped")
+        return
+    }
+    SnoozeNotifications(context.applicationContext).showEndingSoon(snooze, EndingSoonCause.TIME)
 }
 
 /**
@@ -1121,6 +1235,8 @@ private fun reportRecordStuck(context: Context) {
 
 private const val RELEASE_TAG = "SnoozeRelease"
 
+private const val ENDING_SOON_TAG = "SnoozeEndingSoon"
+
 /** Short, because the cap has already passed and the phone is still quiet. */
 private const val RELEASE_RETRY_MS = 5 * 60 * 1000L
 
@@ -1177,7 +1293,8 @@ class TimeChangedReceiver : BroadcastReceiver() {
         // no timezone touches, so rebuilding the card re-formats it in the zone
         // now in force.
         if (intent?.action == Intent.ACTION_TIMEZONE_CHANGED) {
-            if (ActiveSnoozeStore(context).load() != null) {
+            val running = ActiveSnoozeStore(context).load()
+            if (running != null) {
                 // Repaint the tile in-process first. Its subtitle also formats
                 // the deadline in the device's zone, but unlike the card it
                 // renders straight from the record and needs no service — so it
@@ -1186,6 +1303,10 @@ class TimeChangedReceiver : BroadcastReceiver() {
                 // never runs and the shade keeps the old-zone time (Codex,
                 // PR #281). A no-op when no tile is listening.
                 SnoozeTileBridge.refresh()
+                // The "ending soon" card's `Ends at …` is formatted in the zone
+                // too, and like the tile it needs no service — so it is rebuilt
+                // here, in place, if it is showing (Codex, PR #330).
+                SnoozeNotifications.refreshTimedWarning(context, running)
                 // Then the card, via the service. If that start is refused the
                 // label is cosmetic and the next state change rebuilds it.
                 SnoozeService.refresh(context)

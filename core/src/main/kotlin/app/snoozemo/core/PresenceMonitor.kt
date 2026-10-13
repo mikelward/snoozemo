@@ -203,6 +203,21 @@ data class PresenceUpdate(
      * (`TODO.md`, the Wi-Fi-grace countdown).
      */
     val graceDeadlineMs: Long? = null,
+    /**
+     * Whether the departure test is part-way to a verdict of *gone* — one
+     * qualifying fix has landed outside the anchor and §6.6's confirmation
+     * window is open, waiting on a second ([DepartureProgress]).
+     *
+     * A level like [graceActive], restated on every update, for the same
+     * PR #33 reason: "confirmation started" sent once as news could be lost
+     * to the orderings that made recovery unsafe to announce, and a
+     * notification that warns the snooze is about to end has to come down
+     * again as reliably as it went up. Not an event either, because
+     * [PresenceEvent.ProbablyLeft] is already the event for escalating —
+     * and a check started by a Wi-Fi drop or a geofence exit is *not* this:
+     * it is the start of the test, not most of the way through it.
+     */
+    val confirmingDeparture: Boolean = false,
 )
 
 /** What the presence engine has concluded, in increasing order of confidence. */

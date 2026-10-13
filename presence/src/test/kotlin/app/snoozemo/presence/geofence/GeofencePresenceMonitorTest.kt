@@ -81,6 +81,26 @@ class GeofencePresenceMonitorTest {
     }
 
     @Test
+    fun `the published update carries the confirming-departure level`() {
+        // A rebuild, so a field not named in `published` reaches nobody —
+        // and this one is what raises the "ending soon" warning on `play`.
+        val update = GeofencePresenceMonitor.published(
+            event = null,
+            levels = PublishedLevels(
+                degradation = null,
+                graceActive = false,
+                locationAccessLost = false,
+                atAnchorWifi = false,
+                confirmingDeparture = true,
+            ),
+            platformLevel = null,
+            observation = null,
+        )
+
+        assertTrue(update.confirmingDeparture)
+    }
+
+    @Test
     fun `a superseded update publishes no readout of its own`() {
         // Its reading is older than one already published, so carrying it
         // would move the number on screen backwards.
