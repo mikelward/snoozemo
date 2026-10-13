@@ -626,8 +626,12 @@ it in the same commit.
   the three wake-up sources fired, whether the anchor SSID was associated, and the *result*
   of the departure test. Distance from the anchor in meters and fix accuracy are the
   diagnostic value; the position is not. Anything above that gets added only with a specific
-  failure it makes diagnosable, and `docs/PRIVACY.md` must describe what the log carries
-  before it ships.
+  failure it makes diagnosable, and `docs/PRIVACY.md` must describe anything
+  **privacy-relevant** the log carries (a username, a location, a network, other user
+  data, anything Play's data-use policies cover) before it ships, and a count of the
+  user's own records (places, snoozes) or how long a snooze lasted is user data too; app
+  internals — a count or duration of the app's own work, an error kind, a read of data the
+  app ships — need no line there (maintainer, 2026-10-13).
   **The floor is what this app writes**: never a raw coordinate, a full SSID/BSSID or a
   user-typed place name — `logSummary()` is the only sanctioned way to render a snooze, and
   its test pins that. **The one exception is text Snoozemo does not author**: a thrown
