@@ -109,6 +109,14 @@ class MainActivityNotificationBannerTest {
         // `UnExecutedRunnablesException` attached and nothing else to go on.
         // `lastRuleCheck` is the seam that thread was already given for
         // exactly this; joining it is explicit ordering rather than a sleep.
+        //
+        // That thread is started from the access read's answer, which is
+        // itself read on a thread and posted to the main looper — so drain
+        // both before asking for it, the order `MainActivityRuleStateInvalidationTest`
+        // settles in. Read straight after `launch()`, it was null whenever the
+        // access read had not answered yet, which a loaded machine made common.
+        activity.lastAccessRead?.join()
+        shadowOf(android.os.Looper.getMainLooper()).idle()
         val ruleCheck = activity.lastRuleCheck
         // Asserted, not just joined: if that thread ever stops running here the
         // join silently becomes a no-op and this test quietly goes back to
