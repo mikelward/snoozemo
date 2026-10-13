@@ -8304,7 +8304,7 @@ what sets it off.
 
 ## Coverage gap: the trampoline's refused-start recovery (PR #238)
 
-- [ ] **Nothing tests `recoverFromRefusedStart`, and nothing can today.** It is what runs
+- [x] **Nothing tests `recoverFromRefusedStart`, and nothing can today.** It is what runs
   when `startService` refuses the tap — the branch that shows `Couldn't snooze` /
   `Couldn't extend` / `Couldn't set the end`, and for `ACTION_END` and
   `ACTION_RELEASE_STUCK` releases the snooze inline through `releaseDirectly`. That last
@@ -8317,6 +8317,14 @@ what sets it off.
   seam, injected by `TestSnoozeService` in `ReleaseHarness.kt`, added because "the
   production path cannot be driven to do off a device". The trampoline wants the same: an
   overridable start, and a test subclass that refuses it.
+
+  **Covered** by `TileTrampolineRefusedStartTest`, without the production seam: a test-only
+  `ContextImpl` shadow throws from `startService` the way a refused background start does,
+  so the real activity runs every recovery branch. `End now` and the stuck-rule release
+  end the snooze; `+30 min`, a chosen end time, `Still here` and an arm each post their own
+  failure card, and a refused arm keeps its reason for a later notification grant. The
+  welcome flow's fallback arm (`armFromTileWithRecovery`) shares the arm branch and is not
+  separately driven: reaching it also needs the app launch refused.
 
   Not taken in PR #238, which found the gap while fixing a log-ordering bug in this same
   block (the tap line landed *below* the `no-service release` it caused, because recovery
