@@ -9112,13 +9112,16 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
       repost the card or record a second ending. It fails open too — the rule is off. The same
       coordination would cover it: the release taking the lock the service's adoption takes, or
       the worker handing a confirmed departure to a service that turns out to be running.
-- [ ] **The backstop reposts the card only when one is already up** (Codex, PR #312,
-      deferred there). `repostIfStillShowing` refuses to create a missing card, so a live snooze
+- [x] **The backstop reposts the card only when one is already up** (Codex, PR #312,
+      deferred there). `repostIfStillShowing` refused to create a missing card, so a live snooze
       whose card was never posted, or was cleared across a reboot whose restore was then refused,
-      gets its record lowered with nothing on screen saying so. Not a regression: before PR #312
-      such a snooze had no card either. Creating one from the worker needs a protocol that cannot
-      race the teardown, which cancels the card before it clears the record, so a check of the
-      record alone would put `Snoozing` back over an ending in progress.
+      got its record lowered with nothing on screen saying so. The worry was a teardown that
+      cancels the card before it clears the record. **None does**: the service forgets the record
+      before `showEnded`, the no-service release marks it released first, and a foreign record
+      never reads as live. (If that mark itself fails to write, the record reads as live to every
+      reader, the next restore included, so a card agreeing with it is not the contradiction.) So the worker now posts the card while the record reads as live
+      (`postIfStillLive`, under the ongoing lock and generation), and `TeardownOrderTest` pins
+      that order for both release paths so a later ending cannot quietly reverse it.
 - [ ] **The worker-side probe does not remove the fence or the grace alarm** when it ends a
       snooze, matching the cap's no-service fallback: a leftover fence wakes a restore that finds
       no record, and the backstop retires itself on its next empty wake. Worth tidying if those

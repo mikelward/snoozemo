@@ -390,8 +390,10 @@ internal class BackstopWorker(
         )
         // Guarded like the calendar worker's repost (Codex, PR #312): a snooze
         // the user ended while this ran has had its card taken down, and an
-        // unguarded post would put `Snoozing` back beside `Snooze ended`.
-        SnoozeNotifications(applicationContext).repostIfStillShowing(change) {
+        // unguarded post would put `Snoozing` back beside `Snooze ended`. A
+        // card that is missing is posted: a lowered mode nobody can see is
+        // principle 2's failure.
+        SnoozeNotifications(applicationContext).postIfStillLive(change) {
             store.load()?.startedAt == change.startedAt
         }
         SnoozeTileBridge.refresh()

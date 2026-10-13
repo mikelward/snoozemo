@@ -342,8 +342,11 @@ class SnoozeBackstopTest {
     @Test
     fun `a snooze ended while the probe ran gets no card back`() {
         // Codex, PR #312: the teardown took the card down; an unguarded
-        // repost would put `Snoozing` back beside `Snooze ended`.
+        // repost would put `Snoozing` back beside `Snooze ended`. Ended in
+        // the order every ending keeps — the record first, then the card
+        // (`TeardownOrderTest`).
         probeAnswers(BackstopProbe.Outcome.Unavailable(DegradationCause.LOCATION_SERVICES_OFF)) {
+            ActiveSnoozeStore(appContext).clear()
             SnoozeNotifications(appContext).cancelOngoing()
         }
         val snooze = snoozeFixture(now)
@@ -353,5 +356,18 @@ class SnoozeBackstopTest {
         runWorker(refusing)
 
         assertNull("the card stays down", ongoingTitle())
+    }
+
+    @Test
+    fun `a live snooze with no card gets one when the probe lowers it`() {
+        // A reboot cleared the card and the restore was refused, so nothing on
+        // screen would say the mode just dropped (Codex, PR #312, deferred).
+        probeAnswers(BackstopProbe.Outcome.Unavailable(DegradationCause.LOCATION_SERVICES_OFF))
+        ActiveSnoozeStore(appContext).arm(snoozeFixture(now))
+        assertNull("no card to begin with", ongoingTitle())
+
+        runWorker(refusing)
+
+        assertNotNull("the lowered mode is on screen", ongoingTitle())
     }
 }

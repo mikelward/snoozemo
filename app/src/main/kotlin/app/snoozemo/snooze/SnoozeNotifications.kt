@@ -1177,26 +1177,36 @@ class SnoozeNotifications(private val context: Context) {
     fun cancelOngoing() = dropOngoing()
 
     /**
-     * Reposts the card from outside the service — the backstop worker — the
-     * way the calendar worker does, so a teardown landing while the worker
-     * decided cannot be overwritten (Codex, PR #312).
+     * Posts the card from outside the service — the backstop worker — for a
+     * snooze still running, creating it if it is missing (TODO.md, Codex on
+     * PR #312: a live snooze whose card was never posted, or was cleared by a
+     * reboot whose restore was then refused, had its mode lowered with nothing
+     * on screen saying so).
      *
-     * Under [ongoingLock], the card has to still be showing and [stillLive]
-     * has to hold; the generation read there is named in the post, so anything
-     * that lands between this check and the post — a takedown or a newer card —
-     * abandons it. "Showing" asks the platform too, because a worker can run
-     * in a fresh process whose in-memory [ongoingUp] has never been set although
-     * an earlier process's card is still in the shade.
+     * Under [ongoingLock], [stillLive] has to hold; the generation read there
+     * is named in the post, so a takedown landing between this check and the
+     * post abandons it, the way the calendar worker's repost is guarded.
      *
-     * @return whether the repost went ahead.
+     * **Creating, not only reposting, rests on the order every ending keeps**:
+     * the record stops reading as live *before* the card comes down. The
+     * service forgets it before [showEnded], the no-service release marks it
+     * released first, and a foreign record never reads as live at all. So
+     * while [stillLive] holds under this lock, no ending has taken the card
+     * down yet, and one that does so later bumps the generation this post
+     * names. `TeardownOrderTest` pins that order for both release paths.
+     *
+     * @return whether the post went ahead.
      */
-    fun repostIfStillShowing(snooze: ActiveSnooze, stillLive: () -> Boolean): Boolean {
+    fun postIfStillLive(snooze: ActiveSnooze, stillLive: () -> Boolean): Boolean {
         val generation = synchronized(ongoingLock) {
-            if ((ongoingUp || isOngoingShowing()) && stillLive()) ongoingGeneration else null
+            if (stillLive()) ongoingGeneration else null
         }
         if (generation == null) {
-            SnoozeDebugLog.event("worker repost skipped: the card is down or the snooze changed")
+            SnoozeDebugLog.event("worker post skipped: the snooze ended or changed")
             return false
+        }
+        if (!ongoingUp && !isOngoingShowing()) {
+            SnoozeDebugLog.event("worker post: the card was missing; posting it")
         }
         showOngoing(snooze, onlyIfGeneration = generation)
         return true
@@ -1216,9 +1226,11 @@ class SnoozeNotifications(private val context: Context) {
      *
      * Bumped and dropped under the same lock the calendar worker posts under,
      * so a teardown can never land between that worker's check and its post.
-     * The counter is what a *record* check cannot see: a teardown is free to
-     * cancel the card before erasing the record, and in that order the record
-     * still reads as a snooze running.
+     * The counter is what a *record* check cannot see on its own: a post
+     * decided before a teardown, against a record that still read as live,
+     * would otherwise land after it. Every ending also makes the record stop
+     * reading as live before it gets here ([postIfStillLive] depends on that
+     * order), so a decision made after the teardown sees no snooze at all.
      *
      * Every path that removes this card goes through here — the ordinary
      * ending in [showEnded] as much as [cancelOngoing]. A `drop(ID_ONGOING)`

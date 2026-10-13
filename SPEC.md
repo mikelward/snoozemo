@@ -4250,7 +4250,10 @@ two-fix window, so no confirmation spans one. Background location limits may thr
 the field says they do. **What the probe learns about location itself goes on the card**, since
 the service that would say it is the thing that could not start: a request that reports the grant
 gone or location off records that cause as the snooze's degradation (duration-only, as the
-controller maps it) and reposts the card. It only ever lowers the card: a later probe's fix proves location answers,
+controller maps it) and reposts the card — **posting it if it is missing**, since a reboot clears
+the card and a refused restore never puts it back, and a lowered mode nobody can see is the silent
+failure principle 2 rules out. That post cannot revive a snooze that is ending, because every ending
+stops the record reading as live before it takes the card down. It only ever lowers the card: a later probe's fix proves location answers,
 not that the fence or Wi-Fi watch was rebuilt, so lifting it again is left to a restore whose watch
 actually comes back. Any other wake whose start was refused and whose probe could run the test says
 the card is **`Checking less often`** in place of its mode line (maintainer, 2026-10-05): no fence or
