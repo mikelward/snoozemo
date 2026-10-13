@@ -3675,8 +3675,8 @@ the point is that every other line of the app is worthless if it isn't true.
             explicit first-adoption base — a repository variable naming the SHA to start
             from, read only while no run has published. A manual Console upload is **not** a
             third option (Codex, PR #241): publication is discovered solely by querying
-            Actions runs for a `Build and release` job whose `Upload to Play Store internal
-            track` step concluded success, and a Console upload creates no run, so the next
+            Actions runs for a `Publish` (formerly `Build and release`) job whose `Upload to
+            Play Store internal track` step concluded success, and a Console upload creates no run, so the next
             push would fall back to the same oldest visible run and print the same stale
             card. That option was ruled out on its merits before the decision above was
             taken, not by it.
@@ -9038,17 +9038,18 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
       noise just stops landing where it can be mistaken for a real failure. Does not help
       the `sync-screenshots` case above, which the author does not control.
 
-- [ ] **`deploy`'s display name is load-bearing and now inaccurate.** The job
-      is still called `Build and release` after the release build moved to
-      `release-build`, because `Build release notes` selects
-      `.name == "Build and release"` against the Actions API in two places:
-      the release-notes range base, and the guard that stops a rerun
-      re-uploading a versionCode. Renaming it blinds both to every run
-      recorded after the rename — notes repeat shipped subjects, and a rerun
-      gets rejected by Play. Renaming properly means accepting both names in
-      the selectors for as long as any pre-rename publish is still reachable
-      by the walk, then dropping the old one — the same staged-rename shape
-      used for the `gate` → `lanes` check. Caught by Codex on PR #133.
+- [x] **`deploy`'s display name is load-bearing and now inaccurate.** The job
+      was still called `Build and release` after the release build moved to
+      `release-build`, because `Build release notes` selects it by name
+      against the Actions API in two places: the release-notes range base,
+      and the guard that stops a rerun re-uploading a versionCode. Caught by
+      Codex on PR #133. **Renamed to `Publish`** (2026-10-13), with both
+      selectors accepting the old name too.
+  - [ ] **Drop `Build and release` from the two selectors** once a run named
+        `Publish` has uploaded to Play: the walk stops at the first publish it
+        finds, so no older run is read after that, and the rerun guard only
+        reads attempts of its own run. Before Play publishing is switched on,
+        nothing publishes under either name, so there is no hurry.
 
 ## Precise readings near the fence edge degraded a snooze (field log, 2026-10-05)
 

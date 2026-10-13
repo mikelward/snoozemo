@@ -300,7 +300,8 @@ build a release variant at all when it can't prove that.
 
 ## Troubleshooting
 
-- **`Build and release` is green but nothing reached Play.** Read the job's
+- **`Publish` is green but nothing reached Play.** (The job was named `Build and release` before
+  2026-10-13; older runs carry that name.) Read the job's
   steps rather than its conclusion — every Play step skips on its own
   condition, so the job concludes success either way. `Compose Play Store
   release notes` skipped means one of three things: `PLAY_SERVICE_ACCOUNT_JSON`
@@ -314,8 +315,8 @@ build a release variant at all when it can't prove that.
   rule; the mechanics are here. `RELEASE_SUPERSEDED` means a later push already
   published a higher `versionCode`, so a Console upload lands the stale bundle
   the stand-down withheld. The release-notes walk won't see it either: it
-  recognizes a publication only as a `Build and release` job whose `Upload to
-  Play Store internal track` step concluded success, so the queued subjects
+  recognizes a publication only as a `Publish` (formerly `Build and release`) job whose
+  `Upload to Play Store internal track` step concluded success, so the queued subjects
   re-ship on the next release. Fix the cause and push again. Two exceptions:
   the seed upload in step 2, where no API path exists until a listing has its
   first release, and a Play-side refusal — a flagged listing, a rejected

@@ -1149,18 +1149,18 @@ jobs:
 
 
   deploy:
-    # The name is load-bearing, not descriptive. "Build release notes" below
-    # selects `.name == "Build and release"` twice against the Actions API —
-    # once to find the last run that actually published (the release-notes
-    # range base), once to see whether an earlier attempt of this same run
-    # already uploaded. Renaming the job silently breaks both against every
-    # run recorded after the rename: the walk never finds a post-rename
-    # publish, so notes repeat already-shipped subjects, and a rerun retries a
-    # versionCode Play has seen. So it keeps saying "Build" even though the
-    # build moved to `release-build` — renaming it means updating both
-    # selectors to accept the old name and the new one, which is its own
-    # change (TODO.md).
-    name: Build and release
+    # The name is load-bearing, not only descriptive. "Build release notes"
+    # below selects this job by name twice against the Actions API — once to
+    # find the last run that actually published (the release-notes range
+    # base), once to see whether an earlier attempt of this same run already
+    # uploaded. It was `Build and release` until the build moved to
+    # `release-build`, so both selectors accept that name too: without it the
+    # walk would not recognize a publish recorded before the rename, and the
+    # next notes would repeat already-shipped subjects. The old name can go
+    # once a run named `Publish` has uploaded, since the walk stops at the
+    # first publish it finds (TODO.md). Renaming again means the same two
+    # steps.
+    name: Publish
     # Production publish job (TODO.md Phase 6, docs/play-store-internal-track.md).
     # Publishes the signed AAB that `release-build` produced: it composes the
     # release notes and — once PLAY_SERVICE_ACCOUNT_JSON is configured —
@@ -1314,7 +1314,7 @@ jobs:
               published=$(gh api \
                 "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${attempt}/jobs?per_page=100" \
                 --jq '[.jobs[]
-                       | select(.name == "Build and release")
+                       | select(.name == "Publish" or .name == "Build and release")
                        | .steps[]
                        | select(.name == "Upload to Play Store internal track")
                        | .conclusion]
@@ -1375,7 +1375,7 @@ jobs:
             published=$(gh api \
               "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?filter=all&per_page=100" \
               --jq '[.jobs[]
-                     | select(.name == "Build and release")
+                     | select(.name == "Publish" or .name == "Build and release")
                      | select(.conclusion == "success")
                      | .steps[]
                      | select(.name == "Upload to Play Store internal track")
