@@ -3948,8 +3948,9 @@ the point is that every other line of the app is worthless if it isn't true.
       graphic fails and is re-recorded by hand. Worth revisiting if the reusable
       workflow ever takes more than one path. (Simmo auto-commits its own, since it
       still does that inline.)
-- [ ] **Record the store graphics from the shipping variant, and retire the source-set
-      guard** (Codex, PR #101 — eight findings). The graphics are recorded from
+- [x] **Record the store graphics from the shipping variant, and retire the source-set
+      guard — decided against (maintainer, 2026-10-13; see the end of this entry)** (Codex,
+      PR #101 — eight findings). The graphics are recorded from
       `playDebug` while Play ships `playRelease`, so a variant-specific icon override
       would leave CI green on artwork nobody installs. `no build type redefines the
       launcher icon` guards that by scanning source sets, and it is a *proxy*: it went
@@ -3990,6 +3991,15 @@ the point is that every other line of the app is worthless if it isn't true.
       activity to the release variant's tests without shipping it (a Robolectric shadow
       registration in a shared rule, say), and it would also put `testReleaseUnitTest` behind
       the release version guard, which refuses a shallow clone.
+      **Left as it is (maintainer, 2026-10-13).** Recording only the store graphics from
+      `release` would sidestep that blocker, because they draw the icon from resources onto a
+      bitmap and launch no activity, but it adds a release compile to every PR's CI (about two
+      runner-minutes and roughly a minute of wall clock), and a build-time comparison of the two
+      variants' merged icon files would add a release resource merge the same way. The
+      maintainer does not want CI longer or heavier for this. So the four guards stay as they
+      are, frozen, with the two gaps above recorded: don't propose a release-variant CI step
+      for it again, and keep recording new findings against the guards here rather than
+      reshaping them.
 - [ ] **Screenshots are recorded against the PR head, not the merge ref** (Codex,
       PR #101). The `screenshot-tests` job deliberately checks out the head branch on a
       same-repo PR, so that what it renders matches what `sync-screenshots` would commit
@@ -9048,8 +9058,11 @@ Guessed while making the access flow tappable (autopilot, 2026-08-12):
   - [ ] **Drop `Build and release` from the two selectors** once a run named
         `Publish` has uploaded to Play: the walk stops at the first publish it
         finds, so no older run is read after that, and the rerun guard only
-        reads attempts of its own run. Before Play publishing is switched on,
-        nothing publishes under either name, so there is no hurry.
+        reads attempts of its own run. Play publishing is on (the 2026-10-13 run
+        for versionCode 632 uploaded as `Build and release`), but a push of only
+        `ci:`/`docs:` changes makes no release, so the first upload under the new
+        name is the next release-worthy push to `main`. Drop the old name after
+        that run's `Upload to Play Store internal track` step succeeds.
 
 ## Precise readings near the fence edge degraded a snooze (field log, 2026-10-05)
 
