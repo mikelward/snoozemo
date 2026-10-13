@@ -674,6 +674,12 @@ The tile is the tightest constraint in the app: Quick Settings truncates aggress
 the subtitle carries a countdown (`SPEC.md` §4.2), so tile copy is written to the shortest
 form that still reads, and verified on a device rather than in a preview.
 
+## Icons
+
+- **Use a standard Material icon by default** (Material Icons or Material Symbols), not a
+  hand-drawn one: users already know what they mean. If no Material icon clearly fits, or
+  two do, ask before picking or drawing one.
+
 ## Translations
 
 **The rule: the maintainer approves English copy before anything is translated.** Propose
