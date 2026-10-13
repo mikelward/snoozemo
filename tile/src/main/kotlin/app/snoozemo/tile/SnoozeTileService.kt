@@ -7,10 +7,12 @@ import android.content.Intent
 import android.graphics.drawable.Icon
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import android.util.Log
 import app.snoozemo.core.ChooserMode
+import app.snoozemo.core.SnoozeDebugLog
 import app.snoozemo.dnd.AndroidZenController
 import app.snoozemo.dnd.PrefsZenRuleIdStore
 import app.snoozemo.dnd.R as DndR
@@ -214,6 +216,18 @@ class SnoozeTileService : TileService() {
      */
     override fun onClick() {
         super.onClick()
+        // A quick second tap is read as part of the first, not as its opposite
+        // (SPEC.md §7, [TileTapGate]). Ignored before anything is painted or
+        // sent, so the tile keeps saying what the first tap asked for. The
+        // check is one in-memory comparison against elapsed realtime, so
+        // nothing new sits on the tap path, and the log line is an in-memory
+        // append whose file write is coalesced off this thread.
+        if (!tapGate.accept(SystemClock.elapsedRealtime())) {
+            SnoozeDebugLog.event(
+                "tap: on the tile again within ${TileTapGate.SETTLE_MS} ms of the last one it acted on; ignored",
+            )
+            return
+        }
         // Whatever the shade last rendered, rather than a fresh read: see
         // [listening]. The fallback covers a tap the platform delivers without
         // a preceding listen, which should not happen and must not crash if it
@@ -312,6 +326,13 @@ class SnoozeTileService : TileService() {
         private const val TAG = "SnoozeTileService"
 
         private const val TRAMPOLINE_CLASS = "app.snoozemo.snooze.TileTrampolineActivity"
+
+        /**
+         * Process-wide rather than per instance: the platform binds a fresh
+         * [SnoozeTileService] when the shade reopens, and a quick second tap
+         * can land on it.
+         */
+        private val tapGate = TileTapGate()
 
         /**
          * Verifies the zen rule exists — recreating it if the user deleted it

@@ -1453,14 +1453,25 @@ the point is that every other line of the app is worthless if it isn't true.
       ignoring a real "the user turned Do Not Disturb off" and leaving the phone silent, which
       is principle 1's failure.
 
-      Mechanisms the maintainer named, none chosen:
+      Mechanisms the maintainer named:
       - **Make it work** — fix the veto so a late broadcast cannot end a newer snooze. Narrowest,
-        and does nothing about a genuine double-tap.
-      - **Inert controls** while a transition is in flight. The end-condition rows already do
-        this (`committing` disables them); the tile and the arm/end button do not, and the tile
-        is the one that flips meaning between two taps.
+        and does nothing about a genuine double-tap. Still open: it is the `DND_TURNED_OFF`
+        shape's fix, and that shape is not proven yet.
+      - **Inert controls** while a transition is in flight — **chosen for the tile only**
+        (maintainer, 2026-10-13; `SPEC.md` §7): a tile tap within 500 ms of the last one the
+        tile acted on is ignored and logged. The broader version, every control inert, was set
+        aside because it would delay `End now` too, which §7 promises is instant. The
+        end-condition rows already do this (`committing` disables them).
       - **An operation queue**, so arms, ends and cap changes serialize instead of racing.
-        Largest, and the only one that covers taps arriving from three surfaces at once.
+        Largest, and the only one that covers taps arriving from three surfaces at once. Not
+        taken.
+
+      **The tile gate may not be what caught the capture's `MANUAL` endings.** They came about
+      2.4 s after the chosen end applied, which a 500 ms window would not cover, and the
+      app's pinned `Snooze` and `End now` share one slot, so a fast second tap there flips the
+      same way — left instant on purpose (§7). The tap lines in the debug log (`tap: … from the
+      tile`, `tap: … ignored`) say which surface the next stray end came from; widen the fix
+      only once one does.
 
       Whatever is chosen, `DND_TURNED_OFF` is currently a *silent* ending — no notification,
       because the user is assumed to have done it themselves (`SnoozeNotifications`). If it can
