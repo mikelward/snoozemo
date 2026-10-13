@@ -21,6 +21,9 @@ import app.snoozemo.core.identity
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.DepartureObservation
 import app.snoozemo.core.EndReason
+import app.snoozemo.core.EndingSoon
+import app.snoozemo.core.EndingSoonCause
+import app.snoozemo.core.KeepSnoozing
 import app.snoozemo.core.TrackingMode
 import app.snoozemo.core.MeetingEnd
 import app.snoozemo.core.ZenFailure
@@ -119,7 +122,7 @@ class SnoozeNotifications(private val context: Context) {
     }
 
     /**
-     * Creates the three channels, once per process.
+     * Creates the four channels, once per process.
      *
      * `createNotificationChannel` is a synchronous binder call and this class is
      * constructed in the service's `onCreate` — which, on a cold tile tap, sits
@@ -188,10 +191,32 @@ class SnoozeNotifications(private val context: Context) {
             NotificationChannel(CHANNEL_URGENT, context.getString(R.string.channel_urgent), NotificationManager.IMPORTANCE_DEFAULT)
                 .apply { setBypassDnd(true) },
         )
+        // The "ending soon" warning (SPEC.md §4.3). A buzz, not a sound: it
+        // fires while the user is still somewhere they chose quiet for — five
+        // minutes before the end of the meeting, or in the doorway on the way
+        // out — so it must be felt rather than heard. Default importance, the
+        // maintainer's call (2026-10-13: "vibrate, or maybe notify with
+        // default priority"), so it posts visibly without peeking over the
+        // screen.
+        //
+        // Bypasses, because the Do Not Disturb it has to reach through is
+        // Snoozemo's own: under the rule's priority filter an ordinary
+        // channel is silenced by exactly the snooze it is warning about. The
+        // cost is the one §5.7 names — it also buzzes through an unrelated
+        // Do Not Disturb — and that is the user's to switch off per channel,
+        // which is also this warning's off switch.
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_ENDING, context.getString(R.string.channel_ending), NotificationManager.IMPORTANCE_DEFAULT)
+                .apply {
+                    setSound(null, null)
+                    enableVibration(true)
+                    setBypassDnd(true)
+                },
+        )
     }
 
     /**
-     * Re-issues the two bypassing channels so a `setBypassDnd(true)` the
+     * Re-issues the three bypassing channels so a `setBypassDnd(true)` the
      * platform rejected before this app held `ACCESS_NOTIFICATION_POLICY` is
      * honored once it does.
      *
@@ -283,10 +308,13 @@ class SnoozeNotifications(private val context: Context) {
      * and failure messages were all going nowhere (flagged by Codex on PR #18)
      * — principle 2's failure on the screen that exists to prevent it.
      *
-     * All three channels count, and none is optional: the ongoing one is the
-     * only visible state a 1×1 tile has (SPEC.md §4.2), the ended one carries
-     * every reason a snooze stopped (§4.5), and the urgent one is the sole way
-     * back from a phone that may still be silenced (§5.7).
+     * Three channels count, and none of them is optional: the ongoing one is
+     * the only visible state a 1×1 tile has (SPEC.md §4.2), the ended one
+     * carries every reason a snooze stopped (§4.5), and the urgent one is the
+     * sole way back from a phone that may still be silenced (§5.7). The
+     * "ending soon" warning's is the one left out, deliberately: switching it
+     * off is how a user turns the warning off (§4.3), and the snooze is just
+     * as reachable without it.
      *
      * **A missing channel counts against us**, which is why this is an instance
      * method rather than a static read of the manager. Constructing this class
@@ -835,15 +863,17 @@ class SnoozeNotifications(private val context: Context) {
                     trampolinePendingIntent(SnoozeService.ACTION_END, REQUEST_END),
                 ).build(),
             )
-            // `+30 min` matches the end-condition sheet's step, so extending uses
-            // the same unit as choosing (SPEC.md §4.3).
-            .addAction(
-                android.app.Notification.Action.Builder(
-                    null,
-                    context.getString(R.string.action_extend),
-                    trampolinePendingIntent(SnoozeService.ACTION_EXTEND, REQUEST_EXTEND),
-                ).build(),
-            )
+            // The way to keep snoozing, matched to what ends this snooze
+            // (SPEC.md §4.3): `+30 min` for a time — the end-condition
+            // sheet's step, so extending uses the same unit as choosing — and
+            // `Still here` for a departure, whose cap already sits at its
+            // ceiling so the step could only ever answer "at max". Absent when
+            // neither would do anything.
+            .let { builder ->
+                EndingSoon.keepSnoozing(snooze, cause = null)
+                    ?.let { builder.addAction(keepSnoozingAction(it, snooze)) }
+                    ?: builder
+            }
             // `Until 17:00` — the next meeting's end, and only when there is one
             // worth offering (SPEC.md §4.3). Absent rather than disabled where
             // there isn't: a third button that cannot be pressed is a worse
@@ -1206,6 +1236,10 @@ class SnoozeNotifications(private val context: Context) {
             // running one's.
             ongoingForegroundHost?.demote()
             drop(ID_ONGOING)
+            // A warning that the snooze is about to end is false the moment it
+            // has, and this is the one takedown every ending reaches.
+            drop(ID_ENDING_TIME)
+            drop(ID_ENDING_PRESENCE)
             // The tile's readout goes with the card it came from, queued under
             // the same lock as the posts' writes so none can land after it.
             // Its stamp would stop a later snooze reading it anyway; this keeps
@@ -1228,6 +1262,103 @@ class SnoozeNotifications(private val context: Context) {
     fun cancelFailure() {
         drop(ID_FAILURE)
     }
+
+    /**
+     * Warns that [snooze] is about to end because of [cause] (SPEC.md §4.3,
+     * "Ending soon"): a card on its own buzzing channel, carrying `End now`
+     * and whichever way of keeping the snooze going would work.
+     *
+     * Its own card rather than the ongoing one re-alerting, so the warning can
+     * come and go — a departure that turns out to be a GPS jump takes it down
+     * — without the status card the user relies on flickering, and so the user
+     * can turn this off without losing that one.
+     *
+     * Two ids, one per kind: a timed warning and a presence one can stand
+     * together, and each comes down on its own condition clearing.
+     * `setOnlyAlertOnce` means a repost of a card still showing — a restated
+     * level after a restart — updates it without buzzing again.
+     *
+     * [graceDeadlineMs] is the controller's live reading, for the Wi-Fi card's
+     * countdown; null wherever there is none or nobody can say.
+     */
+    fun showEndingSoon(snooze: ActiveSnooze, cause: EndingSoonCause, graceDeadlineMs: Long? = null): Boolean {
+        reapplyDndBypassOnce()
+        val now = SnoozeClock.read()
+        val countdown = when (cause) {
+            EndingSoonCause.TIME -> snooze.remaining(now)
+            // Grace's own deadline, or a sooner cap — what the ongoing card
+            // counts down to in the same state.
+            EndingSoonCause.WIFI_LOST -> snooze.countdown(now, graceDeadlineMs)
+            // The next fix decides, and when it lands is the platform's:
+            // there is no honest number to count to.
+            EndingSoonCause.LEAVING -> null
+        }
+        val text = when (cause) {
+            EndingSoonCause.TIME -> context.getString(R.string.ending_soon_time, formatSheetTime(context, snooze.capExpiresAt))
+            EndingSoonCause.WIFI_LOST -> context.getString(R.string.ending_soon_wifi_lost)
+            EndingSoonCause.LEAVING -> context.getString(R.string.ending_soon_leaving)
+        }
+        val builder = android.app.Notification.Builder(context, CHANNEL_ENDING)
+            .setSmallIcon(DndR.drawable.ic_snooze_mark)
+            .setContentTitle(context.getString(R.string.ending_soon_title))
+            .setContentText(text)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .setContentIntent(contentPendingIntent())
+            // A backstop for the takedown, not the takedown: every ending
+            // drops this card on its way past, but a card outliving the
+            // moment it names is the one thing a warning must not do.
+            .setTimeoutAfter((countdown ?: LEAVING_TIMEOUT).plus(TIMEOUT_SLACK).toMillis())
+            .addAction(
+                android.app.Notification.Action.Builder(
+                    null,
+                    context.getString(R.string.action_end_now),
+                    trampolinePendingIntent(SnoozeService.ACTION_END, REQUEST_END),
+                ).build(),
+            )
+        if (countdown != null) {
+            builder
+                .setWhen(System.currentTimeMillis() + countdown.toMillis())
+                .setUsesChronometer(true)
+                .setChronometerCountDown(true)
+        } else {
+            builder.setShowWhen(false)
+        }
+        EndingSoon.keepSnoozing(snooze, cause)?.let { builder.addAction(keepSnoozingAction(it, snooze)) }
+        val posted = post(if (cause == EndingSoonCause.TIME) ID_ENDING_TIME else ID_ENDING_PRESENCE, builder.build())
+        SnoozeDebugLog.event("ending soon: warned (%s), posted=%s", cause, posted)
+        return posted
+    }
+
+    /**
+     * Takes down a presence warning whose condition has cleared, returning
+     * whether the platform accepted the cancel — the caller's bookkeeping
+     * moves only on a yes, so a refused cancel is retried (Codex, PR #330).
+     */
+    fun cancelPresenceWarning(): Boolean = drop(ID_ENDING_PRESENCE)
+
+    /**
+     * The action that keeps [snooze] going, as [EndingSoon.keepSnoozing]
+     * chose it.
+     *
+     * `Still here` is the `Until I leave` row's own request — a departure
+     * restore over a running snooze, which takes a fresh place and merges it
+     * with the old one ([app.snoozemo.core.AnchorRetake]) — so the card and
+     * the row cannot drift into two meanings of the same tap.
+     */
+    private fun keepSnoozingAction(choice: KeepSnoozing, snooze: ActiveSnooze): android.app.Notification.Action =
+        when (choice) {
+            KeepSnoozing.PLUS_THIRTY -> android.app.Notification.Action.Builder(
+                null,
+                context.getString(R.string.action_extend),
+                trampolinePendingIntent(SnoozeService.ACTION_EXTEND, REQUEST_EXTEND),
+            )
+            KeepSnoozing.STILL_HERE -> android.app.Notification.Action.Builder(
+                null,
+                context.getString(R.string.action_still_here),
+                stillHerePendingIntent(snooze),
+            )
+        }.build()
 
     fun showEnded(reason: EndReason?) {
         // Through the serialized takedown, not a bare drop: this is the
@@ -1534,6 +1665,15 @@ class SnoozeNotifications(private val context: Context) {
      */
     fun showCouldNotRetakePlace() = showOneShot(R.string.failure_could_not_retake_place)
 
+    /**
+     * A `Still here` tap that did not take — the service would not start, or
+     * declined the retake — so the snooze goes on watching the place it had.
+     * Not [showCouldNotRetakePlace]'s line: nothing was captured, so "couldn't
+     * find where you are" would describe a search that never ran; and not
+     * [showCouldNotSetEnd]'s, since the tap named no time (Codex, PR #330).
+     */
+    fun showCouldNotUpdatePlace() = showOneShot(R.string.failure_could_not_update_place)
+
     /** `+30 min` with nowhere left to go: the 24 h backstop is absolute (§7). */
     fun showAtMaxDuration() = showOneShot(R.string.extend_at_max)
 
@@ -1574,11 +1714,14 @@ class SnoozeNotifications(private val context: Context) {
         )
 
     /** Takes one down, with the same containment [post] has. */
-    private fun drop(id: Int) {
-        runCatching { manager.cancel(id) }.onFailure {
-            Log.e(TAG, "Canceling notification $id failed; it may still be on screen.", it)
-        }
-    }
+    private fun drop(id: Int): Boolean =
+        runCatching { manager.cancel(id) }.fold(
+            onSuccess = { true },
+            onFailure = {
+                Log.e(TAG, "Canceling notification $id failed; it may still be on screen.", it)
+                false
+            },
+        )
 
     /**
      * Both notification actions go through the trampoline activity rather than
@@ -1649,6 +1792,30 @@ class SnoozeNotifications(private val context: Context) {
                     SnoozeService.REQUESTED_FROM_NOTIFICATION,
                 )
                 .putExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, endsAt.toEpochMilli())
+                .putExtra(SnoozeService.EXTRA_CHOICE_FOR_SNOOZE, snooze.startedAt.toEpochMilli())
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
+    /**
+     * `Still here`: the `Until I leave` request, through the trampoline for
+     * the reason every action here takes it, carrying the snooze it was
+     * offered for so a card that outlived its snooze retakes nobody's place.
+     *
+     * Its own request code: it shares `ACTION_SET_CAP` with `Until <time>`,
+     * and one code would let either offer rewrite the other's extras.
+     */
+    private fun stillHerePendingIntent(snooze: ActiveSnooze): PendingIntent =
+        PendingIntent.getActivity(
+            context,
+            REQUEST_STILL_HERE,
+            Intent(context, TileTrampolineActivity::class.java)
+                .setAction(SnoozeService.ACTION_SET_CAP)
+                .putExtra(
+                    SnoozeService.EXTRA_REQUESTED_FROM,
+                    SnoozeService.REQUESTED_FROM_NOTIFICATION,
+                )
+                .putExtra(SnoozeService.EXTRA_RESTORE_END, true)
                 .putExtra(SnoozeService.EXTRA_CHOICE_FOR_SNOOZE, snooze.startedAt.toEpochMilli())
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
@@ -1938,6 +2105,7 @@ class SnoozeNotifications(private val context: Context) {
         const val CHANNEL_ACTIVE = "snooze_active"
         const val CHANNEL_ENDED = "snooze_ended"
         const val CHANNEL_URGENT = "snooze_urgent"
+        const val CHANNEL_ENDING = "snooze_ending"
         const val ID_ONGOING = 1
 
         /** The group a silent post of the ongoing card is filed under; see [buildOngoing]. */
@@ -1947,6 +2115,12 @@ class SnoozeNotifications(private val context: Context) {
         const val ID_STUCK = 4
         const val ID_END_FAILURE = 5
         const val ID_RINGER = 6
+
+        /** The timed "ending soon" warning (SPEC.md §4.3). */
+        const val ID_ENDING_TIME = 7
+
+        /** The presence "ending soon" warning: Wi-Fi lost, or a departure confirming. */
+        const val ID_ENDING_PRESENCE = 8
         const val REQUEST_END = 10
         const val REQUEST_EXTEND = 11
         const val REQUEST_RELEASE_STUCK = 12
@@ -1958,6 +2132,48 @@ class SnoozeNotifications(private val context: Context) {
 
         /** Tapping the stuck-ringer notice; see [restoreRingerPendingIntent]. */
         const val REQUEST_RESTORE_RINGER = 16
+
+        /** `Still here` — see [stillHerePendingIntent]. */
+        const val REQUEST_STILL_HERE = 17
+
+        /** How long a departure warning stands, at most, with no countdown to time it out. */
+        private val LEAVING_TIMEOUT: java.time.Duration = java.time.Duration.ofMinutes(15)
+
+        /** How far past its own countdown a warning may stand before the platform takes it down. */
+        private val TIMEOUT_SLACK: java.time.Duration = java.time.Duration.ofMinutes(1)
+
+        /**
+         * Rebuilds a timed warning still in the shade from [snooze] as it now
+         * stands, so its `Ends at …` and its countdown follow a clock or
+         * time-zone change rather than naming the old deadline (Codex,
+         * PR #330). An update in place, so it does not buzz again; and only
+         * while the card is showing, so a warning the user swiped away is not
+         * brought back. The instance is built only then, keeping the channel
+         * calls off every path that has nothing to refresh.
+         */
+        fun refreshTimedWarning(context: Context, snooze: ActiveSnooze) {
+            val showing = runCatching {
+                context.getSystemService(NotificationManager::class.java)
+                    ?.activeNotifications?.any { it.id == ID_ENDING_TIME } == true
+            }.getOrElse {
+                SnoozeDebugLog.failure(it, "ending soon: reading active notifications failed; not refreshing")
+                false
+            }
+            if (showing) SnoozeNotifications(context.applicationContext).showEndingSoon(snooze, EndingSoonCause.TIME)
+        }
+
+        /**
+         * Takes down the timed warning from outside any instance — the cap
+         * alarm's own re-arm, which knows the moment a new deadline makes it
+         * false. Contained like every other takedown here.
+         */
+        fun cancelTimedWarning(context: Context) {
+            runCatching {
+                context.getSystemService(NotificationManager::class.java)?.cancel(ID_ENDING_TIME)
+            }.onFailure {
+                Log.e(TAG, "Canceling the ending-soon warning failed; it times out on its own.", it)
+            }
+        }
 
         /** Handled by [NotificationActionReceiver]; takes the card down and nothing else. */
         const val ACTION_DISMISS_STUCK = "app.snoozemo.action.DISMISS_STUCK"
@@ -1971,7 +2187,7 @@ class SnoozeNotifications(private val context: Context) {
  * [SnoozeNotifications], because its two callers cannot both afford to
  * construct one: the tile trampoline asks this on a block that races the arm,
  * and constructing a `SnoozeNotifications` runs `ensureChannels()` — up to
- * three `createNotificationChannel` binder calls — on the way past. Shared
+ * four `createNotificationChannel` binder calls — on the way past. Shared
  * rather than written twice so the tile tap's gate and the main screen's banner
  * cannot come to different conclusions about the same phone.
  *

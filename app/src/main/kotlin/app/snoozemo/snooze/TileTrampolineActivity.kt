@@ -371,16 +371,21 @@ class TileTrampolineActivity : ComponentActivity() {
         val started = runCatching {
             startService(
                 Intent(this, SnoozeService::class.java).setAction(action).also { forward ->
-                    // The notification's `Until <time>` action is the one tap
-                    // that carries data — the time it offered and the snooze it
-                    // offered it for — and the service declines a claim that no
-                    // longer matches. Copied by name rather than wholesale so a
-                    // start can never smuggle an extra this activity has not
-                    // considered into the service.
+                    // The notification's `Until <time>` and `Still here`
+                    // actions are the taps that carry data — the time offered,
+                    // or that it is the `Until I leave` retake, and the snooze
+                    // it was offered for — and the service declines a claim
+                    // that no longer matches. Copied by name rather than
+                    // wholesale so a start can never smuggle an extra this
+                    // activity has not considered into the service.
                     if (action != SnoozeService.ACTION_SET_CAP) return@also
                     forward.putExtra(
                         SnoozeService.EXTRA_CAP_EXPIRES_AT,
                         intent?.getLongExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT, 0L) ?: 0L,
+                    )
+                    forward.putExtra(
+                        SnoozeService.EXTRA_RESTORE_END,
+                        intent?.getBooleanExtra(SnoozeService.EXTRA_RESTORE_END, false) ?: false,
                     )
                     forward.putExtra(
                         SnoozeService.EXTRA_CHOICE_FOR_SNOOZE,
@@ -424,7 +429,12 @@ class TileTrampolineActivity : ComponentActivity() {
                 (intent?.getStringExtra(SnoozeService.EXTRA_REQUESTED_FROM) ?: "the tile") +
                 if (started) "" else " (the service refused to start)",
         )
-        if (!started) recoverFromRefusedStart(action)
+        if (!started) {
+            recoverFromRefusedStart(
+                action,
+                retakingPlace = intent?.getBooleanExtra(SnoozeService.EXTRA_RESTORE_END, false) == true,
+            )
+        }
 
         // Everything else is queued, not called. `startService` does not *run*
         // the service — it is a binder round trip into `ActivityManagerService`,
@@ -462,7 +472,7 @@ class TileTrampolineActivity : ComponentActivity() {
      * that stays quiet after the user explicitly asked it not to, and because
      * this runs only when the service has already refused to start.
      */
-    private fun recoverFromRefusedStart(action: String) {
+    private fun recoverFromRefusedStart(action: String, retakingPlace: Boolean = false) {
         when (action) {
             // Nothing is running and nothing was extended — but the user tapped
             // something and is owed an answer. `+30 min` has no recovery beyond
@@ -474,8 +484,15 @@ class TileTrampolineActivity : ComponentActivity() {
             // it was, so nothing is stranded and the tap can be repeated — but a
             // button that silently kept the old deadline is the app quietly
             // ignoring the user (AGENTS.md, principle 2).
-            SnoozeService.ACTION_SET_CAP ->
+            //
+            // `Still here` shares the action but names no time — it is the
+            // `Until I leave` retake — so its refusal says the place stayed
+            // put rather than that an end time did not take (Codex, PR #330).
+            SnoozeService.ACTION_SET_CAP -> if (retakingPlace) {
+                SnoozeNotifications(applicationContext).showCouldNotUpdatePlace()
+            } else {
                 SnoozeNotifications(applicationContext).showCouldNotSetEnd()
+            }
             // The last exit refusing to start is the one case with nothing
             // behind it at all — no record, no alarm, and the notification the
             // user just tapped is the only thing that was pointing at this

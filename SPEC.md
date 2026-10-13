@@ -1172,12 +1172,25 @@ than merely declared (§5.2), not the mere existence of a countdown somewhere in
 Channel `snooze_active`, `IMPORTANCE_DEFAULT`, ongoing, not dismissible while the service runs.
 
 ```
-🌙  Snoozing                          3:40:12
+🌙  Snoozing
     Ends when you leave
-    [ End now ]   [ +30 min ]   [ Until 17:00 ]
+    [ End now ]   [ Still here ]   [ Until 17:00 ]
 ```
 
-`+30 min` matches the chooser's step (§4.4), so extending uses the same mental unit as choosing.
+**The second action keeps the snooze going, in the terms of whatever ends it** (maintainer,
+2026-10-13). A snooze ending on a time gets `+30 min`, which matches the chooser's step (§4.4), so
+extending uses the same mental unit as choosing. A snooze ending on leaving gets `Still here`, which
+is `Until I leave`'s own retake (§4.4): the place stretches to cover where the phone is now
+(`AnchorRetake`) and departure goes on being watched from there. This replaced `+30 min` on those
+cards because the step could never move them — a departure snooze arms with its failsafe already at
+the ceiling `+30 min` clamps to, so the button only ever answered `Already at the time limit`, and
+even below the ceiling a later cap does nothing about a departure. The user asked for "a way to
+extend the snooze from the notification" and, for a location snooze, for "the existing extend
+radius logic"; this is both. **Absent when neither would do anything** — a snooze degraded to its
+timer with the cap at its ceiling carries `End now` alone — on the rule the calendar action follows
+below: a button that can only fail is worse than no button. Which of the two applies is one pure
+decision (`EndingSoon.keepSnoozing`), shared with the "ending soon" card below, so the two cards
+cannot offer different answers for the same snooze.
 
 **The third action is the next meeting's end, and it is there only when there is one worth
 offering** (maintainer, 2026-08-31). The idea is the case the app is most often used for: a snooze
@@ -1212,12 +1225,13 @@ between must not take a time chosen for the previous one. A refusal this action 
 time that has since fallen inside the floor — is said in the shade, because unlike a chooser row it
 has nowhere to say it inline.
 
-Tapping the card itself, rather than one of its two actions, opens `MainScreen` (landed
+Tapping the card itself, rather than one of its actions, opens `MainScreen` (landed
 2026-08-23) — the notification is the one thing a snoozing user is already looking at, so it is
-also the natural route back into the app for anyone who wants more than `End now` or `+30 min`.
+also the natural route back into the app for anyone who wants more than `End now` or a way to keep
+going.
 
-**Tap-to-open is a plain foreground activity launch, not routed through the trampoline the two
-actions use.** `End now` and `+30 min` fire `PendingIntent.getService` indirectly through
+**Tap-to-open is a plain foreground activity launch, not routed through the trampoline the
+actions use.** `End now`, `+30 min` and `Still here` fire `PendingIntent.getService` indirectly through
 `TileTrampolineActivity`, because a background service start the platform or an OEM refuses is
 *consumed silently* — no app code ever learns it was refused — and the trampoline is what notices
 and recovers. An activity launch from a notification tap carries no such refusal case: the platform
@@ -1277,6 +1291,78 @@ runs — routine presence re-checks, not events the user needs alerted to — an
 Snoozemo's own Do Not Disturb (§5.7), so a repost that re-sounded or re-vibrated on every re-check
 would be genuinely noisy rather than merely a latent one DND used to catch by accident. Only the
 first post of the card alerts; later ones update the countdown and text quietly.
+
+#### Ending soon
+
+**A snooze about to end says so first, with a buzz** (maintainer, 2026-10-13: "We should vibrate
+when the snooze is ending, e.g. when there's 5 minutes left or we're confirming the geofence").
+The phone coming back to life unannounced can startle in the wrong room, and a warning a little
+ahead of it lets the user keep the snooze going, end it on their own terms, or step out first.
+Nothing alerted near the end before this; the ongoing card only alerts once (below).
+
+**Three moments warn, each the near end of a different exit:**
+
+| Moment | Warning | Way to keep going |
+|---|---|---|
+| The cap is 5 minutes away — a chosen time *or* the failsafe | `Ends at 4:30 PM`, counting down | `+30 min`, while there is room under the ceiling |
+| Wi-Fi grace starts (§6.6) — the snooze ends in 5 minutes unless something answers | `Wi-Fi lost`, counting down | `Still here` |
+| A departure is confirming — one qualifying fix is outside the place and the next, 30 s on, ends the snooze (§6.6) | `Looks like you're leaving` | `Still here` |
+
+All three carry `End now` too, and the title `Snooze ending soon`. **The failsafe is included**, not
+only a time the user chose: a passive eight-hour cap reaching its end is exactly the surprise this
+exists to soften, and it settles the separate "surface the time-based failsafe" to-do the same way.
+At its ceiling it has no way to keep going — the backstop is the one bound nothing here moves (§7)
+— so that warning offers `End now` alone.
+
+**What does not warn is as deliberate.** A Wi-Fi drop or a geofence exit on its own *starts* the
+departure test rather than concluding it, and a warning there would buzz on every router blip.
+`When I move` ends on the motion event itself, so there is no moment before it to warn in. And a
+snooze narrowed to its timer is never warned about a departure, since a departure no longer ends it.
+
+**A buzz, not a sound, on a channel of its own.** `snooze_ending` is `IMPORTANCE_DEFAULT` — posted
+visibly, no heads-up — with vibration on and no sound, because the user is still somewhere they
+chose quiet for: a beep five minutes before the meeting ends is the interruption the snooze was for.
+It bypasses Do Not Disturb (§5.7), because the Do Not Disturb it has to reach through is Snoozemo's
+own. Its own channel rather than the ongoing card re-alerting, so the warning can come and go — a
+confirmation that turns out to be a GPS jump takes it down — without the status card flickering,
+and so a user who does not want it switches off this one channel and loses nothing else. That
+per-channel switch is the off switch for now; an in-app setting is not built (`TODO.md`).
+
+**The ringer ceiling still applies to the buzz.** Under the default `Vibrate` ceiling (§5.9) a
+notification vibrates if the user's own vibrate setting is on; under `Silent`, nothing does, so the
+warning posts without buzzing. That is the user's own choice of silence, not something this card
+overrides — and the card is still in the shade.
+
+**The warning comes down the moment it stops being true**: the condition clearing (a fix back
+home, Wi-Fi back, the cap moved out), the snooze narrowed to a time, `Still here` tapped, or the
+snooze ending, whose one takedown removes it with the ongoing card. A restart reposts a warning
+still standing without buzzing again (`setOnlyAlertOnce`) and takes down one an earlier process left
+up for a cause that has since cleared. A presence warning's levels are believed only from a watch
+that is running: `Still here` takes the watch down while the new place is captured, and the
+previous watch's open window is stale, not news. So taking a watch down takes its warning down
+with it, whichever process posted the card. And the warning is decided once per presence update,
+after every level of it is in — never on one level's change alone, which on a restart read a
+still-true warning as cleared and buzzed it a second time (Codex, PR #330).
+
+**The timed warning rides on the cap alarm.** Every path that moves a deadline already re-arms the
+cap, so arming the warning beside it, 5 minutes earlier, moves the warning with every `+30 min`,
+chosen time, restore, clock change and reboot without teaching each of them. Inexact, so it is
+"about five minutes": it never fires early, it is dropped if the snooze it was armed for has ended
+or its deadline has moved, and a restore inside the last five minutes arms nothing rather than buzz
+twice. A card already showing is rebuilt in place on a clock or time-zone change, so its `Ends at
+…` follows the new reading instead of naming the old deadline.
+
+**But a plain alarm, never the cap's allow-while-idle kind** (Codex, PR #330). Android rate-limits
+allow-while-idle alarms per app — "such as 15 minutes" in idle, by `AlarmManager`'s own reference —
+so a warning spending that budget five minutes ahead could hold the cap itself back past its
+deadline. The trade is stated rather than hidden: in deep Doze the warning waits for the next
+maintenance window, so it can arrive late or after the snooze has ended (and then says nothing).
+A missed courtesy is the right price; a late cap is principle 1's failure. It is armed after the
+rule goes on, never between the tap and `STATE_TRUE` (§6.9). Battery: one more inexact alarm per
+cap change, and nothing for presence — those warnings ride on levels the engine already reports.
+
+**Not yet verified on a device**: that the buzz reaches through Snoozemo's own rule, and what it
+does under an unrelated Do Not Disturb (`TODO.md`, hardware verification).
 
 **Not `IMPORTANCE_LOW`, deliberately** (maintainer, 2026-08-12) — this started low, on the reasoning
 that an ongoing status card should stay out of the way, and that was wrong for this particular card.
@@ -2679,8 +2765,8 @@ own rule* — whatever else was making the phone quiet stays. This is the concre
 
 ### 5.7 Bypassing our own DND
 
-Two of the app's three notification channels — `snooze_active` (§4.3) and the emergency-only
-`snooze_urgent` — bypass Do Not Disturb. Without that, arming a snooze puts the phone into the very
+Three of the app's four notification channels — `snooze_active` (§4.3), the emergency-only
+`snooze_urgent`, and the "ending soon" warning's `snooze_ending` (§4.3) — bypass Do Not Disturb. Without that, arming a snooze puts the phone into the very
 interruption filter that would silence the ongoing "Snoozing" card telling the user it worked, and
 the one alert that exists to hand back a phone that may still be stuck silenced by Snoozemo's own
 rule (`showStuckRule()`, §4.5) — which cannot itself be a casualty of that silence.
@@ -2692,7 +2778,10 @@ bypassing channel would let a routine notice — `showEnded()`'s departure/cap c
 Snoozemo, such as a Bedtime schedule or another app's rule. That is the user's own choice to be
 quiet, and not this app's to override on their behalf (§5.5's "total silence is the user's choice"
 is the same instinct). Only the genuine emergency exit needs to survive an unrelated DND source, so
-only `snooze_urgent` — carrying `showStuckRule()` alone — claims that exemption; everything else
+only `snooze_urgent` — carrying `showStuckRule()` alone — claims that exemption for that reason
+(`snooze_ending` claims it for a different one: it exists only while a snooze runs, and the DND it
+must reach through is Snoozemo's own; a vibration-only warning, it costs a buzz through an
+unrelated source at worst, which the user can switch off per channel); everything else
 that used to share `snooze_ended`'s bypass now respects whatever else is silencing the phone, same
 as any ordinary app's notifications would (Codex, PR #92, raised the mechanism; the split itself is
 the maintainer's call).

@@ -137,6 +137,18 @@ class SnoozeNotificationsCalendarTest {
         )
 
     /**
+     * Whether [card] carries the `Until <time>` offer, asked by itself rather
+     * than by a count: the action beside `End now` varies with what ends the
+     * snooze — `+30 min`, `Still here`, or none for a snooze degraded to its
+     * timer at the ceiling (SPEC.md §4.3) — and a degraded card is exactly that
+     * last kind. `Still here` shares the action but names no time.
+     */
+    private fun offersUntil(card: android.app.Notification): Boolean = card.actions.orEmpty().any {
+        val intent = shadowOf(it.actionIntent).savedIntent
+        intent.action == SnoozeService.ACTION_SET_CAP && intent.hasExtra(SnoozeService.EXTRA_CAP_EXPIRES_AT)
+    }
+
+    /**
      * Runs [steps] one per `showOngoing` post, in order, and nothing once they
      * run out — so a test names only the firings it cares about.
      */
@@ -277,7 +289,7 @@ class SnoozeNotificationsCalendarTest {
         val queries = provider.queries
         while (held.isNotEmpty()) held.removeAt(0).run()
 
-        assertEquals("the action never arrived", 3, currentOngoing().actions.size)
+        assertTrue("the action never arrived", offersUntil(currentOngoing()))
         assertEquals(
             "and the card is the degraded one, not the tracked one it replaced",
             stringOf(R.string.ongoing_timer_only),
@@ -435,10 +447,9 @@ class SnoozeNotificationsCalendarTest {
 
         notifications.showOngoing(degraded)
 
-        assertEquals(
+        assertTrue(
             "the card built before the answer landed kept the stale offer",
-            3,
-            currentOngoing().actions.size,
+            offersUntil(currentOngoing()),
         )
     }
 

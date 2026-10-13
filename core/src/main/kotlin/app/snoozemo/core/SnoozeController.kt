@@ -202,6 +202,24 @@ class SnoozeController(
     var graceDeadlineMs: Long? = null
         private set
 
+    /**
+     * Whether the departure test has one qualifying fix in hand and is waiting
+     * on the second ([PresenceUpdate.confirmingDeparture]). False before any
+     * update and whenever a snooze is armed, adopted or restored — nothing has
+     * been measured for it yet.
+     *
+     * **Read, don't copy**, for [atAnchorWifi]'s reasons: the ending-soon
+     * warning asks here when it decides whether to stand.
+     *
+     * **No listener callback, unlike [graceDeadlineMs], on purpose** (Codex,
+     * PR #330). The warning depends on this *and* the grace deadline, and a
+     * callback per level let it read one level updated and the other not —
+     * on a cold restore that canceled a still-true warning and reposted it,
+     * buzzing twice. Its reader asks once the whole update is in.
+     */
+    var confirmingDeparture: Boolean = false
+        private set
+
     private fun setGraceDeadline(value: Long?) {
         val changed = value != graceDeadlineMs
         graceDeadlineMs = value
@@ -334,6 +352,7 @@ class SnoozeController(
         // before any card for it is posted.
         setAnchorWifi(false)
         setGraceDeadline(null)
+        confirmingDeparture = false
         active = snooze
         state = SnoozeState.ARMING
         listener.onStateChanged(state, snooze, null)
@@ -767,6 +786,15 @@ class SnoozeController(
             update.observation?.let { listener.onDepartureObservation(it) }
         }
 
+        // Ungated, unlike the deadline below: an open window is a fact about
+        // the test whatever the mode reads, and a departure that confirms ends
+        // the snooze from any mode that still ends on leaving. Whether it is
+        // worth a warning is [EndingSoon]'s question, asked with the record
+        // beside it. Assigned ahead of the callbacks that follow, so nothing
+        // they prompt can read this update's deadline beside the last one's
+        // window.
+        confirmingDeparture = update.confirmingDeparture
+
         // Every update, with the edge marked rather than filtered here: a
         // listener caching this must be free to overwrite it unconditionally,
         // and only the edge is worth reposting a card for.
@@ -864,6 +892,7 @@ class SnoozeController(
         // which is the whole reason this path exists rather than [restore].
         setAnchorWifi(false)
         setGraceDeadline(null)
+        confirmingDeparture = false
         active = snooze
         state = SnoozeState.ARMED
     }
@@ -889,6 +918,7 @@ class SnoozeController(
         // snooze's network first rather than drawing it (Codex, PR #229).
         setAnchorWifi(false)
         setGraceDeadline(null)
+        confirmingDeparture = false
         // The record's own claim is lowered too: it was written under some
         // machinery, but not provably this one — an app update can change
         // what is watched between the write and this read.

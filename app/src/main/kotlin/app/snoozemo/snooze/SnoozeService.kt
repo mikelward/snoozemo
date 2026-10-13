@@ -23,6 +23,8 @@ import app.snoozemo.core.ClockReading
 import app.snoozemo.core.DegradationCause
 import app.snoozemo.core.DepartureObservation
 import app.snoozemo.core.EndReason
+import app.snoozemo.core.EndingSoon
+import app.snoozemo.core.EndingSoonCause
 import app.snoozemo.core.PolicyAccess
 import app.snoozemo.core.PolicyAccessAction
 import app.snoozemo.core.PolicyAccessChange
@@ -101,7 +103,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     private val notificationsDelegate = lazy {
         // The host is installed *here* rather than in `onCreate` (Codex,
         // PR #230). Assigning it there reads this property, and reading it
-        // constructs the object, whose `init` creates three notification
+        // constructs the object, whose `init` creates four notification
         // channels with synchronous binder calls — which is the whole reason
         // this is lazy, and would have put them back between a cold tile tap
         // and the zen rule going `STATE_TRUE` (SPEC.md §4.1, §6.9). Installing
@@ -518,7 +520,19 @@ open class SnoozeService : Service(), SnoozeController.Listener {
             ).collect { update ->
                 val running = controller.active
                 if (running == null || running.startedAt != startedAt) return@collect
+                // This watch is speaking now, so the levels the controller
+                // holds are its own again rather than a stopped one's.
+                presenceLevelsLive = true
                 controller.onPresenceUpdate(update)
+                // **Once, after the controller has installed every level** —
+                // never from a per-level callback (Codex, PR #330). The
+                // controller announces its levels one at a time, so a
+                // reconcile on the first saw the second's previous value: on a
+                // cold restore that read a still-true inherited warning as
+                // cleared, canceled it, and reposted it a moment later, which
+                // buzzed again because a repost after a cancel is a new post.
+                // One read of the settled pair cannot see a half-applied update.
+                reconcilePresenceWarning()
                 // An ending event whose zen write was refused leaves the
                 // snooze active with the engine's question answered — no
                 // further presence event is coming, so this collector is the
@@ -654,6 +668,7 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // finished.
         DepartureObservations.clear()
         GraceDeadlines.clear()
+        silencePresenceWarning()
         // The snooze is over, so its periodic wake goes with it; a cancel
         // this path never reaches (cold death) costs one empty backstop
         // wake, which retires itself.
@@ -691,6 +706,48 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // watch came down.
         DepartureObservations.clear()
         GraceDeadlines.clear()
+        silencePresenceWarning()
+    }
+
+    /**
+     * Whether the presence levels the controller holds came from a watch that
+     * is still running. False from the moment a watch is taken down until the
+     * next one delivers its first update.
+     *
+     * The controller keeps the last levels it was told — grace, an open
+     * confirmation window — and nothing restates them while no watch runs. A
+     * `Still here` retake takes the watch down for up to ten seconds, and a
+     * transition inside that window would otherwise read the old window as
+     * live and buzz the warning the user had just answered.
+     */
+    private var presenceLevelsLive: Boolean = false
+
+    /**
+     * Takes the presence warning down with the watch whose levels raised it.
+     * The next watch's first update raises it again if it is still true.
+     *
+     * **Unconditionally while a snooze runs**, not through the reconcile's
+     * "nothing posted by this process" short cut (Codex, PR #330). A card an
+     * earlier process left up is invisible to this one's bookkeeping, and an
+     * explicit stop — `Still here`, a time chosen over the departure — can
+     * land on a cold start before the restored watch says anything. Waiting
+     * for its first update would leave `Looks like you're leaving` up over
+     * the answer the user just gave, with no watch left to clear it. Never on
+     * the tap: every caller runs after the rule is on, or with no snooze, where
+     * the ending's own takedown already removed the card.
+     */
+    private fun silencePresenceWarning() {
+        presenceLevelsLive = false
+        if (controller.active == null) {
+            warnedPresence = null
+            return
+        }
+        if (warnedPresence != null) SnoozeDebugLog.event("ending soon: the %s warning came down with its watch", warnedPresence)
+        val canceled = notifications.cancelPresenceWarning()
+        warnedPresence = null
+        // A refused cancel leaves the shade unknown again, so the next live
+        // update takes the card down rather than trusting "nothing posted".
+        warnedPresenceKnown = canceled
     }
 
     /** Restoring is attempted once per service instance, from onStartCommand. */
@@ -2219,6 +2276,11 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // path like the notification above, and KEEP makes `startPresence`'s
         // re-arm free.
         SnoozeBackstop.schedule(applicationContext)
+        // The timed warning, for the same reason and in the same place as the
+        // backstop: the cap was armed with `armCheckIn` before any record
+        // existed, which arms no warning, and one more alarm call belongs
+        // after `STATE_TRUE` rather than in front of it.
+        CapAlarm.armEndingSoon(applicationContext, snooze, readClock())
         beginAnchorCaptureFor(snooze)
         return true
     }
@@ -3006,7 +3068,18 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         // Only `REFUSED`. `GONE` means the snooze this was for is over, and
         // whatever ended it has already posted its own card — a second one
         // would report the same event twice.
-        if (result == EndChoiceResult.REFUSED && requestId == 0L) notifications.showCouldNotSetEnd()
+        //
+        // The notification's other `ACTION_SET_CAP` is `Still here`, the
+        // `Until I leave` retake, which names no time — so its refusal says
+        // the place did not update rather than that an end time did not take
+        // (Codex, PR #330).
+        if (result == EndChoiceResult.REFUSED && requestId == 0L) {
+            if (intent?.getBooleanExtra(EXTRA_RESTORE_END, false) == true) {
+                notifications.showCouldNotUpdatePlace()
+            } else {
+                notifications.showCouldNotSetEnd()
+            }
+        }
         // Addressed to the commit that asked, never broadcast: the other host
         // may have a commit outstanding too, and an answer delivered to it
         // would dismiss the wrong sheet and strand this one.
@@ -3506,6 +3579,10 @@ open class SnoozeService : Service(), SnoozeController.Listener {
                     Log.w(TAG, "Updating the snooze record failed; the stored cap still stands.")
                 }
                 notifications.showOngoing(it)
+                // A transition can take away the ending a warning names with no
+                // presence update to say so — a time chosen over a departure
+                // stops the watch that would have restated the levels.
+                reconcilePresenceWarning()
             }
             SnoozeState.RELEASED -> {
                 // A capture still running is for a snooze that no longer
@@ -4111,6 +4188,75 @@ open class SnoozeService : Service(), SnoozeController.Listener {
     override fun onGraceDeadline(graceDeadlineMs: Long?, changed: Boolean) {
         GraceDeadlines.publish(graceDeadlineMs)
         if (changed) controller.active?.let(notifications::showOngoing)
+    }
+
+    /**
+     * The presence "ending soon" warning this service last posted, or null for
+     * none — so a restated level reposts nothing and a cause that moves
+     * (Wi-Fi lost, then a departure confirming) replaces the card once.
+     *
+     * In memory only: a restarted process posts again for a cause still
+     * standing, which `setOnlyAlertOnce` keeps silent while the card is still
+     * in the shade — and takes down, on its first reconcile, a card an earlier
+     * process left standing for a cause that has since cleared
+     * ([warnedPresenceKnown]).
+     */
+    private var warnedPresence: EndingSoonCause? = null
+
+    /** Whether [warnedPresence] says anything yet; a new process has never posted. */
+    private var warnedPresenceKnown: Boolean = false
+
+    /**
+     * Raises, replaces or takes down the presence warning (SPEC.md §4.3) to
+     * match what the controller says now. Called once per presence update,
+     * after every level is in, and on transitions; asked of the live snooze,
+     * so a warning cannot outlive the ending it named — a check called off, a
+     * grace cleared, a time chosen over the departure — or the snooze itself.
+     */
+    private fun reconcilePresenceWarning() {
+        val snooze = controller.active
+        if (snooze == null) {
+            // Nothing to post, and nothing to take down: every ending removes
+            // the warnings with the ongoing card ([SnoozeNotifications]'s one
+            // takedown). Touching nothing here also keeps any caller that runs
+            // with no snooze yet off the arm path: constructing
+            // [notifications] is channel binder calls, and none of that may sit
+            // between the tap and `STATE_TRUE` (`AGENTS.md`, the arm path).
+            if (warnedPresence != null) SnoozeDebugLog.event("ending soon: the %s warning ended with the snooze", warnedPresence)
+            warnedPresence = null
+            return
+        }
+        val cause = if (presenceLevelsLive) {
+            EndingSoon.presenceCause(snooze, controller.graceDeadlineMs, controller.confirmingDeparture)
+        } else {
+            null
+        }
+        if (warnedPresenceKnown) {
+            if (cause == warnedPresence) return
+        } else if (cause == null && !presenceLevelsLive) {
+            // Nothing posted by this process and nothing live to say yet:
+            // the first update of a running watch is what clears a card an
+            // earlier process may have left up.
+            return
+        }
+        // **The bookkeeping moves only on a post or cancel the platform
+        // accepted** (Codex, PR #330, twice — a refused post, then a refused
+        // cancel). Recording either as done would have the equality guard
+        // above swallow every later update restating the same level — the
+        // retry — leaving a warning that never landed, or a false one that
+        // never came down. Both failures are already logged where they
+        // happened.
+        val landed = if (cause == null) {
+            notifications.cancelPresenceWarning()
+        } else {
+            notifications.showEndingSoon(snooze, cause, controller.graceDeadlineMs)
+        }
+        if (!landed) return
+        if (cause == null && warnedPresence != null) {
+            SnoozeDebugLog.event("ending soon: the %s warning cleared", warnedPresence)
+        }
+        warnedPresence = cause
+        warnedPresenceKnown = true
     }
 
     override fun onAnchorWifi(atAnchorWifi: Boolean, changed: Boolean) {
@@ -4723,6 +4869,13 @@ open class SnoozeService : Service(), SnoozeController.Listener {
         const val ACTION_RINGER_RETRY = "app.snoozemo.action.RINGER_RETRY"
 
         /**
+         * The timed "ending soon" warning's alarm (SPEC.md §4.3) — handled in
+         * `CapAlarmReceiver` with no service, since all it does is read the
+         * record and post a card.
+         */
+        const val ACTION_ENDING_SOON = "app.snoozemo.action.ENDING_SOON"
+
+        /**
          * The user tapping `Unsnooze` on the stuck-rule notification — the last
          * exit, and the only one driven entirely by them.
          *
@@ -4847,8 +5000,8 @@ open class SnoozeService : Service(), SnoozeController.Listener {
          */
         const val EXTRA_RETRIES_LEFT = "app.snoozemo.extra.RETRIES_LEFT"
 
-        /** The notification's `+30 min` step (SPEC.md §4.3). */
-        val EXTENSION: Duration = Duration.ofMinutes(30)
+        /** The notification's `+30 min` step (SPEC.md §4.3), shared with the card that offers it. */
+        val EXTENSION: Duration = ActiveSnooze.EXTENSION
 
         /** How soon to come back at anything a spent cap alarm left undone. */
         private const val RETRY_MS = 5 * 60 * 1000L

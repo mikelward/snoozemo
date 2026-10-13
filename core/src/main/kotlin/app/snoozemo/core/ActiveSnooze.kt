@@ -742,6 +742,14 @@ data class ActiveSnooze(
         return if (extended.isAfter(ceiling)) maxOf(capExpiresAt, ceiling) else extended
     }
 
+    /**
+     * Whether `+30 min` would move this snooze's cap at all — false once it
+     * sits at its ceiling, which a snooze ending on leaving does from the arm.
+     * What decides whether a card offers the step (`EndingSoon.keepSnoozing`).
+     */
+    val canExtend: Boolean
+        get() = extendedCap(EXTENSION).isAfter(capExpiresAt)
+
     companion object {
         /** Degradations the running watch can still recover from in process. */
         private val RECOVERABLE_IN_PROCESS = setOf(
@@ -767,6 +775,9 @@ data class ActiveSnooze(
 
         /** The floor the sheet's `−` may not go below. */
         val MIN_CAP: Duration = Duration.ofMinutes(30)
+
+        /** The notification's `+30 min` step (SPEC.md §4.3). */
+        val EXTENSION: Duration = Duration.ofMinutes(30)
 
         /**
          * The absolute instant a snooze started at [now] with a requested

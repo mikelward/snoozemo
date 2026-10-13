@@ -973,7 +973,16 @@ class SnoozeControllerTest {
         locationAccessLost: Boolean = degradation?.blocksLocationReads == true,
         atAnchorWifi: Boolean = false,
         graceDeadlineMs: Long? = null,
-    ) = PresenceUpdate(event, degradation, graceActive, locationAccessLost, atAnchorWifi, graceDeadlineMs = graceDeadlineMs)
+        confirmingDeparture: Boolean = false,
+    ) = PresenceUpdate(
+        event,
+        degradation,
+        graceActive,
+        locationAccessLost,
+        atAnchorWifi,
+        graceDeadlineMs = graceDeadlineMs,
+        confirmingDeparture = confirmingDeparture,
+    )
 
     private fun observation(distanceM: Double) = DepartureObservation(
         distanceM = distanceM,
@@ -1194,6 +1203,47 @@ class SnoozeControllerTest {
         controller.onPresenceUpdate(update(degradation = DegradationCause.NO_LOCATION_FIX, graceActive = false))
         assertEquals(null, controller.graceDeadlineMs)
         assertEquals(null to true, listener.graceDeadlineReports.last())
+    }
+
+    @Test
+    fun `an open confirmation window is held while the engine says so`() {
+        armFully()
+        controller.onPresenceUpdate(update(event = PresenceEvent.ProbablyLeft, confirmingDeparture = true))
+        assertTrue(controller.confirmingDeparture)
+
+        controller.onPresenceUpdate(update(event = PresenceEvent.StillHere))
+        assertFalse(controller.confirmingDeparture)
+    }
+
+    @Test
+    fun `the window is installed before the grace deadline is announced`() {
+        // The ending-soon warning reads both levels together; a listener
+        // prompted by the deadline must not find the previous update's window
+        // beside it (Codex, PR #330).
+        var windowAtDeadline: Boolean? = null
+        lateinit var reading: SnoozeController
+        reading = SnoozeController(zen, readClock, object : SnoozeController.Listener by listener {
+            override fun onGraceDeadline(graceDeadlineMs: Long?, changed: Boolean) {
+                windowAtDeadline = reading.confirmingDeparture
+            }
+        })
+        reading.beginArming(ActiveSnooze.capExpiryFor(now), readClock(), canTrackDeparture = true)
+        reading.onAnchorCaptured(anchor)
+
+        reading.onPresenceUpdate(update(event = PresenceEvent.ProbablyLeft, confirmingDeparture = true))
+
+        assertEquals(true, windowAtDeadline)
+    }
+
+    @Test
+    fun `a fresh arm forgets the previous snooze's open window`() {
+        armFully()
+        controller.onPresenceUpdate(update(confirmingDeparture = true))
+        controller.end(EndReason.MANUAL)
+
+        armFully()
+
+        assertFalse(controller.confirmingDeparture)
     }
 
     @Test

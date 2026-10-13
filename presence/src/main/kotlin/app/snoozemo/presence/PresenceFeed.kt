@@ -224,6 +224,10 @@ internal class PresenceFeed(
             // Whatever the step measured, which is nothing unless a usable,
             // non-stale fix produced it.
             observation = step.observation,
+            // An open confirmation window is the engine one qualifying fix
+            // away from ending the snooze; a resolved engine has nothing left
+            // to confirm, whatever its last window said.
+            confirmingDeparture = step.state.progress.firstQualifyingAtMs != null && !step.state.resolved,
         )
     }
 }

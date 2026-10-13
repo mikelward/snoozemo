@@ -190,9 +190,9 @@ set straight away, ahead of the permission it will apply under.
 > **End manually**
 >
 > ```
-> 🌙  Snoozing                          3:40:12
+> 🌙  Snoozing
 >     Ends when you leave
->     [ End now ]   [ +30 min ]   [ Until 17:00 ]
+>     [ End now ]   [ Still here ]   [ Until 17:00 ]
 > ```
 >
 > Tap the notification buttons to extend or end the snooze. Tap the notification
@@ -206,8 +206,10 @@ Illustration: the ongoing notification as §4.3 draws it, in its fullest shape �
 render, not a live card, drawn inert (no ripple, set in slightly like a picture)
 so nobody tries to tap `End now` on a snooze that is not running. It is the
 picture because the notification is where every manual exit lives at once: `End
-now` is the user's guaranteed way back to a ringing phone (§7), `+30 min`
-extends, and the body opens the end-condition chooser with more options.
+now` is the user's guaranteed way back to a ringing phone (§7), `Still here`
+keeps a snooze ending on leaving going from where the phone is now (`+30 min` in
+its place on a timer, §4.3), and the body opens the end-condition chooser with
+more options.
 
 The tile is the other manual exit and is named as a quieter note, since it does
 what the buttons already do — the same tile that armed the snooze turns it off

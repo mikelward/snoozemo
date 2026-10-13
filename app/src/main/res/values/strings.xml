@@ -405,6 +405,11 @@
     <string name="channel_active">Snoozing</string>
     <string name="channel_ended">Snooze ended</string>
     <string name="channel_urgent">Do Not Disturb stuck</string>
+    <!-- The "ending soon" warning's channel (SPEC.md §4.3): the card's own
+         title, so the setting and the card read as one thing, and beside
+         `Snooze ended` in the system list. No description, like the other
+         three (maintainer, 2026-10-13). -->
+    <string name="channel_ending">Snooze ending soon</string>
     <string name="ongoing_title">Snoozing</string>
     <!--
       The headline for a plain timer-only snooze, on the ongoing notification
@@ -478,6 +483,17 @@
          (maintainer, 2026-09-08). -->
     <string name="action_end_now">End now</string>
     <string name="action_extend">+30 min</string>
+    <!-- Keeps a snooze that ends on leaving going from where the phone is now:
+         the `Until I leave` retake, which stretches the place to cover here
+         (SPEC.md §4.3). Approved by the maintainer, 2026-10-13. -->
+    <string name="action_still_here">Still here</string>
+    <!-- The "ending soon" warning (SPEC.md §4.3). The title is shared; the
+         line says which ending is near. The time is the phone's own format.
+         Approved by the maintainer, 2026-10-13. -->
+    <string name="ending_soon_title">Snooze ending soon</string>
+    <string name="ending_soon_time">Ends at %1$s</string>
+    <string name="ending_soon_wifi_lost">Wi-Fi lost</string>
+    <string name="ending_soon_leaving">Looks like you\'re leaving</string>
     <!-- The next meeting's end (SPEC.md §4.3). The placeholder is the time as
          the phone itself writes it — 17:00 or 5:00 PM — so the button reads the
          way the rest of the device does. -->
@@ -508,6 +524,10 @@
          capture coming back with less than the place it already had, which
          is kept. TODO: translate -->
     <string name="failure_could_not_retake_place" tools:ignore="MissingTranslation">Couldn\'t find where you are; still using where you started</string>
+    <!-- A `Still here` tap from the notification that did not take: nothing
+         was captured, so the snooze goes on watching the place it had.
+         Approved by the maintainer, 2026-10-13. -->
+    <string name="failure_could_not_update_place">Couldn\'t update where you are</string>
     <!--
       A chosen time that applied, over an exit that would not come off. The end
       time is set, so "Couldn't set the end time" describes the opposite
