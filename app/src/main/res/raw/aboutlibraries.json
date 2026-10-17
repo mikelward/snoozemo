@@ -2759,7 +2759,7 @@
         },
         {
             "uniqueId": "com.mikelward.androidlog:logging-android",
-            "artifactVersion": "5.0.80",
+            "artifactVersion": "5.1.83",
             "name": "androidlog logging-android",
             "description": "The Android sinks and bug-report transport for androidlog.",
             "website": "https://github.com/mikelward/androidlog",
@@ -2777,7 +2777,7 @@
         },
         {
             "uniqueId": "com.mikelward.androidlog:logging-core",
-            "artifactVersion": "5.0.80",
+            "artifactVersion": "5.1.83",
             "name": "androidlog logging-core",
             "description": "The privacy floor and ring buffer, testable without Android.",
             "website": "https://github.com/mikelward/androidlog",
@@ -3042,7 +3042,7 @@
         },
         {
             "uniqueId": "org.jetbrains.kotlin:kotlin-stdlib",
-            "artifactVersion": "2.4.20",
+            "artifactVersion": "2.4.21",
             "name": "Kotlin Stdlib",
             "description": "Kotlin Standard Library",
             "website": "https://kotlinlang.org/",
