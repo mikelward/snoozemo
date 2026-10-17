@@ -40,6 +40,9 @@ release rather than dropped.
       lands with the first real UI (Phase 2/4) and the `deploy` job with the release
       plumbing (Phase 6) — an empty screenshot allow-list is only a check nobody reads.
       (Built both flavors until `direct` was retired 2026-09-12; `play` only since.)
+- [ ] **Check `AGENTS.md` < 24,000 bytes in CI** (as mikelward/stopdash#932 tracks there): add
+      `test "$(wc -c < AGENTS.md)" -lt 24000` to `.github/workflows/ci.yml` on the docs/classify
+      path, so `AGENTS.md` cannot silently grow past Antigravity's 24,000-byte rule-file cap.
 - [x] Roborazzi screenshot job, now that there is a screen to record (`DebugScreen`, Phase 2).
       Eight snapshots — every state the screen can be in, light and dark, including the two
       *unread* states, since what this screen must never do is answer a question it hasn't
