@@ -11,7 +11,8 @@ now** — one tap on a Quick Settings tile arms it, walking away disarms it (Kot
 Gradle multi-module). Product and architecture decisions live in `SPEC.md`; the phased plan
 lives in `TODO.md`. This repo mirrors the engineering conventions of the sibling Type
 Launcher (`mikelward/typelauncher`) and Simmo (`mikelward/simmo`) repos; when a convention
-is underspecified here, Simmo's `AGENTS.md` is the tiebreaker.
+is underspecified here, Simmo's `AGENTS.md` is the tiebreaker. `CLAUDE.md` and `GEMINI.md`
+are symlinks to this file, so every agent reads the same conventions; edit `AGENTS.md`.
 
 **At the start of every session, print the full absolute path of the `AGENTS.md` you
 loaded and its `last_modified` date** (front matter), so a stale or wrong copy is caught
@@ -150,7 +151,8 @@ it in the same commit.
   work locally, clearly report that it was not pushed and that no PR was opened, and leave
   remote Git operations for a capable environment.
 - **Branch naming.** Feature branches are prefixed with the agent's own short name:
-  `<agent>/<short-topic>` (`claude/...` for Claude Code, `codex/...` for Codex, and so on).
+  `<agent>/<short-topic>` (`claude/...` for Claude Code, `gemini/...` for Gemini /
+  Antigravity, `codex/...` for Codex, and so on).
   One topic per branch; never commit to `main`. The placeholder `<agent>` stands in for
   whichever prefix you use — don't hard-code `claude/` unless you *are* Claude Code.
 - **Merge cue (`merged` / `I merged` / `landed` / merge webhook) runs hygiene *before*
@@ -215,9 +217,10 @@ it in the same commit.
   clones shallow, so `git rev-list --count`, `git log` past the shallow boundary, blame,
   and any "how many commits / what versionCode is this" question return wrong answers
   without warning. The session-start hook runs `scripts/unshallow.sh`, but it is
-  best-effort and Claude-only, so check anyway: if `git rev-parse
-  --is-shallow-repository` says `true`, run `git fetch --unshallow origin
-  +refs/heads/main:refs/remotes/origin/main` first (by refspec, so `origin/main` itself
+  best-effort and auto-invoked only in Claude Code (Gemini / Antigravity and Codex don't
+  run it), so check anyway: if `git rev-parse --is-shallow-repository` says `true`, run
+  `scripts/unshallow.sh` (or `git fetch --unshallow origin
+  +refs/heads/main:refs/remotes/origin/main`) first (by refspec, so `origin/main` itself
   moves in a single-branch clone) — do it once at the start of any session that will
   report a versionCode — then re-check. It exits 0 even when it deepened nothing, so if
   `--is-shallow-repository` is still `true`, say the history is truncated instead of
@@ -265,6 +268,10 @@ it in the same commit.
   If a `main` run goes red before distributing, or skips publishing because its secrets are
   missing, those commits stay queued and ship with the next real release instead of being
   lost. Nothing to do differently — just don't hand-re-push notes after a failed release.
+- **No model identifier** — never name the coding agent's model or version (`Opus 4.8`,
+  `Sonnet`, `Gemini …`, `claude-*`, `gemini-*`) in a commit, PR, comment, or pushed
+  artifact; keep it to chat. Generic attribution (`Co-Authored-By: Claude` / `Gemini`,
+  `Claude-Session:`, "Generated with Claude Code") is fine.
 
 ## Autonomy
 
@@ -276,11 +283,13 @@ it in the same commit.
   satisfied — the ask is here, and it doesn't need repeating per branch.
 - **Watch your own PRs by subscription, plus one scheduled check.** Have a
   subscription — Claude Code makes one when you open a PR; where a client
-  doesn't, call `subscribe_pr_activity`. It delivers reviews, comments and CI
-  failures. It cannot deliver CI *success*, a push, the merge, Codex's clean
-  verdict (a reaction), or Codex never answering at all — so keep exactly one
-  check armed for as long as the PR is open (each event and each check costs
-  a model turn). Under drive, arm auto-merge at PR open too — but only where
+  doesn't, call `subscribe_pr_activity` where exposed (only `claude-code-remote`
+  has it). It delivers reviews, comments and CI failures. It cannot deliver CI
+  *success*, a push, the merge, Codex's clean verdict (a reaction), or Codex
+  never answering at all — so keep exactly one relative-delay check armed for
+  as long as the PR is open (`send_later` in Claude Code; `schedule` with
+  `DurationSeconds` in Antigravity, canceled via `manage_task` `kill`; each
+  event and each check costs a model turn). Under drive, arm auto-merge at PR open too — but only where
   the ruleset makes the Codex verdict a required check AND requires
   conversations resolved: where CI is the only requirement it merges before
   Codex has answered, and an open review comment holds nothing back on its own.
@@ -329,8 +338,8 @@ it in the same commit.
     cleanly with it (`git merge-tree --write-tree`, Git 2.38 or later,
     exits 1). Any exit but 0 or 1 from either is a failure to report, not
     an answer. Your own rules decide the rebase from there. Skip a PR with
-    no session URL, and don't retry a failed send; its own scheduled check
-    is the fallback.
+    no session URL, or when your client only has local subagent messaging,
+    and don't retry a failed send; its own scheduled check is the fallback.
   - Merged or closed, take one last reply-or-resolve pass — a review can
     land after the merge — then cancel it and unsubscribe. `list_triggers`
     spans the account, so match this session and this PR before updating
@@ -377,9 +386,10 @@ it in the same commit.
 
 ## Working with PRs
 
-- Prefer the `mcp__github__*` MCP tools for GitHub operations; the `gh` CLI is not
-  installed in the sandbox. If your client exposes neither, say so rather than guessing at
-  the outcome of an operation you couldn't perform.
+- Prefer the `mcp__github__*` MCP tools for GitHub operations where they're mounted (Claude
+  Code requires them; its sandbox has no `gh`); otherwise fall back to the `gh` CLI. If your
+  client exposes neither, say so rather than guessing at the outcome of an operation you
+  couldn't perform.
 - **"Drive to merge"** is the PR stretch of *drive* (see **Autonomy** above): open the PR,
   wait for the automatic Codex review, address every review comment — fix it if you agree,
   reply on the thread saying why if you don't — and merge once CI is green and Codex's
@@ -410,7 +420,8 @@ it in the same commit.
 - **`resolve_review_thread` works — pass the thread ID, not a comment ID.**
   `mcp__github__pull_request_read` / `get_review_comments` returns each thread's node ID
   (`PRRT_*`) on `review_threads[].id`; pass that straight to
-  `mcp__github__resolve_review_thread` as `threadId`. A comment's node ID (`PRRC_*`) fails
+  `mcp__github__resolve_review_thread` as `threadId` (with `gh`, the same `PRRT_*` ID goes
+  to `gh api graphql`'s `resolveReviewThread`). A comment's node ID (`PRRC_*`) fails
   with `Could not resolve to PullRequestReviewThread node` — they're different objects. So
   reply *then* resolve, with no "replied-but-unresolved" caveat to report.
 - **Report each review in the next message you send, and what it said.** Name the
@@ -713,7 +724,8 @@ takes the `TODO` comment, the only record that its locales are stale. Escape apo
 - **JDK 21** is pre-installed. **Android SDK** lives at `/opt/android-sdk` (`ANDROID_HOME`).
   On Claude Code on the web the SDK is *not* pre-installed; the `SessionStart` hook at
   `.claude/hooks/session-start.sh` provisions it (cmdline-tools, `platforms;android-37.0`,
-  platform-tools, licenses) at session start. If `/opt/android-sdk` is empty mid-session,
+  platform-tools, licenses) at session start — auto-invoked only in Claude Code. If
+  `/opt/android-sdk` is empty in a remote container (mid-session, or under another agent),
   run `CLAUDE_CODE_REMOTE=true .claude/hooks/session-start.sh` rather than hand-installing.
 - The Gradle wrapper auto-downloads Gradle on first run; AGP auto-installs the compileSdk
   minor platform on the first build.
