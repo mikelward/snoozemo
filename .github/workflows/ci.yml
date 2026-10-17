@@ -196,6 +196,31 @@ jobs:
           # the shared cache.
           cache-read-only: ${{ github.event_name != 'push' }}
 
+      # Robolectric's Android runtime (android-all-instrumented, ~200 MB) is
+      # fetched from Maven Central into ~/.m2 on first use, which
+      # setup-gradle's cache doesn't cover: every job downloaded it again, and
+      # a failed fetch failed the build before any test ran. Kept here by
+      # Robolectric's version, saved only from main pushes (PR-controlled code
+      # must not write the shared cache, as for Gradle's), restored
+      # everywhere. A miss just downloads it, as before. A new SDK level under
+      # the same version is fetched each run until the next bump.
+      - name: Robolectric version
+        id: robolectric
+        run: |
+          version=$(sed -n 's/^robolectric = "\(.*\)"$/\1/p' gradle/libs.versions.toml)
+          if [ -z "$version" ]; then
+            echo "::error::No robolectric version in gradle/libs.versions.toml; the runtime cache has no key."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Robolectric's Android runtime
+        id: robolectric-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ runner.os }}-${{ steps.robolectric.outputs.version }}
+
       - name: Test the release-publishing script
         # The only coverage `scripts/publish-github-release.sh` can get:
         # `deploy` is main-only, so the step that calls it never runs on a
@@ -326,6 +351,19 @@ jobs:
 
       - name: Run unit tests
         run: ./gradlew test
+
+      - name: Save Robolectric's Android runtime
+        # Only after the step using it passed, so the runtime is whole: an
+        # entry can't be replaced, and one saved from a failed download would
+        # be restored, incomplete, until the next version bump. Only from
+        # pushes, as setup-gradle's cache-read-only is, so code from a pull
+        # request (or a dispatched run of one) can't write a cache that main
+        # restores.
+        if: success() && github.event_name == 'push' && steps.robolectric-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ runner.os }}-${{ steps.robolectric.outputs.version }}
 
       - name: Print failing test details
         # When `gradlew test` fails the JUnit XML still contains the failure
@@ -556,6 +594,25 @@ jobs:
           # Same allowlist as the build job: only pushes to main write.
           cache-read-only: ${{ github.event_name != 'push' }}
 
+      # Robolectric's Android runtime, as in `build`. Both jobs run SDK 36
+      # only, so they share one entry.
+      - name: Robolectric version
+        id: robolectric
+        run: |
+          version=$(sed -n 's/^robolectric = "\(.*\)"$/\1/p' gradle/libs.versions.toml)
+          if [ -z "$version" ]; then
+            echo "::error::No robolectric version in gradle/libs.versions.toml; the runtime cache has no key."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Robolectric's Android runtime
+        id: robolectric-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ runner.os }}-${{ steps.robolectric.outputs.version }}
+
       - name: Clear committed snapshots before recording
         # Recording only overwrites files the suites still produce, so starting
         # from empty is what makes a deleted test show up as a deletion in the
@@ -609,6 +666,16 @@ jobs:
       # keeps them from going stale after a launcher-drawable edit.
       - name: Run Play Store graphics tests
         run: ./gradlew :app:testDebugUnitTest --tests "app.snoozemo.ui.PlayStoreGraphicsScreenshotTest" -Proborazzi.test.record=true
+
+      - name: Save Robolectric's Android runtime
+        # As in `build`: only once every step using it has passed, and only
+        # from pushes. Whichever job saves first writes the shared entry; the
+        # other's save finds the key taken, warns, and leaves it.
+        if: success() && github.event_name == 'push' && steps.robolectric-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ runner.os }}-${{ steps.robolectric.outputs.version }}
 
       - name: Print failing test details
         if: failure()
