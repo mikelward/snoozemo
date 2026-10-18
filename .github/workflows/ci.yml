@@ -274,9 +274,14 @@ jobs:
         # This runs the same task against the same module with a real Android
         # dependency injected, and requires it to fail *and* to name what it
         # found -- a failure for any other reason would be its own false pass.
+        #
+        # Every build CI runs to fail on purpose (here and in the release
+        # guards' proofs) sets GRADLE_ACTIONS_SKIP_BUILD_RESULT_CAPTURE:
+        # setup-gradle skips its cache cleanup after any failed build in the
+        # job, so a counted one leaves main saving the Gradle cache unpruned.
         run: |
           set +e
-          output=$(./gradlew :core:verifyNoAndroid -PverifyNoAndroidSelfTest 2>&1)
+          output=$(GRADLE_ACTIONS_SKIP_BUILD_RESULT_CAPTURE=true ./gradlew :core:verifyNoAndroid -PverifyNoAndroidSelfTest 2>&1)
           status=$?
           set -e
           echo "$output"
@@ -448,7 +453,7 @@ jobs:
           ./gradlew :app:checkReleaseVersionDerivation
           trap 'rm -f .git/shallow' EXIT
           git rev-parse HEAD > .git/shallow
-          if out=$(./gradlew :app:checkReleaseVersionDerivation 2>&1); then
+          if out=$(GRADLE_ACTIONS_SKIP_BUILD_RESULT_CAPTURE=true ./gradlew :app:checkReleaseVersionDerivation 2>&1); then
             echo "$out"
             echo "::error::The release guard passed on a shallow clone."
             exit 1
@@ -482,7 +487,7 @@ jobs:
           done
           ./gradlew :app:verifyReleaseManifest
           prove() {
-            if out=$(./gradlew ":app:verifyReleaseManifestProof" 2>&1); then
+            if out=$(GRADLE_ACTIONS_SKIP_BUILD_RESULT_CAPTURE=true ./gradlew ":app:verifyReleaseManifestProof" 2>&1); then
               echo "$out"
               echo "::error::The release manifest guard passed on a manifest it must refuse."
               exit 1
