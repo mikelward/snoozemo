@@ -462,6 +462,16 @@ against an unminified build — but nearly all of that is the shrinker, and agai
 run the **AABs barely move at all**, within about 2% and marginally larger. Optimization and
 obfuscation are here because the threshold requires them, not because they save space.
 
+**A build's version name says which build it is; only CI's test runs use a fixed one**
+(maintainer, 2026-10-18). The `versionCode` is the commit count, which is what keeps Play
+uploads monotonic. A release is named `0.1.<count>+<sha>`. A debug build is
+`0.1.<count>-debug+<branch>@<sha>`, so a sideloaded APK or a shared debug log (§4.6) names the
+branch and commit it came from rather than only a count that branches share. CI's unit test, lint
+and screenshot runs build with a fixed version (`versionCode` 1, `0.1.0-test`) instead: those
+tasks read the merged manifest, so a version that changes on every commit made every commit
+rebuild and retest the whole app from scratch. A fixed version is a placeholder, never a release,
+so packaging a release with it is refused.
+
 ---
 
 ## 4. User-visible behavior

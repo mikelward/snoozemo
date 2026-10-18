@@ -354,7 +354,16 @@ jobs:
           ./gradlew :app:exportBundledLicenses --rerun
           git diff --exit-code app/src/main/res/raw/aboutlibraries.json
 
+      - name: Test the version selection
+        # Runs the real manifest tasks: which version each build gets, the debug name's branch,
+        # and the guard that refuses a release packaged with the fixed test version.
+        run: python3 scripts/version_selection_test.py
+
       - name: Run unit tests
+        env:
+          # A fixed version keeps the merged manifest, and so the build cache, stable across
+          # commits (app/build.gradle.kts).
+          ORG_GRADLE_PROJECT_snoozemoFixedVersion: "true"
         run: ./gradlew test
 
       - name: Save Robolectric's Android runtime
@@ -432,6 +441,10 @@ jobs:
           retention-days: 1
 
       - name: Run lint
+        env:
+          # A fixed version keeps the merged manifest, and so the build cache, stable across
+          # commits (app/build.gradle.kts).
+          ORG_GRADLE_PROJECT_snoozemoFixedVersion: "true"
         run: ./gradlew lint
 
       - name: Verify the release version guard
@@ -536,6 +549,10 @@ jobs:
     needs: classify
     if: needs.classify.outputs.docs_only != 'true'
     timeout-minutes: 30
+    env:
+      # A fixed version keeps the merged manifest, and so the build cache, stable across
+      # commits (app/build.gradle.kts).
+      ORG_GRADLE_PROJECT_snoozemoFixedVersion: "true"
     permissions:
       # Read-only: this job now only renders and uploads an artifact. The
       # commit-back and dispatch this job used to do (and the write/actions

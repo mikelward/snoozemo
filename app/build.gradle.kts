@@ -111,6 +111,20 @@ val gitShortSha: String = gitOutput("rev-parse", "--short", "HEAD", fallback = "
 }
 val baseVersionName = "0.1"
 
+// CI's unit test, lint and screenshot runs set -PsnoozemoFixedVersion (as
+// ORG_GRADLE_PROJECT_snoozemoFixedVersion): a per-commit versionCode or versionName lands in
+// the merged manifest those tasks read, so without it every commit misses the build cache
+// for all of :app. Anything installed or shipped is built without it.
+val fixedTestVersion: Boolean = providers.gradleProperty("snoozemoFixedVersion").isPresent
+
+// The branch a debug build names: a pull request's head branch (its checkout is a detached
+// merge commit), then the pushed ref, then git's own answer; kept short and filename-safe.
+val buildBranch: String = (
+    providers.environmentVariable("GITHUB_HEAD_REF").orNull?.ifEmpty { null }
+        ?: providers.environmentVariable("GITHUB_REF_NAME").orNull?.ifEmpty { null }
+        ?: gitOutput("rev-parse", "--abbrev-ref", "HEAD", fallback = "unknown")
+    ).replace(Regex("[^A-Za-z0-9._/-]"), "-").take(30)
+
 // The four release-keystore variables, normalized once: blank is absent. A
 // secret that resolves to whitespace is a misconfigured secret, not a value,
 // and every reader has to agree about that. Reading the raw string in one place
@@ -156,6 +170,21 @@ tasks.configureEach {
     if (name.startsWith("pre") && name.endsWith("ReleaseBuild")) {
         dependsOn(checkReleaseVersionDerivation)
     }
+}
+
+// The fixed test version is a placeholder, never a release: refuse to package one with it.
+// Hooked on packaging rather than preReleaseBuild, which release unit tests also depend on.
+val checkReleaseNotFixedVersion = tasks.register("checkReleaseNotFixedVersion") {
+    description = "Fails a release package built with -PsnoozemoFixedVersion."
+    val fixed = fixedTestVersion
+    doLast {
+        check(!fixed) { "A release build can't be packaged with -PsnoozemoFixedVersion: its versionCode is a placeholder." }
+    }
+}
+tasks.matching {
+    it.name == "packageRelease" || it.name == "packageReleaseBundle" || it.name == "bundleRelease"
+}.configureEach {
+    dependsOn(checkReleaseNotFixedVersion)
 }
 
 // The other Phase 6 guard: a release build refuses on a merged manifest the
@@ -367,6 +396,17 @@ fun CheckReleaseManifest.applyRules(rules: ReleaseManifestRules) {
     requiredForegroundServiceTypes.set(rules.requiredForegroundServiceTypes)
 }
 
+// A debug build names its commit and branch, so a sideloaded APK or a debug log from one says
+// which build it is; the shipped release keeps its plain "<base>.<count>+<sha>".
+androidComponents {
+    onVariants(selector().withBuildType("debug")) { variant ->
+        if (!fixedTestVersion) {
+            val name = "$baseVersionName.$gitCommitCount-debug+$buildBranch@$gitShortSha"
+            variant.outputs.forEach { it.versionName.set(name) }
+        }
+    }
+}
+
 androidComponents {
     onVariants(selector().withBuildType("release")) { variant ->
         val variantName = variant.name.replaceFirstChar { it.uppercase() }
@@ -413,8 +453,8 @@ android {
         // Filters row (SPEC.md §11).
         minSdk = 35
         targetSdk = 36
-        versionCode = gitCommitCount
-        versionName = "$baseVersionName.$gitCommitCount+$gitShortSha"
+        versionCode = if (fixedTestVersion) 1 else gitCommitCount
+        versionName = if (fixedTestVersion) "$baseVersionName.0-test" else "$baseVersionName.$gitCommitCount+$gitShortSha"
     }
 
     signingConfigs {
