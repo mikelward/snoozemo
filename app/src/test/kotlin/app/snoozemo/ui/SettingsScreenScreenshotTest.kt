@@ -32,11 +32,11 @@ import com.mikelward.androidzoom.compose.FontSizeState
 
 /**
  * A representative `BuildConfig.VERSION_NAME`, same shape as the real
- * `$baseVersionName.$gitCommitCount+$gitShortSha` (`app/build.gradle.kts`) —
+ * `$gitCommitCount+$gitShortSha` (`app/build.gradle.kts`) —
  * every recorded baseline passes this rather than the default empty string,
  * so the footer's real text is what actually gets covered (Codex, PR #100).
  */
-private const val SAMPLE_VERSION_NAME = "0.1.2107+a1b2c3d"
+private const val SAMPLE_VERSION_NAME = "2107+a1b2c3d"
 
 /**
  * Everything touched rarely — usually never — that moved off `MainScreen`

@@ -63,12 +63,12 @@ failure is pre-existing on the base commit before debugging.
 
 ## Version names and the fixed test version
 
-The versionCode is the commit count. A release is named `0.1.<count>+<sha>`, a debug build
-`0.1.<count>-debug+<branch>@<sha>`, with the branch from `GITHUB_HEAD_REF` on a pull request,
+The versionCode is the commit count. A release is named `<count>+<sha>`, a debug build
+`<count>-debug+<branch>@<sha>`, with the branch from `GITHUB_HEAD_REF` on a pull request,
 `GITHUB_REF_NAME` on `main` and git locally (sanitized, cut to 30 characters).
 
 CI's unit test, lint and screenshot runs set `-PsnoozemoFixedVersion` (as
-`ORG_GRADLE_PROJECT_snoozemoFixedVersion`): versionCode `1`, versionName `0.1.0-test`. The
+`ORG_GRADLE_PROJECT_snoozemoFixedVersion`): versionCode `1`, versionName `test`. The
 version lands in the merged manifest those tasks read, so a per-commit one made every commit
 miss the Gradle build cache for all of `:app`. The release APKs and AAB use the real version,
 and `checkReleaseNotFixedVersion` refuses `packageRelease`, `packageReleaseBundle` and `bundleRelease` with the flag set.
