@@ -37,7 +37,7 @@ import app.snoozemo.R
 import app.snoozemo.core.SnoozeDebugLog
 import com.mikepenz.aboutlibraries.Libs
 import com.mikepenz.aboutlibraries.entity.Library
-import com.mikepenz.aboutlibraries.ui.compose.android.rememberLibraries
+import com.mikepenz.aboutlibraries.ui.compose.android.produceLibraries
 import com.mikelward.androidzoom.compose.FontSizeWindow
 import com.mikelward.androidzoom.compose.pinchFontSizeHost
 
@@ -57,10 +57,10 @@ internal fun LicensesScreen(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    // rememberLibraries parses the bundled JSON off the composition thread and
+    // produceLibraries parses the bundled JSON off the composition thread and
     // swaps it in when ready, so the screen appears at once with its title and
     // fills in — principle 5, rather than holding the frame on the parse.
-    val libraries by rememberLibraries(R.raw.aboutlibraries)
+    val libraries by produceLibraries(R.raw.aboutlibraries)
     LicensesContent(
         libraries = libraries,
         onBack = onBack,

@@ -29,7 +29,7 @@ import org.robolectric.annotation.GraphicsMode
  *
  * The library list is built synchronously from the committed
  * `res/raw/aboutlibraries.json` so the snapshot is deterministic — production
- * loads the same JSON asynchronously through `rememberLibraries`. CI records
+ * loads the same JSON asynchronously through `produceLibraries`. CI records
  * under `testDebugUnitTest`, so the recorded baseline is the release
  * build's library list, and the assertions below name the components it
  * bundles.

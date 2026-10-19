@@ -637,12 +637,12 @@ aboutLibraries {
 }
 
 // The plugin walks the dependency *graph*, so the scratch export lists nodes
-// that resolve to no bundled artifact: KMP metadata coordinates (e.g.
-// androidx.compose.ui:ui, which selects ...:ui-android) and the
-// org.jetbrains.compose redirect modules that alias to the androidx artifacts on
-// Android. Both would render as duplicate rows. Intersecting against the
-// release runtime classpath drops them -- what's left is exactly what the APK
-// bundles.
+// that resolve to no bundled artifact, and the org.jetbrains.compose redirect
+// modules that alias to the androidx artifacts on Android, which would render
+// as duplicate rows. A Kotlin-Multiplatform library is listed once, by its root
+// coordinate (androidx.compose.ui:ui for the bundled ui-android). Intersecting
+// against the release runtime classpath drops the rest -- what's left is
+// exactly what the APK bundles.
 @Suppress("UNCHECKED_CAST")
 tasks.register("exportBundledLicenses") {
     description = "Exports open-source attributions filtered to the release APK's bundled artifacts."
@@ -657,10 +657,21 @@ tasks.register("exportBundledLicenses") {
                 .artifactView { lenient(true) }.artifacts.artifacts
                 .mapNotNull { it.id.componentIdentifier as? org.gradle.api.artifacts.component.ModuleComponentIdentifier }
                 .map { "${it.moduleIdentifier.group}:${it.moduleIdentifier.name}" }
+                // The plugin lists a Kotlin-Multiplatform library once, by its root
+                // coordinate (androidx.compose.ui:ui), where the APK bundles its
+                // platform artifact (ui-android).
+                .flatMap { listOf(it, it.removeSuffix("-android"), it.removeSuffix("-jvm")) }
                 .toSet()
             val root = groovy.json.JsonSlurper().parse(scratchFile.get().asFile) as MutableMap<String, Any?>
             val libraries = root["libraries"] as List<Map<String, Any?>>
-            val kept = libraries.filter { (it["uniqueId"] as String) in bundled }
+            val ids = libraries.map { it["uniqueId"] as String }.filter { it in bundled }.toSet()
+            // An org.jetbrains.compose module that redirects to its androidx namesake
+            // on Android is that library under a second name, so it's left to the
+            // androidx row.
+            val kept = libraries.filter {
+                val id = it["uniqueId"] as String
+                id in bundled && !(id.startsWith("org.jetbrains.compose.") && id.replaceFirst("org.jetbrains.compose.", "androidx.compose.") in ids)
+            }
             root["libraries"] = kept
             // Prune any license no longer referenced by a kept library.
             val used = kept.flatMap { (it["licenses"] as? List<String>).orEmpty() }.toSet()
@@ -719,7 +730,7 @@ dependencies {
     implementation(libs.firebase.analytics)
     implementation(libs.firebase.crashlytics)
     // Reads the committed res/raw/aboutlibraries.json for the Licenses page.
-    // Only `rememberLibraries` and the `Libs`/`Library` model are used -- the
+    // Only `produceLibraries` and the `Libs`/`Library` model are used -- the
     // artifact's own list UI is not.
     implementation(libs.aboutlibraries.compose.m3)
     debugImplementation(libs.androidx.compose.ui.tooling)

@@ -22,7 +22,7 @@ roborazzi = "1.76.0"
 # `-compose-m3` artifact is only the runtime JSON reader (`rememberLibraries`),
 # not its stock list UI, which we don't use. See app/build.gradle.kts for why
 # the export is committed to res/raw, and why there is one per flavor.
-aboutlibraries = "12.2.4"
+aboutlibraries = "15.3.0"
 androidxTestCore = "1.7.0"
 androidxWork = "2.12.0"
 
