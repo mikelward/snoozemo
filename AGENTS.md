@@ -1,7 +1,7 @@
 ---
 trigger: always_on
 alwaysApply: true
-last_modified: 2026-10-17
+last_modified: 2026-10-22
 ---
 
 # Snoozemo
@@ -254,8 +254,8 @@ hardware list tracks what's owed.
 - **A comment citing a rule is a *reading* of it** — check what this file says. Over-strict
   privacy readings quietly cost diagnostics (a snooze that misfired in a pocket, an alarm late
   outside a Doze window). Right → fix. Stricter than written → quote the rule, decline, then
-  `@codex review` once; escalate if it re-raises or stays silent. Genuine conflict → flag it in
-  chat and `TODO.md` with each choice's cost; never resolve it yourself, autopilot included.
+  `@codex review`; escalate if it re-raises. Genuine conflict → flag it in chat and `TODO.md`
+  with each choice's cost; never resolve it yourself, autopilot included.
 - **A second verified finding in the same mechanism is a design question**: ask whether another
   design deletes the class, say what you chose on the thread; a design change is the
   maintainer's call, autopilot included.
@@ -263,7 +263,10 @@ hardware list tracks what's owed.
   `+1` + green CI = merge; leave body reactions to Codex). Read reactions, `get_reviews`,
   `get_review_comments` and `get_comments` to the last page, and the `codex` status (`updated_at`
   moving with no reaction usually means unread findings); findings block the merge until fixed,
-  rebutted or deferred, and an acknowledgment isn't an answer. Nothing five minutes after a push: `@codex review` once.
+  rebutted or deferred, and an acknowledgment isn't an answer. A hung review — nothing back five
+  minutes after a push or poke, or stuck at running (👀) ten minutes on — gets `@codex review`; a
+  poke that hangs the same way gets a second an hour later, and only a second that hangs too is
+  escalated, never the first (maintainer, 2026-10-22).
 - **Merge when green and Codex passed the current head**, every suggestion thread fixed or
   answered (rebase-merge, no further go-ahead), then take the next `TODO.md` item; that's
   "drive to merge".
