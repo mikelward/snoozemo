@@ -1,7 +1,7 @@
 ---
 trigger: always_on
 alwaysApply: true
-last_modified: 2026-10-22
+last_modified: 2026-10-23
 ---
 
 # Snoozemo
@@ -178,15 +178,16 @@ hardware list tracks what's owed.
 
 ## Commit messages
 
-- Sentence case, plain English, no internal symbol names, ≤ ~70 chars; detail in the body.
-  Every subject lands on `main` and ships in the GitHub prerelease and, with
-  `PLAY_SERVICE_ACCOUNT_JSON`, Play "What's new" (`docs/play-store-internal-track.md`) —
-  title **every** commit for users.
+- **Title like a changelog line** (maintainer, 2026-10-23): an imperative verb, then the
+  feature in the user's words, sentence case, ≤ ~70 chars, e.g. `Fix …`, `Improve …`,
+  `Add …`, an optional parenthetical for how (scenario, mechanism, symbols: the body). Each
+  subject ships in the GitHub prerelease and Play "What's new"
+  (`docs/play-store-internal-track.md`): title **every** commit and PR for users.
 - **Prefix a subject with no user-visible effect**: `ci:`, `docs:` (incl. `docs/PRIVACY.md`),
   `internal:`, `refactor:`, `test:`/`tests:`. A shipped dependency is bare (a test/build-only
   bump you write keeps its prefix).
 - Commits touching only `.md` or root dot-paths never ship a bullet; prefix them anyway.
-  Subjects ship oldest-first as `• ` bullets (repeats once); bodies never. **Play caps "What's
+  Subjects ship oldest-first as `• ` bullets (repeats once). **Play caps "What's
   new" at 500 characters** (plus a 50-distinct-subject cap), so squash supporting commits. The
   range base is the last run that published — don't hand-re-push notes.
 - **No model identifier** — never name the coding agent's model or version (`Opus 4.8`,
@@ -281,12 +282,13 @@ hardware list tracks what's owed.
   anthropics/claude-code#46625).
 - **After every merge to `main`, report versionCode** (`git rev-list --count origin/main`
   after a refspec fetch): `Need versionCode 72 (b81c23d) or higher to test PR #52's fix`.
-- **"Release notes since N"**: up to five `• ` end-user bullets in one code block for commits
-  N+1..`origin/main` (fetched and unshallowed; offline only from a complete local `main`, saying
-  it may be behind; else say they can't be derived) ranked by impact —
-  one feature per bullet (read bodies where a subject is unclear; a reworked feature by its
-  final state); skip prefixed/docs/CI commits, dependency bumps unless nothing else changed
-  (then one bullet says libraries were updated), and anything the range undid; range above, omissions below.
+- **"Release notes since N"**: up to five `• ` bullets worded as titles in one code block,
+  for commits N+1..`origin/main` (fetched and unshallowed; offline, only from a complete
+  local `main`, saying it may be behind). One per feature (a reworked one by its final
+  state; read bodies where unclear), ranked by what the user risks without it: broken or
+  wrong first, polish last. Skip prefixed/docs/CI commits, dependency bumps unless nothing
+  else changed (then one bullet: libraries were updated) and anything the range undid;
+  range above, omissions below.
 - **On CI failure**, follow `dev-docs/agent-notes.md` (failing-tests comment first; CI builds
   the PR merged with `main`).
 
