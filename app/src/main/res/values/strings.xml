@@ -621,6 +621,11 @@
     <string name="setup_font_size_description">Size of Snoozemo\'s text, relative to your system font size</string>
     <!-- A percentage of the system font size; %% is a literal percent sign. -->
     <string name="setup_font_size_value">%1$d%%</string>
+    <!-- The buttons either side of the text size slider, each one percent. -->
+    <!-- TODO: translate -->
+    <string name="setup_font_size_smaller" tools:ignore="MissingTranslation">Smaller text</string>
+    <!-- TODO: translate -->
+    <string name="setup_font_size_larger" tools:ignore="MissingTranslation">Larger text</string>
     <!--
       The switch that turns the gesture off. On by default, because the pinch is
       how most people will find the setting above at all.

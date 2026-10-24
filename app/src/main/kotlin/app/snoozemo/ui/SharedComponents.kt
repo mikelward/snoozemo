@@ -38,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -868,7 +869,8 @@ internal fun AskWhenToUnsnoozeRow(
  *
  * The page resizes as the slider moves and only the release is persisted, so
  * this screen is its own preview: the value shown beside the title is the size
- * the page is currently drawn at.
+ * the page is currently drawn at. The `−` / `+` either side step one percent
+ * per tap, each persisted at once, and turn off at the ends of the range.
  */
 @Composable
 internal fun FontSizeRow(
@@ -951,26 +953,74 @@ internal fun FontSizeRow(
             // setting whose users are most likely to be listening rather than
             // looking.
             val spoken = stringResource(R.string.setup_font_size_value, fontScalePercent(scale))
-            StableInputDensity {
-                Slider(
-                    modifier = Modifier.semantics { stateDescription = spoken },
-                    value = scale,
-                    onValueChange = {
-                        dragging = true
-                        dragged = it
-                        onPreview(it)
-                    },
-                    onValueChangeFinished = {
-                        dragging = false
-                        onSettled(dragged)
-                    },
-                    // No steps: the pinch is continuous, and a stepped slider
-                    // would round a size the user set with their fingers away
-                    // the next time they touched this (maintainer, 2026-09-06).
-                    valueRange = MIN_FONT_SCALE..MAX_FONT_SCALE,
-                )
+            // One percent per tap either side of the slider, for landing on an
+            // exact size a finger can only get near. A tap is a whole gesture:
+            // shown and persisted at once, through the same two calls a drag's
+            // last step and release make.
+            val smaller = stepFontScale(scale, -1)
+            val larger = stepFontScale(scale, 1)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                FontSizeStepButton(
+                    icon = R.drawable.ic_remove,
+                    description = stringResource(R.string.setup_font_size_smaller),
+                    enabled = smaller != scale,
+                    modifier = Modifier.testTag(FONT_SIZE_SMALLER_TAG),
+                ) {
+                    onPreview(smaller)
+                    onSettled(smaller)
+                }
+                Box(modifier = Modifier.weight(1f)) {
+                    StableInputDensity {
+                        Slider(
+                            modifier = Modifier.semantics { stateDescription = spoken },
+                            value = scale,
+                            onValueChange = {
+                                dragging = true
+                                dragged = it
+                                onPreview(it)
+                            },
+                            onValueChangeFinished = {
+                                dragging = false
+                                onSettled(dragged)
+                            },
+                            // No steps: the pinch is continuous, and a stepped slider
+                            // would round a size the user set with their fingers away
+                            // the next time they touched this (maintainer, 2026-09-06).
+                            valueRange = MIN_FONT_SCALE..MAX_FONT_SCALE,
+                        )
+                    }
+                }
+                FontSizeStepButton(
+                    icon = R.drawable.ic_add,
+                    description = stringResource(R.string.setup_font_size_larger),
+                    enabled = larger != scale,
+                    modifier = Modifier.testTag(FONT_SIZE_LARGER_TAG),
+                ) {
+                    onPreview(larger)
+                    onSettled(larger)
+                }
             }
         }
+    }
+}
+
+internal const val FONT_SIZE_SMALLER_TAG = "font-size-smaller"
+internal const val FONT_SIZE_LARGER_TAG = "font-size-larger"
+
+/**
+ * One of [FontSizeRow]'s `−` / `+` buttons: a standard 48dp icon button, so the
+ * target is the platform's and the glyph sits 12dp from the slider either side.
+ */
+@Composable
+private fun FontSizeStepButton(
+    @DrawableRes icon: Int,
+    description: String,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    IconButton(onClick = onClick, enabled = enabled, modifier = modifier) {
+        Icon(painter = painterResource(icon), contentDescription = description)
     }
 }
 
