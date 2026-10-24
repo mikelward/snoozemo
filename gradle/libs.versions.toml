@@ -1,6 +1,6 @@
 [versions]
-androidlog = "5.1.83"
-androidzoom = "1.0.3"
+androidlog = "5.1.92"
+androidzoom = "1.0.4"
 agp = "9.4.1"
 activity = "1.13.0"
 composeBom = "2026.09.00"
