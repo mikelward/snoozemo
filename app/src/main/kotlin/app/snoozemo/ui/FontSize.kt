@@ -3,8 +3,10 @@ package app.snoozemo.ui
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 import com.mikelward.androidzoom.DEFAULT_FONT_SCALE
+import com.mikelward.androidzoom.clampFontScale
 import com.mikelward.androidzoom.compose.FontSizeState
 import com.mikelward.androidzoom.compose.rememberFontSizeState
+import kotlin.math.roundToInt
 
 /**
  * The text size for this composition, wired to the stored settings (`SPEC.md`
@@ -28,4 +30,20 @@ internal fun rememberAppFontSizeState(): FontSizeState {
         onPinchEnabledChange = { FontSizeSetting.setPinchEnabled(context, it) },
         defaultScale = DEFAULT_FONT_SCALE,
     )
+}
+
+/**
+ * [scale] moved by [deltaPercent] whole points of the percentage the Settings
+ * row shows, for its `−` / `+` buttons.
+ *
+ * Rounded to the shown percent first, so a size the slider or a pinch left
+ * between two percents (115.3%) steps to the next whole one (116%) rather than
+ * to another fraction the row would show as the same number. Clamped to the
+ * offered range like everything else that writes a size, a non-finite one
+ * included. App-side because the range and the percent are androidzoom's, and
+ * the buttons are only this app's.
+ */
+internal fun stepFontScale(scale: Float, deltaPercent: Int): Float {
+    val percent = (clampFontScale(scale) * 100).roundToInt()
+    return clampFontScale((percent + deltaPercent) / 100f)
 }

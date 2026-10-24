@@ -9,10 +9,17 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import com.mikelward.androidzoom.FontSizeSettings
+import com.mikelward.androidzoom.MAX_FONT_SCALE
+import com.mikelward.androidzoom.MIN_FONT_SCALE
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -248,6 +255,70 @@ class FontSizeSliderDragTest {
             assertEquals(1.4f, fontSize.scale, 0.05f)
             assertTrue(settled.toString(), settled.all { it > 1.3f })
         }
+    }
+
+    @Test
+    fun `the plus and minus buttons move one percent and persist each tap`() {
+        // Starts between two percents (115.3%, shown as 115%): a tap lands on a
+        // whole percent the row can show, not on 116.3%.
+        showRow(1.153f)
+
+        composeRule.onNodeWithTag(FONT_SIZE_LARGER_TAG).performClick()
+        composeRule.waitForIdle()
+        composeRule.runOnIdle {
+            assertEquals(1.16f, fontSize.scale, 0.00001f)
+            assertEquals(listOf(fontSize.scale), settled)
+        }
+
+        composeRule.onNodeWithContentDescription("Smaller text").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithContentDescription("Smaller text").performClick()
+        composeRule.waitForIdle()
+        composeRule.runOnIdle {
+            assertEquals(1.14f, fontSize.scale, 0.00001f)
+            // One write per tap, each where that tap left the size.
+            assertEquals(3, settled.size)
+            assertEquals(1.15f, settled[1], 0.00001f)
+            assertEquals(1.14f, settled[2], 0.00001f)
+        }
+        // The row says the new size too, not only the store.
+        composeRule.onNodeWithText("114%").assertExists()
+    }
+
+    @Test
+    fun `each button turns off at its end of the range`() {
+        showRow(MAX_FONT_SCALE)
+        composeRule.onNodeWithTag(FONT_SIZE_LARGER_TAG).assertIsNotEnabled()
+        composeRule.onNodeWithTag(FONT_SIZE_SMALLER_TAG).assertIsEnabled()
+
+        composeRule.runOnIdle {
+            fontSize.preview(MIN_FONT_SCALE)
+            fontSize.commit(MIN_FONT_SCALE)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag(FONT_SIZE_SMALLER_TAG).assertIsNotEnabled()
+        composeRule.onNodeWithTag(FONT_SIZE_LARGER_TAG).assertIsEnabled()
+    }
+
+    private fun showRow(scale: Float) {
+        fontSize = FontSizeState(
+            initial = FontSizeSettings(scale = scale),
+            onScaleSettled = { settled += it },
+            onPinchEnabledChange = {},
+        )
+        composeRule.setContent {
+            SnoozemoTheme(fontSize) {
+                Box(Modifier.fillMaxSize().testTag(HOST)) {
+                    FontSizeRow(
+                        scale = fontSize.scale,
+                        saveFailed = false,
+                        onPreview = fontSize::preview,
+                        onSettled = fontSize::commit,
+                    )
+                }
+            }
+        }
+        composeRule.waitForIdle()
     }
 
     private companion object {

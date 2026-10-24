@@ -10,9 +10,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import app.snoozemo.PlayUpdateState
@@ -297,6 +299,33 @@ class SettingsScreenScreenshotTest {
         composeRule.onNodeWithText("Pinch to resize text").assertExists()
         assertEquals(null, previewed)
         assertEquals(null, settledAt)
+    }
+
+    @Test
+    fun `at the largest size the plus button is off and minus is not`() {
+        capture("settings-screen-text-size-max.png", fontScale = 1.6f) {
+            SettingsScreen(
+                tileAdded = true,
+                filtersRuleId = null,
+                settingsFailure = null,
+                debugLogEnabled = true,
+                debugLogSaveFailed = false,
+                fontScale = 1.6f,
+                pinchFontSize = true,
+                debugLogCleanupFailed = false,
+                shareFailed = false,
+                versionName = SAMPLE_VERSION_NAME,
+                onOpenPermissions = {},
+                onTileRow = {},
+                onFiltersRow = {},
+                onDebugLog = {},
+                onShareDebugLog = {},
+            )
+        }
+
+        composeRule.onNodeWithText("160%").assertExists()
+        composeRule.onNodeWithTag(FONT_SIZE_LARGER_TAG).assertIsNotEnabled()
+        composeRule.onNodeWithTag(FONT_SIZE_SMALLER_TAG).assertIsEnabled()
     }
 
     @Test
