@@ -131,11 +131,15 @@ internal fun SettingsScreen(
     onOpenLicenses: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    val scrollState = rememberScrollState()
+    // Keeps the font-size minus, plus and slider under the finger as each change resizes the rows.
+    val fontSizeHold = rememberScrollHold(scrollState)
     Column(
         modifier = modifier
             .fillMaxSize()
             .safeDrawingPadding()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scrollState)
+            .holdSlack(fontSizeHold)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -240,6 +244,7 @@ internal fun SettingsScreen(
             saveFailed = fontScaleSaveFailed,
             onPreview = onFontScalePreview,
             onSettled = onFontScaleSettled,
+            hold = fontSizeHold,
         )
         // Directly under the slider it governs: the switch is only meaningful
         // beside the setting the gesture changes, and reading the two together

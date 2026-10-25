@@ -2,6 +2,10 @@ package app.snoozemo.ui
 
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -298,6 +302,61 @@ class FontSizeSliderDragTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithTag(FONT_SIZE_SMALLER_TAG).assertIsNotEnabled()
         composeRule.onNodeWithTag(FONT_SIZE_LARGER_TAG).assertIsEnabled()
+    }
+
+    @Test
+    fun `tapping plus again and again leaves the buttons where they were`() {
+        showScrolledRow(1f)
+        tapHoldsStill(FONT_SIZE_LARGER_TAG, 30)
+    }
+
+    @Test
+    fun `tapping minus again and again from the top leaves the buttons where they were`() {
+        // Unscrolled, so the text above shrinking can't be met by scrolling back.
+        showScrolledRow(1.5f)
+        tapHoldsStill(FONT_SIZE_SMALLER_TAG, 30)
+    }
+
+    /** Where [tag] sits on screen, in root pixels. */
+    private fun top(tag: String): Float = composeRule.onNodeWithTag(tag).fetchSemanticsNode().positionInRoot.y
+
+    /** Taps [tag] [times] times, checking after each that both buttons are where they were. */
+    private fun tapHoldsStill(tag: String, times: Int) {
+        val larger = top(FONT_SIZE_LARGER_TAG)
+        val smaller = top(FONT_SIZE_SMALLER_TAG)
+        repeat(times) {
+            composeRule.onNodeWithTag(tag).performClick()
+            composeRule.waitForIdle()
+            assertEquals("plus after tap ${it + 1}", larger, top(FONT_SIZE_LARGER_TAG), 1f)
+            assertEquals("minus after tap ${it + 1}", smaller, top(FONT_SIZE_SMALLER_TAG), 1f)
+        }
+    }
+
+    /** The row on a scrolled page under text that resizes with it, as Settings has it. */
+    private fun showScrolledRow(scale: Float) {
+        fontSize = FontSizeState(
+            initial = FontSizeSettings(scale = scale),
+            onScaleSettled = { settled += it },
+            onPinchEnabledChange = {},
+        )
+        composeRule.setContent {
+            SnoozemoTheme(fontSize) {
+                val scroll = rememberScrollState()
+                val hold = rememberScrollHold(scroll)
+                Column(Modifier.fillMaxSize().verticalScroll(scroll).holdSlack(hold)) {
+                    repeat(6) { Text("Some setting above the text size, long enough to wrap onto a second line") }
+                    FontSizeRow(
+                        scale = fontSize.scale,
+                        saveFailed = false,
+                        onPreview = fontSize::preview,
+                        onSettled = fontSize::commit,
+                        hold = hold,
+                    )
+                    repeat(20) { Text("Some setting below") }
+                }
+            }
+        }
+        composeRule.waitForIdle()
     }
 
     private fun showRow(scale: Float) {

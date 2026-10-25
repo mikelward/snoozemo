@@ -2538,7 +2538,10 @@ Two ways to change it, both moving the same value:
   preview — and persists once on release. A **`−` and a `+` button** either side of it step the size
   by one percent per tap, persisted at once, for landing on an exact size a drag only gets near
   (maintainer, 2026-10-24); a size between two percents steps to the next whole one, and each
-  button turns off at its end of the range.
+  button turns off at its end of the range. The buttons and slider hold still on screen while they
+  resize Settings: the page scrolls by however much the rows above grow or shrink, so tap after tap
+  (or the rest of a drag) lands on the same control, until the user scrolls the page themselves
+  (maintainer, 2026-10-25).
 - **A two-finger pinch anywhere in Snoozemo** — every screen, the welcome flow, both dialogs and the
   ringer menu included — tracking the fingers as they
   move and persisting where they stop. *Anywhere* is meant literally (maintainer, 2026-09-07):

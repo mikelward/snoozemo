@@ -878,6 +878,7 @@ internal fun FontSizeRow(
     saveFailed: Boolean,
     onPreview: (Float) -> Unit,
     onSettled: (Float) -> Unit,
+    hold: ScrollHold? = null,
 ) {
     Surface(
         shape = MaterialTheme.shapes.medium,
@@ -959,13 +960,16 @@ internal fun FontSizeRow(
             // last step and release make.
             val smaller = stepFontScale(scale, -1)
             val larger = stepFontScale(scale, 1)
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // Held still as the size changes ([ScrollHold]), so the next tap or the rest of a drag
+            // lands where the last one did, however much the rows above grow or shrink.
+            Row(modifier = Modifier.holding(hold), verticalAlignment = Alignment.CenterVertically) {
                 FontSizeStepButton(
                     icon = R.drawable.ic_remove,
                     description = stringResource(R.string.setup_font_size_smaller),
                     enabled = smaller != scale,
                     modifier = Modifier.testTag(FONT_SIZE_SMALLER_TAG),
                 ) {
+                    hold?.hold()
                     onPreview(smaller)
                     onSettled(smaller)
                 }
@@ -977,6 +981,7 @@ internal fun FontSizeRow(
                             onValueChange = {
                                 dragging = true
                                 dragged = it
+                                hold?.hold()
                                 onPreview(it)
                             },
                             onValueChangeFinished = {
@@ -996,6 +1001,7 @@ internal fun FontSizeRow(
                     enabled = larger != scale,
                     modifier = Modifier.testTag(FONT_SIZE_LARGER_TAG),
                 ) {
+                    hold?.hold()
                     onPreview(larger)
                     onSettled(larger)
                 }
