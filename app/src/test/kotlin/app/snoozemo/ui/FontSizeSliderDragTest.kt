@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -19,6 +20,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import com.mikelward.androidzoom.FontSizeSettings
@@ -317,6 +319,18 @@ class FontSizeSliderDragTest {
         tapHoldsStill(FONT_SIZE_SMALLER_TAG, 30)
     }
 
+    @Test
+    fun `the buttons stay put when the page is recreated after shrinking from the top`() {
+        // Shrinking from the unscrolled top adds room above; it is saved with the scroll position.
+        val restore = StateRestorationTester(composeRule)
+        showScrolledRow(1.5f, restore::setContent)
+        tapHoldsStill(FONT_SIZE_SMALLER_TAG, 20)
+        val larger = top(FONT_SIZE_LARGER_TAG)
+        restore.emulateSavedInstanceStateRestore()
+        composeRule.waitForIdle()
+        assertEquals(larger, top(FONT_SIZE_LARGER_TAG), 1f)
+    }
+
     /** Where [tag] sits on screen, in root pixels. */
     private fun top(tag: String): Float = composeRule.onNodeWithTag(tag).fetchSemanticsNode().positionInRoot.y
 
@@ -333,13 +347,16 @@ class FontSizeSliderDragTest {
     }
 
     /** The row on a scrolled page under text that resizes with it, as Settings has it. */
-    private fun showScrolledRow(scale: Float) {
+    private fun showScrolledRow(
+        scale: Float,
+        setContent: (@Composable () -> Unit) -> Unit = composeRule::setContent,
+    ) {
         fontSize = FontSizeState(
             initial = FontSizeSettings(scale = scale),
             onScaleSettled = { settled += it },
             onPinchEnabledChange = {},
         )
-        composeRule.setContent {
+        setContent {
             SnoozemoTheme(fontSize) {
                 val scroll = rememberScrollState()
                 val hold = rememberScrollHold(scroll)
