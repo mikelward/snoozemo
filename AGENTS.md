@@ -1,7 +1,7 @@
 ---
 trigger: always_on
 alwaysApply: true
-last_modified: 2026-10-26
+last_modified: 2026-11-04
 ---
 
 # Snoozemo
@@ -138,3 +138,5 @@ Shared by every mikelward repo and the user-level agent config; canonical in mik
 - **Release notes since N**. Up to five user-facing bullets, what users most need first.
 - **UI**. 4dp grid, short copy, standard Material icons.
 - **Translations**. Wait until the maintainer approves the English.
+- **Shared script**. `scripts/publish-github-release.sh` is identical across the Android
+  apps: change them all.
