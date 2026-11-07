@@ -1,7 +1,7 @@
 ---
 trigger: always_on
 alwaysApply: true
-last_modified: 2026-11-04
+last_modified: 2026-11-07
 ---
 
 # Snoozemo
@@ -132,10 +132,30 @@ Shared by every mikelward repo and the user-level agent config; canonical in mik
   sets up the SDK. Do Not Disturb and geofences need a real phone: say what you couldn't
   verify.
 - **Screenshots**. CI records them; each new screenshot class needs its own CI step.
-- **What's new**. Every commit subject ships in Play's release notes: write it for
-  users. Prefix the rest `ci:`, `test:`, `internal:`, `docs:` or `refactor:`.
-- **After a merge**. Report the new versionCode.
-- **Release notes since N**. Up to five user-facing bullets, what users most need first.
+- **What's new**. Title every commit and PR like a changelog line (maintainer,
+  2026-10-23): an imperative verb, then the feature in the user's words, sentence case,
+  ≤ ~70 chars, e.g. `Fix …`, `Improve …`, `Add …`, an optional parenthetical for how
+  (scenario, mechanism, symbols: the body). Each subject ships in the GitHub prerelease
+  and Play "What's new" (`docs/play-store-internal-track.md`) as a `• ` bullet,
+  oldest first (repeats once).
+- **Prefixes**. Prefix a subject with no user-visible effect, overriding the fleet's list:
+  `ci:`, `docs:` (incl. `docs/PRIVACY.md`), `internal:`, `refactor:`, `test:`/`tests:`.
+  Never `build:`: CI doesn't filter it, so it ships. A shipped dependency is bare (a
+  test/build-only bump you write keeps its prefix). Commits touching only `.md` or root
+  dot-paths never ship a bullet; prefix them anyway.
+- **500 characters**. Play caps "What's new" there (plus a 50-distinct-subject cap), so
+  squash supporting commits. The range base is the last run that published — don't
+  hand-re-push notes.
+- **After a merge**. Report the versionCode (`git rev-list --count origin/main` after an
+  unshallowed refspec fetch): `Need versionCode 72 (b81c23d) or higher to test PR #52's
+  fix`.
+- **Release notes since N**. Up to five `• ` bullets worded as titles in one code block,
+  for commits N+1..`origin/main` (fetched and unshallowed; offline, only from a complete
+  local `main`, saying it may be behind). One per feature (a reworked one by its final
+  state; read bodies where unclear), ranked by what the user risks without it: broken or
+  wrong first, polish last. Skip prefixed/docs/CI commits, dependency bumps unless nothing
+  else changed (then one bullet: libraries were updated) and anything the range undid;
+  range above, omissions below.
 - **UI**. 4dp grid, short copy, standard Material icons.
 - **Translations**. Wait until the maintainer approves the English.
 - **Shared script**. `scripts/publish-github-release.sh` is identical across the Android
