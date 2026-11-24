@@ -27,6 +27,33 @@ if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
   exit 0
 fi
 
+# The hook's record: when it started, how it ended, and the SDK tools' own
+# output, kept where it outlasts the session's terminal.
+log_dir="${XDG_STATE_HOME:-$HOME/.local/state}/snoozemo"
+mkdir -p "$log_dir"
+LOG="$log_dir/session-start.log"
+log() { printf '%s session-start: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" | tee -a "$LOG" >&2; }
+tmp=""
+finish() {
+  status=$?
+  if [ -n "$tmp" ]; then rm -rf "$tmp"; fi
+  if [ "$status" -eq 0 ]; then log "ended: Android SDK ready"; else log "ended: failed with status $status (details in $LOG)"; fi
+}
+trap finish EXIT
+log "started"
+
+# Accepts the SDK licenses with the given sdkmanager. `yes` ends on SIGPIPE
+# once sdkmanager stops reading, so only sdkmanager's own status counts; a
+# failure is logged and left to the install that follows, which needs the
+# licenses and fails loudly without them.
+accept_licenses() {
+  local accepted=0
+  set +o pipefail
+  yes | "$@" --licenses >>"$LOG" 2>&1 || accepted=$?
+  set -o pipefail
+  if [ "$accepted" -ne 0 ]; then log "accepting the SDK licenses failed with status $accepted"; fi
+}
+
 ANDROID_SDK_ROOT="${ANDROID_HOME:-/opt/android-sdk}"
 CMDLINE_TOOLS_BUILD="${CMDLINE_TOOLS_BUILD:-13114758}"
 PLATFORM="platforms;android-37.0"
@@ -52,20 +79,17 @@ SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
 #    up installed are always the current latest pulled fresh by sdkmanager. The
 #    pinned URL is only contacted on a cold SDK, and only to bootstrap.
 if [ ! -x "$SDKMANAGER" ]; then
-  echo "Bootstrapping Android command-line tools into $ANDROID_SDK_ROOT ..."
+  log "bootstrapping the Android command-line tools into $ANDROID_SDK_ROOT"
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' EXIT
   curl -fsSL --retry 4 --retry-delay 2 -o "$tmp/cmdline-tools.zip" \
-    "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_TOOLS_BUILD}_latest.zip"
-  unzip -q "$tmp/cmdline-tools.zip" -d "$tmp/extracted"
+    "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_TOOLS_BUILD}_latest.zip" 2>>"$LOG"
+  unzip -q "$tmp/cmdline-tools.zip" -d "$tmp/extracted" >>"$LOG" 2>&1
   bootstrap_sdkmanager="$tmp/extracted/cmdline-tools/bin/sdkmanager"
-  yes | "$bootstrap_sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null 2>&1 || true
-  "$bootstrap_sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" "cmdline-tools;latest" >/dev/null
+  accept_licenses "$bootstrap_sdkmanager" --sdk_root="$ANDROID_SDK_ROOT"
+  "$bootstrap_sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" "cmdline-tools;latest" >>"$LOG" 2>&1
 fi
 
 # 2. Accept licenses (idempotent) and seed the base platform + platform-tools
 #    using the freshly installed latest command-line tools.
-yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-"$SDKMANAGER" "$PLATFORM" "platform-tools" >/dev/null
-
-echo "Android SDK ready at $ANDROID_SDK_ROOT"
+accept_licenses "$SDKMANAGER"
+"$SDKMANAGER" "$PLATFORM" "platform-tools" >>"$LOG" 2>&1
